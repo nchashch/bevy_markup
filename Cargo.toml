@@ -25,6 +25,9 @@ bevy_asset_loader = { version = "0.27.0", features = [
 bevy_skein = "0.6.0"
 avian3d = { version = "0.7.0", features = ["diagnostic_ui", "simd"] }
 noiz = "0.5.0"
+bevy_fluent = "0.15"
+fluent = "0.16.0"
+fluent_content = "0.0.5"
 
 [patch.crates-io]
 gltf = { git = "https://github.com/nchashch/gltf", branch = "feat/khr_texture_basisu" }

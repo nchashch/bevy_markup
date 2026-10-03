@@ -1,13 +1,12 @@
 use bevy::prelude::*;
 
+mod consts;
+mod system;
+mod tui;
+
 fn main() {
     let mut app = App::new();
-    app.add_plugins((DefaultPlugins, P23SystemPlugins)).finish();
-    app.run();
-}
-
-struct P23SystemPlugins;
-
-impl Plugin for P23SystemPlugins {
-    fn build(&self, app: &mut App) {}
+    app.add_plugins(DefaultPlugins)
+        .add_plugins(crate::system::SystemPlugins)
+        .run();
 }
