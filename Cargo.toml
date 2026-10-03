@@ -28,6 +28,7 @@ noiz = "0.5.0"
 bevy_fluent = "0.15"
 fluent = "0.16.0"
 fluent_content = "0.0.5"
+serde = { version = "1", features = ["derive"] }
 
 [patch.crates-io]
 gltf = { git = "https://github.com/nchashch/gltf", branch = "feat/khr_texture_basisu" }

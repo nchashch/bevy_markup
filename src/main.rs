@@ -3,6 +3,7 @@ use bevy::prelude::*;
 mod consts;
 mod system;
 mod tui;
+mod ui;
 
 fn main() {
     let mut app = App::new();

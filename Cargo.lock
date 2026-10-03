@@ -5818,6 +5818,7 @@ dependencies = [
  "noiz",
  "ratatui",
  "ron 0.12.2",
+ "serde",
  "vleue_navigator",
 ]
 
