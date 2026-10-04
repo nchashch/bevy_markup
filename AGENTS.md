@@ -222,7 +222,9 @@ assets/            (gitignored — see Gotchas)
 
 ## Testing
 
-Two layers, both deterministic and headless:
+Two layers, both deterministic and headless. Bugs found here (or by the
+fuzzers/property harnesses below) are filed in `docs/agents/bugs/` — see
+**Bug reports**.
 
 - **Cascade unit tests** (`src/cascade.rs`, `cargo test --lib`): CSS text →
   declared style for an `HtmlElement` (specificity, compound matching, comma
@@ -368,6 +370,34 @@ known gaps:
   tolerance — the only layer that sees real fonts, wrapping, 9-slice drawing
   and CJK fallback. Brittle across drivers and font versions: a smoke check,
   not a spec.
+
+## Bug reports
+
+Bugs found by the automated testing above — or by any other means — are
+filed in `docs/agents/bugs/` as `bug_NNNN.md`, numbered sequentially in
+discovery order, with an `INDEX.md` title/metadata page linking all reports.
+File one for every real defect a fuzzer, property test, vector, or manual
+investigation uncovers, *at minimum when the fix lands* (don't let the
+analysis live only in commit messages or chat logs).
+
+Per-bug file, whatever is known and useful:
+
+- **Status** (open / fixed / upstream-unfixed) and **severity**; reachable
+  from user data = high, even if only panics.
+- **Component** and **symptoms** (the observable misbehavior, not the cause).
+- **Discovery**: which tool/target found it (fuzz target, stateful op
+  sequence, seed, minimizing commit), the repository commit at discovery, the
+  agent/model, and the date.
+- **Minimal reproduction** — a minimized input or op sequence, not the raw
+  fuzzer artifact.
+- **Root cause**, the **fix** (with commit), and the **regression test** that
+  now guards it; upstream bugs note the affected/pinned versions and where
+  the local patch (`[patch.crates-io]` + `vendor/`) is wired.
+
+`INDEX.md` carries the shared metadata: date range, machine, OS/kernel,
+toolchain and dependency versions, and the discovery agent. Keep it current
+when new bugs are added; see the existing entries (bug_0001–bug_0005) as
+templates.
 
 ## Limits and next steps
 
