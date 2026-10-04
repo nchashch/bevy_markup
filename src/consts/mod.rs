@@ -19,6 +19,43 @@ pub const BODY_BOLD_FONT_PATH: &str = "fonts/Spectral-Bold.ttf";
 pub const BODY_ITALIC_FONT_PATH: &str = "fonts/Spectral-Italic.ttf";
 pub const BODY_BOLD_ITALIC_FONT_PATH: &str = "fonts/Spectral-BoldItalic.ttf";
 
+/// Font families CSS `font-family` can name, each as
+/// `[regular, bold, italic, bold-italic]` asset paths. Matched
+/// case-insensitively; see `FONT_GENERIC_FAMILIES` for generic names.
+pub const FONT_FAMILIES: &[(&str, [&str; 4])] = &[
+    (
+        "Iosevka Slab QP",
+        [
+            HEADER_FONT_PATH,
+            HEADER_BOLD_FONT_PATH,
+            HEADER_ITALIC_FONT_PATH,
+            HEADER_BOLD_ITALIC_FONT_PATH,
+        ],
+    ),
+    (
+        "Spectral",
+        [
+            BODY_FONT_PATH,
+            BODY_BOLD_FONT_PATH,
+            BODY_ITALIC_FONT_PATH,
+            BODY_BOLD_ITALIC_FONT_PATH,
+        ],
+    ),
+    (
+        "Iosevka Slab Mono",
+        [
+            MONO_FONT_PATH,
+            MONO_BOLD_FONT_PATH,
+            MONO_ITALIC_FONT_PATH,
+            MONO_BOLD_ITALIC_FONT_PATH,
+        ],
+    ),
+];
+
+/// CSS generic family keyword → a `FONT_FAMILIES` name.
+pub const FONT_GENERIC_FAMILIES: &[(&str, &str)] =
+    &[("serif", "Spectral"), ("monospace", "Iosevka Slab Mono")];
+
 pub const HEADER_COLOR: Color = Color::srgb_u8(220, 50, 50);
 
 pub const BODY_COLOR: Color = Color::srgb_u8(225, 225, 225);

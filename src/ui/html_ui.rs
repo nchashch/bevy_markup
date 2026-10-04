@@ -2,25 +2,23 @@
 //!
 //! Put [`HtmlUi`] next to an `HtmlView` on a UI node; its children are rebuilt
 //! whenever the view re-renders, re-localizes, or its [`HtmlStylesheet`]
-//! (re)loads. Supported, deliberately minimal:
+//! (re)loads.
 //!
-//! - `h1`–`h6`: header font, sizes descending from `h1`
-//! - `p`: body font
-//! - `li`: body font with a bullet
-//! - `pre`: monospace block; whitespace and line breaks kept, no wrapping
-//! - loose text directly inside a container: body font
-//! - inline `b`/`strong` and `i`/`em`: Bold / Italic / BoldItalic face
-//! - inline `code`/`kbd`/`samp`/`tt`: monospace family (bold/italic still apply)
+//! Tags only decide structure:
+//! - blocks: `h1`–`h6`, `p`, `li` (with a bullet), `pre` (whitespace and line
+//!   breaks kept, no wrapping), and loose text directly inside a container
+//! - everything else is inline (contributes styled text) or, outside a
+//!   block, a container that's walked through; `head`/`script`/`style` are
+//!   skipped
 //!
-//! Colors come from the stylesheet (see [`super::html_style`]): `color` is
-//! inherited down the tree, `background-color` applies to blocks. Without a
-//! stylesheet (or a matching rule) text is white.
+//! All styling — color, background, font family/size/weight/style — comes
+//! from the stylesheet (see [`super::html_style`]), with inheritance. Without
+//! a matching rule: white text, Bevy's default font, 16px.
 //!
-//! Any other element is walked through for its children; `head`, `script`, and
-//! `style` are skipped. A block's text is its Fluent translation when it has a
-//! `data-l10n-id` that resolved (plain, unstyled), otherwise its own content.
-//! Outside `pre`, whitespace collapses as in HTML. Each block is one `Text`
-//! with a `TextSpan` child per styled run.
+//! A block's text is its Fluent translation when it has a `data-l10n-id` that
+//! resolved (one run in the block's style), otherwise its own content. Outside
+//! `pre`, whitespace collapses as in HTML. Each block is one `Text` with a
+//! `TextSpan` child per styled run.
 
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
@@ -33,18 +31,12 @@ use super::scroll::{SCROLLBAR_GAP, spawn_scrollbar, viewport_node};
 use crate::assets::css::CssStyleSheet;
 use crate::assets::html::{HtmlView, RenderedHtml, decode_entities};
 use crate::assets::l10n::LocalizedText;
-use crate::consts::{
-    BODY_BOLD_FONT_PATH, BODY_BOLD_ITALIC_FONT_PATH, BODY_FONT_PATH, BODY_ITALIC_FONT_PATH,
-    FRAME_PATH, HEADER_BOLD_FONT_PATH, HEADER_BOLD_ITALIC_FONT_PATH, HEADER_FONT_PATH,
-    HEADER_ITALIC_FONT_PATH, MONO_BOLD_FONT_PATH, MONO_BOLD_ITALIC_FONT_PATH, MONO_FONT_PATH,
-    MONO_ITALIC_FONT_PATH,
-};
+use crate::consts::{FONT_FAMILIES, FRAME_PATH};
 
 const STYLESHEET_PATH: &str = "ui/html.css";
-const BODY_SIZE: f32 = 20.0;
-const PRE_SIZE: f32 = 16.0;
-/// Text color when no stylesheet rule applies.
+/// Values when no stylesheet rule applies (CSS initial values, white on dark).
 const DEFAULT_COLOR: Color = Color::WHITE;
+const DEFAULT_FONT_SIZE: f32 = 16.0;
 /// Top-anchored; capped so it stays clear of the debug panels along the bottom.
 const PANEL_MAX_HEIGHT_VH: f32 = 50.0;
 
@@ -58,24 +50,15 @@ pub struct HtmlUi;
 #[derive(Component)]
 pub struct HtmlStylesheet(pub Handle<CssStyleSheet>);
 
-/// Computed style of a text run.
+/// Computed (inherited) text style.
 #[derive(Clone, Copy, PartialEq)]
 struct Style {
+    color: Color,
+    /// Index into [`FONT_FAMILIES`]; `None` = Bevy's default font.
+    family: Option<usize>,
+    size: f32,
     bold: bool,
     italic: bool,
-    mono: bool,
-    color: Color,
-}
-
-impl Style {
-    fn plain(color: Color) -> Self {
-        Self {
-            bold: false,
-            italic: false,
-            mono: false,
-            color,
-        }
-    }
 }
 
 /// A stretch of text in one style.
@@ -85,7 +68,7 @@ struct Run {
 }
 
 enum BlockKind {
-    Heading(u8),
+    Heading,
     Paragraph,
     ListItem,
     Preformatted,
@@ -93,43 +76,36 @@ enum BlockKind {
 
 struct Block {
     kind: BlockKind,
-    /// The block's own computed color (bullet, runs without a rule of their own).
-    color: Color,
+    /// The block element's own computed style (bullet; root `Text` font).
+    style: Style,
     background: Option<Color>,
     runs: Vec<Run>,
 }
 
-/// One typeface in its four faces.
-struct Family {
-    regular: Handle<Font>,
-    bold: Handle<Font>,
-    italic: Handle<Font>,
-    bold_italic: Handle<Font>,
-}
+/// [`FONT_FAMILIES`] loaded as font handles, `[regular, bold, italic,
+/// bold-italic]` per family.
+struct Fonts(Vec<[Handle<Font>; 4]>);
 
-impl Family {
-    fn load(
-        asset_server: &AssetServer,
-        regular: &'static str,
-        bold: &'static str,
-        italic: &'static str,
-        bold_italic: &'static str,
-    ) -> Self {
-        Self {
-            regular: asset_server.load(regular),
-            bold: asset_server.load(bold),
-            italic: asset_server.load(italic),
-            bold_italic: asset_server.load(bold_italic),
-        }
+impl Fonts {
+    fn load(asset_server: &AssetServer) -> Self {
+        Self(
+            FONT_FAMILIES
+                .iter()
+                .map(|(_, paths)| paths.map(|path| asset_server.load(path)))
+                .collect(),
+        )
     }
 
-    fn face(&self, style: Style) -> Handle<Font> {
-        match (style.bold, style.italic) {
-            (true, true) => self.bold_italic.clone(),
-            (true, false) => self.bold.clone(),
-            (false, true) => self.italic.clone(),
-            (false, false) => self.regular.clone(),
-        }
+    fn text_font(&self, style: Style) -> TextFont {
+        let face = (style.bold as usize) + 2 * (style.italic as usize);
+        let font = style
+            .family
+            .and_then(|family| self.0.get(family))
+            .map(|faces| faces[face].clone())
+            .unwrap_or_default();
+        TextFont::default()
+            .with_font(font)
+            .with_font_size(style.size)
     }
 }
 
@@ -208,60 +184,30 @@ pub(super) fn build_html_ui(
             },
             None => HtmlStyles::default(),
         };
+        let root = root_style(&styles);
 
         let blocks = match &*rendered {
             RenderedHtml::Pending => continue,
-            RenderedHtml::Ready(document) => collect_blocks(document.dom(), &localized.0, &styles),
-            RenderedHtml::Failed(message) => {
-                let color = styles.get("html").color.unwrap_or(DEFAULT_COLOR);
-                vec![Block {
-                    kind: BlockKind::Paragraph,
-                    color,
-                    background: None,
-                    runs: vec![Run {
-                        text: format!("failed to render: {message}"),
-                        style: Style::plain(color),
-                    }],
-                }]
+            RenderedHtml::Ready(document) => {
+                collect_blocks(document.dom(), &localized.0, &styles, root)
             }
+            RenderedHtml::Failed(message) => vec![Block {
+                kind: BlockKind::Paragraph,
+                style: root,
+                background: None,
+                runs: vec![Run {
+                    text: format!("failed to render: {message}"),
+                    style: root,
+                }],
+            }],
         };
 
-        let [header, body, mono] = fonts.get_or_insert_with(|| {
-            [
-                Family::load(
-                    &asset_server,
-                    HEADER_FONT_PATH,
-                    HEADER_BOLD_FONT_PATH,
-                    HEADER_ITALIC_FONT_PATH,
-                    HEADER_BOLD_ITALIC_FONT_PATH,
-                ),
-                Family::load(
-                    &asset_server,
-                    BODY_FONT_PATH,
-                    BODY_BOLD_FONT_PATH,
-                    BODY_ITALIC_FONT_PATH,
-                    BODY_BOLD_ITALIC_FONT_PATH,
-                ),
-                Family::load(
-                    &asset_server,
-                    MONO_FONT_PATH,
-                    MONO_BOLD_FONT_PATH,
-                    MONO_ITALIC_FONT_PATH,
-                    MONO_BOLD_ITALIC_FONT_PATH,
-                ),
-            ]
-        });
-
+        let fonts = fonts.get_or_insert_with(|| Fonts::load(&asset_server));
         commands
             .entity(entity)
             .despawn_related::<Children>()
             .with_children(|parent| {
                 for block in blocks {
-                    let (family, size) = match block.kind {
-                        BlockKind::Heading(level) => (&*header, heading_size(level)),
-                        BlockKind::Paragraph | BlockKind::ListItem => (&*body, BODY_SIZE),
-                        BlockKind::Preformatted => (&*mono, PRE_SIZE),
-                    };
                     let prefix = match block.kind {
                         BlockKind::ListItem => "• ",
                         _ => "",
@@ -281,17 +227,15 @@ pub(super) fn build_html_ui(
                             overflow: Overflow::clip_x(),
                             ..default()
                         },
-                        BlockKind::Heading(_) | BlockKind::Paragraph => Node {
+                        BlockKind::Heading | BlockKind::Paragraph => Node {
                             flex_shrink: 0.0,
                             ..default()
                         },
                     };
                     let mut text = parent.spawn((
                         Text::new(prefix),
-                        TextFont::default()
-                            .with_font(family.regular.clone())
-                            .with_font_size(size),
-                        TextColor(block.color),
+                        fonts.text_font(block.style),
+                        TextColor(block.style.color),
                         node,
                     ));
                     if matches!(block.kind, BlockKind::Preformatted) {
@@ -302,12 +246,9 @@ pub(super) fn build_html_ui(
                     }
                     text.with_children(|spans| {
                         for run in block.runs {
-                            let face = if run.style.mono { &*mono } else { family };
                             spans.spawn((
                                 TextSpan::new(run.text),
-                                TextFont::default()
-                                    .with_font(face.face(run.style))
-                                    .with_font_size(size),
+                                fonts.text_font(run.style),
                                 TextColor(run.style.color),
                             ));
                         }
@@ -317,12 +258,20 @@ pub(super) fn build_html_ui(
     }
 }
 
-fn heading_size(level: u8) -> f32 {
-    match level {
-        1 => 28.0,
-        2 => 24.0,
-        3 => 22.0,
-        _ => BODY_SIZE,
+/// The `html` rule's values (the starting point even for fragments without
+/// `<html>`), over the defaults.
+fn root_style(styles: &HtmlStyles) -> Style {
+    let declared = styles.get("html");
+    Style {
+        color: declared.color.unwrap_or(DEFAULT_COLOR),
+        family: declared.font_family,
+        size: declared
+            .font_size
+            .map_or(DEFAULT_FONT_SIZE, |size| {
+                size.resolve(DEFAULT_FONT_SIZE, DEFAULT_FONT_SIZE)
+            }),
+        bold: declared.bold.unwrap_or(false),
+        italic: declared.italic.unwrap_or(false),
     }
 }
 
@@ -331,40 +280,58 @@ struct Ctx<'a, 'p, 'buf> {
     parser: &'p tl::Parser<'buf>,
     localized: &'a HashMap<tl::NodeHandle, Result<String, String>>,
     styles: &'a HtmlStyles,
+    /// Root font size, for `rem`.
+    root_size: f32,
+}
+
+impl Ctx<'_, '_, '_> {
+    /// `tag`'s computed style: its declared values over `inherited`.
+    fn style_of(&self, tag: &str, inherited: Style) -> Style {
+        let declared = self.styles.get(tag);
+        Style {
+            color: declared.color.unwrap_or(inherited.color),
+            family: declared.font_family.or(inherited.family),
+            size: declared
+                .font_size
+                .map_or(inherited.size, |size| size.resolve(inherited.size, self.root_size)),
+            bold: declared.bold.unwrap_or(inherited.bold),
+            italic: declared.italic.unwrap_or(inherited.italic),
+        }
+    }
 }
 
 fn collect_blocks(
     dom: &tl::VDom,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
     styles: &HtmlStyles,
+    root: Style,
 ) -> Vec<Block> {
     let ctx = Ctx {
         parser: dom.parser(),
         localized,
         styles,
+        root_size: root.size,
     };
-    // `html`'s color is the starting point even for fragments without <html>.
-    let root_color = styles.get("html").color.unwrap_or(DEFAULT_COLOR);
     let mut blocks = Vec::new();
     for handle in dom.children() {
-        collect_node(&ctx, *handle, root_color, &mut blocks);
+        collect_node(&ctx, *handle, root, &mut blocks);
     }
     blocks
 }
 
-fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Color, blocks: &mut Vec<Block>) {
+fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mut Vec<Block>) {
     let Some(node) = handle.get(ctx.parser) else {
         return;
     };
     let tag = match node {
         tl::Node::Tag(tag) => tag,
         tl::Node::Raw(_) => {
-            // Anonymous block: inherits the container's color.
-            let runs = inline_runs(ctx, handle, Style::plain(inherited));
+            // Anonymous block: inherits the container's style.
+            let runs = inline_runs(ctx, handle, inherited);
             if !runs.is_empty() {
                 blocks.push(Block {
                     kind: BlockKind::Paragraph,
-                    color: inherited,
+                    style: inherited,
                     background: None,
                     runs,
                 });
@@ -375,26 +342,21 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Color, blocks: &mu
     };
 
     let name = tag.name().as_utf8_str().to_ascii_lowercase();
-    let declared = ctx.styles.get(&name);
-    let color = declared.color.unwrap_or(inherited);
+    let style = ctx.style_of(&name, inherited);
     let kind = match name.as_str() {
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading(name.as_bytes()[1] - b'0'),
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
         "p" => BlockKind::Paragraph,
         "li" => BlockKind::ListItem,
         "pre" => BlockKind::Preformatted,
         "head" | "script" | "style" => return,
         _ => {
             for child in tag.children().top().iter() {
-                collect_node(ctx, *child, color, blocks);
+                collect_node(ctx, *child, style, blocks);
             }
             return;
         }
     };
     let preformatted = matches!(kind, BlockKind::Preformatted);
-    let style = Style {
-        mono: preformatted,
-        ..Style::plain(color)
-    };
     let runs = match ctx.localized.get(&handle) {
         Some(Ok(text)) => {
             let run = Run {
@@ -413,8 +375,8 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Color, blocks: &mu
     };
     blocks.push(Block {
         kind,
-        color,
-        background: declared.background,
+        style,
+        background: ctx.styles.get(&name).background,
         runs,
     });
 }
@@ -474,18 +436,7 @@ fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run
         }
         Some(tl::Node::Tag(tag)) => {
             let name = tag.name().as_utf8_str().to_ascii_lowercase();
-            let mut style = match name.as_str() {
-                "b" | "strong" => Style { bold: true, ..style },
-                "i" | "em" => Style {
-                    italic: true,
-                    ..style
-                },
-                "code" | "kbd" | "samp" | "tt" => Style { mono: true, ..style },
-                _ => style,
-            };
-            if let Some(color) = ctx.styles.get(&name).color {
-                style.color = color;
-            }
+            let style = ctx.style_of(&name, style);
             for child in tag.children().top().iter() {
                 push_runs(ctx, *child, style, runs);
             }
