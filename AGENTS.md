@@ -259,8 +259,9 @@ known gaps:
   - [ ] More oracle vectors as CSS support grows (every new property gets one).
 - [ ] **2. Metamorphic and property-based tests** (fixes weakness 6). Check
   relationships that must always hold, over generated inputs (`proptest`,
-  `quickcheck`, `arbtest` are dev-dependencies; pipeline properties live in
-  `tests/properties.rs` over the shared `tests/common` harness):
+  `quickcheck`, `arbtest`, `test-strategy` are dev-dependencies; pipeline
+  properties live in `tests/properties.rs`, written with `#[proptest]` /
+  `#[strategy]` over the shared `tests/common` harness):
   - [x] Shorthand = longhands: `padding: 1px 2px` builds the same world as the
     four longhands; likewise `border-image`. (`border-width` has no longhands.)
   - [x] Unmatched rules don't matter: adding a rule that matches nothing changes
