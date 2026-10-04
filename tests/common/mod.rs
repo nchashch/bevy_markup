@@ -41,6 +41,7 @@ pub fn face_label(source: &FontSource) -> String {
         .to_owned()
 }
 
+/// `HtmlUiBuilt` + `HtmlUiRestyled` events: every update of any `HtmlUi`.
 #[derive(Resource, Default)]
 pub struct Builds(pub usize);
 
@@ -118,7 +119,8 @@ impl TestUi {
         // bevy_render normally registers the image loader.
         .register_asset_loader(ImageLoader::new(CompressedImageFormats::empty()))
         .init_resource::<Builds>()
-        .add_observer(|_: On<HtmlUiBuilt>, mut builds: ResMut<Builds>| builds.0 += 1);
+        .add_observer(|_: On<HtmlUiBuilt>, mut builds: ResMut<Builds>| builds.0 += 1)
+        .add_observer(|_: On<HtmlUiRestyled>, mut builds: ResMut<Builds>| builds.0 += 1);
 
         match viewport {
             Some(size) => {
@@ -304,7 +306,7 @@ impl TestUi {
         self
     }
 
-    /// `HtmlUiBuilt` events so far (all `HtmlUi` entities).
+    /// Updates so far (builds and restyles, all `HtmlUi` entities).
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn builds(&self) -> usize {
         self.app.world().resource::<Builds>().0

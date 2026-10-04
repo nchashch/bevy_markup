@@ -3,8 +3,9 @@
 //! Spawn [`HtmlUi`] with a template handle; its required components
 //! ([`Node`], [`TemplateContext`], [`RenderedHtml`], …) are added for you, so
 //! override any of them in the same bundle. The entity's children are owned by
-//! the pipeline: they're despawned and rebuilt whenever the template, context,
-//! locale, stylesheet or fonts change.
+//! the pipeline: they're despawned and rebuilt whenever the template, context
+//! or locale change ([`HtmlUiBuilt`]), and restyled in place when the
+//! stylesheet or fonts change ([`HtmlUiRestyled`]).
 //!
 //! Tags decide structure:
 //! - blocks: `h1`–`h6`, `p`, `li` (bulleted), `pre` (whitespace and line breaks
@@ -45,7 +46,7 @@ use crate::template::{HtmlDocument, HtmlTemplate, error_chain};
 /// ```
 #[derive(Component, Clone, Debug, Reflect)]
 #[reflect(Component)]
-#[require(Node, TemplateContext, RenderedHtml, LocalizedText)]
+#[require(Node, TemplateContext, RenderedHtml, LocalizedText, crate::rebuild::RebuildState)]
 pub struct HtmlUi(pub Handle<HtmlTemplate>);
 
 impl HtmlUi {
@@ -126,8 +127,10 @@ impl HtmlElement {
 }
 
 /// Fired on an [`HtmlUi`] entity after its children were (re)built. Children
-/// are replaced on every rebuild, so attach behaviour (observers, components)
-/// here rather than once at spawn.
+/// are replaced on every rebuild — template, context, locale or outline
+/// changes — so attach behaviour (observers, components) here rather than
+/// once at spawn. Style-only changes restyle the existing children instead
+/// and fire [`HtmlUiRestyled`].
 ///
 /// ```no_run
 /// # use bevy::prelude::*;
@@ -143,6 +146,18 @@ impl HtmlElement {
 /// ```
 #[derive(EntityEvent, Clone, Copy, Debug)]
 pub struct HtmlUiBuilt {
+    pub entity: Entity,
+}
+
+/// Fired on an [`HtmlUi`] entity after a style-only change (stylesheet swap
+/// or reload, a frame image loading, `FontFamilies`) restyled its existing
+/// children in place. The entities — and whatever the app attached to them
+/// on [`HtmlUiBuilt`] — are kept, so there's nothing to re-wire. When the
+/// new styles need a different node structure (e.g. box properties appearing
+/// on a block, which then needs a wrapper node), the children are rebuilt
+/// and [`HtmlUiBuilt`] fires instead.
+#[derive(EntityEvent, Clone, Copy, Debug)]
+pub struct HtmlUiRestyled {
     pub entity: Entity,
 }
 

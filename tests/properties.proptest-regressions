@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 089d15a2491c6419cf40cfeeff00951d8c7a0299cb7166758bd7f5cda7edc414 # shrinks to n = 2, ids = ["a"], classes = ["a"], sizes = [8, 8, 8, 8]
 cc 3d70c603cfcd34860448e726fa73ab9caa3b5a2894455e6c5c5fbd12a11568fd # shrinks to slice = 1, tile = true
+cc 2f1064b8586144ff6f17f3aa3f149b364083e1f0d1a43221dbbacf74a98c123d # shrinks to input = _RestyleMatchesAFreshBuildArgs { a: ".box { background-color: #102030 }\n", b: "" }

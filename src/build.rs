@@ -8,8 +8,11 @@ use bevy::prelude::*;
 
 use crate::cascade::{HtmlStyles, LayoutDecl, SliceValue};
 use crate::fonts::FontFamilies;
-use crate::html::{HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, RenderedHtml};
+use crate::html::{
+    HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, HtmlUiRestyled, RenderedHtml,
+};
 use crate::l10n::LocalizedText;
+use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
 use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
 use crate::template::decode_entities;
 
@@ -225,14 +228,6 @@ impl Styler<'_> {
     }
 }
 
-/// Stylesheet-load failures already handled, per `HtmlUi` entity, so each
-/// failure is rebuilt around exactly once (asset failures emit no asset
-/// event). Entries are cleared when the entity successfully styles with a
-/// ready sheet or when that sheet reloads, so re-selecting a broken sheet is
-/// a fresh failure.
-#[derive(Resource, Default)]
-pub(crate) struct FailedSheets(HashSet<(Entity, AssetId<Stylesheet>)>);
-
 /// The `html` rule's values (the starting point even for fragments without
 /// `<html>`), over the defaults.
 pub(crate) fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Assets<Image>) -> Style {
@@ -259,37 +254,32 @@ pub(crate) fn build_html_ui(
     mut image_events: MessageReader<AssetEvent<Image>>,
     sheets: Res<Assets<Stylesheet>>,
     server: Res<AssetServer>,
-    mut failed_sheets: ResMut<FailedSheets>,
     images: Res<Assets<Image>>,
     default_sheet: Res<DefaultStylesheet>,
     fonts: Res<FontFamilies>,
-    views: Query<
+    mut views: Query<
         (
             Entity,
             Ref<RenderedHtml>,
             Ref<LocalizedText>,
             Option<Ref<HtmlStylesheet>>,
             Option<Ref<HtmlDebugOutline>>,
+            &mut RebuildState,
         ),
         With<HtmlUi>,
     >,
     mut roots: Query<(&mut Node, Option<&CssRootBox>), With<HtmlUi>>,
+    tree: Tree,
     mut removed_outlines: RemovedComponents<HtmlDebugOutline>,
     mut removed_sheets: RemovedComponents<HtmlStylesheet>,
-    // Entities whose change arrived while their stylesheet was loading.
-    mut deferred: Local<HashSet<Entity>>,
 ) {
-    // Removals aren't `Ref` changes; the outline must still un-stick, and a
-    // removed override falls back to the default stylesheet.
-    let removed: HashSet<Entity> = removed_outlines.read().chain(removed_sheets.read()).collect();
+    // Removals aren't `Ref` changes, so they're read separately.
+    let removed_outlines: HashSet<Entity> = removed_outlines.read().collect();
+    let removed_sheets: HashSet<Entity> = removed_sheets.read().collect();
     let reloaded_sheets: HashSet<AssetId<Stylesheet>> = sheet_events
         .read()
         .filter_map(|event| match event {
-            AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => {
-                // Reloaded after a failure: let a later failure latch again.
-                failed_sheets.0.retain(|(_, sheet)| sheet != id);
-                Some(*id)
-            }
+            AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => Some(*id),
             _ => None,
         })
         .collect();
@@ -300,91 +290,47 @@ pub(crate) fn build_html_ui(
             _ => None,
         })
         .collect();
-    deferred.retain(|entity| views.contains(*entity));
+    let phase = |handle: &Handle<Stylesheet>| match sheets.get(handle) {
+        Some(_) => Phase::Ready,
+        None if matches!(server.load_state(handle.id()), LoadState::Failed(_)) => Phase::Failed,
+        None => Phase::Loading,
+    };
+    // A sheet reloaded, or one of its `border-image` images (re)loaded.
+    let refreshed = |handle: &Handle<Stylesheet>| {
+        reloaded_sheets.contains(&handle.id())
+            || sheets.get(handle).is_some_and(|css| {
+                css.images()
+                    .iter()
+                    .any(|image| loaded_images.contains(&image.id()))
+            })
+    };
+    let default_changed =
+        default_sheet.is_changed() || default_sheet.0.as_ref().is_some_and(refreshed);
 
-    for (entity, rendered, localized, own_sheet, outline) in &views {
-        // A stylesheet that failed to load is treated as absent — a broken
-        // CSS file renders unstyled instead of blocking the UI forever —
-        // while one that is still loading defers the build to its load
-        // event. A failed per-entity override falls back to the default.
-        enum Sheet<'a> {
-            Ready(Option<&'a Stylesheet>),
-            Loading,
-            Failed,
-        }
-        let state = |handle: &Handle<Stylesheet>| match sheets.get(handle) {
-            Some(sheet) => Sheet::Ready(Some(sheet)),
-            None if matches!(server.load_state(handle.id()), LoadState::Failed(_)) => Sheet::Failed,
-            None => Sheet::Loading,
+    for (entity, rendered, localized, own_sheet, outline, mut rebuild) in &mut views {
+        let frame = Frame {
+            own: own_sheet.as_ref().map(|own| phase(&own.0)),
+            default: default_sheet.0.as_ref().map(phase),
+            document_ready: !matches!(*rendered, RenderedHtml::Pending),
+            own_changed: removed_sheets.contains(&entity)
+                || own_sheet.as_ref().is_some_and(|own| own.is_changed() || refreshed(&own.0)),
+            default_changed,
+            fonts_changed: fonts.is_changed(),
+            content_changed: rendered.is_changed()
+                || localized.is_changed()
+                || removed_outlines.contains(&entity)
+                || outline.as_ref().is_some_and(|outline| outline.is_changed()),
         };
-        // Change signals, gathered before a still-loading sheet defers the
-        // build: re-requesting an already failed sheet reads as `Loading` for
-        // a frame, and a signal seen only in that frame must not be lost.
-        let own_ready = own_sheet.as_ref().is_some_and(|own| sheets.contains(&own.0));
-        // The default stylesheet applies unless a ready override replaces it.
-        let default_applies = !own_ready;
-        let reloaded = |handle: &Handle<Stylesheet>| reloaded_sheets.contains(&handle.id());
-        let changed = rendered.is_changed()
-            || localized.is_changed()
-            || own_sheet.as_ref().is_some_and(|own| own.is_changed() || reloaded(&own.0))
-            || (default_applies
-                && (default_sheet.is_changed() || default_sheet.0.as_ref().is_some_and(reloaded)))
-            || removed.contains(&entity)
-            || fonts.is_changed()
-            || outline.as_ref().is_some_and(|outline| outline.is_changed());
-        let resolved = match (&own_sheet, &default_sheet.0) {
-            (Some(own), _) => match state(&own.0) {
-                Sheet::Ready(css) => Some(css),
-                Sheet::Loading => None,
-                Sheet::Failed => match default_sheet.0.as_ref().map(state) {
-                    Some(Sheet::Ready(css)) => Some(css),
-                    Some(Sheet::Loading) => None,
-                    _ => Some(None),
-                },
-            },
-            (None, Some(default)) => match state(default) {
-                Sheet::Ready(css) => Some(css),
-                Sheet::Loading => None,
-                Sheet::Failed => Some(None),
-            },
-            (None, None) => Some(None),
+        let (source, restyle) = match rebuild.decide(frame) {
+            Decision::Wait | Decision::Skip => continue,
+            Decision::Build(source) => (source, false),
+            Decision::Restyle(source) => (source, true),
         };
-        let Some(css) = resolved else {
-            // Still loading: its load event (or failure) builds; keep the
-            // signal for then.
-            if changed {
-                deferred.insert(entity);
-            }
-            continue;
+        let css = match source {
+            Source::Own => own_sheet.as_ref().and_then(|own| sheets.get(&own.0)),
+            Source::Default => default_sheet.0.as_ref().and_then(|d| sheets.get(d)),
+            Source::Unstyled => None,
         };
-        let was_deferred = deferred.remove(&entity);
-        let sheet_handle = match &own_sheet {
-            Some(own) => Some(&own.0),
-            None => default_sheet.0.as_ref(),
-        };
-        // Failures emit no asset event, so latch them to rebuild once. The
-        // latch is per entity: re-selecting a failed sheet later is a new
-        // user action, even if this entity failed on it before.
-        let failed_handle = sheet_handle
-            .filter(|handle| !sheets.contains(*handle))
-            .filter(|handle| matches!(state(handle), Sheet::Failed));
-        let newly_failed = failed_handle
-            .is_some_and(|handle| !failed_sheets.0.contains(&(entity, handle.id())));
-        let images_loaded = css.is_some_and(|css| {
-            css.images()
-                .iter()
-                .any(|image| loaded_images.contains(&image.id()))
-        });
-        if !(changed || was_deferred || newly_failed || images_loaded) {
-            continue;
-        }
-        if let Some(handle) = failed_handle {
-            failed_sheets.0.insert((entity, handle.id()));
-        } else if css.is_some() {
-            // Styled with a ready sheet: any earlier failure of *other*
-            // sheets no longer applies to this entity.
-            failed_sheets.0.retain(|(owner, _)| *owner != entity);
-        }
 
         let styles = css
             .map(|css| HtmlStyles::from_sheet(css.sheet()))
@@ -440,21 +386,91 @@ pub(crate) fn build_html_ui(
 
         // Nested containers space their children like the root does.
         let default_gap = roots.get(entity).map_or(Val::Auto, |(node, _)| node.row_gap);
-        commands
-            .entity(entity)
-            .despawn_related::<Children>()
-            .with_children(|parent| {
-                for item in items {
-                    spawn_item(parent, &styler, item, default_gap);
-                }
-            })
-            .trigger(|entity| HtmlUiBuilt { entity });
+        let specs: Vec<NodeSpec> = items
+            .into_iter()
+            .map(|item| item_spec(&styler, item, default_gap))
+            .collect();
+        let children: Vec<Entity> = tree
+            .get(entity)
+            .ok()
+            .and_then(|(children, ..)| children)
+            .map_or_else(Vec::new, |children| children.to_vec());
+        // Restyle in place when the existing children have the spec's shape;
+        // otherwise (e.g. CSS added box properties, which need a wrapper)
+        // rebuild.
+        if restyle
+            && children.len() == specs.len()
+            && children.iter().zip(&specs).all(|(child, spec)| same_shape(spec, *child, &tree))
+        {
+            for (child, spec) in children.into_iter().zip(specs) {
+                apply_spec(&mut commands, child, spec, &tree);
+            }
+            commands.trigger(HtmlUiRestyled { entity });
+        } else {
+            commands
+                .entity(entity)
+                .despawn_related::<Children>()
+                .with_children(|parent| {
+                    for spec in specs {
+                        spawn_spec(parent, spec);
+                    }
+                })
+                .trigger(|entity| HtmlUiBuilt { entity });
+        }
     }
 }
 
-fn spawn_item(parent: &mut ChildSpawnerCommands, styler: &Styler, item: Item, default_gap: Val) {
+/// What one UI node should be, computed from the item tree, then spawned
+/// ([`spawn_spec`]) or applied onto an existing entity of the same shape
+/// ([`apply_spec`]): one description for both builds and restyles.
+struct NodeSpec {
+    node: Node,
+    element: Option<HtmlElement>,
+    background: Option<Color>,
+    image: Option<ImageNode>,
+    /// `Text` nodes hold spans, never child nodes.
+    text: Option<TextSpec>,
+    children: Vec<NodeSpec>,
+}
+
+struct TextSpec {
+    /// Before the spans, in the block's own style (the `li` bullet).
+    prefix: &'static str,
+    font: TextFont,
+    color: Color,
+    no_wrap: bool,
+    spans: Vec<(String, TextFont, Color)>,
+}
+
+impl NodeSpec {
+    fn new(node: Node) -> Self {
+        Self {
+            node,
+            element: None,
+            background: None,
+            image: None,
+            text: None,
+            children: Vec::new(),
+        }
+    }
+}
+
+/// The existing children's structure, for [`same_shape`] and [`apply_spec`].
+type Tree<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Option<&'static Children>,
+        Has<Text>,
+        Has<TextSpan>,
+        Has<HtmlElement>,
+        Has<ImageNode>,
+    ),
+>;
+
+fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
     let (element, children) = match item {
-        Item::Block(block) => return spawn_block(parent, styler, block),
+        Item::Block(block) => return block_spec(styler, block),
         Item::Container { element, children } => (element, children),
     };
     let boxed = styler.box_of(&element);
@@ -469,30 +485,24 @@ fn spawn_item(parent: &mut ChildSpawnerCommands, styler: &Styler, item: Item, de
         ..default()
     };
     boxed.layout.apply_to(&mut node);
-    let mut container = parent.spawn((node, element));
-    if let Some(background) = boxed.background {
-        container.insert(BackgroundColor(background));
+    NodeSpec {
+        element: Some(element),
+        background: boxed.background,
+        image: boxed.sliced_image(),
+        children: children
+            .into_iter()
+            .map(|child| item_spec(styler, child, default_gap))
+            .collect(),
+        ..NodeSpec::new(node)
     }
-    if let Some(image) = boxed.sliced_image() {
-        container.insert(image);
-    }
-    container.with_children(|container| {
-        for child in children {
-            spawn_item(container, styler, child, default_gap);
-        }
-    });
 }
 
-fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block) {
+fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
     let boxed = block
         .element
         .as_ref()
         .map(|element| styler.box_of(element))
         .unwrap_or_default();
-    let prefix = match block.kind {
-        BlockKind::ListItem => "• ",
-        _ => "",
-    };
     let indent = match block.kind {
         BlockKind::ListItem => UiRect::left(Val::Px(12.0)),
         _ => UiRect::DEFAULT,
@@ -516,21 +526,20 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
         },
         ..default()
     };
-    let text = (
-        Text::new(prefix),
-        styler.text_font(block.style),
-        TextColor(block.style.color),
-    );
-    let spawn_spans = |spans: &mut ChildSpawnerCommands| {
-        for run in block.runs {
-            spans.spawn((
-                TextSpan::new(run.text),
-                styler.text_font(run.style),
-                TextColor(run.style.color),
-            ));
-        }
+    let text = TextSpec {
+        prefix: match block.kind {
+            BlockKind::ListItem => "• ",
+            _ => "",
+        },
+        font: styler.text_font(block.style),
+        color: block.style.color,
+        no_wrap: matches!(block.kind, BlockKind::Preformatted),
+        spans: block
+            .runs
+            .into_iter()
+            .map(|run| (run.text, styler.text_font(run.style), run.style.color))
+            .collect(),
     };
-    let no_wrap = matches!(block.kind, BlockKind::Preformatted);
 
     if boxed.is_empty() {
         let mut node = Node {
@@ -539,15 +548,11 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
             ..text_node
         };
         boxed.layout.apply_to(&mut node);
-        let mut entity = parent.spawn((text, node));
-        if let Some(element) = block.element {
-            entity.insert(element);
-        }
-        if no_wrap {
-            entity.insert(TextLayout::no_wrap());
-        }
-        entity.with_children(spawn_spans);
-        return;
+        return NodeSpec {
+            element: block.element,
+            text: Some(text),
+            ..NodeSpec::new(node)
+        };
     }
 
     // Box properties go on a wrapper node: a node can't be both `Text` and
@@ -564,23 +569,118 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
         ..default()
     };
     boxed.layout.apply_to(&mut node);
-    let mut wrapper = parent.spawn(node);
-    if let Some(element) = block.element {
-        wrapper.insert(element);
+    NodeSpec {
+        element: block.element,
+        background: boxed.background,
+        image: boxed.sliced_image(),
+        children: vec![NodeSpec {
+            text: Some(text),
+            ..NodeSpec::new(text_node)
+        }],
+        ..NodeSpec::new(node)
     }
-    if let Some(background) = boxed.background {
-        wrapper.insert(BackgroundColor(background));
+}
+
+fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
+    let mut entity = parent.spawn(spec.node);
+    if let Some(element) = spec.element {
+        entity.insert(element);
     }
-    if let Some(image) = boxed.sliced_image() {
-        wrapper.insert(image);
+    if let Some(background) = spec.background {
+        entity.insert(BackgroundColor(background));
     }
-    wrapper.with_children(|wrapper| {
-        let mut entity = wrapper.spawn((text, text_node));
-        if no_wrap {
-            entity.insert(TextLayout::no_wrap());
+    if let Some(image) = spec.image {
+        entity.insert(image);
+    }
+    match spec.text {
+        Some(text) => {
+            entity.insert((Text::new(text.prefix), text.font, TextColor(text.color)));
+            if text.no_wrap {
+                entity.insert(TextLayout::no_wrap());
+            }
+            entity.with_children(|spans| {
+                for (span, font, color) in text.spans {
+                    spans.spawn((TextSpan::new(span), font, TextColor(color)));
+                }
+            });
         }
-        entity.with_children(spawn_spans);
-    });
+        None => {
+            entity.with_children(|children| {
+                for child in spec.children {
+                    spawn_spec(children, child);
+                }
+            });
+        }
+    }
+}
+
+/// Whether `entity` (an existing child) has the structure `spec` would
+/// spawn: the same text/element/frame presence, span count and children.
+fn same_shape(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
+    let Ok((children, has_text, _, has_element, has_image)) = tree.get(entity) else {
+        return false;
+    };
+    let children: &[Entity] = children.map_or(&[], |children| children);
+    if has_text != spec.text.is_some()
+        || has_element != spec.element.is_some()
+        || has_image != spec.image.is_some()
+    {
+        return false;
+    }
+    match &spec.text {
+        Some(text) => {
+            children.len() == text.spans.len()
+                && children
+                    .iter()
+                    .all(|child| tree.get(*child).is_ok_and(|(_, _, is_span, ..)| is_span))
+        }
+        None => {
+            children.len() == spec.children.len()
+                && children
+                    .iter()
+                    .zip(&spec.children)
+                    .all(|(child, spec)| same_shape(spec, *child, tree))
+        }
+    }
+}
+
+/// Restyles `entity` (checked by [`same_shape`]) to `spec` in place: the
+/// entity and its children — and anything the app attached — stay.
+fn apply_spec(commands: &mut Commands, entity: Entity, spec: NodeSpec, tree: &Tree) {
+    let children: Vec<Entity> = tree
+        .get(entity)
+        .ok()
+        .and_then(|(children, ..)| children)
+        .map_or_else(Vec::new, |children| children.to_vec());
+    let mut target = commands.entity(entity);
+    target.insert(spec.node);
+    if let Some(element) = spec.element {
+        target.insert(element);
+    }
+    match spec.background {
+        Some(background) => target.insert(BackgroundColor(background)),
+        None => target.remove::<BackgroundColor>(),
+    };
+    if let Some(image) = spec.image {
+        target.insert(image);
+    }
+    match spec.text {
+        Some(text) => {
+            // `TextLayout` is required by `Text`: replace, never remove.
+            let layout = if text.no_wrap { TextLayout::no_wrap() } else { TextLayout::default() };
+            target.insert((Text::new(text.prefix), text.font, TextColor(text.color), layout));
+            for (span, (content, font, color)) in children.into_iter().zip(text.spans) {
+                commands
+                    .entity(span)
+                    .insert((TextSpan::new(content), font, TextColor(color)));
+            }
+        }
+        None => {
+            for (child, spec) in children.into_iter().zip(spec.children) {
+                apply_spec(commands, child, spec, tree);
+            }
+        }
+    }
 }
 
 /// Applies the `html` rule's `border-image`, `border-width` and `padding` to

@@ -52,6 +52,7 @@ src/
   cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
   fonts.rs         FontFamilies, FontFaces, GenericFamily
   build.rs         (internal) DOM + styles → Bevy UI children; HtmlUiBuilt trigger
+  rebuild.rs       (internal) pure rebuild decision: Frame (load phases + change signals) → Build/Skip/Wait
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
   quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, click wiring, Space = language
@@ -130,14 +131,26 @@ assets/            (gitignored — see Gotchas)
 - Asset-backed state reacts to `AssetEvent::LoadedWithDependencies` /
   `Modified` plus change detection, so hot reload works with Bevy's
   `file_watcher` (not enabled in the examples).
-- A stylesheet that *fails* to load emits no asset event; `build.rs` latches
-  failures per entity (`FailedSheets`) and builds unstyled once (a failed
-  per-entity `HtmlStylesheet` falls back to `DefaultStylesheet`). Styling
-  with a ready sheet again, or the sheet reloading, clears the latch, so
-  re-selecting a broken sheet fails fresh. Only *loading* stylesheets defer
-  the build. Beware: re-requesting a failed asset can flip its state to
-  `Loading` for a frame, eating that frame's change signal — don't rely on
-  `is_changed` alone across a load-state transition.
+- When to update is decided by the pure `rebuild` module (`RebuildState`,
+  a component every `HtmlUi` requires): `build_html_ui` only gathers a
+  `Frame` per entity (own/default stylesheet load phase, document ready,
+  change signals) and acts on the `Decision` (`Build`/`Restyle`/`Skip`/
+  `Wait`). Change update triggers there, and unit-test them in
+  `rebuild::tests`, not via full apps. A stylesheet that *fails* to load
+  emits no asset event: a change that arrives while a needed sheet loads is
+  kept pending and updates the frame the sheet resolves (ready or failed) —
+  that's what turns a failure into an (unstyled) update, and why a failed
+  `HtmlStylesheet` falls back to `DefaultStylesheet` without a separate
+  latch. Re-requesting a failed asset can flip its state to `Loading` for a
+  frame, so never read change signals only after resolving load states.
+- Build vs restyle (`build.rs`): items become a `NodeSpec` tree (plain data:
+  `Node`, element, background, frame, text spans), which is either spawned
+  (`spawn_spec`, `HtmlUiBuilt`) or, for style-only changes, applied onto the
+  existing children in place (`apply_spec`, `HtmlUiRestyled`) when they have
+  the same shape (`same_shape`: text/element/frame presence, span and child
+  counts) — otherwise it rebuilds. Restyles keep entities and app-attached
+  components. `restyle_matches_a_fresh_build` (properties) guards that both
+  paths agree; keyed reconciliation can later extend `NodeSpec` with keys.
 - `vendor/fluent-syntax` is a patched fork (wired via `[patch.crates-io]` in
   the root, `fuzz/` and `honggfuzz/` manifests): upstream fluent-syntax 0.11.1
   panics slicing FTL source at byte ranges inside multi-byte characters
@@ -161,12 +174,12 @@ assets/            (gitignored — see Gotchas)
 
 - Templates: compiled at load (syntax errors fail the load); name = asset path,
   so `.html` gets Tera HTML autoescaping. Plain HTML renders to itself.
-- Rebuild triggers: template/context change or reload, locale change or bundle
-  (re)load, stylesheet swap or (re)load (a failed sheet rebuilds unstyled
-  once, per entity), a stylesheet's `border-image` image loading,
-  `FontFamilies` change, outline marker added or removed. The UI isn't built
-  while its stylesheet is loading (images may arrive later; their load
-  rebuilds).
+- Update triggers: rebuild on template/context change or reload, locale
+  change or bundle (re)load, outline marker added or removed; restyle on
+  stylesheet swap or (re)load (a failed sheet updates unstyled once, when it
+  resolves), a stylesheet's `border-image` image loading, `FontFamilies`
+  change. The UI isn't built while its stylesheet is loading (images may
+  arrive later; their load restyles).
 - Structure (`build.rs`: DOM → `Item` tree → nodes): blocks `h1`–`h6`, `p`,
   `li` (bulleted), `pre` (whitespace kept, no wrap; leading newline and
   trailing whitespace dropped), loose text; containers (`CONTAINERS`: `div`,
@@ -468,7 +481,8 @@ known gaps:
     toggle) against one long-lived `HtmlUi`, model-checked after every op.
     Found two real bugs the pairwise tests missed: outline *removal* never
     rebuilt (fixed via `RemovedComponents`), and a globally latched failed
-    sheet swallowed a later re-select (latch is now per entity).
+    sheet swallowed a later re-select (since replaced by the pending-change
+    rule in `src/rebuild.rs`).
   - [x] `quickcheck` over structured inputs: a generated many-rule stylesheet
     checked against a reference CSS-precedence model (`cascade_winner_matches_
     precedence_model`), and arbitrary text round-tripping through Tera
@@ -571,7 +585,7 @@ known gaps:
     - `sliced_image` / `apply_nine_slices` dropping `VisualBox::BorderBox`:
       the dump prints `visual-box=` for frames not over the border box;
       `nine_slice::tests::frames_get_the_sliced_image_over_the_border_box`.
-    - stylesheet reload arm deleted, and `!=`→`==` in the failed-latch
+    - stylesheet reload arm deleted, and `!=`→`==` in the (since removed) failed-latch
       cleanup (unrelated failed UIs rebuilt on any reload):
       `stylesheet_reload_rebuilds_only_its_users` (per-entity build counts).
     - image reload arm deleted: `image_change_reslices_percent_frames`.
@@ -627,10 +641,13 @@ Known limits (each skipped/ignored value is logged at `debug`):
   inline elements are ignored (Bevy `TextSpan` has no box); inline elements
   have no entity, so `HtmlElements` can't find them (only blocks/containers).
 - **Interactivity:** none built in; apps wire behaviour on `HtmlUiBuilt`
-  (children are rebuilt on every change, so state on them doesn't persist).
-  No forms/inputs, no links.
-- **Rebuilds:** any change rebuilds the whole `HtmlUi` subtree (no diffing).
-  Fine for panel-sized UIs; large or per-frame-updated documents will churn.
+  (children are rebuilt on content changes, so state on them persists only
+  across restyles). No forms/inputs, no links, no `:hover` yet — restyles
+  are the groundwork for it.
+- **Rebuilds:** content changes (template, context, locale) rebuild the
+  whole `HtmlUi` subtree (no diffing); style changes restyle in place unless
+  the node structure changes. A run merge (e.g. `b` restyled to its parent's
+  style) changes the span count and falls back to a rebuild.
 - **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
   CJK (wrapped CJK source lines become spaces); `decode_entities` handles only
   the five escapes Tera emits (no numeric references). Mixed inline content
@@ -651,8 +668,10 @@ Next steps (roughly in order of value):
    rebuild.
 4. Lists done properly: `list-style-type`, `ol` numbering, CSS-driven indent.
 5. Text properties: `text-align` (`Justify`), `line-height` (`LineHeight`).
-6. Incremental rebuilds: keep entities for unchanged elements (key by DOM
-   path) so app-attached state survives and large documents stay cheap.
+6. Keyed reconciliation for content changes: keep entities for unchanged
+   elements (key `NodeSpec`s by DOM path) so app-attached state survives
+   template/locale changes too and large documents stay cheap. (Restyle in
+   place for style-only changes is done.)
 7. More test vectors alongside each of the above.
 
 ## Verification

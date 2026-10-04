@@ -28,6 +28,56 @@ fn name() -> proptest::strategy::BoxedStrategy<String> {
     proptest::string::string_regex("[a-z][a-z0-9]{0,7}").unwrap().boxed()
 }
 
+/// A generated stylesheet over a fixed set of selectors and declarations,
+/// including ones that change structure (box properties need wrappers) and
+/// layout.
+fn generated_sheet() -> proptest::strategy::BoxedStrategy<String> {
+    const SELECTORS: [&str; 6] = ["html", "p", ".box", "b", "li", "pre"];
+    const DECLARATIONS: [&str; 10] = [
+        "color: #ff0000",
+        "color: #00ff00",
+        "font-size: 30px",
+        "font-family: Spectral",
+        "font-weight: bold",
+        "padding: 3px",
+        "background-color: #102030",
+        "border-width: 2px",
+        "display: none",
+        "flex-direction: row",
+    ];
+    proptest::collection::vec((0..SELECTORS.len(), 0..DECLARATIONS.len()), 0..6)
+        .prop_map(|rules| {
+            rules
+                .into_iter()
+                .map(|(selector, declaration)| {
+                    format!("{} {{ {} }}\n", SELECTORS[selector], DECLARATIONS[declaration])
+                })
+                .collect()
+        })
+        .boxed()
+}
+
+/// Restyling never disagrees with building: swapping from any stylesheet A
+/// to B gives exactly the world a fresh build with B gives (whether the
+/// swap restyled in place or had to rebuild for a new structure).
+#[proptest(cases = 24)]
+fn restyle_matches_a_fresh_build(
+    #[strategy(generated_sheet())] a: String,
+    #[strategy(generated_sheet())] b: String,
+) {
+    let page = r#"<p>Plain <b>bold</b></p><div class="box"><p>Inside</p></div><ul><li>Item</li></ul><pre>pre</pre>"#;
+    let mut swapped = TestUi::new("prop-restyle", &[("page.html", page), ("a.css", &a), ("b.css", &b)])
+        .stylesheet("a.css");
+    let b_sheet = swapped.load::<Stylesheet>("b.css");
+    let mut swapped = swapped.spawn("page.html", TemplateContext::new(), Node::default());
+    swapped.settle();
+    swapped.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
+    let mut fresh = TestUi::new("prop-fresh", &[("page.html", page), ("b.css", &b)])
+        .stylesheet("b.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    prop_assert_eq!(swapped.settle().dump(), fresh.settle().dump());
+}
+
 /// `padding: T R` builds the same world as the four longhands.
 #[proptest(cases = 24)]
 fn padding_shorthand_equals_longhands(

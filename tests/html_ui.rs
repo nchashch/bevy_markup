@@ -379,9 +379,105 @@ html-ui
     );
 }
 
-/// Counts `HtmlUiBuilt` per entity.
+/// A stylesheet swap restyles the existing children in place: the same
+/// entities — with what the app attached — take the new styles, and
+/// `HtmlUiRestyled` fires instead of `HtmlUiBuilt`. When the new styles
+/// need another structure (blocks gaining a box need wrapper nodes), the
+/// children are rebuilt and `HtmlUiBuilt` fires.
+#[test]
+fn style_changes_restyle_in_place_unless_the_shape_changes() {
+    #[derive(Component)]
+    struct Wired;
+    #[derive(Resource, Default)]
+    struct Events {
+        built: usize,
+        restyled: usize,
+    }
+    fn descendants(world: &World, entity: Entity, out: &mut Vec<Entity>) {
+        for &child in world.entity(entity).get::<Children>().into_iter().flatten() {
+            out.push(child);
+            descendants(world, child, out);
+        }
+    }
+
+    let mut ui = TestUi::new(
+        "restyle",
+        &[
+            ("page.html", r#"<p id="a">One</p><div class="box"><p>Two</p></div>"#),
+            ("red.css", "html { color: #ff0000; font-size: 20px }"),
+            ("blue.css", "html { color: #0000ff; font-size: 20px } .box { padding: 4px }"),
+            ("boxed.css", "html { color: #0000ff; font-size: 20px } p { background-color: #102030 }"),
+        ],
+    )
+    .stylesheet("red.css");
+    let blue = ui.load::<Stylesheet>("blue.css");
+    let boxed = ui.load::<Stylesheet>("boxed.css");
+    let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
+    let world = ui.world_mut();
+    world.init_resource::<Events>();
+    world.add_observer(|_: On<HtmlUiBuilt>, mut events: ResMut<Events>| events.built += 1);
+    world.add_observer(|_: On<HtmlUiRestyled>, mut events: ResMut<Events>| events.restyled += 1);
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p#a
+    "One" default 20px #ff0000
+  div.box
+    p
+      "Two" default 20px #ff0000
+"#,
+    );
+    let root = ui.root();
+    let world = ui.world_mut();
+    let mut before = Vec::new();
+    descendants(world, root, &mut before);
+    let mut elements = world.query::<(Entity, &HtmlElement)>();
+    let wired = elements
+        .iter(world)
+        .find(|(_, element)| element.id.as_deref() == Some("a"))
+        .map(|(entity, _)| entity)
+        .unwrap();
+    world.entity_mut(wired).insert(Wired);
+
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(blue);
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p#a
+    "One" default 20px #0000ff
+  div.box padding=4,4,4,4
+    p
+      "Two" default 20px #0000ff
+"#,
+    );
+    let world = ui.world_mut();
+    let mut after = Vec::new();
+    descendants(world, root, &mut after);
+    assert_eq!(after, before, "restyle kept every child entity");
+    assert!(world.entity(wired).contains::<Wired>(), "app component survived");
+    let events = world.resource::<Events>();
+    assert_eq!((events.built, events.restyled), (1, 1));
+
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(boxed);
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p#a bg=#102030
+    -
+      "One" default 20px #0000ff
+  div.box
+    p bg=#102030
+      -
+        "Two" default 20px #0000ff
+"#,
+    );
+    let events = ui.world_mut().resource::<Events>();
+    assert_eq!((events.built, events.restyled), (2, 1), "new wrappers: rebuilt");
+}
+
+/// Counts updates (`HtmlUiBuilt` or `HtmlUiRestyled`) per entity.
 #[derive(Resource, Default)]
-struct BuildsPer(bevy::platform::collections::HashMap<Entity, usize>);
+struct UpdatesPer(bevy::platform::collections::HashMap<Entity, usize>);
 
 /// Editing a stylesheet asset in place (hot reload) rebuilds the UIs using
 /// it — and only those: a UI whose own stylesheet failed to load isn't
@@ -402,15 +498,18 @@ fn stylesheet_reload_rebuilds_only_its_users() {
     let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
     let user = ui.root();
     let world = ui.world_mut();
-    world.init_resource::<BuildsPer>();
-    world.add_observer(|built: On<HtmlUiBuilt>, mut per: ResMut<BuildsPer>| {
+    world.init_resource::<UpdatesPer>();
+    world.add_observer(|built: On<HtmlUiBuilt>, mut per: ResMut<UpdatesPer>| {
         *per.0.entry(built.entity).or_default() += 1;
+    });
+    world.add_observer(|restyled: On<HtmlUiRestyled>, mut per: ResMut<UpdatesPer>| {
+        *per.0.entry(restyled.entity).or_default() += 1;
     });
     world.entity_mut(user).insert(HtmlStylesheet(good.clone()));
     let failed = world.spawn((HtmlUi::new(template), HtmlStylesheet(broken))).id();
     ui.settle();
     let counts = |ui: &mut TestUi| {
-        let per = &ui.world_mut().resource::<BuildsPer>().0;
+        let per = &ui.world_mut().resource::<UpdatesPer>().0;
         (per.get(&user).copied().unwrap_or(0), per.get(&failed).copied().unwrap_or(0))
     };
     let (user_before, failed_before) = counts(&mut ui);

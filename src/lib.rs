@@ -56,7 +56,9 @@
 //! [`DefaultStylesheet`](style::DefaultStylesheet) restyles — all at runtime.
 //! After every (re)build an [`HtmlUiBuilt`](html::HtmlUiBuilt) event fires on
 //! the `HtmlUi` entity; use [`HtmlElements`](html::HtmlElements) to find
-//! elements by `id`/`class` and attach behaviour.
+//! elements by `id`/`class` and attach behaviour. Style-only changes
+//! (stylesheets, fonts) restyle the existing children in place and fire
+//! [`HtmlUiRestyled`](html::HtmlUiRestyled) instead, keeping what you attached.
 //!
 //! ## Supported subset
 //!
@@ -100,6 +102,7 @@ pub mod fonts;
 pub mod html;
 pub mod l10n;
 pub mod nine_slice;
+mod rebuild;
 pub mod style;
 pub mod template;
 
@@ -110,8 +113,8 @@ pub use {bevy_fluent, lightningcss, tera, tl};
 pub mod prelude {
     pub use crate::fonts::{FontFaces, FontFamilies, GenericFamily};
     pub use crate::html::{
-        HtmlDebugOutline, HtmlElement, HtmlElements, HtmlUi, HtmlUiBuilt, RenderedHtml,
-        TemplateContext,
+        HtmlDebugOutline, HtmlElement, HtmlElements, HtmlUi, HtmlUiBuilt, HtmlUiRestyled,
+        RenderedHtml, TemplateContext,
     };
     pub use crate::l10n::ActiveLocale;
     pub use crate::nine_slice::{NineSlice, NineSliceFrame};
@@ -140,8 +143,9 @@ pub enum HtmlUiSystems {
     Render,
     /// Fluent resolves `data-l10n-id` elements against [`l10n::ActiveLocale`].
     Localize,
-    /// The DOM is styled with CSS and spawned as Bevy UI children; then
-    /// [`html::HtmlUiBuilt`] fires.
+    /// The DOM is styled with CSS and spawned as Bevy UI children (then
+    /// [`html::HtmlUiBuilt`] fires), or existing children are restyled in
+    /// place ([`html::HtmlUiRestyled`]).
     Build,
 }
 
@@ -159,7 +163,6 @@ impl Plugin for HtmlUiPlugin {
             .init_resource::<style::DefaultStylesheet>()
             .init_resource::<l10n::ActiveLocale>()
             .init_resource::<fonts::FontFamilies>()
-            .init_resource::<build::FailedSheets>()
             .configure_sets(
                 PostUpdate,
                 (

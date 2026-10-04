@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b02be6b0e08b5334a1d808e3db593d713fcd4c7a819621735d362ae4c4f10c17 # shrinks to frames = [Frame { own: None, default: Some(Loading), own_changed: false, default_changed: false, content_changed: true }, Frame { own: Some(Ready), default: None, own_changed: false, default_changed: false, content_changed: false }]
+cc f5223623b6c34c4f984a155fe567f6e860770daf7f4495e6e7c8a6578f2eac69 # shrinks to frames = [Frame { own: Some(Ready), default: None, own_changed: false, default_changed: true, content_changed: false }]
