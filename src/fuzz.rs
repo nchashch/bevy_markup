@@ -153,6 +153,42 @@ mod tests {
         let _ = translate(&ftl, "", "");
     }
 
+    /// bug_0015: placeables nested far beyond the vendored parser's limit
+    /// (`MAX_PLACEABLE_DEPTH`, 100) are a parse error, not a stack overflow
+    /// — even on a 2 MB thread, where an unbounded debug build overflowed
+    /// between 200 and 400 levels.
+    #[test]
+    fn deeply_nested_placeables_are_an_error_not_a_stack_overflow() {
+        let nested = |depth: usize| format!("x = {}\"a\"{}\n", "{".repeat(depth), "}".repeat(depth));
+        let deep = nested(100_000);
+        let result = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || translate(&deep, "x", "{}"))
+            .unwrap()
+            .join()
+            .expect("no stack overflow");
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    /// Nesting up to the limit still parses and formats, and the limit
+    /// leaves later entries alone (the deep entry becomes Junk).
+    #[test]
+    fn nesting_up_to_the_limit_still_works() {
+        let nested = |depth: usize| format!("{}\"a\"{}", "{".repeat(depth), "}".repeat(depth));
+        assert_eq!(translate(&format!("x = {}\n", nested(100)), "x", "{}"), Ok("a".to_owned()));
+        let resource = fluent::FluentResource::try_new(format!("deep = {}\nok = fine\n", nested(101)));
+        let (resource, errors) = resource.expect_err("depth 101 is an error");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        let ids: Vec<&str> = resource
+            .entries()
+            .filter_map(|entry| match entry {
+                fluent_syntax::ast::Entry::Message(message) => Some(message.id.name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, ["ok"], "the entry after the deep one survives");
+    }
+
     proptest::proptest! {
         #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
 

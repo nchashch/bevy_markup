@@ -5,12 +5,21 @@ use super::{
 };
 use crate::ast;
 
-pub type Result<T> = std::result::Result<T, ParserError>;
+pub type Result<T, E = ParserError> = std::result::Result<T, E>;
+
+// PATCH(p23): placeables nest recursively (placeable → expression → inline
+// expression or select variant → placeable) and upstream has no limit, so a
+// few KB of `{{{…}}}` overflow the stack (bug_0015: a debug build on a 2 MB
+// thread overflowed between 200 and 400 levels). Real translations nest a
+// handful of levels.
+pub(super) const MAX_PLACEABLE_DEPTH: usize = 100;
 
 pub struct Parser<S> {
     pub(super) source: S,
     pub(super) ptr: usize,
     pub(super) length: usize,
+    // PATCH(p23): current placeable nesting (see MAX_PLACEABLE_DEPTH).
+    pub(super) depth: usize,
 }
 
 impl<'s, S> Parser<S>
@@ -23,6 +32,7 @@ where
             source,
             ptr: 0,
             length,
+            depth: 0,
         }
     }
 
@@ -287,6 +297,18 @@ where
     }
 
     pub(super) fn get_placeable(&mut self) -> Result<ast::Expression<S>> {
+        // PATCH(p23): bound the recursion (see MAX_PLACEABLE_DEPTH). The
+        // entry fails as Junk and parsing resumes at the next entry.
+        if self.depth >= MAX_PLACEABLE_DEPTH {
+            return error!(ErrorKind::PlaceableNestingTooDeep, self.ptr);
+        }
+        self.depth += 1;
+        let result = self.get_placeable_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn get_placeable_inner(&mut self) -> Result<ast::Expression<S>> {
         self.skip_blank();
         let exp = self.get_expression()?;
         self.skip_blank_inline();

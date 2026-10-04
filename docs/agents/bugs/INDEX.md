@@ -24,7 +24,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0012](bug_0012.md) | `HtmlElements` lookups were breadth-first, not document order | `src/html.rs` | medium | fixed (uncommitted, on `e1b910c`) | unit test + arbtest model |
 | [bug_0013](bug_0013.md) | CSS padding on a boxed `pre` added to the default 8px | `src/build.rs` | low | fixed (uncommitted, on `e1b910c`) | code reading while adding layout support; confirmed by the layout oracle |
 | [bug_0014](bug_0014.md) | Text in a boxed block never wraps: it overflows the box | `src/build.rs` | medium | fixed (uncommitted) | mutation-testing triage (layout oracle case) |
-| [bug_0015](bug_0015.md) | Deeply nested FTL placeables overflow the stack | upstream `fluent-syntax` 0.11.1 | medium | **open** | fuzz-corpus coverage replay |
+| [bug_0015](bug_0015.md) | Deeply nested FTL placeables overflow the stack | upstream `fluent-syntax` 0.11.1 | medium | fixed locally via vendored patch (uncommitted); **upstream unfixed** | fuzz-corpus coverage replay |
 
 ## Discovery session metadata: bug_0001–0005
 

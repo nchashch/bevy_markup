@@ -1,6 +1,8 @@
 // Fluent is a localization system; see the original crate docs below.
-// PATCH(p23): this vendored copy exists only for the boundary-safe
-// `Slice::slice` patch (see src/parser/slice.rs); silence its lints.
+// PATCH(p23): this vendored copy exists for two patches: the boundary-safe
+// `Slice::slice` (src/parser/slice.rs, bug_0005) and a placeable nesting
+// limit (`MAX_PLACEABLE_DEPTH` in src/parser/core.rs, bug_0015); silence
+// its lints.
 #![allow(warnings)]
 
 //! Fluent is a modern localization system designed to improve how software is translated.

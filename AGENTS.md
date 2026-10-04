@@ -119,7 +119,7 @@ test-fuzz/
                      `#[test_fuzz]` (`cargo +nightly test-fuzz tests::fuzz_html`
                      from this directory; corpus seeds come from plain
                      `cargo test` runs)
-vendor/fluent-syntax/  vendored fluent-syntax 0.11.1 (patched char-boundary bug, see Gotchas)
+vendor/fluent-syntax/  vendored fluent-syntax 0.11.1 (patched: char boundaries, placeable nesting limit; see Gotchas)
 assets/            (gitignored — see Gotchas)
   fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
@@ -160,11 +160,17 @@ assets/            (gitignored — see Gotchas)
   components. `restyle_matches_a_fresh_build` (properties) guards that both
   paths agree; keyed reconciliation can later extend `NodeSpec` with keys.
 - `vendor/fluent-syntax` is a patched fork (wired via `[patch.crates-io]` in
-  the root, `fuzz/` and `honggfuzz/` manifests): upstream fluent-syntax 0.11.1
-  panics slicing FTL source at byte ranges inside multi-byte characters
-  (broken `\U` escapes etc.), reachable from any FTL asset. The patch clamps
-  `Slice::slice` to char boundaries. Upstream hasn't fixed it and the version
-  is pinned by bevy_fluent's fluent; re-check when bumping bevy_fluent.
+  the root, `fuzz/` and `honggfuzz/` manifests) carrying two fixes for bugs
+  reachable from any FTL asset, both marked `PATCH(p23)`:
+  - bug_0005: upstream panics slicing FTL source at byte ranges inside
+    multi-byte characters (broken `\U` escapes etc.); `Slice::slice` clamps
+    to char boundaries.
+  - bug_0015: placeable nesting recursed without a limit, so a few KB of
+    `{{{…}}}` overflowed the stack; `get_placeable` now fails past
+    `MAX_PLACEABLE_DEPTH` = 100 with `ErrorKind::PlaceableNestingTooDeep`
+    (the entry becomes Junk).
+  Upstream has fixed neither and the version is pinned by bevy_fluent's
+  fluent; re-check (and re-apply) when bumping bevy_fluent.
 - `vendor/honggfuzz` is a patched fork of the honggfuzz crate used only by
   `honggfuzz/` targets: its bundled C source fails against current binutils
   (`bfd.h` no longer defines `TRUE`).
