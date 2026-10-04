@@ -32,7 +32,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `ActiveLocale(Option<Handle<BundleAsset>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
 | `FontFamilies` / `FontFaces` / `GenericFamily` | Resource + types | CSS `font-family` name → font handles (+ generic keyword mapping) |
 | `HtmlTemplate`, `Stylesheet`, `NineSlice` | Assets | `.html`/`.htm`, `.css`, `*.slice.ron` |
-| `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background |
+| `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
 
 Re-exported crates (their types appear in the API): `tera`, `tl`,
@@ -59,9 +59,9 @@ examples/
                    scroll.rs, selector.rs, locale_panel.rs, theme_panel.rs, consts.rs
 assets/            (gitignored — see Gotchas)
   fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
-  quickstart/      hello.html, style.css, locales/{en-US,de}
-  ui/frame.png     256x256 frame; ui/frame.slice.ron slices it (16px borders)
-  ui/themes/       demo CSS themes: crimson (default), parchment, terminal, large_print
+  quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
+  ui/frame.png     256x256 frame; ui/frame.slice.ron slices it (16px borders); frame_transparent.png (clear center)
+  ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print
   ui/content/      test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent), test.css
   locales/<id>/    demo bundles (main.ftl.ron + ui.ftl) for en-US, ru, de, ja
 ```
@@ -91,8 +91,9 @@ assets/            (gitignored — see Gotchas)
 - Templates: compiled at load (syntax errors fail the load); name = asset path,
   so `.html` gets Tera HTML autoescaping. Plain HTML renders to itself.
 - Rebuild triggers: template/context change or reload, locale change or bundle
-  (re)load, stylesheet swap or (re)load, `FontFamilies` change, outline marker
-  added. The UI isn't built while its stylesheet is loading.
+  (re)load, stylesheet swap or (re)load, a stylesheet's `border-image` image
+  loading, `FontFamilies` change, outline marker added. The UI isn't built
+  while its stylesheet is loading (images may arrive later; their load rebuilds).
 - Structure: blocks `h1`–`h6`, `p`, `li` (bulleted), `pre` (whitespace kept, no
   wrap; leading newline and trailing whitespace dropped), loose text; other
   elements are inline in a block or walked through outside one;
@@ -115,6 +116,19 @@ assets/            (gitignored — see Gotchas)
   starting point even without `<html>`; nothing declared → white, Bevy's
   default font, 16px. Missing font faces fall back bold-italic → bold →
   italic → regular.
+- Box properties (`cascade.rs` → `build.rs`): `border-image` (shorthand +
+  `-source`/`-slice`/`-repeat`), `border-width`, `padding` (absolute lengths)
+  on blocks and on the `html` rule; `background-color` on blocks only.
+  `url()` resolves relative to the `.css`; the `Stylesheet` loader loads the
+  images as dependencies. Maps to Bevy's sliced `ImageNode`
+  (`VisualBox::BorderBox`) + `Node::border`/`padding`. Slice numbers = image px,
+  `%` = of image size (needs the image loaded). `stretch` → Stretch, other
+  repeats → `Tile`; one mode for all sides. Bevy always draws the center;
+  `border-image-width`/`-outset` ignored (corners at image size). Blocks with
+  box properties get a wrapper node (a node can't be both `Text` and
+  `ImageNode`); the `HtmlElement` is on the wrapper. The `html` rule's box is
+  applied to the `HtmlUi` node itself, with the replaced border/padding kept in
+  `CssRootBox` and restored if a later stylesheet drops them.
 - Demo locales: every locale needs the same message ids; item names arrive as
   English data (`$item`) and non-English bundles map them with an `item-name`
   message. Every visible string in `l10n.html` has a key.

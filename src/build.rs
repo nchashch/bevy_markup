@@ -3,7 +3,7 @@
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
-use crate::cascade::HtmlStyles;
+use crate::cascade::{HtmlStyles, SliceValue};
 use crate::fonts::FontFamilies;
 use crate::html::{HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, RenderedHtml};
 use crate::l10n::LocalizedText;
@@ -45,8 +45,54 @@ struct Block {
     element: Option<HtmlElement>,
     /// The block element's own computed style (bullet; root `Text` font).
     style: Style,
-    background: Option<Color>,
     runs: Vec<Run>,
+}
+
+/// Resolved box properties of an element: `border-width`, `padding`,
+/// `background-color`, `border-image`.
+#[derive(Default)]
+struct BoxStyle {
+    border: [Option<f32>; 4],
+    padding: [Option<f32>; 4],
+    background: Option<Color>,
+    image: Option<(Handle<Image>, TextureSlicer)>,
+}
+
+impl BoxStyle {
+    fn is_empty(&self) -> bool {
+        self.border.iter().all(Option::is_none)
+            && self.padding.iter().all(Option::is_none)
+            && self.background.is_none()
+            && self.image.is_none()
+    }
+
+    fn sliced_image(&self) -> Option<ImageNode> {
+        let (image, slicer) = self.image.as_ref()?;
+        Some(ImageNode {
+            visual_box: VisualBox::BorderBox,
+            ..ImageNode::new(image.clone()).with_mode(NodeImageMode::Sliced(slicer.clone()))
+        })
+    }
+}
+
+/// `[top, right, bottom, left]` px values over `base`.
+fn rect_over(base: UiRect, sides: [Option<f32>; 4]) -> UiRect {
+    let side = |value: Option<f32>, base: Val| value.map_or(base, Val::Px);
+    UiRect {
+        top: side(sides[0], base.top),
+        right: side(sides[1], base.right),
+        bottom: side(sides[2], base.bottom),
+        left: side(sides[3], base.left),
+    }
+}
+
+/// What the `html` rule's box properties replaced on an `HtmlUi` node, so
+/// they can be restored when a later stylesheet drops them.
+#[derive(Component)]
+pub(crate) struct CssRootBox {
+    border: UiRect,
+    padding: UiRect,
+    image: bool,
 }
 
 /// Computes styles from declared CSS + registered fonts.
@@ -55,6 +101,9 @@ struct Styler<'a> {
     fonts: &'a FontFamilies,
     /// Root font size, for `rem`.
     root_size: f32,
+    /// For `border-image` sources.
+    sheet: Option<&'a Stylesheet>,
+    images: &'a Assets<Image>,
 }
 
 impl Styler<'_> {
@@ -86,11 +135,62 @@ impl Styler<'_> {
             .with_font(font)
             .with_font_size(style.size)
     }
+
+    /// `tag`'s box properties. A `border-image` whose `%` slices need the
+    /// image size is skipped until the image has loaded (its load rebuilds).
+    fn box_of(&self, tag: &str) -> BoxStyle {
+        let declared = self.styles.get(tag);
+        let image = declared.border_image.as_ref().and_then(|decl| {
+            let url = decl.source.as_ref()?.as_ref()?;
+            let handle = self.sheet?.image(url)?;
+            let (offsets, fill) = decl
+                .slice
+                .unwrap_or(([SliceValue::Fraction(1.0); 4], false));
+            if !fill {
+                debug!("html css: border-image without `fill` still draws the center in Bevy");
+            }
+            let size = self.images.get(handle).map(Image::size_f32);
+            // [top, right, bottom, left]; % is of the height for top/bottom.
+            let mut px = [0.0; 4];
+            for (index, offset) in offsets.iter().enumerate() {
+                px[index] = match offset {
+                    SliceValue::Px(px) => *px,
+                    SliceValue::Fraction(fraction) => {
+                        let size = size?;
+                        fraction * if index % 2 == 0 { size.y } else { size.x }
+                    }
+                };
+            }
+            let mode = if decl.tile.unwrap_or(false) {
+                SliceScaleMode::Tile { stretch_value: 1.0 }
+            } else {
+                SliceScaleMode::Stretch
+            };
+            Some((
+                handle.clone(),
+                TextureSlicer {
+                    border: BorderRect {
+                        min_inset: Vec2::new(px[3], px[0]),
+                        max_inset: Vec2::new(px[1], px[2]),
+                    },
+                    center_scale_mode: mode,
+                    sides_scale_mode: mode,
+                    max_corner_scale: 1.0,
+                },
+            ))
+        });
+        BoxStyle {
+            border: declared.border_width,
+            padding: declared.padding,
+            background: declared.background,
+            image,
+        }
+    }
 }
 
 /// The `html` rule's values (the starting point even for fragments without
 /// `<html>`), over the defaults.
-fn root_style(styles: &HtmlStyles, fonts: &FontFamilies) -> Style {
+fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Assets<Image>) -> Style {
     let defaults = Style {
         color: DEFAULT_COLOR,
         family: None,
@@ -102,6 +202,8 @@ fn root_style(styles: &HtmlStyles, fonts: &FontFamilies) -> Style {
         styles,
         fonts,
         root_size: DEFAULT_FONT_SIZE,
+        sheet: None,
+        images,
     }
     .style_of("html", defaults)
 }
@@ -109,7 +211,9 @@ fn root_style(styles: &HtmlStyles, fonts: &FontFamilies) -> Style {
 pub(crate) fn build_html_ui(
     mut commands: Commands,
     mut sheet_events: MessageReader<AssetEvent<Stylesheet>>,
+    mut image_events: MessageReader<AssetEvent<Image>>,
     sheets: Res<Assets<Stylesheet>>,
+    images: Res<Assets<Image>>,
     default_sheet: Res<DefaultStylesheet>,
     fonts: Res<FontFamilies>,
     views: Query<
@@ -122,6 +226,7 @@ pub(crate) fn build_html_ui(
         ),
         With<HtmlUi>,
     >,
+    mut roots: Query<(&mut Node, Option<&CssRootBox>), With<HtmlUi>>,
 ) {
     let reloaded_sheets: HashSet<AssetId<Stylesheet>> = sheet_events
         .read()
@@ -130,16 +235,36 @@ pub(crate) fn build_html_ui(
             _ => None,
         })
         .collect();
+    let loaded_images: HashSet<AssetId<Image>> = image_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
 
     for (entity, rendered, localized, own_sheet, outline) in &views {
-        let sheet = match &own_sheet {
+        let sheet_handle = match &own_sheet {
             Some(own) => Some(&own.0),
             None => default_sheet.0.as_ref(),
+        };
+        let css = match sheet_handle {
+            Some(handle) => match sheets.get(handle) {
+                Some(css) => Some(css),
+                // Still loading: its load event triggers the build.
+                None => continue,
+            },
+            None => None,
         };
         let sheet_changed = match &own_sheet {
             Some(own) => own.is_changed(),
             None => default_sheet.is_changed(),
-        } || sheet.is_some_and(|sheet| reloaded_sheets.contains(&sheet.id()));
+        } || sheet_handle.is_some_and(|sheet| reloaded_sheets.contains(&sheet.id()))
+            || css.is_some_and(|css| {
+                css.images()
+                    .iter()
+                    .any(|image| loaded_images.contains(&image.id()))
+            });
         let dirty = rendered.is_changed()
             || localized.is_changed()
             || sheet_changed
@@ -149,20 +274,21 @@ pub(crate) fn build_html_ui(
             continue;
         }
 
-        let styles = match sheet {
-            Some(sheet) => match sheets.get(sheet) {
-                Some(css) => HtmlStyles::from_sheet(css.sheet()),
-                // Still loading: its load event triggers the build.
-                None => continue,
-            },
-            None => HtmlStyles::default(),
-        };
-        let root = root_style(&styles, &fonts);
+        let styles = css
+            .map(|css| HtmlStyles::from_sheet(css.sheet()))
+            .unwrap_or_default();
+        let root = root_style(&styles, &fonts, &images);
         let styler = Styler {
             styles: &styles,
             fonts: &fonts,
             root_size: root.size,
+            sheet: css,
+            images: &images,
         };
+
+        if let Ok((mut node, state)) = roots.get_mut(entity) {
+            apply_root_box(&mut commands, entity, &mut node, state, styler.box_of("html"));
+        }
 
         let blocks = if outline.is_some() {
             let text = match &*rendered {
@@ -179,7 +305,6 @@ pub(crate) fn build_html_ui(
                 kind: BlockKind::Paragraph,
                 element: None,
                 style,
-                background: None,
                 runs: vec![Run { text, style }],
             }]
         } else {
@@ -192,7 +317,6 @@ pub(crate) fn build_html_ui(
                     kind: BlockKind::Paragraph,
                     element: None,
                     style: root,
-                    background: None,
                     runs: vec![Run {
                         text: format!("failed to render: {message}"),
                         style: root,
@@ -214,45 +338,39 @@ pub(crate) fn build_html_ui(
 }
 
 fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block) {
+    let boxed = block
+        .element
+        .as_ref()
+        .map(|element| styler.box_of(&element.tag))
+        .unwrap_or_default();
     let prefix = match block.kind {
         BlockKind::ListItem => "• ",
         _ => "",
     };
+    let indent = match block.kind {
+        BlockKind::ListItem => UiRect::left(Val::Px(12.0)),
+        _ => UiRect::DEFAULT,
+    };
     // Blocks keep their height (`flex_shrink: 0`) so a scrolling parent
     // overflows instead of squashing them.
-    let node = match block.kind {
-        BlockKind::ListItem => Node {
-            flex_shrink: 0.0,
-            margin: UiRect::left(Val::Px(12.0)),
-            ..default()
-        },
+    let text_node = match block.kind {
         BlockKind::Preformatted => Node {
             flex_shrink: 0.0,
             padding: UiRect::all(Val::Px(8.0)),
             overflow: Overflow::clip_x(),
             ..default()
         },
-        BlockKind::Heading | BlockKind::Paragraph => Node {
+        BlockKind::Heading | BlockKind::Paragraph | BlockKind::ListItem => Node {
             flex_shrink: 0.0,
             ..default()
         },
     };
-    let mut text = parent.spawn((
+    let text = (
         Text::new(prefix),
         styler.text_font(block.style),
         TextColor(block.style.color),
-        node,
-    ));
-    if let Some(element) = block.element {
-        text.insert(element);
-    }
-    if matches!(block.kind, BlockKind::Preformatted) {
-        text.insert(TextLayout::no_wrap());
-    }
-    if let Some(background) = block.background {
-        text.insert(BackgroundColor(background));
-    }
-    text.with_children(|spans| {
+    );
+    let spawn_spans = |spans: &mut ChildSpawnerCommands| {
         for run in block.runs {
             spans.spawn((
                 TextSpan::new(run.text),
@@ -260,7 +378,105 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
                 TextColor(run.style.color),
             ));
         }
+    };
+    let no_wrap = matches!(block.kind, BlockKind::Preformatted);
+
+    if boxed.is_empty() {
+        let mut entity = parent.spawn((text, Node { margin: indent, ..text_node }));
+        if let Some(element) = block.element {
+            entity.insert(element);
+        }
+        if no_wrap {
+            entity.insert(TextLayout::no_wrap());
+        }
+        entity.with_children(spawn_spans);
+        return;
+    }
+
+    // Box properties go on a wrapper node: a node can't be both `Text` and
+    // `ImageNode` (both size it from content).
+    let mut wrapper = parent.spawn(Node {
+        flex_shrink: 0.0,
+        margin: indent,
+        border: rect_over(UiRect::DEFAULT, boxed.border),
+        padding: rect_over(UiRect::DEFAULT, boxed.padding),
+        ..default()
     });
+    if let Some(element) = block.element {
+        wrapper.insert(element);
+    }
+    if let Some(background) = boxed.background {
+        wrapper.insert(BackgroundColor(background));
+    }
+    if let Some(image) = boxed.sliced_image() {
+        wrapper.insert(image);
+    }
+    wrapper.with_children(|wrapper| {
+        let mut entity = wrapper.spawn((text, text_node));
+        if no_wrap {
+            entity.insert(TextLayout::no_wrap());
+        }
+        entity.with_children(spawn_spans);
+    });
+}
+
+/// Applies the `html` rule's `border-image`, `border-width` and `padding` to
+/// the `HtmlUi` node itself, remembering what they replaced (in
+/// [`CssRootBox`]) so a stylesheet without them restores the node.
+/// `background-color` stays block-only (the node's own `BackgroundColor`
+/// belongs to the app).
+fn apply_root_box(
+    commands: &mut Commands,
+    entity: Entity,
+    node: &mut Node,
+    state: Option<&CssRootBox>,
+    boxed: BoxStyle,
+) {
+    let (base_border, base_padding) = state.map_or((node.border, node.padding), |state| {
+        (state.border, state.padding)
+    });
+    let image = boxed.sliced_image();
+    let applies = image.is_some()
+        || boxed.border.iter().any(Option::is_some)
+        || boxed.padding.iter().any(Option::is_some);
+    let had_image = state.is_some_and(|state| state.image);
+
+    if !applies {
+        if state.is_some() {
+            node.border = base_border;
+            node.padding = base_padding;
+            let mut entity = commands.entity(entity);
+            entity.remove::<CssRootBox>();
+            if had_image {
+                entity.remove::<ImageNode>();
+            }
+        }
+        return;
+    }
+
+    let border = rect_over(base_border, boxed.border);
+    let padding = rect_over(base_padding, boxed.padding);
+    if node.border != border {
+        node.border = border;
+    }
+    if node.padding != padding {
+        node.padding = padding;
+    }
+    let mut entity = commands.entity(entity);
+    entity.insert(CssRootBox {
+        border: base_border,
+        padding: base_padding,
+        image: image.is_some(),
+    });
+    match image {
+        Some(image) => {
+            entity.insert(image);
+        }
+        None if had_image => {
+            entity.remove::<ImageNode>();
+        }
+        None => {}
+    }
 }
 
 /// Walk context shared by every node.
@@ -304,7 +520,6 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
                     kind: BlockKind::Paragraph,
                     element: None,
                     style: inherited,
-                    background: None,
                     runs,
                 });
             }
@@ -355,7 +570,6 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
         kind,
         element: Some(element),
         style,
-        background: ctx.styler.styles.get(&name).background,
         runs,
     });
 }

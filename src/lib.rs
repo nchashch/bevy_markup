@@ -65,13 +65,16 @@
 //!   Each block becomes a `Text` node with a `TextSpan` per styled run and an
 //!   [`HtmlElement`](html::HtmlElement) component (tag, id, classes).
 //! - **CSS** ([`style`]): type selectors; `color`, `font-family`, `font-size`,
-//!   `font-weight`, `font-style` (inherited), `background-color` (blocks).
+//!   `font-weight`, `font-style` (inherited); `border-image` (9-slice),
+//!   `border-width`, `padding` on blocks and on the `HtmlUi` node (`html`
+//!   rule); `background-color` (blocks).
 //! - **Fluent** ([`l10n`]): `data-l10n-id` / `data-l10n-args` (fluent-dom
 //!   convention); translations may contain inline markup.
 //! - **Tera** ([`template`](mod@template)): full Tera 2 syntax in `.html` files, rendered with
 //!   the entity's [`TemplateContext`](html::TemplateContext).
-//! - **9-slice frames** ([`nine_slice`]): `*.slice.ron` assets drawn as a node's
-//!   background via [`NineSliceFrame`](nine_slice::NineSliceFrame).
+//! - **9-slice frames**: in CSS via `border-image` (see [`style`]), or for
+//!   nodes outside HTML via `*.slice.ron` assets and
+//!   [`NineSliceFrame`](nine_slice::NineSliceFrame) ([`nine_slice`]).
 //!
 //! ## Cargo features
 //!

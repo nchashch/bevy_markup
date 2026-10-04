@@ -4,6 +4,10 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightningcss::properties::Property;
+use lightningcss::properties::border::BorderSideWidth;
+use lightningcss::properties::border_image::{
+    BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
+};
 use lightningcss::properties::font::{
     AbsoluteFontSize, AbsoluteFontWeight, FontFamily, FontSize, FontStyle, FontWeight,
     GenericFontFamily, RelativeFontSize,
@@ -12,7 +16,9 @@ use lightningcss::rules::CssRule;
 use lightningcss::stylesheet::{PrinterOptions, StyleSheet};
 use lightningcss::traits::ToCss;
 use lightningcss::values::color::{CssColor, RGBA};
-use lightningcss::values::length::{LengthPercentage, LengthValue};
+use lightningcss::values::image::Image;
+use lightningcss::values::length::{LengthPercentage, LengthPercentageOrAuto, LengthValue};
+use lightningcss::values::percentage::NumberOrPercentage;
 
 use crate::fonts::{FamilyRef, GenericFamily};
 
@@ -36,6 +42,27 @@ impl FontSizeSpec {
     }
 }
 
+/// One `border-image-slice` offset.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SliceValue {
+    /// Image pixels (a plain number).
+    Px(f32),
+    /// Fraction of the image's width (left/right) or height (top/bottom).
+    Fraction(f32),
+}
+
+/// Declared `border-image` (shorthand and/or longhands; each part optional so
+/// longhands override parts of an earlier shorthand).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BorderImageDecl {
+    /// The `url(...)` as written; `Some(None)` = `none`.
+    pub source: Option<Option<String>>,
+    /// `[top, right, bottom, left]` and `fill`.
+    pub slice: Option<([SliceValue; 4], bool)>,
+    /// `repeat`/`round`/`space` (tiled) vs `stretch`.
+    pub tile: Option<bool>,
+}
+
 /// Declared (not computed) style for one element type.
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ElementStyle {
@@ -46,6 +73,39 @@ pub(crate) struct ElementStyle {
     pub font_size: Option<FontSizeSpec>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
+    pub border_image: Option<BorderImageDecl>,
+    /// `[top, right, bottom, left]` in px.
+    pub border_width: [Option<f32>; 4],
+    /// `[top, right, bottom, left]` in px.
+    pub padding: [Option<f32>; 4],
+}
+
+/// Every `border-image-source` URL in `sheet`, as written.
+pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
+    let mut urls = Vec::new();
+    for rule in &sheet.rules.0 {
+        let CssRule::Style(rule) = rule else {
+            continue;
+        };
+        let declarations = rule
+            .declarations
+            .declarations
+            .iter()
+            .chain(&rule.declarations.important_declarations);
+        for declaration in declarations {
+            let image = match declaration {
+                Property::BorderImage(border_image, _) => &border_image.source,
+                Property::BorderImageSource(image) => image,
+                _ => continue,
+            };
+            if let Some(url) = image_url(image)
+                && !urls.contains(&url)
+            {
+                urls.push(url);
+            }
+        }
+    }
+    urls
 }
 
 /// Element type (lowercase tag name) → declared style.
@@ -132,7 +192,94 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::FontStyle(font_style) => {
             style.italic = Some(!matches!(font_style, FontStyle::Normal));
         }
+        Property::BorderImage(border_image, _) => {
+            style.border_image = Some(BorderImageDecl {
+                source: Some(image_url(&border_image.source)),
+                slice: Some(slice(&border_image.slice)),
+                tile: Some(tile(&border_image.repeat)),
+            });
+        }
+        Property::BorderImageSource(image) => {
+            style.border_image.get_or_insert_default().source = Some(image_url(image));
+        }
+        Property::BorderImageSlice(value) => {
+            style.border_image.get_or_insert_default().slice = Some(slice(value));
+        }
+        Property::BorderImageRepeat(repeat) => {
+            style.border_image.get_or_insert_default().tile = Some(tile(repeat));
+        }
+        Property::BorderImageWidth(_) | Property::BorderImageOutset(_) => {
+            debug!("html css: border-image-width/-outset unsupported (corners draw at image size)");
+        }
+        Property::BorderWidth(width) => {
+            style.border_width = [&width.top, &width.right, &width.bottom, &width.left]
+                .map(side_width);
+        }
+        Property::BorderTopWidth(width) => style.border_width[0] = side_width(width),
+        Property::BorderRightWidth(width) => style.border_width[1] = side_width(width),
+        Property::BorderBottomWidth(width) => style.border_width[2] = side_width(width),
+        Property::BorderLeftWidth(width) => style.border_width[3] = side_width(width),
+        Property::Padding(padding) => {
+            style.padding = [&padding.top, &padding.right, &padding.bottom, &padding.left]
+                .map(length_px);
+        }
+        Property::PaddingTop(value) => style.padding[0] = length_px(value),
+        Property::PaddingRight(value) => style.padding[1] = length_px(value),
+        Property::PaddingBottom(value) => style.padding[2] = length_px(value),
+        Property::PaddingLeft(value) => style.padding[3] = length_px(value),
         _ => {}
+    }
+}
+
+fn image_url(image: &Image) -> Option<String> {
+    match image {
+        Image::Url(url) => Some(url.url.to_string()),
+        Image::None => None,
+        _ => {
+            debug!("html css: only url() border-image sources are supported");
+            None
+        }
+    }
+}
+
+fn slice(value: &BorderImageSlice) -> ([SliceValue; 4], bool) {
+    let offsets = &value.offsets;
+    let side = |offset: &NumberOrPercentage| match offset {
+        NumberOrPercentage::Number(px) => SliceValue::Px(*px),
+        NumberOrPercentage::Percentage(percent) => SliceValue::Fraction(percent.0),
+    };
+    (
+        [side(&offsets.0), side(&offsets.1), side(&offsets.2), side(&offsets.3)],
+        value.fill,
+    )
+}
+
+fn tile(repeat: &BorderImageRepeat) -> bool {
+    // Bevy has one scale mode for all sides: tile if either axis tiles.
+    [repeat.horizontal, repeat.vertical]
+        .iter()
+        .any(|keyword| !matches!(keyword, BorderImageRepeatKeyword::Stretch))
+}
+
+fn side_width(width: &BorderSideWidth) -> Option<f32> {
+    match width {
+        BorderSideWidth::Thin => Some(1.0),
+        BorderSideWidth::Medium => Some(3.0),
+        BorderSideWidth::Thick => Some(5.0),
+        BorderSideWidth::Length(length) => length.to_px(),
+    }
+}
+
+/// `padding` in px; `auto`, `%` and `calc()` are unsupported.
+fn length_px(value: &LengthPercentageOrAuto) -> Option<f32> {
+    match value {
+        LengthPercentageOrAuto::LengthPercentage(LengthPercentage::Dimension(length)) => {
+            length.to_px()
+        }
+        _ => {
+            debug!("html css: only absolute lengths are supported for padding");
+            None
+        }
     }
 }
 

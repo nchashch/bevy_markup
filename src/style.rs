@@ -11,7 +11,10 @@
 //!   others are skipped (logged at `debug`)
 //! - inherited: `color`, `font-family`, `font-size`, `font-weight`,
 //!   `font-style`
-//! - blocks only: `background-color`
+//! - box properties on blocks and on the `html` rule (= the `HtmlUi` node
+//!   itself): `border-image` (+ `-source`, `-slice`, `-repeat`),
+//!   `border-width`, `padding` (absolute lengths); `background-color` on
+//!   blocks only
 //! - cascade: later rules win; `!important` beats normal declarations
 //! - an `html` rule sets the starting values, also for fragments without `<html>`
 //!
@@ -22,22 +25,59 @@
 //! `px`, `em`/`%` (of the inherited size), `rem` (of the root size), keywords
 //! (`medium` = 16px), `smaller`/`larger`. `font-weight`: bold at 600+.
 //! `font-style`: `italic`/`oblique` vs `normal`.
+//!
+//! ## 9-slice frames with `border-image`
+//!
+//! ```css
+//! html {
+//!   border-image: url("frame.png") 16 fill / 16px stretch;
+//!   border-width: 16px;
+//!   padding: 12px 20px;
+//! }
+//! ```
+//!
+//! The image (relative to the `.css` file; its format must be enabled in the
+//! app's Bevy features) is drawn 9-sliced over the node's border box:
+//! `border-image-slice` gives the insets in image pixels (or `%` of the image
+//! size), `border-image-repeat: stretch` stretches sides and center,
+//! `repeat`/`round`/`space` tile them. `border-width` and `padding` become the
+//! node's `border`/`padding`, insetting the content. Bevy differences: the
+//! center is always drawn (`fill` or not), corners keep their image size
+//! (`border-image-width`/`-outset` are ignored), and one repeat mode applies to
+//! all sides. Box properties from the `html` rule are applied to the `HtmlUi`
+//! node and restored when a later stylesheet drops them.
 
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
 use lightningcss::stylesheet::{ParserOptions, StyleSheet};
 use lightningcss::traits::IntoOwned;
 
-/// A parsed `.css` file.
+/// A parsed `.css` file, plus the images its `border-image-source: url(...)`
+/// declarations reference (resolved relative to the `.css` file, loaded as
+/// dependencies).
 #[derive(Asset, TypePath)]
 pub struct Stylesheet {
     sheet: StyleSheet<'static>,
+    /// URLs as written, parallel to `images`.
+    image_urls: Vec<String>,
+    #[dependency]
+    images: Vec<Handle<Image>>,
 }
 
 impl Stylesheet {
     /// The lightningcss stylesheet tree.
     pub fn sheet(&self) -> &StyleSheet<'static> {
         &self.sheet
+    }
+
+    /// The image a `url(...)` in this sheet refers to.
+    pub(crate) fn image(&self, url: &str) -> Option<&Handle<Image>> {
+        let index = self.image_urls.iter().position(|u| u == url)?;
+        self.images.get(index)
+    }
+
+    pub(crate) fn images(&self) -> &[Handle<Image>] {
+        &self.images
     }
 }
 
@@ -82,8 +122,16 @@ impl AssetLoader for StylesheetLoader {
         };
         // The parse error borrows `source`; render it before `source` drops.
         let sheet = StyleSheet::parse(&source, options).map_err(|err| err.to_string())?;
+        let image_urls = crate::cascade::image_urls(&sheet);
+        let mut images = Vec::with_capacity(image_urls.len());
+        for url in &image_urls {
+            let path = load_context.path().resolve_embed_str(url)?;
+            images.push(load_context.load(path));
+        }
         Ok(Stylesheet {
             sheet: sheet.into_owned(),
+            image_urls,
+            images,
         })
     }
 

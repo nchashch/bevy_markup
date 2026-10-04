@@ -1,4 +1,5 @@
-//! 9-slice styles as assets.
+//! 9-slice styles as assets, for nodes outside HTML. Inside HTML, use CSS
+//! `border-image` instead (see [`crate::style`]).
 //!
 //! A `*.slice.ron` file names an image (relative to the `.ron` file) and how to
 //! slice it:
