@@ -22,7 +22,7 @@ src/
     mod.rs           UiPlugin: registers panels and systems below
     nine_slice.rs    *.slice.ron loader, NineSlice asset, NineSliceFrame component
     panel.rs         Static Bevy UI panel (header + body text)
-    dom_panel.rs     Debug panels: DOM outline of test/inventory/l10n.html; demo_context()
+    dom_panel.rs     Debug panels: DOM outline of test/inventory/l10n.html (max 45vh, wheel + scrollbar); demo_context()
     html_ui.rs       HtmlUi: renders an HtmlView's DOM as Bevy UI nodes
 assets/              (gitignored — see Gotchas)
   fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
@@ -113,6 +113,23 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
 - `assets/` is gitignored: new asset files are not committed.
 - Bevy `ImageNode` defaults to `VisualBox::ContentBox` (draws inside padding);
   frames need `BorderBox`.
+- Scrollable panels (see `dom_panel.rs::spawn_panel`): framed row node with
+  `max_height` → children `[viewport, scrollbar]`. Viewport: `ScrollArea`
+  (wheel/trackpad, clamped), `overflow: Overflow::scroll_y()`, `flex_grow: 1`,
+  `min_height: 0` (else its content sizes it and nothing scrolls); its content
+  child gets `flex_shrink: 0.0`. Scrollbar: `bevy::ui_widgets::Scrollbar {
+  target: viewport }` as a *sibling* (a child of the scrolled node would scroll
+  away) with one `ScrollbarThumb` child (no `Node`; style via
+  `BackgroundColor` + its `border_radius`). `toggle_scrollbars` hides bars whose
+  content fits. Widgets are in `DefaultPlugins` via Bevy's default `ui`
+  feature. If a framed node itself scrolls, add `overflow_clip_margin:
+  OverflowClipMargin::content_box()` or content draws over the frame.
+- Every UI `Node` is pickable and blocks pointer input to nodes below by
+  default. Invisible layout-only wrappers (e.g. the full-window root in
+  `tui/mod.rs`) must carry `Pickable::IGNORE`, or they swallow wheel/click/drag
+  for everything underneath — this is what broke `ScrollArea`/`Scrollbar`.
+- Bevy 0.19: `BorderRadius` is a `Node` field (`border_radius`), not a
+  component.
 - `tl::VDom` borrows its input; assets use `tl::parse_owned` (unsafe fn, sound
   per its docs) → `VDomGuard`. The guard only hands out shared borrows, so the
   DOM is never mutated; derived data (translations) lives beside it, keyed by
@@ -148,3 +165,7 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
 
 - The HTML pipeline logs each DOM outline at `info`; `timeout 10 cargo run`
   and read the log to check templating/localization without a screenshot.
+- Pointer interaction can be tested in-app by writing
+  `bevy::window::WindowEvent::{CursorMoved, MouseWheel, MouseButtonInput}`
+  messages (picking reads these) from a throwaway system, then logging
+  `HoverMap` / `ScrollPosition`.

@@ -43,6 +43,10 @@ fn fit_panel_aspect(
 /// replaces it with a `Tui` component.
 fn spawn_panel(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
+        // Full-window layout root so the frame's `Percent` height resolves
+        // against the window. Invisible, so it must not take pointer input:
+        // UI nodes are pickable and block lower nodes by default.
+        Pickable::IGNORE,
         Node {
             width: Val::Percent(100.),
             height: Val::Percent(100.),
