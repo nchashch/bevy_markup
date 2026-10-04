@@ -1,5 +1,7 @@
-//! Stylesheet → declared style per element type (the subset documented in
-//! [`crate::style`]).
+//! Stylesheet → declared style per element (the subset documented in
+//! [`crate::style`]): compound selectors matched against tag, id and classes.
+
+use std::cell::RefCell;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -21,6 +23,7 @@ use lightningcss::values::length::{LengthPercentage, LengthPercentageOrAuto, Len
 use lightningcss::values::percentage::NumberOrPercentage;
 
 use crate::fonts::{FamilyRef, GenericFamily};
+use crate::html::HtmlElement;
 
 /// A declared `font-size`, resolved against inherited/root sizes later.
 #[derive(Clone, Copy, Debug)]
@@ -108,54 +111,137 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
     urls
 }
 
-/// Element type (lowercase tag name) → declared style.
-#[derive(Default)]
-pub(crate) struct HtmlStyles {
-    styles: HashMap<String, ElementStyle>,
-    empty: ElementStyle,
+/// A compound selector: optional type (or `*`), then any number of `.class`
+/// and `#id` parts, e.g. `p.note`, `.a.b`, `#title`.
+#[derive(Clone, Debug)]
+struct Compound {
+    /// Lowercase; `None` for `*` or no type.
+    tag: Option<String>,
+    ids: Vec<String>,
+    classes: Vec<String>,
 }
 
-impl HtmlStyles {
-    pub fn from_sheet(sheet: &StyleSheet) -> Self {
-        let mut styles: HashMap<String, ElementStyle> = HashMap::default();
-        // Normal declarations first, then `!important` ones, each pass in
-        // source order: later wins, important beats normal.
-        for important in [false, true] {
-            for rule in &sheet.rules.0 {
-                let CssRule::Style(rule) = rule else {
+impl Compound {
+    /// `None` for anything else (combinators, attributes, pseudo-classes).
+    fn parse(selector: &str) -> Option<Self> {
+        let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+        let mut rest = selector;
+        let mut tag = None;
+        if let Some(after) = rest.strip_prefix('*') {
+            rest = after;
+        } else {
+            let end = rest.find(|c| !is_ident(c)).unwrap_or(rest.len());
+            if end > 0 {
+                tag = Some(rest[..end].to_ascii_lowercase());
+                rest = &rest[end..];
+            }
+        }
+        let mut ids = Vec::new();
+        let mut classes = Vec::new();
+        while let Some(kind) = rest.chars().next() {
+            let body = &rest[1..];
+            let end = body.find(|c| !is_ident(c)).unwrap_or(body.len());
+            if end == 0 {
+                return None;
+            }
+            match kind {
+                '.' => classes.push(body[..end].to_owned()),
+                '#' => ids.push(body[..end].to_owned()),
+                _ => return None,
+            }
+            rest = &body[end..];
+        }
+        if tag.is_none() && ids.is_empty() && classes.is_empty() && selector != "*" {
+            return None;
+        }
+        Some(Self { tag, ids, classes })
+    }
+
+    /// CSS specificity: (ids, classes, types).
+    fn specificity(&self) -> (u32, u32, u32) {
+        (
+            self.ids.len() as u32,
+            self.classes.len() as u32,
+            self.tag.is_some() as u32,
+        )
+    }
+
+    fn matches(&self, element: &HtmlElement) -> bool {
+        self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
+            && self.ids.iter().all(|id| element.id.as_ref() == Some(id))
+            && self.classes.iter().all(|class| element.has_class(class))
+    }
+}
+
+/// One selector of a style rule with one importance level's declarations.
+struct Rule<'a> {
+    selector: Compound,
+    /// Sort key: importance, then specificity, then source order.
+    rank: (bool, (u32, u32, u32), usize),
+    declarations: &'a [Property<'static>],
+}
+
+/// A stylesheet's rules, matched per element (cached by tag + id + classes).
+#[derive(Default)]
+pub(crate) struct HtmlStyles<'a> {
+    rules: Vec<Rule<'a>>,
+    cache: RefCell<HashMap<(String, Option<String>, Vec<String>), ElementStyle>>,
+}
+
+impl<'a> HtmlStyles<'a> {
+    pub fn from_sheet(sheet: &'a StyleSheet<'static>) -> Self {
+        let mut rules = Vec::new();
+        for (order, rule) in sheet.rules.0.iter().enumerate() {
+            let CssRule::Style(rule) = rule else {
+                continue;
+            };
+            for selector in rule.selectors.0.iter() {
+                let Ok(text) = selector.to_css_string(PrinterOptions::default()) else {
                     continue;
                 };
-                let declarations = if important {
-                    &rule.declarations.important_declarations
-                } else {
-                    &rule.declarations.declarations
-                };
-                if declarations.is_empty() {
+                let Some(compound) = Compound::parse(&text) else {
+                    debug!("html css: skipping unsupported selector `{text}`");
                     continue;
-                }
-                for selector in rule.selectors.0.iter() {
-                    let Ok(name) = selector.to_css_string(PrinterOptions::default()) else {
-                        continue;
-                    };
-                    if !is_type_selector(&name) {
-                        debug!("html css: skipping unsupported selector `{name}`");
+                };
+                let specificity = compound.specificity();
+                for (important, declarations) in [
+                    (false, &rule.declarations.declarations),
+                    (true, &rule.declarations.important_declarations),
+                ] {
+                    if declarations.is_empty() {
                         continue;
                     }
-                    let style = styles.entry(name.to_ascii_lowercase()).or_default();
-                    for declaration in declarations {
-                        apply(style, declaration);
-                    }
+                    rules.push(Rule {
+                        selector: compound.clone(),
+                        rank: (important, specificity, order),
+                        declarations,
+                    });
                 }
             }
         }
+        // Apply in ascending rank: later application wins.
+        rules.sort_by_key(|rule| rule.rank);
         Self {
-            styles,
-            empty: ElementStyle::default(),
+            rules,
+            cache: RefCell::default(),
         }
     }
 
-    pub fn get(&self, tag: &str) -> &ElementStyle {
-        self.styles.get(tag).unwrap_or(&self.empty)
+    /// The declared style for `element`: every matching rule's declarations,
+    /// applied in cascade order.
+    pub fn get(&self, element: &HtmlElement) -> ElementStyle {
+        let key = (element.tag.clone(), element.id.clone(), element.classes.clone());
+        if let Some(style) = self.cache.borrow().get(&key) {
+            return style.clone();
+        }
+        let mut style = ElementStyle::default();
+        for rule in self.rules.iter().filter(|rule| rule.selector.matches(element)) {
+            for declaration in rule.declarations {
+                apply(&mut style, declaration);
+            }
+        }
+        self.cache.borrow_mut().insert(key, style.clone());
+        style
     }
 }
 
@@ -283,13 +369,6 @@ fn length_px(value: &LengthPercentageOrAuto) -> Option<f32> {
     }
 }
 
-fn is_type_selector(selector: &str) -> bool {
-    !selector.is_empty()
-        && selector
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-}
-
 /// `None` for colors without a fixed sRGB value (`currentColor`, system colors).
 fn to_color(color: &CssColor) -> Option<Color> {
     let rgba = RGBA::try_from(color).ok()?;
@@ -348,4 +427,80 @@ fn font_size(size: &FontSize) -> Option<FontSizeSpec> {
         FontSize::Relative(RelativeFontSize::Smaller) => FontSizeSpec::Inherited(1.0 / 1.2),
         FontSize::Relative(RelativeFontSize::Larger) => FontSizeSpec::Inherited(1.2),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use lightningcss::stylesheet::ParserOptions;
+
+    use super::*;
+
+    fn sheet(css: &'static str) -> StyleSheet<'static> {
+        StyleSheet::parse(css, ParserOptions::default()).expect("valid css")
+    }
+
+    fn element(tag: &str, id: Option<&str>, classes: &[&str]) -> HtmlElement {
+        HtmlElement {
+            tag: tag.to_owned(),
+            id: id.map(str::to_owned),
+            classes: classes.iter().map(|class| (*class).to_owned()).collect(),
+        }
+    }
+
+    const RED: Color = Color::srgb_u8(255, 0, 0);
+    const GREEN: Color = Color::srgb_u8(0, 128, 0);
+    const BLUE: Color = Color::srgb_u8(0, 0, 255);
+
+    fn color(css: &'static str, element: &HtmlElement) -> Option<Color> {
+        let sheet = sheet(css);
+        HtmlStyles::from_sheet(&sheet).get(element).color
+    }
+
+    #[test]
+    fn more_specific_selector_wins_regardless_of_order() {
+        let note = element("p", None, &["note"]);
+        assert_eq!(color(".note { color: green } p { color: red }", &note), Some(GREEN));
+        assert_eq!(color(".note { color: red } p.note { color: green }", &note), Some(GREEN));
+        let titled = element("p", Some("title"), &["note", "big"]);
+        assert_eq!(color("#title { color: green } p.note.big { color: red }", &titled), Some(GREEN));
+    }
+
+    #[test]
+    fn equal_specificity_later_rule_wins() {
+        let both = element("p", None, &["a", "b"]);
+        assert_eq!(color(".a { color: red } .b { color: green }", &both), Some(GREEN));
+        assert_eq!(color(".b { color: green } .a { color: red }", &both), Some(RED));
+    }
+
+    #[test]
+    fn important_beats_specificity() {
+        let titled = element("p", Some("title"), &[]);
+        assert_eq!(color("p { color: green !important } #title { color: red }", &titled), Some(GREEN));
+    }
+
+    #[test]
+    fn compound_requires_every_part() {
+        let css = "p.note.big { color: red } h1#x { color: blue }";
+        assert_eq!(color(css, &element("p", None, &["note"])), None);
+        assert_eq!(color(css, &element("div", None, &["note", "big"])), None);
+        assert_eq!(color(css, &element("p", None, &["big", "note", "extra"])), Some(RED));
+        assert_eq!(color(css, &element("h1", Some("y"), &[])), None);
+        assert_eq!(color(css, &element("h1", Some("x"), &[])), Some(BLUE));
+    }
+
+    #[test]
+    fn comma_list_matches_each_selector_with_its_own_specificity() {
+        // `.note` in the list beats the later, less specific `p`.
+        let css = "h1, .note { color: green } p { color: red }";
+        assert_eq!(color(css, &element("p", None, &["note"])), Some(GREEN));
+        assert_eq!(color(css, &element("p", None, &[])), Some(RED));
+        assert_eq!(color(css, &element("h1", None, &[])), Some(GREEN));
+    }
+
+    #[test]
+    fn universal_loses_to_everything_and_unsupported_selectors_are_skipped() {
+        let css = "* { color: red } p { color: green } div p { color: blue } p:hover { color: blue }";
+        assert_eq!(color(css, &element("p", None, &[])), Some(GREEN));
+        assert_eq!(color(css, &element("span", None, &[])), Some(RED));
+    }
 }

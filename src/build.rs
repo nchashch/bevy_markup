@@ -97,7 +97,7 @@ pub(crate) struct CssRootBox {
 
 /// Computes styles from declared CSS + registered fonts.
 struct Styler<'a> {
-    styles: &'a HtmlStyles,
+    styles: &'a HtmlStyles<'a>,
     fonts: &'a FontFamilies,
     /// Root font size, for `rem`.
     root_size: f32,
@@ -107,9 +107,9 @@ struct Styler<'a> {
 }
 
 impl Styler<'_> {
-    /// `tag`'s computed style: its declared values over `inherited`.
-    fn style_of(&self, tag: &str, inherited: Style) -> Style {
-        let declared = self.styles.get(tag);
+    /// `element`'s computed style: its declared values over `inherited`.
+    fn style_of(&self, element: &HtmlElement, inherited: Style) -> Style {
+        let declared = self.styles.get(element);
         Style {
             color: declared.color.unwrap_or(inherited.color),
             family: declared
@@ -136,10 +136,10 @@ impl Styler<'_> {
             .with_font_size(style.size)
     }
 
-    /// `tag`'s box properties. A `border-image` whose `%` slices need the
+    /// `element`'s box properties. A `border-image` whose `%` slices need the
     /// image size is skipped until the image has loaded (its load rebuilds).
-    fn box_of(&self, tag: &str) -> BoxStyle {
-        let declared = self.styles.get(tag);
+    fn box_of(&self, element: &HtmlElement) -> BoxStyle {
+        let declared = self.styles.get(element);
         let image = declared.border_image.as_ref().and_then(|decl| {
             let url = decl.source.as_ref()?.as_ref()?;
             let handle = self.sheet?.image(url)?;
@@ -205,7 +205,7 @@ fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Assets<Image>)
         sheet: None,
         images,
     }
-    .style_of("html", defaults)
+    .style_of(&element_tag("html"), defaults)
 }
 
 pub(crate) fn build_html_ui(
@@ -287,7 +287,8 @@ pub(crate) fn build_html_ui(
         };
 
         if let Ok((mut node, state)) = roots.get_mut(entity) {
-            apply_root_box(&mut commands, entity, &mut node, state, styler.box_of("html"));
+            let root_box = styler.box_of(&element_tag("html"));
+            apply_root_box(&mut commands, entity, &mut node, state, root_box);
         }
 
         let blocks = if outline.is_some() {
@@ -300,7 +301,7 @@ pub(crate) fn build_html_ui(
                 }
                 RenderedHtml::Failed(message) => format!("failed to render: {message}"),
             };
-            let style = styler.style_of("pre", root);
+            let style = styler.style_of(&element_tag("pre"), root);
             vec![Block {
                 kind: BlockKind::Paragraph,
                 element: None,
@@ -341,7 +342,7 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
     let boxed = block
         .element
         .as_ref()
-        .map(|element| styler.box_of(&element.tag))
+        .map(|element| styler.box_of(element))
         .unwrap_or_default();
     let prefix = match block.kind {
         BlockKind::ListItem => "• ",
@@ -528,9 +529,9 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
         tl::Node::Comment(_) => return,
     };
 
-    let name = tag.name().as_utf8_str().to_ascii_lowercase();
-    let style = ctx.styler.style_of(&name, inherited);
-    let kind = match name.as_str() {
+    let element = element_of(tag);
+    let style = ctx.styler.style_of(&element, inherited);
+    let kind = match element.tag.as_str() {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
         "p" => BlockKind::Paragraph,
         "li" => BlockKind::ListItem,
@@ -553,25 +554,37 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
             finish_runs(runs, preformatted)
         }
     };
-    let attribute = |key: &str| {
-        tag.attributes()
-            .get(key)
-            .flatten()
-            .map(|value| decode_entities(&value.as_utf8_str()))
-    };
-    let element = HtmlElement {
-        id: attribute("id"),
-        classes: attribute("class")
-            .map(|classes| classes.split_whitespace().map(str::to_owned).collect())
-            .unwrap_or_default(),
-        tag: name.clone(),
-    };
     blocks.push(Block {
         kind,
         element: Some(element),
         style,
         runs,
     });
+}
+
+/// Tag name (lowercase), `id` and `class` of an element.
+fn element_of(tag: &tl::HTMLTag) -> HtmlElement {
+    let attribute = |key: &str| {
+        tag.attributes()
+            .get(key)
+            .flatten()
+            .map(|value| decode_entities(&value.as_utf8_str()))
+    };
+    HtmlElement {
+        tag: tag.name().as_utf8_str().to_ascii_lowercase(),
+        id: attribute("id"),
+        classes: attribute("class")
+            .map(|classes| classes.split_whitespace().map(str::to_owned).collect())
+            .unwrap_or_default(),
+    }
+}
+
+/// An element known only by its tag (`html` root, `pre` for outlines).
+fn element_tag(tag: &str) -> HtmlElement {
+    HtmlElement {
+        tag: tag.to_owned(),
+        ..default()
+    }
 }
 
 /// Styled runs of a translation. Translations are markup (fluent-dom style
@@ -646,8 +659,7 @@ fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run
             }
         }
         Some(tl::Node::Tag(tag)) => {
-            let name = tag.name().as_utf8_str().to_ascii_lowercase();
-            let style = ctx.styler.style_of(&name, style);
+            let style = ctx.styler.style_of(&element_of(tag), style);
             for child in tag.children().top().iter() {
                 push_runs(ctx, *child, style, runs);
             }

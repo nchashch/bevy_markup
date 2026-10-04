@@ -107,12 +107,15 @@ assets/            (gitignored — see Gotchas)
   for literal `<`/`&`, `{"{"}`/`{"}"}` for braces. String args are
   HTML-escaped. CJK paragraphs go on one line (a wrapped line becomes a stray
   space).
-- CSS subset (`style.rs` docs): type selectors (comma lists; others skipped at
-  `debug`); inherited `color`, `font-family` (first name registered in
+- CSS subset (`style.rs` docs): compound selectors (type or `*` + `.class` /
+  `#id` parts, comma lists; combinators/attributes/pseudo-classes skipped at
+  `debug`), matched per element (`HtmlElement` tag/id/classes, cached per
+  combination) with CSS precedence: `!important`, then specificity (ids,
+  classes, type), then source order. Inherited `color`, `font-family` (first name registered in
   `FontFamilies`, generics via `set_generic`; no registered name → inherited),
   `font-size` (`px`, `em`/`%`, `rem`, keywords with medium = 16px,
   `smaller`/`larger`), `font-weight` (bold at 600+), `font-style`; blocks:
-  `background-color`. Later rules win, `!important` beats normal. `html` is the
+  `background-color`. `html` is the
   starting point even without `<html>`; nothing declared → white, Bevy's
   default font, 16px. Missing font faces fall back bold-italic → bold →
   italic → regular.
@@ -170,8 +173,10 @@ assets/            (gitignored — see Gotchas)
 ## Verification
 
 - Warning-free: `cargo check --lib` (minimal Bevy features), `cargo build
-  --all-targets`, `cargo doc --no-deps`; `cargo test --doc` compiles the
-  `no_run` doc examples.
+  --all-targets`, `cargo doc --no-deps`. `cargo test --lib` runs the cascade
+  unit tests (specificity, compound matching, comma lists, importance);
+  `cargo test --doc` compiles the `no_run` doc examples (run them separately —
+  cargo rejects `--lib --doc` together).
 - Visual changes: run an example and capture an in-app screenshot (desktop
   screenshots grab whatever workspace is visible). Throwaway system, removed
   afterwards:

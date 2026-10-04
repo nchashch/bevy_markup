@@ -64,7 +64,8 @@
 //!   other element is inline text (inside a block) or a container (outside).
 //!   Each block becomes a `Text` node with a `TextSpan` per styled run and an
 //!   [`HtmlElement`](html::HtmlElement) component (tag, id, classes).
-//! - **CSS** ([`style`]): type selectors; `color`, `font-family`, `font-size`,
+//! - **CSS** ([`style`]): type, `.class`, `#id` and compound selectors with
+//!   specificity; `color`, `font-family`, `font-size`,
 //!   `font-weight`, `font-style` (inherited); `border-image` (9-slice),
 //!   `border-width`, `padding` on blocks and on the `HtmlUi` node (`html`
 //!   rule); `background-color` (blocks).

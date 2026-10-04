@@ -7,15 +7,19 @@
 //! so it never flashes unstyled.
 //!
 //! Supported CSS (parsed with lightningcss; a syntax error fails the load):
-//! - selectors: type selectors (`h1`, `p`, `code`, …), incl. comma lists;
-//!   others are skipped (logged at `debug`)
+//! - selectors: compound selectors — a type (or `*`) plus any `.class` /
+//!   `#id` parts: `p`, `.note`, `#title`, `p.note`, `.a.b`, `h1#x.big` — incl.
+//!   comma lists. Matched against each element's tag, `id` and `class`
+//!   attributes. Combinators, attribute selectors and pseudo-classes are
+//!   skipped (logged at `debug`).
 //! - inherited: `color`, `font-family`, `font-size`, `font-weight`,
 //!   `font-style`
 //! - box properties on blocks and on the `html` rule (= the `HtmlUi` node
 //!   itself): `border-image` (+ `-source`, `-slice`, `-repeat`),
 //!   `border-width`, `padding` (absolute lengths); `background-color` on
 //!   blocks only
-//! - cascade: later rules win; `!important` beats normal declarations
+//! - cascade: `!important` beats normal declarations, then higher specificity
+//!   (ids, classes, type) wins, then the later rule
 //! - an `html` rule sets the starting values, also for fragments without `<html>`
 //!
 //! `font-family` uses the first name registered in
