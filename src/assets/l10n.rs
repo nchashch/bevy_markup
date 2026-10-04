@@ -7,8 +7,14 @@
 //! ```
 //!
 //! An element with `data-l10n-id` gets the message's formatted value as its
-//! text, replacing its children. `data-l10n-args` is a JSON object of Fluent
+//! content, replacing its children. `data-l10n-args` is a JSON object of Fluent
 //! variables (numbers stay numbers, so plural selectors work).
+//!
+//! Translations are markup, like fluent-dom's "DOM overlays": a value may
+//! contain inline elements (`Press <kbd>Ctrl</kbd>…`) which the renderer
+//! parses and styles. Literal `<`/`&` in a translation must be written as
+//! entities (`&lt;`, `&amp;`). String args are HTML-escaped before formatting,
+//! so values like `Ada <The Brave>` stay text.
 //!
 //! The DOM is not mutated (`tl::VDomGuard` only hands out shared borrows);
 //! translations live beside it in [`LocalizedText`], keyed by node.
@@ -177,10 +183,27 @@ fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
                 Some(number) => args.set(key, number),
                 None => return Err(format!("`{key}`: number out of range")),
             },
-            serde_json::Value::String(string) => args.set(key, string),
+            // Translations are parsed as markup; keep values as text.
+            serde_json::Value::String(string) => args.set(key, escape_html(&string)),
             serde_json::Value::Bool(flag) => args.set(key, flag.to_string()),
             _ => return Err(format!("`{key}`: only numbers, strings and bools are supported")),
         }
     }
     Ok(args)
+}
+
+/// Escapes text for inclusion in markup (inverse of `decode_entities`).
+fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
 }

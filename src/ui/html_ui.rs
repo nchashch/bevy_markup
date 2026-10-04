@@ -15,8 +15,9 @@
 //! from the stylesheet (see [`super::html_style`]), with inheritance. Without
 //! a matching rule: white text, Bevy's default font, 16px.
 //!
-//! A block's text is its Fluent translation when it has a `data-l10n-id` that
-//! resolved (one run in the block's style), otherwise its own content. Outside
+//! A block's content is its Fluent translation when it has a `data-l10n-id`
+//! that resolved — parsed as markup, so inline elements in translations are
+//! styled too — otherwise its own content. Outside
 //! `pre`, whitespace collapses as in HTML. Each block is one `Text` with a
 //! `TextSpan` child per styled run.
 
@@ -330,7 +331,9 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
         tl::Node::Tag(tag) => tag,
         tl::Node::Raw(_) => {
             // Anonymous block: inherits the container's style.
-            let runs = inline_runs(ctx, handle, inherited);
+            let mut runs = Vec::new();
+            push_children_runs(ctx, handle, inherited, &mut runs);
+            let runs = collapse_runs(runs);
             if !runs.is_empty() {
                 blocks.push(Block {
                     kind: BlockKind::Paragraph,
@@ -361,20 +364,13 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
     };
     let preformatted = matches!(kind, BlockKind::Preformatted);
     let runs = match ctx.localized.get(&handle) {
-        Some(Ok(text)) => {
-            let run = Run {
-                text: text.clone(),
-                style,
-            };
-            if preformatted {
-                vec![run]
-            } else {
-                collapse_runs(vec![run])
-            }
-        }
+        Some(Ok(translation)) => translation_runs(ctx, translation, style, preformatted),
         // Missing translation: fall back to the element's own content.
-        _ if preformatted => preformatted_runs(ctx, handle, style),
-        _ => inline_runs(ctx, handle, style),
+        _ => {
+            let mut runs = Vec::new();
+            push_children_runs(ctx, handle, style, &mut runs);
+            finish_runs(runs, preformatted)
+        }
     };
     blocks.push(Block {
         kind,
@@ -384,19 +380,38 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
     });
 }
 
-/// Styled text runs of `handle`'s content, whitespace collapsed.
-fn inline_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style) -> Vec<Run> {
+/// Styled runs of a translation. Translations are markup (fluent-dom style
+/// overlays): inline elements in them are styled by the stylesheet like
+/// elements in the document; entities are decoded.
+fn translation_runs(ctx: &Ctx, translation: &str, style: Style, preformatted: bool) -> Vec<Run> {
+    let Ok(fragment) = tl::parse(translation, tl::ParserOptions::default()) else {
+        return finish_runs(
+            vec![Run {
+                text: decode_entities(translation),
+                style,
+            }],
+            preformatted,
+        );
+    };
+    let fragment_ctx = Ctx {
+        parser: fragment.parser(),
+        localized: ctx.localized,
+        styles: ctx.styles,
+        root_size: ctx.root_size,
+    };
     let mut runs = Vec::new();
-    push_children_runs(ctx, handle, style, &mut runs);
-    collapse_runs(runs)
+    for child in fragment.children() {
+        push_runs(&fragment_ctx, *child, style, &mut runs);
+    }
+    finish_runs(runs, preformatted)
 }
 
-/// Styled runs of a `pre` element's content, whitespace kept. As in HTML, a
-/// newline right after `<pre>` is dropped; so is trailing whitespace.
-fn preformatted_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style) -> Vec<Run> {
-    let mut runs = Vec::new();
-    push_children_runs(ctx, handle, style, &mut runs);
-
+/// Whitespace handling for a block's runs: collapsed as in HTML, or for `pre`
+/// kept, minus a newline right after the start tag and trailing whitespace.
+fn finish_runs(mut runs: Vec<Run>, preformatted: bool) -> Vec<Run> {
+    if !preformatted {
+        return collapse_runs(runs);
+    }
     if let Some(first) = runs.first_mut() {
         let stripped = first
             .text

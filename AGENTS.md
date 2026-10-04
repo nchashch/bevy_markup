@@ -105,6 +105,14 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   the fallback. Args are a JSON object (numbers stay numbers for plurals).
   A whole args map can be one Tera variable: `data-l10n-args='{{ my_args }}'`
   with a map/struct in the context.
+- Translations are markup (fluent-dom "DOM overlay" style): a message value
+  may contain inline elements (`Press <kbd>Ctrl</kbd>…`); `html_ui` parses it
+  with `tl` and styles those elements via the CSS theme. In `.ftl` values:
+  literal `<`/`&` as `&lt;`/`&amp;`, literal `{`/`}` as `{"{"}`/`{"}"}`.
+  String args are HTML-escaped before formatting (so `Ada <The Brave>` stays
+  text). Every visible string in `l10n.html` has a key; keep it that way when
+  adding content. CJK paragraphs go on one line (a wrapped line collapses to a
+  stray space).
 - Locales: `LOCALES` in `l10n.rs` lists (dir, native name); add a row plus
   `assets/locales/<dir>/{main.ftl.ron,ui.ftl}` to add a language. Every locale
   needs the same message ids. Item names come in as English data (`$item`);
@@ -120,8 +128,9 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   newlines kept, no wrap; a newline right after `<pre>` and trailing
   whitespace are dropped), and loose text; other elements are inline within a
   block or walked through outside one; `head`/`script`/`style` skipped. Each
-  block is a `Text` with one `TextSpan` per styled run. Fluent translations
-  are one run in the block's style. Outside `pre`, whitespace collapses across
+  block is a `Text` with one `TextSpan` per styled run. A Fluent translation
+  is parsed as markup and walked like the element's content (styled inline
+  elements). Outside `pre`, whitespace collapses across
   run boundaries as in HTML.
 - All `HtmlUi` styling comes from its `HtmlStylesheet(Handle<CssStyleSheet>)`
   (initially `THEMES[0]`, swapped by the theme panel; a changed handle or a
