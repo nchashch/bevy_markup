@@ -21,20 +21,40 @@ use std::borrow::Borrow;
 
 use super::html::{RenderedHtml, decode_entities};
 
-const LOCALE_PATH: &str = "locales/en-US/main.ftl.ron";
+/// Available locales: (directory under `assets/locales/`, native name). The
+/// first entry is active at startup.
+const LOCALES: &[(&str, &str)] = &[
+    ("en-US", "English"),
+    ("ru", "Русский"),
+    ("de", "Deutsch"),
+    ("ja", "日本語"),
+];
 
 pub struct L10nPlugin;
 
 impl Plugin for L10nPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FluentPlugin)
-            .add_systems(Startup, load_locale)
+            .add_systems(Startup, load_locales)
             .add_systems(PostUpdate, localize_html_views.after(super::html::render_html_views));
     }
 }
 
-/// The Fluent bundle `data-l10n-id` keys resolve against. Swap the handle to
-/// change language; every view re-localizes once the new bundle loads.
+/// One selectable locale.
+pub struct Locale {
+    pub id: &'static str,
+    /// The language's name in that language, for selectors.
+    pub name: &'static str,
+    pub bundle: Handle<BundleAsset>,
+}
+
+/// Every available locale, loaded at startup so switching is immediate.
+#[derive(Resource)]
+pub struct Locales(pub Vec<Locale>);
+
+/// The Fluent bundle `data-l10n-id` keys resolve against. Swap the handle
+/// (e.g. to another [`Locales`] entry) to change language; every view
+/// re-localizes as soon as the bundle is loaded.
 #[derive(Resource)]
 pub struct ActiveLocale(pub Handle<BundleAsset>);
 
@@ -43,8 +63,17 @@ pub struct ActiveLocale(pub Handle<BundleAsset>);
 #[derive(Component, Default)]
 pub struct LocalizedText(pub HashMap<tl::NodeHandle, Result<String, String>>);
 
-fn load_locale(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.insert_resource(ActiveLocale(asset_server.load(LOCALE_PATH)));
+fn load_locales(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let locales: Vec<Locale> = LOCALES
+        .iter()
+        .map(|&(id, name)| Locale {
+            id,
+            name,
+            bundle: asset_server.load(format!("locales/{id}/main.ftl.ron")),
+        })
+        .collect();
+    commands.insert_resource(ActiveLocale(locales[0].bundle.clone()));
+    commands.insert_resource(Locales(locales));
 }
 
 fn localize_html_views(

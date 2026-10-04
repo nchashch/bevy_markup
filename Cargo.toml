@@ -8,6 +8,9 @@ bevy = { version = "0.19.1", features = [
 	"basis-universal",
 	"ktx2",
 	"bevy_dev_tools",
+	# Parley falls back to system fonts per script (Japanese: none of the
+	# bundled fonts have CJK glyphs).
+	"system_font_discovery",
 ] }
 bevy_enhanced_input = "0.26.0"
 bevy_mod_outline = { git = "https://github.com/nchashch/bevy_mod_outline", branch = "fix/skinned-motion-outline" }

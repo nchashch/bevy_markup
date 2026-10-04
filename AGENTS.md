@@ -14,7 +14,7 @@ src/
   assets/
     mod.rs           AssetsPlugin = HtmlPlugin + L10nPlugin
     html.rs          .html loader (Tera template), HtmlView → RenderedHtml (tl DOM), decode_entities
-    l10n.rs          Fluent: ActiveLocale, data-l10n-id/-args → LocalizedText
+    l10n.rs          Fluent: Locales (all bundles, preloaded), ActiveLocale, data-l10n-id/-args → LocalizedText
   tui/
     mod.rs           TuiPlugin: bevy_tui_texture terminal inside a 9-slice frame
     panel.rs         TuiPanel marker + ratatui draw system (write ratatui code here)
@@ -25,11 +25,12 @@ src/
     dom_panel.rs     Debug panels: DOM outline of test/inventory/l10n.html (max 45vh, scrollable); demo_context()
     html_ui.rs       HtmlUi: renders an HtmlView's DOM as Bevy UI nodes (rendered panel: max 50vh, scrollable)
     scroll.rs        Shared scroll pieces: viewport_node(), spawn_scrollbar(), toggle_scrollbars
+    locale_panel.rs  Language selector: a button per Locales entry sets ActiveLocale
 assets/              (gitignored — see Gotchas)
   fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
   ui/frame.png       256x256 frame; ui/frame.slice.ron slices it (16px borders)
   ui/content/        test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent)
-  locales/en-US/     main.ftl.ron (bundle manifest), ui.ftl (messages)
+  locales/<id>/      main.ftl.ron (bundle manifest) + ui.ftl, for en-US, ru, de, ja
 ```
 
 ## Conventions
@@ -96,6 +97,15 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   the fallback. Args are a JSON object (numbers stay numbers for plurals).
   A whole args map can be one Tera variable: `data-l10n-args='{{ my_args }}'`
   with a map/struct in the context.
+- Locales: `LOCALES` in `l10n.rs` lists (dir, native name); add a row plus
+  `assets/locales/<dir>/{main.ftl.ron,ui.ftl}` to add a language. Every locale
+  needs the same message ids. Item names come in as English data (`$item`);
+  non-English bundles map them with an `item-name` message selecting on
+  `$item`, referenced from `item-count`.
+- Fonts: Spectral/IosevkaSlabQP/IosevkaSlabMono cover Latin + Cyrillic, not
+  CJK. Japanese renders via Bevy's `system_font_discovery` feature (Parley
+  falls back per script to installed system fonts) — depends on the player's
+  OS having a CJK font; bundle one for shipping.
 - `HtmlUi` on a node with `HtmlView` rebuilds its children on change (in the
   rendered panel that node is the scroll viewport). Supported:
   `h1`–`h6` (header font, 28/24/22/20px), `p` (body 20px), `li` (bulleted body),
@@ -149,6 +159,12 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   string escaping — valid JSON except for control characters.
 - Fluent wraps placeables in U+2068/U+2069; `bevy_fluent`'s bundle sits behind
   an `Arc`, so `l10n.rs` strips them instead of `set_use_isolating(false)`.
+- Fluent term arguments only accept literals (`-term(x: "a")`); passing a
+  variable fails to parse ("Expected a string or number literal"). Message
+  references (`{ other-msg }`) share the caller's variables, so use a message
+  for variable-driven lookups.
+- `Locales` is inserted by an L10nPlugin Startup system; anything reading it
+  at startup (e.g. `locale_panel::spawn`) runs in `PostStartup`.
 - Iosevka ligatures render `<!--`/`-->` as arrows in debug text.
 
 ## Verification
