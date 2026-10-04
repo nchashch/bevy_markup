@@ -5,3 +5,4 @@
 /fuzzcheck/target
 /fuzzcheck/fuzz
 /test-fuzz/target
+/honggfuzz/target

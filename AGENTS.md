@@ -68,6 +68,11 @@ tests/
   fixtures/        frame.png (32×24, committed; `assets/` is not)
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
+  fuzz-<driver>.sh   run one fuzzer over one target:
+                     `scripts/fuzz-{libfuzzer,honggfuzz,fuzzcheck,test-fuzz}.sh
+                     <html|css|ftl> [seconds=60]` (details in each script's
+                     header; they encapsulate the per-driver workarounds
+                     described under Testing TODO 5)
 fuzz/
   fuzz_targets/      cargo-fuzz targets (`html`, `css`, `ftl`) over `p23::fuzz`
   corpus/, artifacts/, coverage/  gitignored
@@ -344,10 +349,11 @@ known gaps:
   - every CSS file parses; every `url()` resolves to an existing file
   - a pseudo-locale (e.g. `[Ĩñvéñtöŕý~~~]`, longer and accented) exposing
     untranslated strings and overflow in the UI
-- [ ] **5. Fuzzing** (robustness). Two drivers over the same
+- [ ] **5. Fuzzing** (robustness). Four drivers over the same
   `#[doc(hidden)]` `p23::fuzz` harness (feature `fuzzing`), which calls the
   internal glue directly — a full Bevy app is far too slow per exec.
   Contract for every target: no panic/hang/abort; errors are values.
+  Easiest entry point: `scripts/fuzz-<driver>.sh <html|css|ftl> [seconds]`.
   - `cargo fuzz` (`fuzz/`, libFuzzer/ASan, nightly):
     `cargo +nightly fuzz run <target> -- -max_total_time=60`.
   - `honggfuzz-rs` (`honggfuzz/`, hardware-counter feedback; also nightly):
