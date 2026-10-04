@@ -27,11 +27,13 @@ src/
     html_ui.rs       HtmlUi: renders an HtmlView's DOM as Bevy UI nodes (rendered panel: max 50vh, scrollable)
     html_style.rs    Stylesheet → per-element style table (color, background, font) for html_ui
     scroll.rs        Shared scroll pieces: viewport_node(), spawn_scrollbar(), toggle_scrollbars
-    locale_panel.rs  Language selector: a button per Locales entry sets ActiveLocale
+    selector.rs      Framed panel with one-of-N toggle buttons → Selector { active } (+ caller marker)
+    locale_panel.rs  Language selector (Selector + LocaleSelector) sets ActiveLocale
+    theme_panel.rs   Theme selector (Selector + ThemeSelector) swaps every HtmlStylesheet; THEMES list
 assets/              (gitignored — see Gotchas)
   fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
   ui/frame.png       256x256 frame; ui/frame.slice.ron slices it (16px borders)
-  ui/html.css        All styling for HTML rendered by html_ui (HtmlStylesheet)
+  ui/themes/         CSS themes for html_ui: crimson (default), parchment, terminal, large_print
   ui/content/        test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent), test.css
   locales/<id>/      main.ftl.ron (bundle manifest) + ui.ftl, for en-US, ru, de, ja
 ```
@@ -48,8 +50,9 @@ assets/              (gitignored — see Gotchas)
   in panels. `FONT_FAMILIES` maps CSS `font-family` names to those four-face
   sets; `FONT_GENERIC_FAMILIES` maps `serif`/`monospace`.
 - Typography: headers IosevkaSlabQP (red), body Spectral (off-white),
-  monospace/debug Iosevka Slab Mono. For rendered HTML this lives in
-  `assets/ui/html.css`; plain Bevy UI panels use the consts.
+  monospace/debug Iosevka Slab Mono. For rendered HTML this lives in the CSS
+  themes (`assets/ui/themes/crimson.css` is the default look); plain Bevy UI
+  panels use the consts.
 - Framed panels: `NineSliceFrame(asset_server.load(FRAME_PATH))` on the panel's
   root `Node`; use `padding` for the inset (the frame covers the border box).
 - Asset-backed state updates react to `AssetEvent::LoadedWithDependencies` /
@@ -121,7 +124,8 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   are one run in the block's style. Outside `pre`, whitespace collapses across
   run boundaries as in HTML.
 - All `HtmlUi` styling comes from its `HtmlStylesheet(Handle<CssStyleSheet>)`
-  (`assets/ui/html.css`) — including what browsers do by default (bold `b`,
+  (initially `THEMES[0]`, swapped by the theme panel; a changed handle or a
+  (re)loaded sheet rebuilds) — including what browsers do by default (bold `b`,
   italic `em`, mono `code`/`pre`, heading sizes). Subset (`ui/html_style.rs`):
   type selectors only (comma lists ok; others skipped at `debug`);
   inherited `color`, `font-family` (first name in `FONT_FAMILIES`, or a mapped

@@ -28,12 +28,12 @@ use super::NineSliceFrame;
 use super::dom_panel::{L10N_PATH, demo_context};
 use super::html_style::HtmlStyles;
 use super::scroll::{SCROLLBAR_GAP, spawn_scrollbar, viewport_node};
+use super::theme_panel::THEMES;
 use crate::assets::css::CssStyleSheet;
 use crate::assets::html::{HtmlView, RenderedHtml, decode_entities};
 use crate::assets::l10n::LocalizedText;
 use crate::consts::{FONT_FAMILIES, FRAME_PATH};
 
-const STYLESHEET_PATH: &str = "ui/html.css";
 /// Values when no stylesheet rule applies (CSS initial values, white on dark).
 const DEFAULT_COLOR: Color = Color::WHITE;
 const DEFAULT_FONT_SIZE: f32 = 16.0;
@@ -134,7 +134,8 @@ pub(super) fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
                         template: asset_server.load(L10N_PATH),
                         context: demo_context(),
                     },
-                    HtmlStylesheet(asset_server.load(STYLESHEET_PATH)),
+                    // Default theme; the theme panel swaps it at runtime.
+                    HtmlStylesheet(asset_server.load(THEMES[0].1)),
                     ScrollArea,
                     Node {
                         row_gap: Val::Px(10.0),
@@ -156,7 +157,7 @@ pub(super) fn build_html_ui(
             Entity,
             Ref<RenderedHtml>,
             Ref<LocalizedText>,
-            Option<&HtmlStylesheet>,
+            Option<Ref<HtmlStylesheet>>,
         ),
         With<HtmlUi>,
     >,
@@ -171,9 +172,11 @@ pub(super) fn build_html_ui(
 
     let mut fonts = None;
     for (entity, rendered, localized, stylesheet) in &views {
-        let sheet_reloaded =
-            stylesheet.is_some_and(|sheet| reloaded_sheets.contains(&sheet.0.id()));
-        if !rendered.is_changed() && !localized.is_changed() && !sheet_reloaded {
+        // Rebuild on a swapped stylesheet (theme change) or a (re)loaded one.
+        let sheet_changed = stylesheet.as_ref().is_some_and(|sheet| {
+            sheet.is_changed() || reloaded_sheets.contains(&sheet.0.id())
+        });
+        if !rendered.is_changed() && !localized.is_changed() && !sheet_changed {
             continue;
         }
         let styles = match stylesheet {
