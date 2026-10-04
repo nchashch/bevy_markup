@@ -253,6 +253,47 @@ html-ui border=16,16,16,16 padding=10,20,10,20 slice=frame.png 4,4,4,4 stretch
     );
 }
 
+/// A template that compiles but fails to *render* (an undefined variable)
+/// shows the error as a `failed to render:` paragraph naming the problem,
+/// styled like the root, and recovers once the context provides the value.
+#[test]
+fn template_render_failure_shows_the_error_and_recovers() {
+    let mut ui = TestUi::new(
+        "render-failure",
+        &[
+            ("page.html", "<p>Hello {{ player }}</p>"),
+            ("style.css", "html { color: #ff0000; font-size: 20px }"),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let root = ui.root();
+    let failed = match ui.world_mut().get::<RenderedHtml>(root) {
+        Some(RenderedHtml::Failed(message)) => message.clone(),
+        _ => panic!("expected a render failure"),
+    };
+    assert!(failed.contains("player"), "error names the variable: {failed}");
+    let dump = ui.dump();
+    let mut lines = dump.lines();
+    assert_eq!(lines.next(), Some("html-ui"));
+    assert_eq!(lines.next(), Some("  -"), "{dump}");
+    let run = lines.next().unwrap_or_default();
+    assert!(
+        run.starts_with("    \"failed to render: ") && run.contains("player") && run.ends_with("default 20px #ff0000"),
+        "{dump}"
+    );
+
+    ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("player", "Ada");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "Hello Ada" default 20px #ff0000
+"#,
+    );
+}
+
 /// A stylesheet that fails to load renders the UI unstyled (like a browser)
 /// instead of leaving it blank forever.
 #[test]

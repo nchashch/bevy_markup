@@ -808,13 +808,16 @@ Next steps (roughly in order of value):
   to the job summary, the reports to the `coverage` artifact (without
   `assets/` and fuzz corpora, those two layers cover nothing in CI).
   First local measurement (2026-10-04): 94.3% of 1684 library lines
-  covered by some layer; vectors+oracles 82.4%, properties 77.5%, unit
-  33.9% (but 102 lines only they reach), fuzz corpora 13.4%. Open gaps from
-  it: the template *render*-failure path (`html.rs` render error →
-  `failed to render:` paragraph) is never exercised, and many CSS mapping
-  arms (most `justify-content`/`align-items`/`align-self` values, font-size
-  keywords, `vmin`/`vmax`) never run. Mutants can't see the latter (no arm
-  of an exhaustive match can be deleted).
+  covered by some layer. Its two gaps are closed: the template
+  *render*-failure path (`template_render_failure_shows_the_error_and_recovers`
+  in `html_ui`) and the CSS mapping arms nothing ran
+  (`alignment_values_map_to_bevy_values`,
+  `units_keywords_and_unsupported_values` in `cascade::tests`) — now 98.0%
+  (vectors+oracles 83.5%, properties 77.5%, unit 38.7%, fuzz corpora
+  13.4%). The rest of `uncovered.txt` is `#[derive]` lines, `debug!`
+  fallbacks, defensive early returns and the outline-mode render failure.
+  Mutants couldn't flag the mapping gaps (no arm of an exhaustive match can
+  be deleted): read coverage and mutation results together.
   GitHub moves `ubuntu-latest` to Ubuntu 26 from 2026-10-19: that can change
   Mesa (golden images: lavapipe rendering vs the references) and the apt
   package names (Bevy/honggfuzz build dependencies). If the nightly breaks

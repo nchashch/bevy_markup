@@ -902,6 +902,106 @@ mod tests {
         assert!(style.border_image.is_none(), "{:?}", style.border_image);
     }
 
+    /// Every `justify-content`, `align-items` and `align-self` value and
+    /// the remaining flex keywords map onto the Bevy value CSS means; the
+    /// unsupported ones (`left`/`right`, `last baseline`) are skipped.
+    #[test]
+    fn alignment_values_map_to_bevy_values() {
+        let layout = |css: String| declared(&css).layout;
+        for (value, expected) in [
+            ("space-between", JustifyContent::SpaceBetween),
+            ("space-around", JustifyContent::SpaceAround),
+            ("space-evenly", JustifyContent::SpaceEvenly),
+            ("stretch", JustifyContent::Stretch),
+            ("center", JustifyContent::Center),
+            ("start", JustifyContent::Start),
+            ("flex-start", JustifyContent::FlexStart),
+            ("flex-end", JustifyContent::FlexEnd),
+        ] {
+            assert_eq!(layout(format!("justify-content: {value}")).justify_content, Some(expected), "{value}");
+        }
+        assert_eq!(layout("justify-content: right".into()).justify_content, None);
+        for (value, expected) in [
+            ("normal", AlignItems::Default),
+            ("stretch", AlignItems::Stretch),
+            ("center", AlignItems::Center),
+            ("start", AlignItems::Start),
+            ("self-start", AlignItems::Start),
+            ("end", AlignItems::End),
+            ("self-end", AlignItems::End),
+            ("flex-start", AlignItems::FlexStart),
+            ("flex-end", AlignItems::FlexEnd),
+        ] {
+            assert_eq!(layout(format!("align-items: {value}")).align_items, Some(expected), "{value}");
+        }
+        assert_eq!(layout("align-items: last baseline".into()).align_items, None);
+        for (value, expected) in [
+            ("auto", AlignSelf::Auto),
+            ("stretch", AlignSelf::Stretch),
+            ("baseline", AlignSelf::Baseline),
+            ("center", AlignSelf::Center),
+            ("start", AlignSelf::Start),
+            ("self-start", AlignSelf::Start),
+            ("end", AlignSelf::End),
+            ("self-end", AlignSelf::End),
+            ("flex-start", AlignSelf::FlexStart),
+            ("flex-end", AlignSelf::FlexEnd),
+        ] {
+            assert_eq!(layout(format!("align-self: {value}")).align_self, Some(expected), "{value}");
+        }
+        assert_eq!(layout("align-self: last baseline".into()).align_self, None);
+        assert_eq!(layout("align-content: baseline".into()).align_content, None);
+
+        assert_eq!(layout("flex-direction: column".into()).flex_direction, Some(FlexDirection::Column));
+        assert_eq!(layout("flex-direction: row".into()).flex_direction, Some(FlexDirection::Row));
+        assert_eq!(layout("flex-wrap: nowrap".into()).flex_wrap, Some(FlexWrap::NoWrap));
+        assert_eq!(layout("display: contents".into()).display, None, "unsupported keyword");
+        assert_eq!(layout("box-sizing: content-box".into()).box_sizing, Some(BoxSizing::ContentBox));
+    }
+
+    /// Lengths, keywords and fallbacks: viewport units, the border-width
+    /// keywords, the CSS Fonts 4 font-size keyword scale (medium = 16px),
+    /// `normal`/`lighter` weights; `calc()`, `%` padding/gap, intrinsic max
+    /// sizes and non-`url()` border-image sources are skipped (left
+    /// undeclared), never mis-mapped.
+    #[test]
+    fn units_keywords_and_unsupported_values() {
+        let layout = |css: &str| declared(css).layout;
+        assert_eq!(layout("min-width: 10vmin").min_width, Some(Val::VMin(10.0)));
+        assert_eq!(layout("max-width: 20vmax").max_width, Some(Val::VMax(20.0)));
+        assert_eq!(layout("width: calc(10px + 5%)").width, None);
+        assert_eq!(layout("max-height: min-content").max_height, None);
+
+        assert_eq!(declared("border-top-width: thin").border_width[0], Some(1.0));
+        assert_eq!(declared("border-top-width: medium").border_width[0], Some(3.0));
+        assert_eq!(declared("border-top-width: thick").border_width[0], Some(5.0));
+        assert_eq!(declared("padding-top: 10%").padding[0], None);
+        assert_eq!(declared("row-gap: normal").row_gap, None);
+        assert_eq!(declared("row-gap: 5%").row_gap, None);
+
+        let size = |css: &str| declared(css).font_size.map(|size| size.resolve(20.0, 10.0));
+        for (keyword, px) in [
+            ("xx-small", 9.0),
+            ("x-small", 10.0),
+            ("small", 13.0),
+            ("medium", 16.0),
+            ("large", 18.0),
+            ("x-large", 24.0),
+            ("xx-large", 32.0),
+            ("xxx-large", 48.0),
+        ] {
+            assert_eq!(size(&format!("font-size: {keyword}")), Some(px), "{keyword}");
+        }
+        assert_eq!(size("font-size: calc(1em + 2px)"), None);
+        assert_eq!(declared("font-weight: normal").bold, Some(false));
+        assert_eq!(declared("font-weight: lighter").bold, Some(false));
+
+        let source = declared("border-image-source: linear-gradient(red, blue)")
+            .border_image
+            .and_then(|decl| decl.source);
+        assert!(matches!(source, Some(None)), "gradient source treated as no image: {source:?}");
+    }
+
     /// `font-weight` 500 stays regular, anything above picks bold (the CSS
     /// font-matching boundary).
     #[test]
