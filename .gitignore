@@ -4,3 +4,4 @@
 /hfuzz_workspace
 /fuzzcheck/target
 /fuzzcheck/fuzz
+/test-fuzz/target

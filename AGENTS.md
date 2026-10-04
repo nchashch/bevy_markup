@@ -82,6 +82,11 @@ fuzzcheck/
                      LLVM 21+; see the comment in `llvm_coverage.rs`)
   .cargo/config.toml linker override: the repo's clang+mold cannot link the
                      LLVM coverage section symbols (`__start___llvm_prf_*`)
+test-fuzz/
+  src/lib.rs         the same three harnesses as AFLplus targets via
+                     `#[test_fuzz]` (`cargo +nightly test-fuzz tests::fuzz_html`
+                     from this directory; corpus seeds come from plain
+                     `cargo test` runs)
 vendor/fluent-syntax/  vendored fluent-syntax 0.11.1 (patched char-boundary bug, see Gotchas)
 assets/            (gitignored — see Gotchas)
   fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
@@ -364,6 +369,14 @@ known gaps:
     counter-file filter relaxed (cargo passes absolute source paths).
     `fuzzcheck/.cargo/config.toml` overrides the repo's clang+mold linker,
     which cannot resolve `__start___llvm_prf_*` section symbols.
+  - `test-fuzz` (`test-fuzz/`, AFLplus via `cargo-afl`; nightly):
+    `cargo +nightly test-fuzz tests::fuzz_html` (from `test-fuzz/`). Corpus
+    seeds are collected by ordinary `cargo test` runs (the `#[test_fuzz]`
+    macro writes arguments to the corpus); AFL needs
+    `AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 AFL_SKIP_CPUFREQ=1` on this
+    machine (the core-pattern and cpu checks require `sudo`, which we don't
+    have). Install with `cargo install cargo-test-fuzz cargo-afl` (both
+    nightly). Data lands in `test-fuzz/target/` (gitignored).
   - [x] cargo-fuzz's first `css` run found a real crash: a selector with a
     non-ASCII first character panicked in `Compound::parse` (`&rest[1..]`
     byte-sliced past a multi-byte char). Fixed to skip the rule (p23 idents

@@ -1,0 +1,15 @@
+[package]
+name = "p23-test-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+p23 = { path = "..", features = ["fuzzing"] }
+
+[dev-dependencies]
+serde = "1.0.229"
+test-fuzz = "8.1"
+
+[patch.crates-io]
+fluent-syntax = { path = "../vendor/fluent-syntax" }
