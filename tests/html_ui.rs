@@ -475,6 +475,119 @@ html-ui
     assert_eq!((events.built, events.restyled), (2, 1), "new wrappers: rebuilt");
 }
 
+/// Swapping stylesheet `a` → `b` must end exactly where a fresh build with
+/// `b` does — also when only a nested node's shape changes, a frame goes
+/// away, or text runs merge (the restyle must notice and rebuild).
+#[test]
+fn restyles_that_change_shape_match_a_fresh_build() {
+    let page = r#"<p id="a">One</p><div class="box"><p class="inner">Plain <b>bold</b></p></div>"#;
+    let cases = [
+        // Only the nested block gains a box (needs a wrapper).
+        ("html { color: #ffffff }", "html { color: #ffffff } .inner { background-color: #102030 }"),
+        // The container loses its frame.
+        (
+            r#"html { color: #ffffff } .box { border-image: url("frame.png") 4 fill stretch; border-width: 4px }"#,
+            "html { color: #ffffff }",
+        ),
+        // `b` stops differing from its block: two runs become one.
+        ("html { color: #ffffff } b { color: #ff0000 }", "html { color: #ffffff }"),
+    ];
+    for (a, b) in cases {
+        let mut swapped = TestUi::new("restyle-shape", &[("page.html", page), ("a.css", a), ("b.css", b)])
+            .stylesheet("a.css");
+        let b_sheet = swapped.load::<Stylesheet>("b.css");
+        let mut swapped = swapped.spawn("page.html", TemplateContext::new(), Node::default());
+        swapped.settle();
+        swapped.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
+        let mut fresh = TestUi::new("restyle-fresh", &[("page.html", page), ("b.css", b)])
+            .stylesheet("b.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        assert_eq!(swapped.settle().dump(), fresh.settle().dump(), "{a} → {b}");
+    }
+}
+
+/// The `html` rule's box properties leave an `ImageNode` the app put on the
+/// `HtmlUi` node alone when the stylesheet has no frame of its own.
+#[test]
+fn root_box_keeps_the_apps_own_image() {
+    let mut ui = TestUi::new(
+        "root-image",
+        &[("page.html", "<p>Text</p>"), ("style.css", "html { padding: 5px }")],
+    )
+    .stylesheet("style.css");
+    let template = ui.load::<HtmlTemplate>("page.html");
+    let backdrop = ui.load::<Image>("frame.png");
+    let root = ui
+        .world_mut()
+        .spawn((HtmlUi::new(template), ImageNode::new(backdrop.clone())))
+        .id();
+    // `TestUi::spawn` isn't used: the root needs the app's own `ImageNode`.
+    ui.settle_quiet();
+    ui.update(10);
+    let world = ui.world_mut();
+    assert_eq!(world.get::<Node>(root).unwrap().padding, UiRect::all(Val::Px(5.0)));
+    let image = world.get::<ImageNode>(root).expect("the app's ImageNode survived");
+    assert_eq!(image.image, backdrop);
+}
+
+/// Untyped loads (folders, `load_untyped`) pick p23's loaders by file
+/// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
+#[test]
+fn loaders_are_found_by_extension() {
+    use std::any::TypeId;
+
+    let mut ui = TestUi::new(
+        "extensions",
+        &[
+            ("a.css", "p { color: red }"),
+            ("b.html", "<p>b</p>"),
+            ("c.htm", "<p>c</p>"),
+            (
+                "d.slice.ron",
+                r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1))"#,
+            ),
+        ],
+    );
+    let expected = [
+        ("a.css", TypeId::of::<Stylesheet>()),
+        ("b.html", TypeId::of::<HtmlTemplate>()),
+        ("c.htm", TypeId::of::<HtmlTemplate>()),
+        ("d.slice.ron", TypeId::of::<p23::nine_slice::NineSlice>()),
+    ];
+    let handles: Vec<_> = expected
+        .iter()
+        .map(|(path, _)| ui.world_mut().resource::<AssetServer>().load_builder().load_untyped(*path))
+        .collect();
+    for _ in 0..3000 {
+        ui.update(1);
+        let loaded = ui.world_mut().resource::<Assets<bevy::asset::LoadedUntypedAsset>>();
+        if handles.iter().all(|handle| loaded.contains(handle)) {
+            break;
+        }
+    }
+    let loaded = ui.world_mut().resource::<Assets<bevy::asset::LoadedUntypedAsset>>();
+    for ((path, type_id), handle) in expected.iter().zip(&handles) {
+        let asset = loaded.get(handle).unwrap_or_else(|| panic!("{path} didn't load untyped"));
+        assert_eq!(asset.handle.type_id(), *type_id, "{path}");
+    }
+}
+
+/// A loaded template is named after its asset path (Tera picks HTML
+/// autoescaping from the `.html` name).
+#[test]
+fn template_is_named_after_its_asset_path() {
+    let mut ui = TestUi::new("template-name", &[("ui/page.html", "<p>x</p>")]);
+    let handle = ui.load::<HtmlTemplate>("ui/page.html");
+    for _ in 0..3000 {
+        ui.update(1);
+        if ui.world_mut().resource::<Assets<HtmlTemplate>>().contains(&handle) {
+            break;
+        }
+    }
+    let templates = ui.world_mut().resource::<Assets<HtmlTemplate>>();
+    assert_eq!(templates.get(&handle).expect("loaded").name(), "ui/page.html");
+}
+
 /// Counts updates (`HtmlUiBuilt` or `HtmlUiRestyled`) per entity.
 #[derive(Resource, Default)]
 struct UpdatesPer(bevy::platform::collections::HashMap<Entity, usize>);

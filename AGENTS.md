@@ -586,11 +586,44 @@ known gaps:
     (`mutants.yml`: unit + html_ui + stateful, 8 shards; survivors in each
     shard's job summary and the `mutants-shard-N` artifacts). Line numbers
     below are from `e1b910c`.
-  - [ ] Triage the first CI run (2026-10-04, triggered by hand:
-    `gh run view 37223937948`; 8 shards of ~53 mutants, ~1–2 h each):
-    collect survivors from the job summaries / `mutants-shard-N` artifacts
-    (`gh run download 37223937948`) and triage them like the first batch
-    below — a killing test, or a note why the mutant is equivalent.
+  - [x] Triage the first CI run (2026-10-04, run 37223937948: 420 mutants;
+    278 caught, 51 missed, 46 unviable across 8 shards of 25–44 min). All 51
+    rerun against the full suite (+ properties, quickcheck,
+    layout_properties): 9 were already caught there. New tests kill 36 more:
+    - `cascade.rs` property mapping (border sides, flex-flow/-shrink/flex,
+      align-content, max-height, margin sides, `display: flex`, `auto`/
+      `none` sizes, generic families, weight 500/501 boundary,
+      `border-image-source` longhand and `none`): table-driven unit tests
+      (`layout_properties_map_to_bevy_values`, `border_sides_…`,
+      `font_weight_boundary_is_above_500`,
+      `generic_family_keywords_map_one_to_one`,
+      `border_image_sources_none_and_longhands`).
+    - `same_shape` (nested shape change, frame removed, merged runs):
+      `restyles_that_change_shape_match_a_fresh_build`.
+    - `apply_root_box` `had_image` guard: `root_box_keeps_the_apps_own_image`.
+    - loader `extensions()` (css/html/htm/slice.ron):
+      `loaders_are_found_by_extension` (untyped loads).
+    - `HtmlTemplate::name`: `template_is_named_after_its_asset_path`;
+      `error_chain`: `error_chain_includes_all_sources`; outline indentation
+      and blank-text skipping: `outline_indents_levels_and_shows_translations`;
+      `From<tera::Context>`: `template_context_from_tera_keeps_variables`.
+    - `apply_nine_slices` reload arm and `!` guard:
+      `style_reload_reapplies_to_unchanged_frames` (registered system, so
+      change ticks persist).
+    Equivalent (documented; 6 left, all behaviour-neutral):
+    - `build.rs` `box_of` `delete !` on `if !fill`, `cascade.rs`
+      `BorderImageWidth/Outset` arm deleted, `Image::None` arm deleted,
+      `unsupported` → `None`: each only changes whether a `debug!` line is
+      logged (the fallback arm returns the same value).
+    - `style.rs` `ParserOptions { filename }`: only the file name in CSS
+      parse-error messages.
+    - `build.rs` `same_shape` top check `||` → `&&`: every shape change p23
+      produces also changes the child/span structure checked next, so a
+      wrong top-level answer is rejected one level down (redundant check).
+    Gotcha: under `-j 6` with the full suite, two mutants hit the 60 s test
+    timeout from load alone; rerun timeouts alone with
+    `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT=300` (the script already passes the
+    flag, which can't be repeated).
   - [x] Triage the survivors of the partial runs (`e1b910c`; reruns with
     unit + html_ui + stateful). Killed by new tests:
     - `BoxStyle::is_empty` `&&`→`||` (background-only block lost its

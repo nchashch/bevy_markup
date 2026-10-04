@@ -813,4 +813,129 @@ mod tests {
         assert_eq!(color(css, &element("p", None, &[])), Some(GREEN));
         assert_eq!(color(css, &element("span", None, &[])), None);
     }
+
+    /// `css` parsed and owned (no borrowed input), like the asset loader does.
+    fn owned_sheet(css: &str) -> StyleSheet<'static> {
+        use lightningcss::traits::IntoOwned;
+        StyleSheet::parse(css, ParserOptions::default()).expect("valid css").into_owned()
+    }
+
+    /// `p`'s declared style under one `p { declarations }` rule.
+    fn declared(declarations: &str) -> ElementStyle {
+        let sheet = owned_sheet(&format!("p {{ {declarations} }}"));
+        HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]))
+    }
+
+    /// Every supported layout property and value maps onto the Bevy value
+    /// CSS means, through its longhand and its shorthand, so a dropped or
+    /// crossed arm shows up per property.
+    #[test]
+    fn layout_properties_map_to_bevy_values() {
+        let layout = |css: &str| declared(css).layout;
+        assert_eq!(layout("display: none").display, Some(Display::None));
+        assert_eq!(layout("display: block").display, Some(Display::Block));
+        assert_eq!(layout("display: flex").display, Some(Display::Flex));
+        assert_eq!(layout("display: inline-flex").display, Some(Display::Flex));
+        assert_eq!(layout("display: inline").display, None);
+
+        let flow = layout("flex-flow: column-reverse wrap");
+        assert_eq!(flow.flex_direction, Some(FlexDirection::ColumnReverse));
+        assert_eq!(flow.flex_wrap, Some(FlexWrap::Wrap));
+        assert_eq!(layout("flex-wrap: wrap-reverse").flex_wrap, Some(FlexWrap::WrapReverse));
+
+        let flex = layout("flex: 2 3 40px");
+        assert_eq!(
+            (flex.flex_grow, flex.flex_shrink, flex.flex_basis),
+            (Some(2.0), Some(3.0), Some(Val::Px(40.0)))
+        );
+        assert_eq!(layout("flex-shrink: 0.5").flex_shrink, Some(0.5));
+        assert_eq!(layout("flex-basis: auto").flex_basis, Some(Val::Auto));
+
+        assert_eq!(layout("justify-content: normal").justify_content, Some(JustifyContent::Default));
+        assert_eq!(layout("justify-content: end").justify_content, Some(JustifyContent::End));
+        assert_eq!(layout("justify-content: left").justify_content, None);
+        for (value, expected) in [
+            ("normal", AlignContent::Default),
+            ("space-between", AlignContent::SpaceBetween),
+            ("space-around", AlignContent::SpaceAround),
+            ("space-evenly", AlignContent::SpaceEvenly),
+            ("stretch", AlignContent::Stretch),
+            ("center", AlignContent::Center),
+            ("start", AlignContent::Start),
+            ("end", AlignContent::End),
+            ("flex-start", AlignContent::FlexStart),
+            ("flex-end", AlignContent::FlexEnd),
+        ] {
+            let css = format!("align-content: {value}");
+            assert_eq!(layout(&css).align_content, Some(expected), "{css}");
+        }
+        assert_eq!(layout("align-items: baseline").align_items, Some(AlignItems::Baseline));
+        assert_eq!(layout("align-self: normal").align_self, Some(AlignSelf::Stretch));
+
+        assert_eq!(layout("width: auto").width, Some(Val::Auto));
+        assert_eq!(layout("height: 50%").height, Some(Val::Percent(50.0)));
+        assert_eq!(layout("min-height: 10vh").min_height, Some(Val::Vh(10.0)));
+        assert_eq!(layout("max-height: 30px").max_height, Some(Val::Px(30.0)));
+        assert_eq!(layout("max-width: none").max_width, Some(Val::Auto));
+        assert_eq!(layout("width: min-content").width, None);
+        assert_eq!(layout("width: 2em").width, None);
+
+        assert_eq!(layout("margin-top: 1px").margin, [Some(Val::Px(1.0)), None, None, None]);
+        assert_eq!(layout("margin-right: 2px").margin, [None, Some(Val::Px(2.0)), None, None]);
+        assert_eq!(layout("margin-bottom: auto").margin, [None, None, Some(Val::Auto), None]);
+        assert_eq!(layout("margin-left: 10%").margin, [None, None, None, Some(Val::Percent(10.0))]);
+        assert_eq!(layout("column-gap: 6px").column_gap, Some(6.0));
+        assert_eq!(layout("box-sizing: border-box").box_sizing, Some(BoxSizing::BorderBox));
+    }
+
+    /// Per-side border widths go to their own side; `border-image-width` and
+    /// `-outset` are ignored without disturbing the rest.
+    #[test]
+    fn border_sides_and_ignored_border_image_parts() {
+        let sides = |css: &str| declared(css).border_width;
+        assert_eq!(sides("border-top-width: 1px"), [Some(1.0), None, None, None]);
+        assert_eq!(sides("border-right-width: 2px"), [None, Some(2.0), None, None]);
+        assert_eq!(sides("border-bottom-width: 3px"), [None, None, Some(3.0), None]);
+        assert_eq!(sides("border-left-width: 4px"), [None, None, None, Some(4.0)]);
+        let style = declared("border-image-width: 9px; border-image-outset: 3px; border-width: 2px");
+        assert_eq!(style.border_width, [Some(2.0); 4]);
+        assert!(style.border_image.is_none(), "{:?}", style.border_image);
+    }
+
+    /// `font-weight` 500 stays regular, anything above picks bold (the CSS
+    /// font-matching boundary).
+    #[test]
+    fn font_weight_boundary_is_above_500() {
+        assert_eq!(declared("font-weight: 500").bold, Some(false));
+        assert_eq!(declared("font-weight: 501").bold, Some(true));
+    }
+
+    /// Each CSS generic family keyword maps to its own `GenericFamily`.
+    #[test]
+    fn generic_family_keywords_map_one_to_one() {
+        for (keyword, generic) in [
+            ("serif", GenericFamily::Serif),
+            ("sans-serif", GenericFamily::SansSerif),
+            ("monospace", GenericFamily::Monospace),
+            ("cursive", GenericFamily::Cursive),
+            ("fantasy", GenericFamily::Fantasy),
+            ("system-ui", GenericFamily::SystemUi),
+        ] {
+            match declared(&format!("font-family: {keyword}")).font_family.as_deref() {
+                Some([FamilyRef::Generic(found)]) => assert_eq!(*found, generic, "{keyword}"),
+                other => panic!("{keyword}: {other:?}"),
+            }
+        }
+    }
+
+    /// `border-image-source: none` declares "no image" (overriding an
+    /// earlier shorthand), and a sheet's image URLs include longhand sources,
+    /// so they load as dependencies.
+    #[test]
+    fn border_image_sources_none_and_longhands() {
+        let style = declared(r#"border-image: url("a.png") 4; border-image-source: none"#);
+        assert!(matches!(style.border_image.and_then(|decl| decl.source), Some(None)));
+        let sheet = owned_sheet(r#"p { border-image-source: url("b.png") } div { border-image: url("c.png") 4 }"#);
+        assert_eq!(image_urls(&sheet), ["b.png", "c.png"]);
+    }
 }

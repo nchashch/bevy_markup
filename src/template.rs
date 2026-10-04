@@ -246,4 +246,55 @@ mod tests {
             prop_assert_eq!(decoded_text(&document), s);
         }
     }
+
+    /// The DOM outline indents each level by two spaces, skips blank text
+    /// (formatting whitespace between tags), quotes text, and shows a
+    /// translated element's translation (or error) instead of its children.
+    #[test]
+    fn outline_indents_levels_and_shows_translations() {
+        let document = HtmlDocument::parse(
+            "<div class=\"a\">\n  <p>Hi <b>there</b></p>\n  <p data-l10n-id=\"t\">x</p>\n  <p data-l10n-id=\"e\">y</p>\n</div>".to_owned(),
+        )
+        .unwrap();
+        let paragraphs: Vec<tl::NodeHandle> = document
+            .dom()
+            .query_selector("p")
+            .unwrap()
+            .collect();
+        let mut localized = LocalizedText::default();
+        localized.0.insert(paragraphs[1], Ok("Translated".to_owned()));
+        localized.0.insert(paragraphs[2], Err("missing".to_owned()));
+        let expected = "\
+div class=\"a\"
+  p
+    \"Hi\"
+    b
+      \"there\"
+  p data-l10n-id=\"t\"
+    l10n \"Translated\"
+  p data-l10n-id=\"e\"
+    l10n error: missing
+";
+        assert_eq!(document.outline(&localized), expected);
+    }
+
+    /// Error messages include every `source()` in the chain (Tera puts the
+    /// useful detail — the missing variable — in a source).
+    #[test]
+    fn error_chain_includes_all_sources() {
+        #[derive(Debug)]
+        struct Layer(&'static str, Option<Box<Layer>>);
+        impl std::fmt::Display for Layer {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Layer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1.as_deref().map(|layer| layer as _)
+            }
+        }
+        let error = Layer("render failed", Some(Box::new(Layer("in t.html", Some(Box::new(Layer("unknown variable `x`", None)))))));
+        assert_eq!(error_chain(&error), "render failed: in t.html: unknown variable `x`");
+    }
 }

@@ -238,6 +238,16 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
+    /// `TemplateContext::from(tera::Context)` keeps the context's variables
+    /// (an app building a `tera::Context` itself must not lose them).
+    #[test]
+    fn template_context_from_tera_keeps_variables() {
+        let mut context = tera::Context::new();
+        context.insert("player", "Ada");
+        let converted = TemplateContext::from(context);
+        assert_eq!(converted.get("player").and_then(|value| value.as_str()), Some("Ada"));
+    }
+
     fn element(tag: &str, id: Option<&str>, classes: &[&str]) -> HtmlElement {
         HtmlElement {
             tag: tag.to_owned(),

@@ -207,6 +207,42 @@ mod tests {
         }
     }
 
+    /// An unchanged frame whose style asset reloads (hot reload) takes the
+    /// new slices; one whose style didn't change is left alone.
+    #[test]
+    fn style_reload_reapplies_to_unchanged_frames() {
+        use bevy::ecs::message::Messages;
+
+        let mut world = World::new();
+        world.init_resource::<Messages<AssetEvent<NineSlice>>>();
+        let slicer = |inset: f32| TextureSlicer {
+            border: BorderRect::all(inset),
+            ..default()
+        };
+        let mut slices = Assets::<NineSlice>::default();
+        let reloaded = slices.add(NineSlice { image: Handle::default(), slicer: slicer(4.0) });
+        let untouched = slices.add(NineSlice { image: Handle::default(), slicer: slicer(4.0) });
+        world.insert_resource(slices);
+        let frame = world.spawn(NineSliceFrame(reloaded.clone())).id();
+        let other = world.spawn(NineSliceFrame(untouched.clone())).id();
+        // A registered system keeps its change ticks between runs.
+        let system = world.register_system(apply_nine_slices);
+        world.run_system(system).unwrap();
+
+        let mut slices = world.resource_mut::<Assets<NineSlice>>();
+        slices.get_mut_untracked(&reloaded).unwrap().slicer = slicer(9.0);
+        slices.get_mut_untracked(&untouched).unwrap().slicer = slicer(7.0);
+        world.write_message(AssetEvent::<NineSlice>::Modified { id: reloaded.id() });
+        world.run_system(system).unwrap();
+
+        let inset = |entity| match &world.get::<ImageNode>(entity).unwrap().image_mode {
+            NodeImageMode::Sliced(slicer) => slicer.border.min_inset.x,
+            mode => panic!("not sliced: {mode:?}"),
+        };
+        assert_eq!(inset(frame), 9.0, "reloaded style re-applied");
+        assert_eq!(inset(other), 4.0, "unchanged frame and style left alone");
+    }
+
     /// The module docs' example parses, with each side read from its own
     /// field and `Tile(x)` carrying its stretch value.
     #[test]
