@@ -49,7 +49,7 @@ src/
   template.rs      HtmlTemplate asset + loader, HtmlDocument (+ outline), decode_entities
   l10n.rs          ActiveLocale, LocalizedText; localize system (data-l10n-id/-args)
   style.rs         Stylesheet asset + loader, DefaultStylesheet, HtmlStylesheet; CSS subset docs
-  cascade.rs       (internal) stylesheet → declared style per element type
+  cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
   fonts.rs         FontFamilies, FontFaces, GenericFamily
   build.rs         (internal) DOM + styles → Bevy UI children; HtmlUiBuilt trigger
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
@@ -57,6 +57,9 @@ examples/
   quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, click wiring, Space = language
   demo/            main.rs (setup: fonts), panels.rs (plain / rendered / outline panels),
                    scroll.rs, selector.rs, locale_panel.rs, theme_panel.rs, consts.rs
+tests/
+  html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump (see Testing)
+  fixtures/        frame.png (32×24, committed; `assets/` is not)
 assets/            (gitignored — see Gotchas)
   fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
@@ -175,14 +178,92 @@ assets/            (gitignored — see Gotchas)
 - rustdoc: a bare `[`template`]` link is ambiguous (Bevy has a `template` fn);
   write `[`template`](mod@template)`.
 - Iosevka ligatures render `<!--`/`-->` as arrows in outline text.
+- CSS generic keywords are case-insensitive: unquoted `font-family: Serif` is
+  the generic `serif`, not a family named "Serif" (quote it, or map the
+  generic with `FontFamilies::set_generic`).
+- Headless apps: `ImagePlugin` only pre-registers its loader; `bevy_render`
+  registers the real one. Without rendering, register
+  `ImageLoader::new(CompressedImageFormats::empty())` yourself.
+
+## Testing
+
+Two layers, both deterministic and headless:
+
+- **Cascade unit tests** (`src/cascade.rs`, `cargo test --lib`): CSS text →
+  declared style for an `HtmlElement` (specificity, compound matching, comma
+  lists, importance, unsupported selectors).
+- **Test vectors** (`tests/html_ui.rs`, `cargo test --test html_ui`): input
+  files (HTML/Tera template, CSS, Fluent bundles) → the Bevy world they
+  produce. `TestUi::new(name, files)` writes the files plus `frame.png` into a
+  fresh temp asset root and builds `MinimalPlugins + AssetPlugin + ImagePlugin
+  + HtmlUiPlugin` (no window/renderer; fonts are fake `Handle::Uuid`s labelled
+  `serif`, `serif-bold`, …, `mono`). `.stylesheet()`, `.locale()`,
+  `.spawn(template, context, node)`, then `settle()` updates until all tracked
+  assets are loaded and a new build has been stable for 5 frames.
+  `assert_dump(expected)` compares a text dump of the `HtmlUi` subtree: one
+  line per entity (`tag#id.class` / `-` / `html-ui`, then `border=`,
+  `padding=`, `margin=` as t,r,b,l, `gap=`, `bg=`, `slice=file t,r,b,l
+  stretch|tile`), one indented line per text run (`"text" face size color`).
+  Vectors: Tera structure, CSS cascade + fonts, Fluent, box model, runtime
+  changes (context / locale / stylesheet swaps, root box restore).
+- Adding a vector: write the inputs, derive the expected dump **by hand from
+  HTML/CSS/Fluent semantics** (don't paste actual output), run. When a vector
+  fails, decide whether the code or the expectation is wrong before editing
+  either. Keep the dump format stable; extend it only for newly mapped
+  properties. A vector should fail when its feature is broken (spot-check by
+  breaking the code once).
+
+## Limits and next steps
+
+Known limits (each skipped/ignored value is logged at `debug`):
+
+- **Layout:** containers are always vertical columns; no `display`,
+  `flex-direction`, `width`/`height`, `margin`, alignment, `position`. Text
+  blocks and containers only stack.
+- **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
+  hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
+- **Selectors:** compound only (type/`*` + `.class` + `#id`); no combinators
+  (`div p`, `>`), attribute selectors, pseudo-classes (`:hover`) or
+  pseudo-elements.
+- **Properties:** no `text-align`, `line-height`, `letter-spacing`,
+  `text-decoration`, `opacity`, `border-radius`, `border-color`/solid
+  borders, `overflow`. Lengths: px/em/rem/% for `font-size`, absolute only
+  for box properties.
+- **border-image:** center always drawn, `-width`/`-outset` ignored, one
+  repeat mode for all sides (Bevy `TextureSlicer` limits).
+- **Inline:** no inline boxes — `background`, borders, frames and padding on
+  inline elements are ignored (Bevy `TextSpan` has no box); inline elements
+  have no entity, so `HtmlElements` can't find them (only blocks/containers).
+- **Interactivity:** none built in; apps wire behaviour on `HtmlUiBuilt`
+  (children are rebuilt on every change, so state on them doesn't persist).
+  No forms/inputs, no links.
+- **Rebuilds:** any change rebuilds the whole `HtmlUi` subtree (no diffing).
+  Fine for panel-sized UIs; large or per-frame-updated documents will churn.
+- **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
+  CJK (wrapped CJK source lines become spaces); `decode_entities` handles only
+  the five escapes Tera emits (no numeric references).
+- **Fonts:** no bundled CJK font; Japanese relies on `system_fonts`.
+
+Next steps (roughly in order of value):
+
+1. Flex layout from CSS: `display: flex`, `flex-direction`, `justify-content`,
+   `align-items`, `width`/`height`/`min-`/`max-`, `margin` → `Node`.
+2. Descendant/child combinators (`.panel p`, `.panel > p`) — needs the
+   ancestor chain during matching; specificity sums.
+3. `:hover` / `:active` via `Interaction` or picking, re-styling without a full
+   rebuild.
+4. Lists done properly: `list-style-type`, `ol` numbering, CSS-driven indent.
+5. Text properties: `text-align` (`Justify`), `line-height` (`LineHeight`).
+6. Incremental rebuilds: keep entities for unchanged elements (key by DOM
+   path) so app-attached state survives and large documents stay cheap.
+7. More test vectors alongside each of the above.
 
 ## Verification
 
 - Warning-free: `cargo check --lib` (minimal Bevy features), `cargo build
-  --all-targets`, `cargo doc --no-deps`. `cargo test --lib` runs the cascade
-  unit tests (specificity, compound matching, comma lists, importance);
-  `cargo test --doc` compiles the `no_run` doc examples (run them separately —
-  cargo rejects `--lib --doc` together).
+  --all-targets`, `cargo doc --no-deps`. `cargo test` must pass: cascade unit
+  tests, the headless test vectors, and the `no_run` doc examples (see
+  Testing). Library changes that alter the mapping need a vector.
 - Visual changes: run an example and capture an in-app screenshot (desktop
   screenshots grab whatever workspace is visible). Throwaway system, removed
   afterwards:
