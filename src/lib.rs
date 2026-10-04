@@ -60,15 +60,16 @@
 //!
 //! ## Supported subset
 //!
-//! - **HTML** ([`html`]): blocks `h1`–`h6`, `p`, `li`, `pre`, loose text; any
-//!   other element is inline text (inside a block) or a container (outside).
-//!   Each block becomes a `Text` node with a `TextSpan` per styled run and an
-//!   [`HtmlElement`](html::HtmlElement) component (tag, id, classes).
+//! - **HTML** ([`html`]): blocks `h1`–`h6`, `p`, `li`, `pre`, loose text;
+//!   containers `div`, `section`, `ul`, … as nested column nodes; other
+//!   elements are inline text (inside a block) or walked through. Each block
+//!   becomes a `Text` node with a `TextSpan` per styled run; blocks and
+//!   containers carry an [`HtmlElement`](html::HtmlElement) (tag, id, classes).
 //! - **CSS** ([`style`]): type, `.class`, `#id` and compound selectors with
 //!   specificity; `color`, `font-family`, `font-size`,
 //!   `font-weight`, `font-style` (inherited); `border-image` (9-slice),
-//!   `border-width`, `padding` on blocks and on the `HtmlUi` node (`html`
-//!   rule); `background-color` (blocks).
+//!   `border-width`, `padding`, `background-color` on blocks, containers and
+//!   the `HtmlUi` node (`html` rule, except background); `gap` on containers.
 //! - **Fluent** ([`l10n`]): `data-l10n-id` / `data-l10n-args` (fluent-dom
 //!   convention); translations may contain inline markup.
 //! - **Tera** ([`template`](mod@template)): full Tera 2 syntax in `.html` files, rendered with

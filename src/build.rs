@@ -48,6 +48,33 @@ struct Block {
     runs: Vec<Run>,
 }
 
+/// Elements that become column nodes holding their children's nodes (so CSS
+/// box properties and `HtmlElements` reach them).
+const CONTAINERS: &[&str] = &[
+    "div",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "main",
+    "nav",
+    "aside",
+    "ul",
+    "ol",
+    "blockquote",
+    "figure",
+    "form",
+];
+
+/// A node to spawn: a text block, or a container of further items.
+enum Item {
+    Block(Block),
+    Container {
+        element: HtmlElement,
+        children: Vec<Item>,
+    },
+}
+
 /// Resolved box properties of an element: `border-width`, `padding`,
 /// `background-color`, `border-image`.
 #[derive(Default)]
@@ -56,6 +83,8 @@ struct BoxStyle {
     padding: [Option<f32>; 4],
     background: Option<Color>,
     image: Option<(Handle<Image>, TextureSlicer)>,
+    /// `row-gap` for containers (not part of `is_empty`: blocks ignore it).
+    row_gap: Option<f32>,
 }
 
 impl BoxStyle {
@@ -184,6 +213,7 @@ impl Styler<'_> {
             padding: declared.padding,
             background: declared.background,
             image,
+            row_gap: declared.row_gap,
         }
     }
 }
@@ -291,7 +321,7 @@ pub(crate) fn build_html_ui(
             apply_root_box(&mut commands, entity, &mut node, state, root_box);
         }
 
-        let blocks = if outline.is_some() {
+        let items = if outline.is_some() {
             let text = match &*rendered {
                 RenderedHtml::Pending => continue,
                 RenderedHtml::Ready(document) => {
@@ -302,19 +332,19 @@ pub(crate) fn build_html_ui(
                 RenderedHtml::Failed(message) => format!("failed to render: {message}"),
             };
             let style = styler.style_of(&element_tag("pre"), root);
-            vec![Block {
+            vec![Item::Block(Block {
                 kind: BlockKind::Paragraph,
                 element: None,
                 style,
                 runs: vec![Run { text, style }],
-            }]
+            })]
         } else {
             match &*rendered {
                 RenderedHtml::Pending => continue,
                 RenderedHtml::Ready(document) => {
-                    collect_blocks(document.dom(), &localized.0, &styler, root)
+                    collect_items(document.dom(), &localized.0, &styler, root)
                 }
-                RenderedHtml::Failed(message) => vec![Block {
+                RenderedHtml::Failed(message) => vec![Item::Block(Block {
                     kind: BlockKind::Paragraph,
                     element: None,
                     style: root,
@@ -322,20 +352,52 @@ pub(crate) fn build_html_ui(
                         text: format!("failed to render: {message}"),
                         style: root,
                     }],
-                }],
+                })],
             }
         };
 
+        // Nested containers space their children like the root does.
+        let default_gap = roots.get(entity).map_or(Val::Auto, |(node, _)| node.row_gap);
         commands
             .entity(entity)
             .despawn_related::<Children>()
             .with_children(|parent| {
-                for block in blocks {
-                    spawn_block(parent, &styler, block);
+                for item in items {
+                    spawn_item(parent, &styler, item, default_gap);
                 }
             })
             .trigger(|entity| HtmlUiBuilt { entity });
     }
+}
+
+fn spawn_item(parent: &mut ChildSpawnerCommands, styler: &Styler, item: Item, default_gap: Val) {
+    let (element, children) = match item {
+        Item::Block(block) => return spawn_block(parent, styler, block),
+        Item::Container { element, children } => (element, children),
+    };
+    let boxed = styler.box_of(&element);
+    let mut container = parent.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            flex_shrink: 0.0,
+            row_gap: boxed.row_gap.map_or(default_gap, Val::Px),
+            border: rect_over(UiRect::DEFAULT, boxed.border),
+            padding: rect_over(UiRect::DEFAULT, boxed.padding),
+            ..default()
+        },
+        element,
+    ));
+    if let Some(background) = boxed.background {
+        container.insert(BackgroundColor(background));
+    }
+    if let Some(image) = boxed.sliced_image() {
+        container.insert(image);
+    }
+    container.with_children(|container| {
+        for child in children {
+            spawn_item(container, styler, child, default_gap);
+        }
+    });
 }
 
 fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block) {
@@ -487,25 +549,25 @@ struct Ctx<'a, 'p, 'buf> {
     styler: &'a Styler<'a>,
 }
 
-fn collect_blocks(
+fn collect_items(
     dom: &tl::VDom,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
     styler: &Styler,
     root: Style,
-) -> Vec<Block> {
+) -> Vec<Item> {
     let ctx = Ctx {
         parser: dom.parser(),
         localized,
         styler,
     };
-    let mut blocks = Vec::new();
+    let mut items = Vec::new();
     for handle in dom.children() {
-        collect_node(&ctx, *handle, root, &mut blocks);
+        collect_node(&ctx, *handle, root, &mut items);
     }
-    blocks
+    items
 }
 
-fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mut Vec<Block>) {
+fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut Vec<Item>) {
     let Some(node) = handle.get(ctx.parser) else {
         return;
     };
@@ -517,12 +579,12 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
             push_children_runs(ctx, handle, inherited, &mut runs);
             let runs = collapse_runs(runs);
             if !runs.is_empty() {
-                blocks.push(Block {
+                items.push(Item::Block(Block {
                     kind: BlockKind::Paragraph,
                     element: None,
                     style: inherited,
                     runs,
-                });
+                }));
             }
             return;
         }
@@ -537,9 +599,19 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
         "li" => BlockKind::ListItem,
         "pre" => BlockKind::Preformatted,
         "head" | "script" | "style" => return,
+        name if CONTAINERS.contains(&name) => {
+            let mut children = Vec::new();
+            for child in tag.children().top().iter() {
+                collect_node(ctx, *child, style, &mut children);
+            }
+            items.push(Item::Container { element, children });
+            return;
+        }
+        // Other elements outside a block (`html`, `body`, unknown tags):
+        // walked through, no node.
         _ => {
             for child in tag.children().top().iter() {
-                collect_node(ctx, *child, style, blocks);
+                collect_node(ctx, *child, style, items);
             }
             return;
         }
@@ -554,12 +626,12 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, blocks: &mu
             finish_runs(runs, preformatted)
         }
     };
-    blocks.push(Block {
+    items.push(Item::Block(Block {
         kind,
         element: Some(element),
         style,
         runs,
-    });
+    }));
 }
 
 /// Tag name (lowercase), `id` and `class` of an element.

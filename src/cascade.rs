@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightningcss::properties::Property;
+use lightningcss::properties::align::GapValue;
 use lightningcss::properties::border::BorderSideWidth;
 use lightningcss::properties::border_image::{
     BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
@@ -81,6 +82,8 @@ pub(crate) struct ElementStyle {
     pub border_width: [Option<f32>; 4],
     /// `[top, right, bottom, left]` in px.
     pub padding: [Option<f32>; 4],
+    /// `row-gap` (or `gap`'s row part) in px, for containers.
+    pub row_gap: Option<f32>,
 }
 
 /// Every `border-image-source` URL in `sheet`, as written.
@@ -313,6 +316,8 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::PaddingRight(value) => style.padding[1] = length_px(value),
         Property::PaddingBottom(value) => style.padding[2] = length_px(value),
         Property::PaddingLeft(value) => style.padding[3] = length_px(value),
+        Property::RowGap(gap) => style.row_gap = gap_px(gap),
+        Property::Gap(gap) => style.row_gap = gap_px(&gap.row),
         _ => {}
     }
 }
@@ -353,6 +358,18 @@ fn side_width(width: &BorderSideWidth) -> Option<f32> {
         BorderSideWidth::Medium => Some(3.0),
         BorderSideWidth::Thick => Some(5.0),
         BorderSideWidth::Length(length) => length.to_px(),
+    }
+}
+
+/// `row-gap` in px; `normal` (= no override), `%` and `calc()` give `None`.
+fn gap_px(gap: &GapValue) -> Option<f32> {
+    match gap {
+        GapValue::LengthPercentage(LengthPercentage::Dimension(length)) => length.to_px(),
+        GapValue::Normal => None,
+        GapValue::LengthPercentage(_) => {
+            debug!("html css: only absolute lengths are supported for gap");
+            None
+        }
     }
 }
 

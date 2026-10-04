@@ -14,10 +14,10 @@
 //!   skipped (logged at `debug`).
 //! - inherited: `color`, `font-family`, `font-size`, `font-weight`,
 //!   `font-style`
-//! - box properties on blocks and on the `html` rule (= the `HtmlUi` node
-//!   itself): `border-image` (+ `-source`, `-slice`, `-repeat`),
+//! - box properties on blocks, containers and the `html` rule (= the `HtmlUi`
+//!   node itself): `border-image` (+ `-source`, `-slice`, `-repeat`),
 //!   `border-width`, `padding` (absolute lengths); `background-color` on
-//!   blocks only
+//!   blocks and containers; `gap` / `row-gap` on containers
 //! - cascade: `!important` beats normal declarations, then higher specificity
 //!   (ids, classes, type) wins, then the later rule
 //! - an `html` rule sets the starting values, also for fragments without `<html>`

@@ -6,15 +6,20 @@
 //! the pipeline: they're despawned and rebuilt whenever the template, context,
 //! locale, stylesheet or fonts change.
 //!
-//! Tags only decide structure:
+//! Tags decide structure:
 //! - blocks: `h1`–`h6`, `p`, `li` (bulleted), `pre` (whitespace and line breaks
 //!   kept, no wrapping), and loose text directly inside a container
+//! - containers: `div`, `section`, `article`, `header`, `footer`, `main`,
+//!   `nav`, `aside`, `ul`, `ol`, `blockquote`, `figure`, `form` — column nodes
+//!   holding their children's nodes, spaced like the `HtmlUi` node's own
+//!   `row_gap` unless CSS sets `gap`
 //! - any other element is inline (styled text inside a block) or, outside a
-//!   block, a container that's walked through; `head`/`script`/`style` are
-//!   skipped
+//!   block, walked through without a node (`html`, `body`, unknown tags);
+//!   `head`/`script`/`style` are skipped
 //!
-//! Each block is spawned as a `Text` with one `TextSpan` per styled run, plus
-//! an [`HtmlElement`] (unless it's anonymous loose text).
+//! Each block is spawned as a `Text` with one `TextSpan` per styled run. Blocks
+//! and containers carry an [`HtmlElement`] (anonymous loose text doesn't), so
+//! CSS selectors and [`HtmlElements`] reach them.
 
 use std::borrow::Cow;
 

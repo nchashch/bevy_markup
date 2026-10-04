@@ -25,7 +25,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlStylesheet(Handle<Stylesheet>)` | Component | per-entity stylesheet override |
 | `HtmlDebugOutline` | Component | show the DOM outline (styled like `pre`) instead of the UI |
 | `RenderedHtml` | Component | `Pending` / `Ready(HtmlDocument)` / `Failed(msg)` (read-only) |
-| `HtmlElement { tag, id, classes }` | Component | on each spawned block node |
+| `HtmlElement { tag, id, classes }` | Component | on each spawned block and container node |
 | `HtmlUiBuilt { entity }` | EntityEvent | after each (re)build; children are replaced every time, so wire behaviour here |
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
@@ -94,11 +94,16 @@ assets/            (gitignored — see Gotchas)
   (re)load, stylesheet swap or (re)load, a stylesheet's `border-image` image
   loading, `FontFamilies` change, outline marker added. The UI isn't built
   while its stylesheet is loading (images may arrive later; their load rebuilds).
-- Structure: blocks `h1`–`h6`, `p`, `li` (bulleted), `pre` (whitespace kept, no
-  wrap; leading newline and trailing whitespace dropped), loose text; other
-  elements are inline in a block or walked through outside one;
-  `head`/`script`/`style` skipped. Each block is a `Text` + one `TextSpan` per
-  styled run; whitespace collapses outside `pre`.
+- Structure (`build.rs`: DOM → `Item` tree → nodes): blocks `h1`–`h6`, `p`,
+  `li` (bulleted), `pre` (whitespace kept, no wrap; leading newline and
+  trailing whitespace dropped), loose text; containers (`CONTAINERS`: `div`,
+  `section`, `article`, `header`, `footer`, `main`, `nav`, `aside`, `ul`,
+  `ol`, `blockquote`, `figure`, `form`) become column nodes holding their
+  children, `row_gap` = the `HtmlUi` node's own unless CSS `gap`; other
+  elements are inline in a block or walked through outside one (`html`,
+  `body` included — the `HtmlUi` node is the root); `head`/`script`/`style`
+  skipped. Each block is a `Text` + one `TextSpan` per styled run; whitespace
+  collapses outside `pre`.
 - Localization (fluent-dom convention): `<p data-l10n-id="key"
   data-l10n-args='{"n": 3}'>fallback</p>`; the translation replaces the
   content, the element's own content is the fallback. Args are JSON (numbers
@@ -121,7 +126,8 @@ assets/            (gitignored — see Gotchas)
   italic → regular.
 - Box properties (`cascade.rs` → `build.rs`): `border-image` (shorthand +
   `-source`/`-slice`/`-repeat`), `border-width`, `padding` (absolute lengths)
-  on blocks and on the `html` rule; `background-color` on blocks only.
+  on blocks, containers and the `html` rule; `background-color` on blocks and
+  containers; `gap`/`row-gap` on containers.
   `url()` resolves relative to the `.css`; the `Stylesheet` loader loads the
   images as dependencies. Maps to Bevy's sliced `ImageNode`
   (`VisualBox::BorderBox`) + `Node::border`/`padding`. Slice numbers = image px,
