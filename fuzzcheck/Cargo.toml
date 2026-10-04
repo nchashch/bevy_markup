@@ -1,0 +1,19 @@
+[package]
+name = "p23-fuzzcheck"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+p23 = { path = "..", features = ["fuzzing"] }
+
+[dev-dependencies]
+fuzzcheck = "0.13"
+
+# Vendored: fuzzcheck_mutators_derive 0.13.0 uses let-chains but declares
+# edition 2021, which no longer compiles; bumped to edition 2024.
+[patch.crates-io]
+fuzzcheck = { path = "vendor/fuzzcheck" }
+fuzzcheck_mutators_derive = { path = "vendor/fuzzcheck_mutators_derive" }
+fuzzcheck_common = { path = "vendor/fuzzcheck_common" }
+fluent-syntax = { path = "../vendor/fluent-syntax" }

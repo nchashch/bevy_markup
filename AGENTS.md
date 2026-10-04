@@ -74,6 +74,14 @@ fuzz/
 honggfuzz/
   targets/           the same three harnesses driven by honggfuzz (`cargo +nightly hfuzz run <t>`)
   vendor/honggfuzz/  vendored honggfuzz crate (patched bfd.c for current binutils)
+fuzzcheck/
+  tests/             the same three harnesses as fuzzcheck `#[test]`s
+                     (`cargo +nightly fuzzcheck --test <name> fuzz_<name> --stop-after-duration 60`)
+  vendor/            vendored fuzzcheck 0.13 git-master (edition 2024; patched
+                     `__llvm_prf_data` parser for the u64 record layout of
+                     LLVM 21+; see the comment in `llvm_coverage.rs`)
+  .cargo/config.toml linker override: the repo's clang+mold cannot link the
+                     LLVM coverage section symbols (`__start___llvm_prf_*`)
 vendor/fluent-syntax/  vendored fluent-syntax 0.11.1 (patched char-boundary bug, see Gotchas)
 assets/            (gitignored — see Gotchas)
   fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
@@ -345,6 +353,17 @@ known gaps:
     `HFUZZ_RUN_ARGS="--run_time 60"`; args after the target name reach the
     *target's* argv, not the driver). Data lands in `hfuzz_workspace/`
     (gitignored).
+  - `fuzzcheck` (`fuzzcheck/`, its own coverage sensor over `-C
+    instrument-coverage`; also nightly, installed via
+    `cargo +nightly install cargo-fuzzcheck`):
+    `cd fuzzcheck && cargo +nightly fuzzcheck --test <name> fuzz_<name>
+    --stop-after-duration 60`. The vendored copy (git master, edition 2024)
+    needed: a patched `__llvm_prf_data` parser (LLVM 21+ widened the record
+    fields to u64 — NumCounters sits at offset 0x38 of the 72-byte record;
+    verified against a `-C instrument-coverage` section dump) and the
+    counter-file filter relaxed (cargo passes absolute source paths).
+    `fuzzcheck/.cargo/config.toml` overrides the repo's clang+mold linker,
+    which cannot resolve `__start___llvm_prf_*` section symbols.
   - [x] cargo-fuzz's first `css` run found a real crash: a selector with a
     non-ASCII first character panicked in `Compound::parse` (`&rest[1..]`
     byte-sliced past a multi-byte char). Fixed to skip the rule (p23 idents

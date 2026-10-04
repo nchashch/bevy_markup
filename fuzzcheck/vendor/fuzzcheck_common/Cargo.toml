@@ -1,0 +1,17 @@
+[package]
+name = "fuzzcheck_common"
+version = "0.13.0"
+authors = ["Loïc Lecrenier <loic.lecrenier@me.com>"]
+edition = "2024"
+description = "Common components for both cargo-fuzzcheck and fuzzcheck"
+homepage = "https://fuzzcheck.neocities.org"
+license = "MIT"
+repository = "https://github.com/loiclec/fuzzcheck-rs"
+keywords = ["property", "fuzzer", "fuzzing", "test", "testing"]
+categories = ["development-tools::testing"]
+
+[dependencies]
+getopts = "0.2.21"
+
+[lib]
+name = "fuzzcheck_common"

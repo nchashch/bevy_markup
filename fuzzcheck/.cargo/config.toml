@@ -1,0 +1,5 @@
+# Overrides the repo-root config (clang+mold), which cannot link the LLVM
+# coverage section symbols (`__start___llvm_prf_*`) that fuzzcheck's
+# instrumentation requires.
+[target.x86_64-unknown-linux-gnu]
+linker = "cc"

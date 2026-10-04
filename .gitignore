@@ -2,3 +2,5 @@
 /assets
 /hfuzz_target
 /hfuzz_workspace
+/fuzzcheck/target
+/fuzzcheck/fuzz
