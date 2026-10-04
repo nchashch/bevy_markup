@@ -12,16 +12,9 @@ system_fonts = ["bevy/system_font_discovery"]
 # Only what the library's code uses; the app picks rendering, windowing,
 # platform and everything else. Check with `cargo check --lib`.
 bevy = { version = "0.19.1", default-features = false, features = [
-	# Node, ImageNode, Text/TextSpan, ScrollPosition (bevy_ui + bevy_text).
+	# Node, ImageNode, Text/TextSpan (bevy_ui + bevy_text), assets, ECS.
 	"ui_api",
-	# Pointer events, Button/Interaction, hit testing for UI nodes.
-	"bevy_picking",
-	"ui_picking",
-	# ScrollArea, Scrollbar.
-	"bevy_ui_widgets",
-	# The bundled 9-slice frame image.
-	"png",
-	# Fallback when the CSS names no known font family.
+	# Fallback when the CSS names no registered font family.
 	"default_font",
 	"bevy_log",
 ] }

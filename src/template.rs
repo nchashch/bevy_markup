@@ -1,34 +1,24 @@
-//! `.html` files as Tera templates.
+//! `.html` files as Tera templates, and the parsed result.
 //!
-//! The loader compiles each file as a Tera template (so syntax errors fail the
-//! load). [`HtmlView`] renders a template with its `tera::Context`, then parses
-//! the resulting plain HTML with `tl` into [`RenderedHtml`]. A plain `.html`
-//! file with no Tera syntax is just a template that renders to itself.
+//! The loader compiles each file as a Tera 2 template, so syntax errors fail the
+//! load. The template's name is its asset path, so `.html` files get Tera's
+//! HTML autoescaping of `{{ }}` values. A plain `.html` file with no Tera
+//! syntax is a template that renders to itself.
 
 use std::fmt::Write;
 
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
-use bevy::platform::collections::{HashMap, HashSet};
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-use super::l10n::LocalizedText;
+use crate::l10n::LocalizedText;
 
-pub struct HtmlPlugin;
-
-impl Plugin for HtmlPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_asset::<HtmlTemplate>()
-            .init_asset_loader::<HtmlTemplateLoader>()
-            .add_systems(PostUpdate, render_html_views);
-    }
-}
-
-/// A compiled Tera template loaded from an `.html` file.
+/// A compiled Tera template loaded from an `.html`/`.htm` file. Use it via
+/// [`HtmlUi`](crate::html::HtmlUi).
 #[derive(Asset, TypePath)]
 pub struct HtmlTemplate {
     tera: tera::Tera,
-    /// Template name inside `tera`: the asset path, so `.html` names get
-    /// Tera's HTML autoescaping.
+    /// Template name inside `tera`: the asset path.
     name: String,
 }
 
@@ -41,9 +31,14 @@ impl HtmlTemplate {
         let html = self.tera.render(&self.name, context)?;
         Ok(HtmlDocument::parse(html)?)
     }
+
+    /// The template's name (its asset path).
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
-/// Parsed HTML. The DOM owns its source text.
+/// Parsed HTML. Owns its source text.
 pub struct HtmlDocument {
     dom: tl::VDomGuard,
 }
@@ -56,6 +51,7 @@ impl HtmlDocument {
         Ok(Self { dom })
     }
 
+    /// The parsed DOM.
     pub fn dom(&self) -> &tl::VDom<'_> {
         self.dom.get_ref()
     }
@@ -74,60 +70,9 @@ impl HtmlDocument {
     }
 }
 
-/// Renders `template` with `context` into this entity's [`RenderedHtml`].
-/// Re-renders when either field changes or the template reloads.
-#[derive(Component)]
-#[require(RenderedHtml, LocalizedText)]
-pub struct HtmlView {
-    pub template: Handle<HtmlTemplate>,
-    pub context: tera::Context,
-}
-
-/// Output of an [`HtmlView`].
-#[derive(Component, Default)]
-pub enum RenderedHtml {
-    /// Template not loaded yet.
-    #[default]
-    Pending,
-    Ready(HtmlDocument),
-    /// Rendering or parsing failed; the message includes the error chain.
-    Failed(String),
-}
-
-pub(super) fn render_html_views(
-    mut events: MessageReader<AssetEvent<HtmlTemplate>>,
-    templates: Res<Assets<HtmlTemplate>>,
-    mut views: Query<(Ref<HtmlView>, &mut RenderedHtml)>,
-) {
-    let reloaded: HashSet<AssetId<HtmlTemplate>> = events
-        .read()
-        .filter_map(|event| match event {
-            AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => Some(*id),
-            _ => None,
-        })
-        .collect();
-
-    for (view, mut rendered) in &mut views {
-        if !view.is_changed() && !reloaded.contains(&view.template.id()) {
-            continue;
-        }
-        let Some(template) = templates.get(&view.template) else {
-            continue;
-        };
-        *rendered = match template.render(&view.context) {
-            Ok(document) => RenderedHtml::Ready(document),
-            Err(err) => {
-                let message = error_chain(&*err);
-                error!("rendering {}: {message}", template.name);
-                RenderedHtml::Failed(message)
-            }
-        };
-    }
-}
-
 /// `tl` leaves character references as written. Undo the ones Tera's HTML
 /// autoescaping produces, so text and attribute values read as authored.
-pub fn decode_entities(text: &str) -> String {
+pub(crate) fn decode_entities(text: &str) -> String {
     if !text.contains('&') {
         return text.to_owned();
     }
@@ -139,7 +84,7 @@ pub fn decode_entities(text: &str) -> String {
 }
 
 /// `err: source: source…` — Tera puts the useful detail in the sources.
-fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+pub(crate) fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
     let mut message = err.to_string();
     let mut source = err.source();
     while let Some(err) = source {
@@ -203,7 +148,7 @@ fn write_node(
 }
 
 #[derive(Default, TypePath)]
-struct HtmlTemplateLoader;
+pub(crate) struct HtmlTemplateLoader;
 
 impl AssetLoader for HtmlTemplateLoader {
     type Asset = HtmlTemplate;

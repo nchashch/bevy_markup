@@ -1,22 +1,5 @@
-//! Element styles for [`super::html_ui`], read from a lightningcss stylesheet.
-//!
-//! Deliberately small subset:
-//! - selectors: type selectors only (`h1`, `p`, `code`, …), incl. comma lists;
-//!   anything else is skipped (logged at `debug`)
-//! - inherited properties: `color`, `font-family`, `font-size`, `font-weight`,
-//!   `font-style`
-//! - non-inherited: `background-color` (blocks only)
-//! - cascade: later rules win; `!important` beats normal declarations
-//!
-//! A rule for `html` sets the document's starting values, also for fragments
-//! that have no `<html>` element.
-//!
-//! `font-family` picks the first listed name found in
-//! [`FONT_FAMILIES`] (or mapped by [`FONT_GENERIC_FAMILIES`]); unknown-only
-//! lists are ignored. `font-size`: `px`, `em`/`%` (of the inherited size),
-//! `rem` (of the root size), absolute keywords (`medium` = 16px),
-//! `smaller`/`larger`. `font-weight`: bold at 600+, `bolder`/`lighter`.
-//! `font-style`: `italic`/`oblique` vs `normal`.
+//! Stylesheet → declared style per element type (the subset documented in
+//! [`crate::style`]).
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -31,11 +14,11 @@ use lightningcss::traits::ToCss;
 use lightningcss::values::color::{CssColor, RGBA};
 use lightningcss::values::length::{LengthPercentage, LengthValue};
 
-use crate::consts::{FONT_FAMILIES, FONT_GENERIC_FAMILIES};
+use crate::fonts::{FamilyRef, GenericFamily};
 
 /// A declared `font-size`, resolved against inherited/root sizes later.
-#[derive(Clone, Copy)]
-pub(super) enum FontSizeSpec {
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FontSizeSpec {
     Px(f32),
     /// Multiple of the inherited size (`em`, `%`, `smaller`/`larger`).
     Inherited(f32),
@@ -54,12 +37,12 @@ impl FontSizeSpec {
 }
 
 /// Declared (not computed) style for one element type.
-#[derive(Clone, Copy, Default)]
-pub(super) struct ElementStyle {
+#[derive(Clone, Default, Debug)]
+pub(crate) struct ElementStyle {
     pub color: Option<Color>,
     pub background: Option<Color>,
-    /// Index into [`FONT_FAMILIES`].
-    pub font_family: Option<usize>,
+    /// The `font-family` list as written.
+    pub font_family: Option<Vec<FamilyRef>>,
     pub font_size: Option<FontSizeSpec>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
@@ -67,7 +50,10 @@ pub(super) struct ElementStyle {
 
 /// Element type (lowercase tag name) → declared style.
 #[derive(Default)]
-pub(super) struct HtmlStyles(HashMap<String, ElementStyle>);
+pub(crate) struct HtmlStyles {
+    styles: HashMap<String, ElementStyle>,
+    empty: ElementStyle,
+}
 
 impl HtmlStyles {
     pub fn from_sheet(sheet: &StyleSheet) -> Self {
@@ -102,11 +88,14 @@ impl HtmlStyles {
                 }
             }
         }
-        Self(styles)
+        Self {
+            styles,
+            empty: ElementStyle::default(),
+        }
     }
 
-    pub fn get(&self, tag: &str) -> ElementStyle {
-        self.0.get(tag).copied().unwrap_or_default()
+    pub fn get(&self, tag: &str) -> &ElementStyle {
+        self.styles.get(tag).unwrap_or(&self.empty)
     }
 }
 
@@ -123,9 +112,9 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             }
         }
         Property::FontFamily(families) => {
-            match families.iter().find_map(family_index) {
-                Some(index) => style.font_family = Some(index),
-                None => debug!("html css: no known family in `font-family`"),
+            let list: Vec<FamilyRef> = families.iter().filter_map(family_ref).collect();
+            if !list.is_empty() {
+                style.font_family = Some(list);
             }
         }
         Property::FontSize(size) => {
@@ -160,29 +149,24 @@ fn to_color(color: &CssColor) -> Option<Color> {
     Some(Color::srgba_u8(rgba.red, rgba.green, rgba.blue, rgba.alpha))
 }
 
-fn family_index(family: &FontFamily) -> Option<usize> {
-    let name = match family {
-        FontFamily::FamilyName(name) => name
-            .to_css_string(PrinterOptions::default())
-            .ok()?
-            .trim_matches(['"', '\''])
-            .to_owned(),
-        FontFamily::Generic(generic) => {
-            let keyword = match generic {
-                GenericFontFamily::Serif => "serif",
-                GenericFontFamily::Monospace => "monospace",
-                _ => return None,
-            };
-            FONT_GENERIC_FAMILIES
-                .iter()
-                .find(|(generic, _)| *generic == keyword)?
-                .1
-                .to_owned()
-        }
-    };
-    FONT_FAMILIES
-        .iter()
-        .position(|(family, _)| family.eq_ignore_ascii_case(&name))
+fn family_ref(family: &FontFamily) -> Option<FamilyRef> {
+    Some(match family {
+        FontFamily::FamilyName(name) => FamilyRef::Named(
+            name.to_css_string(PrinterOptions::default())
+                .ok()?
+                .trim_matches(['"', '\''])
+                .to_owned(),
+        ),
+        FontFamily::Generic(generic) => FamilyRef::Generic(match generic {
+            GenericFontFamily::Serif => GenericFamily::Serif,
+            GenericFontFamily::SansSerif => GenericFamily::SansSerif,
+            GenericFontFamily::Monospace => GenericFamily::Monospace,
+            GenericFontFamily::Cursive => GenericFamily::Cursive,
+            GenericFontFamily::Fantasy => GenericFamily::Fantasy,
+            GenericFontFamily::SystemUI => GenericFamily::SystemUi,
+            _ => return None,
+        }),
+    })
 }
 
 fn font_size(size: &FontSize) -> Option<FontSizeSpec> {

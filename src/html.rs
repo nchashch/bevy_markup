@@ -1,0 +1,214 @@
+//! The `HtmlUi` component and what it produces.
+//!
+//! Spawn [`HtmlUi`] with a template handle; its required components
+//! ([`Node`], [`TemplateContext`], [`RenderedHtml`], …) are added for you, so
+//! override any of them in the same bundle. The entity's children are owned by
+//! the pipeline: they're despawned and rebuilt whenever the template, context,
+//! locale, stylesheet or fonts change.
+//!
+//! Tags only decide structure:
+//! - blocks: `h1`–`h6`, `p`, `li` (bulleted), `pre` (whitespace and line breaks
+//!   kept, no wrapping), and loose text directly inside a container
+//! - any other element is inline (styled text inside a block) or, outside a
+//!   block, a container that's walked through; `head`/`script`/`style` are
+//!   skipped
+//!
+//! Each block is spawned as a `Text` with one `TextSpan` per styled run, plus
+//! an [`HtmlElement`] (unless it's anonymous loose text).
+
+use std::borrow::Cow;
+
+use bevy::ecs::system::SystemParam;
+use bevy::platform::collections::HashSet;
+use bevy::prelude::*;
+use serde::Serialize;
+
+use crate::l10n::LocalizedText;
+use crate::template::{HtmlDocument, HtmlTemplate, error_chain};
+
+/// A Bevy UI subtree rendered from an HTML template.
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use p23::prelude::*;
+/// # fn system(mut commands: Commands, asset_server: Res<AssetServer>) {
+/// commands.spawn((
+///     HtmlUi::new(asset_server.load("ui/inventory.html")),
+///     TemplateContext::new().with("gold", &120),
+/// ));
+/// # }
+/// ```
+#[derive(Component, Clone, Debug, Reflect)]
+#[reflect(Component)]
+#[require(Node, TemplateContext, RenderedHtml, LocalizedText)]
+pub struct HtmlUi(pub Handle<HtmlTemplate>);
+
+impl HtmlUi {
+    pub fn new(template: Handle<HtmlTemplate>) -> Self {
+        Self(template)
+    }
+}
+
+impl From<Handle<HtmlTemplate>> for HtmlUi {
+    fn from(template: Handle<HtmlTemplate>) -> Self {
+        Self(template)
+    }
+}
+
+/// Tera variables for this entity's template. Mutate it (it derefs to
+/// [`tera::Context`]) to re-render.
+#[derive(Component, Default, Clone, Deref, DerefMut)]
+pub struct TemplateContext(pub tera::Context);
+
+impl TemplateContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builder form of [`tera::Context::insert`].
+    pub fn with<T: Serialize + ?Sized>(
+        mut self,
+        key: impl Into<Cow<'static, str>>,
+        value: &T,
+    ) -> Self {
+        self.0.insert(key, value);
+        self
+    }
+}
+
+impl From<tera::Context> for TemplateContext {
+    fn from(context: tera::Context) -> Self {
+        Self(context)
+    }
+}
+
+/// The template's latest render. Read-only for users; written by
+/// [`HtmlUiSystems::Render`](crate::HtmlUiSystems::Render).
+#[derive(Component, Default)]
+pub enum RenderedHtml {
+    /// Template not loaded yet.
+    #[default]
+    Pending,
+    Ready(HtmlDocument),
+    /// Rendering or parsing failed; the message includes the error chain. The
+    /// UI shows it as a paragraph.
+    Failed(String),
+}
+
+/// Show the DOM outline (elements, attributes, text, translations) instead of
+/// the rendered UI — for debugging templates. Styled like the stylesheet's
+/// `pre`. Also logged at `debug` level on every rebuild.
+#[derive(Component, Default, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, Default)]
+pub struct HtmlDebugOutline;
+
+/// The HTML element a spawned block node came from.
+#[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component, Default)]
+pub struct HtmlElement {
+    /// Lowercase tag name, e.g. `"p"`.
+    pub tag: String,
+    /// The `id` attribute.
+    pub id: Option<String>,
+    /// The `class` attribute, split on whitespace.
+    pub classes: Vec<String>,
+}
+
+impl HtmlElement {
+    pub fn has_class(&self, class: &str) -> bool {
+        self.classes.iter().any(|c| c == class)
+    }
+}
+
+/// Fired on an [`HtmlUi`] entity after its children were (re)built. Children
+/// are replaced on every rebuild, so attach behaviour (observers, components)
+/// here rather than once at spawn.
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use p23::prelude::*;
+/// fn wire_buttons(built: On<HtmlUiBuilt>, elements: HtmlElements, mut commands: Commands) {
+///     if let Some(save) = elements.by_id(built.entity, "save") {
+///         commands.entity(save).insert(Button).observe(|_: On<Pointer<Click>>| {
+///             info!("save clicked");
+///         });
+///     }
+/// }
+/// # App::new().add_observer(wire_buttons);
+/// ```
+#[derive(EntityEvent, Clone, Copy, Debug)]
+pub struct HtmlUiBuilt {
+    pub entity: Entity,
+}
+
+/// Finds spawned [`HtmlElement`]s below an [`HtmlUi`] entity.
+#[derive(SystemParam)]
+pub struct HtmlElements<'w, 's> {
+    children: Query<'w, 's, &'static Children>,
+    elements: Query<'w, 's, &'static HtmlElement>,
+}
+
+impl HtmlElements<'_, '_> {
+    /// All element nodes below `root`, in document order.
+    pub fn iter(&self, root: Entity) -> impl Iterator<Item = (Entity, &HtmlElement)> + '_ {
+        self.children
+            .iter_descendants(root)
+            .filter_map(|entity| Some((entity, self.elements.get(entity).ok()?)))
+    }
+
+    /// The first element below `root` with this `id`.
+    pub fn by_id(&self, root: Entity, id: &str) -> Option<Entity> {
+        self.iter(root)
+            .find(|(_, element)| element.id.as_deref() == Some(id))
+            .map(|(entity, _)| entity)
+    }
+
+    /// Elements below `root` with this class.
+    pub fn by_class<'a>(
+        &'a self,
+        root: Entity,
+        class: &'a str,
+    ) -> impl Iterator<Item = Entity> + 'a {
+        self.iter(root)
+            .filter(move |(_, element)| element.has_class(class))
+            .map(|(entity, _)| entity)
+    }
+
+    /// Elements below `root` with this tag.
+    pub fn by_tag<'a>(&'a self, root: Entity, tag: &'a str) -> impl Iterator<Item = Entity> + 'a {
+        self.iter(root)
+            .filter(move |(_, element)| element.tag == tag)
+            .map(|(entity, _)| entity)
+    }
+}
+
+pub(crate) fn render_templates(
+    mut events: MessageReader<AssetEvent<HtmlTemplate>>,
+    templates: Res<Assets<HtmlTemplate>>,
+    mut views: Query<(Ref<HtmlUi>, Ref<TemplateContext>, &mut RenderedHtml)>,
+) {
+    let reloaded: HashSet<AssetId<HtmlTemplate>> = events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+
+    for (html, context, mut rendered) in &mut views {
+        if !html.is_changed() && !context.is_changed() && !reloaded.contains(&html.0.id()) {
+            continue;
+        }
+        let Some(template) = templates.get(&html.0) else {
+            continue;
+        };
+        *rendered = match template.render(&context) {
+            Ok(document) => RenderedHtml::Ready(document),
+            Err(err) => {
+                let message = error_chain(&*err);
+                error!("rendering {}: {message}", template.name());
+                RenderedHtml::Failed(message)
+            }
+        };
+    }
+}

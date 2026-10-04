@@ -1,100 +1,84 @@
-//! Fluent localization of parsed HTML via `data-l10n-id` / `data-l10n-args`,
-//! the attribute convention from Fluent's DOM bindings (`fluent-dom`):
+//! Fluent localization of HTML via `data-l10n-id` / `data-l10n-args`, the
+//! attribute convention from Fluent's DOM bindings (`fluent-dom`):
 //!
 //! ```html
-//! <h1 data-l10n-id="inventory-title"></h1>
+//! <h1 data-l10n-id="inventory-title">Inventory</h1>
 //! <p data-l10n-id="hp-status" data-l10n-args='{"hp": 7, "max": 10}'></p>
 //! ```
 //!
 //! An element with `data-l10n-id` gets the message's formatted value as its
-//! content, replacing its children. `data-l10n-args` is a JSON object of Fluent
-//! variables (numbers stay numbers, so plural selectors work).
+//! content, replacing its children; its own content is the fallback when the
+//! message is missing or no [`ActiveLocale`] is set. `data-l10n-args` is a JSON
+//! object of Fluent variables (numbers stay numbers, so plural selectors work);
+//! a whole map can come from one Tera variable: `data-l10n-args='{{ args }}'`.
 //!
 //! Translations are markup, like fluent-dom's "DOM overlays": a value may
-//! contain inline elements (`Press <kbd>Ctrl</kbd>…`) which the renderer
-//! parses and styles. Literal `<`/`&` in a translation must be written as
-//! entities (`&lt;`, `&amp;`). String args are HTML-escaped before formatting,
-//! so values like `Ada <The Brave>` stay text.
-//!
-//! The DOM is not mutated (`tl::VDomGuard` only hands out shared borrows);
-//! translations live beside it in [`LocalizedText`], keyed by node.
+//! contain inline elements (`Press <kbd>Ctrl</kbd>…`), styled by the CSS like
+//! document elements. In `.ftl` values write a literal `<`/`&` as
+//! `&lt;`/`&amp;` and a literal `{`/`}` as `{"{"}`/`{"}"}`. String args are
+//! HTML-escaped before formatting, so values like `Ada <The Brave>` stay text.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy_fluent::prelude::*;
+use bevy_fluent::BundleAsset;
 use fluent::{FluentArgs, FluentResource, bundle::FluentBundle, memoizer::MemoizerKind};
 use std::borrow::Borrow;
 
-use super::html::{RenderedHtml, decode_entities};
+use crate::html::RenderedHtml;
+use crate::template::decode_entities;
 
-/// Available locales: (directory under `assets/locales/`, native name). The
-/// first entry is active at startup.
-const LOCALES: &[(&str, &str)] = &[
-    ("en-US", "English"),
-    ("ru", "Русский"),
-    ("de", "Deutsch"),
-    ("ja", "日本語"),
-];
+/// The Fluent bundle (`*.ftl.ron`, loaded via bevy_fluent) that
+/// `data-l10n-id` attributes resolve against. `None` (the default): no
+/// localization, elements show their own content. Set a different handle to
+/// switch language; every `HtmlUi` re-localizes once the bundle is loaded, so
+/// preload bundles you'll switch to.
+#[derive(Resource, Default, Clone, Debug, Reflect)]
+#[reflect(Resource, Default)]
+pub struct ActiveLocale(pub Option<Handle<BundleAsset>>);
 
-pub struct L10nPlugin;
+impl ActiveLocale {
+    pub fn new(bundle: Handle<BundleAsset>) -> Self {
+        Self(Some(bundle))
+    }
 
-impl Plugin for L10nPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_plugins(FluentPlugin)
-            .add_systems(Startup, load_locales)
-            .add_systems(PostUpdate, localize_html_views.after(super::html::render_html_views));
+    /// Switches to `bundle`.
+    pub fn set(&mut self, bundle: Handle<BundleAsset>) {
+        self.0 = Some(bundle);
     }
 }
 
-/// One selectable locale.
-pub struct Locale {
-    pub id: &'static str,
-    /// The language's name in that language, for selectors.
-    pub name: &'static str,
-    pub bundle: Handle<BundleAsset>,
-}
-
-/// Every available locale, loaded at startup so switching is immediate.
-#[derive(Resource)]
-pub struct Locales(pub Vec<Locale>);
-
-/// The Fluent bundle `data-l10n-id` keys resolve against. Swap the handle
-/// (e.g. to another [`Locales`] entry) to change language; every view
-/// re-localizes as soon as the bundle is loaded.
-#[derive(Resource)]
-pub struct ActiveLocale(pub Handle<BundleAsset>);
-
-/// Translated text per element carrying `data-l10n-id`. `Err` holds why the
-/// lookup failed (missing message, bad args), for display/debugging.
+/// Translations for an `HtmlUi`'s `data-l10n-id` elements (`Err` holds why a
+/// lookup failed). Maintained by
+/// [`HtmlUiSystems::Localize`](crate::HtmlUiSystems::Localize); see
+/// [`HtmlDocument::outline`](crate::template::HtmlDocument::outline) to inspect it.
 #[derive(Component, Default)]
-pub struct LocalizedText(pub HashMap<tl::NodeHandle, Result<String, String>>);
+pub struct LocalizedText(pub(crate) HashMap<tl::NodeHandle, Result<String, String>>);
 
-fn load_locales(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let locales: Vec<Locale> = LOCALES
-        .iter()
-        .map(|&(id, name)| Locale {
-            id,
-            name,
-            bundle: asset_server.load(format!("locales/{id}/main.ftl.ron")),
-        })
-        .collect();
-    commands.insert_resource(ActiveLocale(locales[0].bundle.clone()));
-    commands.insert_resource(Locales(locales));
-}
-
-fn localize_html_views(
+pub(crate) fn localize(
     mut events: MessageReader<AssetEvent<BundleAsset>>,
     locale: Res<ActiveLocale>,
     bundles: Res<Assets<BundleAsset>>,
     mut views: Query<(Ref<RenderedHtml>, &mut LocalizedText)>,
 ) {
+    let Some(handle) = &locale.0 else {
+        events.clear();
+        if locale.is_changed() {
+            for (_, mut localized) in &mut views {
+                if !localized.0.is_empty() {
+                    localized.0.clear();
+                }
+            }
+        }
+        return;
+    };
     let bundle_ready = events.read().any(|event| match event {
         AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => {
-            *id == locale.0.id()
+            *id == handle.id()
         }
         _ => false,
     });
-    let Some(bundle) = bundles.get(&locale.0) else {
+    // Not loaded yet: its load event triggers localization.
+    let Some(bundle) = bundles.get(handle) else {
         return;
     };
     for (rendered, mut localized) in &mut views {
@@ -104,12 +88,12 @@ fn localize_html_views(
         let RenderedHtml::Ready(document) = &*rendered else {
             continue;
         };
-        localized.0 = localize(document.dom(), &**bundle);
+        localized.0 = resolve_all(document.dom(), &**bundle);
     }
 }
 
 /// Resolves every `data-l10n-id` element in `dom` against `bundle`.
-pub fn localize<R, M>(
+fn resolve_all<R, M>(
     dom: &tl::VDom,
     bundle: &FluentBundle<R, M>,
 ) -> HashMap<tl::NodeHandle, Result<String, String>>

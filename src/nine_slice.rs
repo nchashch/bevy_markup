@@ -14,23 +14,14 @@
 //! ```
 //!
 //! Put `NineSliceFrame(asset_server.load("ui/frame.slice.ron"))` on a UI node to
-//! draw it as the node's sliced background image.
+//! draw it as the node's sliced background image, covering the border box —
+//! use `Node::padding` to inset the content. The image format (e.g. `png`) must
+//! be enabled in the app's Bevy features.
 
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
-use bevy::ui::UiSystems;
 use serde::Deserialize;
-
-pub struct NineSlicePlugin;
-
-impl Plugin for NineSlicePlugin {
-    fn build(&self, app: &mut App) {
-        app.init_asset::<NineSlice>()
-            .init_asset_loader::<NineSliceLoader>()
-            .add_systems(PostUpdate, apply_nine_slices.before(UiSystems::Prepare));
-    }
-}
 
 /// A loaded 9-slice style: the source image and how to slice it.
 #[derive(Asset, TypePath, Debug)]
@@ -44,7 +35,8 @@ pub struct NineSlice {
 /// border box so `Node::padding` insets the children, not the frame. Inserts or
 /// updates the entity's `ImageNode` once the style has loaded (keeping any
 /// existing tint).
-#[derive(Component, Clone)]
+#[derive(Component, Clone, Debug, Reflect)]
+#[reflect(Component)]
 #[require(Node)]
 pub struct NineSliceFrame(pub Handle<NineSlice>);
 
@@ -91,7 +83,7 @@ impl From<ScaleModeDescriptor> for SliceScaleMode {
 }
 
 #[derive(Default, TypePath)]
-struct NineSliceLoader;
+pub(crate) struct NineSliceLoader;
 
 impl AssetLoader for NineSliceLoader {
     type Asset = NineSlice;
@@ -131,7 +123,7 @@ impl AssetLoader for NineSliceLoader {
 
 /// Applies a style to frames that were just added/changed, or whose style just
 /// (re)loaded.
-fn apply_nine_slices(
+pub(crate) fn apply_nine_slices(
     mut commands: Commands,
     mut events: MessageReader<AssetEvent<NineSlice>>,
     slices: Res<Assets<NineSlice>>,

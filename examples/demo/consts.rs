@@ -17,9 +17,8 @@ pub const BODY_BOLD_FONT_PATH: &str = "fonts/Spectral-Bold.ttf";
 pub const BODY_ITALIC_FONT_PATH: &str = "fonts/Spectral-Italic.ttf";
 pub const BODY_BOLD_ITALIC_FONT_PATH: &str = "fonts/Spectral-BoldItalic.ttf";
 
-/// Font families CSS `font-family` can name, each as
-/// `[regular, bold, italic, bold-italic]` asset paths. Matched
-/// case-insensitively; see `FONT_GENERIC_FAMILIES` for generic names.
+/// Font families the demo's CSS themes name, as `[regular, bold, italic,
+/// bold-italic]` asset paths; registered in `FontFamilies` at startup.
 pub const FONT_FAMILIES: &[(&str, [&str; 4])] = &[
     (
         "Iosevka Slab QP",
@@ -49,10 +48,6 @@ pub const FONT_FAMILIES: &[(&str, [&str; 4])] = &[
         ],
     ),
 ];
-
-/// CSS generic family keyword → a `FONT_FAMILIES` name.
-pub const FONT_GENERIC_FAMILIES: &[(&str, &str)] =
-    &[("serif", "Spectral"), ("monospace", "Iosevka Slab Mono")];
 
 pub const HEADER_COLOR: Color = Color::srgb_u8(220, 50, 50);
 
