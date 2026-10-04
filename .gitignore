@@ -1,2 +1,4 @@
 /target
 /assets
+/hfuzz_target
+/hfuzz_workspace

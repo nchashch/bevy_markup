@@ -1,0 +1,47 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ubuntu-nightly:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: recursive
+    - uses: dtolnay/rust-toolchain@nightly
+    - name: Install Deps
+      run: sudo apt-get install --no-install-recommends build-essential binutils-dev libunwind-dev libblocksruntime-dev liblzma-dev
+    - name: Test
+      run: ./test.sh
+
+  ubuntu-stable:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: recursive
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Install Deps
+      run: sudo apt-get install --no-install-recommends build-essential binutils-dev libunwind-dev libblocksruntime-dev liblzma-dev
+    - name: Test
+      run: ./test.sh
+
+  ubuntu-msrv:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: recursive
+    - uses: dtolnay/rust-toolchain@1.85.0
+    - name: Install Deps
+      run: sudo apt-get install --no-install-recommends build-essential binutils-dev libunwind-dev libblocksruntime-dev liblzma-dev
+    - name: Test
+      run: ./test.sh

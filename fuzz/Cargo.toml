@@ -35,3 +35,6 @@ path = "fuzz_targets/ftl.rs"
 test = false
 doc = false
 bench = false
+
+[patch.crates-io]
+fluent-syntax = { path = "../vendor/fluent-syntax" }

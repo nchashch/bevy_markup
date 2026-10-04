@@ -1,0 +1,59 @@
+[package]
+name = "honggfuzz"
+version = "0.5.62"
+edition = "2024"
+rust-version = "1.85" # NOTE also update ubuntu-msrv in .github/workflows/rust.yml
+authors = ["Paul Grandperrin <paul.grandperrin@gmail.com>"]
+license = "MIT/Apache-2.0/Unlicense/WTFPL"
+repository = "https://github.com/rust-fuzz/honggfuzz-rs"
+documentation = "https://docs.rs/honggfuzz"
+homepage = "https://github.com/rust-fuzz/honggfuzz-rs/blob/master/README.md"
+readme = "README.md"
+keywords = ["fuzzer", "fuzzing", "testing", "security", "property"]
+categories = [
+    "command-line-utilities",
+    "development-tools::testing",
+    "development-tools::cargo-plugins",
+    "development-tools::debugging",
+]
+description = """
+Fuzz your Rust code with Google-developed Honggfuzz !
+"""
+
+exclude = [
+    "/honggfuzz/examples/**",
+    "/honggfuzz/hfuzz_cc/**",
+    "/honggfuzz/**/*.png",
+    "/honggfuzz/includes/**",
+]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[features]
+default = ["arbitrary"]
+
+[dependencies]
+arbitrary = { version = "1", optional = true }
+rustc_version = "0.4"
+semver = "1"
+
+[dev-dependencies]
+rand = "0.10"
+rand_chacha = "0.10"
+
+[target.'cfg(fuzzing)'.dependencies]
+lazy_static = "1.5"
+
+[target.'cfg(fuzzing_debug)'.dependencies]
+memmap2 = "0.9"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing,fuzzing_debug)'] }
+
+[lints.clippy]
+match_like_matches_macro = "warn"
+redundant_closure_for_method_calls = "warn"
+map_unwrap_or = "warn"
+unnecessary_semicolon = "warn"
+explicit_iter_loop = "warn"

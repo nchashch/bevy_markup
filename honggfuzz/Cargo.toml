@@ -1,0 +1,37 @@
+[package]
+name = "p23-honggfuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+honggfuzz = "0.5"
+p23 = { path = "..", features = ["fuzzing"] }
+
+[[bin]]
+name = "html"
+path = "targets/html.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "css"
+path = "targets/css.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ftl"
+path = "targets/ftl.rs"
+test = false
+doc = false
+bench = false
+
+# Vendored (path) so the bundled C source can be patched for current
+# binutils: bfd.h no longer defines TRUE/FALSE (see linux/bfd.c). Also
+# patches fluent-syntax (see the root Cargo.toml).
+[patch.crates-io]
+honggfuzz = { path = "vendor/honggfuzz" }
+fluent-syntax = { path = "../vendor/fluent-syntax" }

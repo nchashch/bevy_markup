@@ -128,3 +128,27 @@ pub fn translate(ftl: &str, id: &str, args_json: &str) -> Result<String, String>
         .map_err(|errors| format!("{errors:?}"))?;
     crate::l10n::translate(&bundle, id, Some(args_json))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Found by honggfuzz (`ftl` target): fluent-syntax 0.11.1 slices source
+    /// text at byte ranges that can land inside a multi-byte character —
+    /// here a broken `\U` escape after one. The vendored
+    /// `vendor/fluent-syntax` patch clamps to char boundaries; this must
+    /// never panic.
+    #[test]
+    fn broken_unicode_escape_after_multibyte_char_does_not_panic() {
+        let ftl = "u={\"\\U\u{fffd}";
+        let _ = translate(ftl, "", "");
+    }
+
+    /// Same class of bug in the other direction (byte index 100 inside a
+    /// multi-byte character); also from honggfuzz.
+    #[test]
+    fn long_multibyte_error_context_does_not_panic() {
+        let ftl = format!("x = {}{{{}", "é".repeat(48), "é");
+        let _ = translate(&ftl, "", "");
+    }
+}

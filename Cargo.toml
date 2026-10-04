@@ -53,3 +53,11 @@ quickcheck = "1.1.0"
 quickcheck_macros = "1.2.0"
 # 0.4 requires proptest ≥1.6; 0.3.1 is the last line on ^1.1.
 test-strategy = "0.3.1"
+
+# Vendored with a p23 patch: fluent-syntax slices source text at byte
+# ranges that can land inside a multi-byte character (panic on broken
+# unicode escapes and similar paths; reachable from any FTL asset). Not
+# fixed upstream as of 0.11.1, which is pinned by fluent(-bundle) 0.16/0.15
+# as required by bevy_fluent 0.15.
+[patch.crates-io]
+fluent-syntax = { path = "vendor/fluent-syntax" }
