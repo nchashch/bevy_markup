@@ -827,7 +827,9 @@ Next steps (roughly in order of value):
   `coverage` job runs `scripts/coverage.py --html`: the per-layer table goes
   to the job summary, the reports to the `coverage` artifact (without
   `assets/`, content lint covers nothing in CI; the fuzz-corpora layer
-  replays the committed seeds).
+  replays the committed seeds plus the newest CI corpus caches). Each fuzz
+  job also uploads its corpus as the `fuzz-corpus-<target>` artifact (90
+  days) so CI's finds can be merged into `fuzz/seeds` (testing guide).
   First local measurement (2026-10-04): 94.3% of 1684 library lines
   covered by some layer. Its two gaps are closed: the template
   *render*-failure path (`template_render_failure_shows_the_error_and_recovers`

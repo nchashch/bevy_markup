@@ -316,16 +316,25 @@ The cargo-fuzz targets also read committed seeds, `fuzz/seeds/<target>/`
 (minimized, read-only: libFuzzer writes new inputs only to the first
 corpus directory, `fuzz/corpus/<target>/`). First seeded 2026-10-05 from a
 local corpus (2940 html, 4868 css, 1181 ftl inputs; 580 KB). To refresh
-them from a grown local corpus, merge both into a fresh directory and
-replace the seeds (inputs are named by content hash, so git only stores
-the new ones):
+them, merge the seeds, your local corpus and CI's latest corpus into a
+fresh directory and replace the seeds (inputs are named by content hash,
+so git only stores the new ones). CI's corpus is the nightly fuzz job's
+`fuzz-corpus-<target>` artifact (kept 90 days; the cache it also saves
+can't be downloaded):
 
 ```sh
 cd fuzz && host=$(rustc +nightly -vV | sed -n 's/^host: //p')
-t=html; rm -rf /tmp/seed && mkdir /tmp/seed
-cargo +nightly fuzz run --target "$host" $t /tmp/seed corpus/$t seeds/$t -- -merge=1
-rm -rf seeds/$t && mv /tmp/seed seeds/$t
+run=$(gh run list --workflow nightly.yml --status success --limit 1 --json databaseId -q '.[0].databaseId')
+for t in html css ftl; do
+  rm -rf /tmp/ci-$t /tmp/seed-$t && mkdir -p /tmp/seed-$t
+  gh run download "$run" -n fuzz-corpus-$t -D /tmp/ci-$t
+  cargo +nightly fuzz run --target "$host" $t /tmp/seed-$t seeds/$t corpus/$t /tmp/ci-$t -- -merge=1
+  rm -rf seeds/$t && mv /tmp/seed-$t seeds/$t && rm -rf /tmp/ci-$t
+done
 ```
+
+The nightly coverage job restores the same corpus caches, so its
+fuzz-corpora layer measures seeds plus everything CI has found so far.
 
 To add a fuzz target: add the glue function to `src/fuzz.rs`, then a target
 per driver. Regression tests for fuzz-found crashes go in `src/fuzz.rs`'s

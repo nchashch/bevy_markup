@@ -91,6 +91,27 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
+      # The fuzz-corpora layer replays fuzz/seeds plus fuzz/corpus: restore
+      # the newest corpus each fuzz job saved (the key itself never exists;
+      # restore-keys picks the most recent entry).
+      - name: Restore the html fuzz corpus
+        uses: actions/cache/restore@v6
+        with:
+          path: fuzz/corpus/html
+          key: fuzz-corpus-html-for-coverage-${{ github.run_id }}
+          restore-keys: fuzz-corpus-html-
+      - name: Restore the css fuzz corpus
+        uses: actions/cache/restore@v6
+        with:
+          path: fuzz/corpus/css
+          key: fuzz-corpus-css-for-coverage-${{ github.run_id }}
+          restore-keys: fuzz-corpus-css-
+      - name: Restore the ftl fuzz corpus
+        uses: actions/cache/restore@v6
+        with:
+          path: fuzz/corpus/ftl
+          key: fuzz-corpus-ftl-for-coverage-${{ github.run_id }}
+          restore-keys: fuzz-corpus-ftl-
       - name: Measure (content lint skips in CI; assets/ is gitignored)
         run: |
           scripts/coverage.py --html | tee coverage.txt
@@ -156,6 +177,17 @@ jobs:
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # Caches can't be downloaded; the artifact can (`gh run download <run>
+      # -n fuzz-corpus-<target>`), to fold into fuzz/seeds (see
+      # docs/agents/skills/testing.md, fuzzing).
+      - name: Upload the corpus
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 90
       - name: Upload crashing inputs
         if: failure()
         uses: actions/upload-artifact@v7
