@@ -327,9 +327,10 @@ assets/            (gitignored — see Gotchas)
 
 ## Testing
 
-Two layers, both deterministic and headless. Bugs found here (or by the
-fuzzers/property harnesses below) are filed in `docs/agents/bugs/` — see
-**Bug reports**.
+How-to guide for writing and running tests and hunting bugs across the
+whole harness: `docs/agents/skills/testing.md`. This section is the
+reference and history. Bugs found here (or by the fuzzers/property
+harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
 
 - **Cascade unit tests** (`src/cascade.rs`, `cargo test --lib`): CSS text →
   declared style for an `HtmlElement` (specificity, compound matching, comma
@@ -593,9 +594,11 @@ known gaps:
     faster; Bevy's recommended dev setting, scoped to mutation runs).
   - Bevy linked dynamically (`--cargo-arg=--features=bevy/dynamic_linking`,
     the Bevy guide's biggest fast-compile win): each relink is ~1 s.
-  With these, the build is 0.8 s per mutant in a warm tree. Further options
-  from the Bevy guide (Cranelift, `-Zshare-generics`) need nightly and
-  aren't worth it at this point. `-j`/`--minimum-test-timeout` are set by
+  With these, the build is 0.8 s per mutant in a warm tree. The Bevy guide's
+  nightly options don't help (measured, same settings, rebuild per mutant):
+  stable 1.03 s; nightly 2.03 s; + `-Zshare-generics` 2.08 s; + Cranelift
+  for p23 (LLVM for deps) 1.97 s; both 2.03 s. Share-generics only trims
+  the one-time build (150 s → 128 s). `-j`/`--minimum-test-timeout` are set by
   the script: use `P23_MUTANTS_JOBS` / `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT`.
   No mold on CI (measured, not worth it): rustc ≥ 1.90 already links
   through its bundled `rust-lld` on x86_64 Linux (`-fuse-ld=lld` + its own
