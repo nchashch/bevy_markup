@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+mod assets;
 mod consts;
 mod system;
 mod tui;

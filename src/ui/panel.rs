@@ -1,17 +1,18 @@
 use bevy::prelude::*;
 
 use super::NineSliceFrame;
-use crate::consts::FONT_PATH;
-
-const FRAME_PATH: &str = "ui/frame.slice.ron";
+use crate::consts::{BODY_COLOR, BODY_FONT_PATH, FRAME_PATH, HEADER_COLOR, HEADER_FONT_PATH};
 
 /// Marker for the 9-slice framed Bevy UI panel.
 #[derive(Component)]
 pub struct UiPanel;
 
 pub(super) fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let font = TextFont::default()
-        .with_font(asset_server.load(FONT_PATH))
+    let header_font = TextFont::default()
+        .with_font(asset_server.load(HEADER_FONT_PATH))
+        .with_font_size(28.0);
+    let body_font = TextFont::default()
+        .with_font(asset_server.load(BODY_FONT_PATH))
         .with_font_size(20.0);
 
     commands.spawn((
@@ -30,16 +31,16 @@ pub(super) fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
         children![
             (
                 Text::new("Bevy UI"),
-                font.clone().with_font_size(28.0),
-                TextColor(Color::srgb_u8(220, 50, 50)),
+                header_font,
+                TextColor(HEADER_COLOR),
             ),
             (
                 Text::new(
                     "This panel is plain Bevy UI. Its background is ui/frame.png, \
                      9-sliced so the corners keep their size as the panel grows.",
                 ),
-                font,
-                TextColor(Color::srgb_u8(225, 225, 225)),
+                body_font,
+                TextColor(BODY_COLOR),
             ),
         ],
     ));
