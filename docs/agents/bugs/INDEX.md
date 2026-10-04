@@ -1,9 +1,10 @@
 # Bug Reports — Index
 
-Bugs found during the 2026-10-04 testing-infrastructure session (property
-testing, stateful testing and fuzzing were added; the fuzzers immediately
-paid for themselves). One file per bug, `bug_NNNN.md`, numbered in discovery
-order. This page is the title/metadata record for the whole batch.
+Bugs found by the automated testing infrastructure. One file per bug,
+`bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
+record; each discovery session has its own metadata section below
+(bug_0001–0005: property testing, stateful testing and fuzzing — the fuzzers
+immediately paid for themselves; bug_0006–0007: the Fluent oracle).
 
 ## Bugs
 
@@ -14,8 +15,10 @@ order. This page is the title/metadata record for the whole batch.
 | [bug_0003](bug_0003.md) | Removing `HtmlDebugOutline` never triggers a rebuild | `build.rs` (pipeline) | medium | fixed (`06b86ae`) | `proptest-stateful` (tests/stateful.rs) |
 | [bug_0004](bug_0004.md) | Global failed-stylesheet latch swallows a later re-select of the same broken sheet | `build.rs` (`FailedSheets`) | medium | fixed (`06b86ae`) | `proptest-stateful` (tests/stateful.rs) |
 | [bug_0005](bug_0005.md) | fluent-syntax panics slicing FTL source inside a multi-byte character | upstream `fluent-syntax` 0.11.1 | high | fixed locally via vendored patch (`042782f`); **upstream unfixed** | honggfuzz `ftl` target |
+| [bug_0006](bug_0006.md) | `data-l10n-id` on containers and inline elements is silently ignored | `build.rs` (translation walk) | medium | fixed (uncommitted, on `1169ca4`) | Fluent oracle (`fluent_oracle`) |
+| [bug_0007](bug_0007.md) | `data-l10n-name` overlays unsupported: source attributes lost | `build.rs` (translation walk) | medium | fixed (uncommitted, on `1169ca4`) | Fluent oracle (`fluent_oracle`) |
 
-## Discovery session metadata
+## Discovery session metadata: bug_0001–0005
 
 ### When / where
 
@@ -60,3 +63,19 @@ All fuzz targets drive the feature-gated `p23::fuzz` harness
 `Err` or produce any output, but must never panic, hang, or abort. The
 state-machine tests (`tests/stateful.rs`) require each applied operation to
 settle (rebuild observed) and the resulting dump to match a reference model.
+
+## Discovery session metadata: bug_0006–0007
+
+- **Date:** 2026-10-04, ~12:00 +04:00; same machine (`anne`) and Rust
+  toolchain/dependency versions as above.
+- **Session start HEAD:** `1169ca4` — "Add scripts for running fuzzers";
+  found and fixed in the uncommitted working tree on top of it.
+- **Harness:** the Fluent oracle — `scripts/fluent_oracle.sh` runs
+  `@fluent/dom` 0.10.2 + `@fluent/bundle` 0.19.1 in jsdom 30.1.1 (Node
+  v26.10.0) over `tests/vectors/fluent_*`, writing `fluent.html`; the
+  `fluent_oracle` test requires p23's localized build to equal p23's build of
+  that reference DOM.
+- **Discovery agent:** model **`anthropic/claude-opus-5-5:high`**. Of the
+  first run's eight differences, two were these bugs; the other six were
+  triaged with the user as deliberate (no sanitizing, escaped string args,
+  fluent-rs number formatting) and are pinned by hand-written vectors.

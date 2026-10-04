@@ -1,7 +1,8 @@
-//! Fuzzing harnesses, behind the `fuzzing` cargo feature (used only by
-//! `fuzz/` targets via `cargo fuzz`). `#[doc(hidden)]` and not covered by
-//! semver: these call internal glue directly, because the public API reaches
-//! it only through a full Bevy app, which is far too slow per fuzz iteration.
+//! Fuzzing harnesses, behind the `fuzzing` cargo feature (used by the
+//! `fuzz/`, `honggfuzz/`, `fuzzcheck/` and `test-fuzz/` drivers).
+//! `#[doc(hidden)]` and not covered by semver: these call internal glue
+//! directly, because the public API reaches it only through a full Bevy app,
+//! which is far too slow per fuzz iteration.
 //!
 //! Contract for every function: arbitrary `&str` inputs may produce `Err` or
 //! arbitrary output, but must never panic, hang, or abort.
@@ -53,7 +54,7 @@ pub fn render_html(source: &str, context_json: &str) -> Result<String, String> {
 /// arithmetic and the style cache). Errors are values, not crashes.
 pub fn cascade(css: &str) -> Result<String, String> {
     use lightningcss::stylesheet::{ParserOptions, StyleSheet};
-use lightningcss::traits::IntoOwned;
+    use lightningcss::traits::IntoOwned;
 
     let parsed = StyleSheet::parse(css, ParserOptions::default()).map_err(|err| err.to_string())?;
     let sheet = parsed.into_owned();

@@ -64,10 +64,13 @@ tests/
   arbtest.rs       arbtest robustness properties: arbitrary HTML/CSS/Fluent/args bytes through the pipeline
   stateful.rs      proptest-stateful machine: random op sequences (theme/locale/context/outline) vs a reference model
   common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump)
-  vectors/<name>/  file-based vectors: page.html, style.css, browser.json (oracle output)
+  vectors/<name>/  file-based vectors: page.html, style.css, browser.json (CSS oracle output);
+                   Fluent vectors add messages.ftl + fluent.html (Fluent oracle output)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
+  fluent_oracle.sh   @fluent/dom in jsdom → tests/vectors/*/fluent.html (Node + npm;
+                     pinned packages in fluent-oracle/, node_modules gitignored)
   fuzz-<driver>.sh   run one fuzzer over one target:
                      `scripts/fuzz-{libfuzzer,honggfuzz,fuzzcheck,test-fuzz}.sh
                      <html|css|ftl> [seconds=60]` (details in each script's
@@ -160,13 +163,18 @@ assets/            (gitignored — see Gotchas)
   skipped. Each block is a `Text` + one `TextSpan` per styled run; whitespace
   collapses outside `pre`.
 - Localization (fluent-dom convention): `<p data-l10n-id="key"
-  data-l10n-args='{"n": 3}'>fallback</p>`; the translation replaces the
-  content, the element's own content is the fallback. Args are JSON (numbers
-  stay numbers for plurals); a whole map can be one Tera variable. Translations
-  are markup: inline elements in them are styled. In `.ftl`: `&lt;`/`&amp;`
-  for literal `<`/`&`, `{"{"}`/`{"}"}` for braces. String args are
-  HTML-escaped. CJK paragraphs go on one line (a wrapped line becomes a stray
-  space).
+  data-l10n-args='{"n": 3}'>fallback</p>` on any element (block, container,
+  inline, walked-through); the translation replaces the children, the
+  element's own content is the fallback. Args are JSON (numbers stay numbers
+  for plurals); a whole map can be one Tera variable. Translations are markup
+  (`walk_translation` in `build.rs` parses them as a fragment): inline
+  elements in them are styled; `data-l10n-name` elements take the
+  same-named, same-tag source descendant's tag/id/classes (each usable once,
+  otherwise plain text). In `.ftl`: `&lt;`/`&amp;` for literal `<`/`&`,
+  `{"{"}`/`{"}"}` for braces. Deliberate differences from fluent-dom: no
+  sanitizing (nested markup, `class`/`id`, any element kept), string args
+  HTML-escaped, fluent-rs number formatting (no grouping). CJK paragraphs go
+  on one line (a wrapped line becomes a stray space).
 - CSS subset (`style.rs` docs): compound selectors (type or `*` + `.class` /
   `#id` parts, comma lists; combinators/attributes/pseudo-classes skipped at
   `debug`), matched per element (`HtmlElement` tag/id/classes, cached per
@@ -277,13 +285,32 @@ fuzzers/property harnesses below) are filed in `docs/agents/bugs/` — see
   vector's inputs: `scripts/browser_oracle.py [tests/vectors/<name>]`, then
   review the `browser.json` diff (one record per line) and commit it. The page
   is `* { all: unset }` + `style.css` + `page.html`, so vectors must be plain
-  HTML (no Tera / `data-l10n-id`; the script refuses them), set `color` on
+  HTML (no Tera / `data-l10n-id`; the script refuses them and skips Fluent
+  vectors), set `color` on
   `html` (browsers default to black, p23 to white) and `border-style: solid`
   where widths matter. Deliberate differences (`pre` padding, root background,
   `border-style`, `li` bullets) are skipped and listed above
   `FIXTURE_SIZE` in `tests/html_ui.rs`; add new ones there with a reason. The
   oracle's first run found two real bugs (unregistered `font-family` kept the
   inherited family; weight 501–599 wasn't bold).
+- **Fluent oracle** (`fluent_oracle` test): every `tests/vectors/*/` with a
+  `fluent.html` must build the same dump localized by p23 (`page.html` +
+  `messages.ftl` as the en-US bundle, via `TestUi::from_vector`) as
+  unlocalized from `fluent.html` — the DOM Fluent's reference bindings
+  (`@fluent/dom` 0.10.2 + `@fluent/bundle` 0.19.1 in jsdom, `useIsolating:
+  false` because p23 strips the isolation marks) produce from the same
+  inputs, `data-l10n-*` attributes removed. Failures print a line diff
+  (`-` fluent-dom, `+` p23). Regenerate after changing a vector:
+  `scripts/fluent_oracle.sh [tests/vectors/<name>]`; fluent-dom's warnings
+  (missing messages, sanitizer and name decisions) are recorded as comments
+  at the top of `fluent.html`. Vectors: `fluent_basics` (plurals,
+  selectors, terms, markup values, entities, missing-message fallback, `li`,
+  `pre`), `fluent_overlays` (`data-l10n-name` edge cases, translated
+  containers and inline elements). Deliberate differences stay out of
+  oracle vectors and are pinned by the hand-written `fluent_permissive_markup`
+  and `fluent_localization` vectors. Its first run found two missing
+  features, now implemented: `data-l10n-name` overlays, and `data-l10n-id` on
+  containers/inline elements (translations were silently dropped).
 
 ### Testing TODO
 
@@ -300,13 +327,12 @@ known gaps:
 5. `settle()` polls with a sleep and a frame cap (possible flakiness).
 6. Coverage by example only.
 
-- [x] **1. Real browser as the oracle** (fixes weakness 1) — CSS part done:
-  `scripts/browser_oracle.py` + `browser_oracle` test + vectors `cascade`,
-  `box_model`, `units` (see Testing).
-  - [ ] Fluent part: `@fluent/dom` (needs npm + a DOM, e.g. jsdom) translating
-    the same DOM, as the reference for the overlay and markup behaviour.
+- [x] **1. Real browser as the oracle** (fixes weakness 1): CSS via
+  `scripts/browser_oracle.py` + `browser_oracle` (vectors `cascade`,
+  `box_model`, `units`); Fluent via `scripts/fluent_oracle.sh` +
+  `fluent_oracle` (vectors `fluent_basics`, `fluent_overlays`). See Testing.
   - [ ] More oracle vectors as CSS support grows (every new property gets one).
-- [ ] **2. Metamorphic and property-based tests** (fixes weakness 6). Check
+- [x] **2. Metamorphic and property-based tests** (fixes weakness 6). Check
   relationships that must always hold, over generated inputs (`proptest`,
   `quickcheck`, `arbtest`, `test-strategy` are dev-dependencies; pipeline
   properties live in `tests/properties.rs`, written with `#[proptest]` /
@@ -334,8 +360,8 @@ known gaps:
     Note: quickcheck 1.1's `Gen` RNG is private (edition-2024 `gen` keyword) —
     build `Arbitrary` impls from `T::arbitrary(g)` + `g.choose`;
     the `#[quickcheck]` attribute comes from `quickcheck_macros`.
-  - Remaining: shrink quality (stateful ops shrink only by removal; proptest
-    value shrinking inside an op not supported by the framework).
+  - [ ] Shrink quality: stateful ops shrink only by removal; proptest value
+    shrinking inside an op isn't supported by the framework.
 - [ ] **3. Headless layout checks** (fixes weakness 3, mostly). Run Bevy UI's
   layout headless with a fixed viewport; assert node rects (`ComputedNode`,
   `UiGlobalTransform`). Essential once flex layout lands (next step 1); then
@@ -349,7 +375,7 @@ known gaps:
   - every CSS file parses; every `url()` resolves to an existing file
   - a pseudo-locale (e.g. `[Ĩñvéñtöŕý~~~]`, longer and accented) exposing
     untranslated strings and overflow in the UI
-- [ ] **5. Fuzzing** (robustness). Four drivers over the same
+- [x] **5. Fuzzing** (robustness). Four drivers over the same
   `#[doc(hidden)]` `p23::fuzz` harness (feature `fuzzing`), which calls the
   internal glue directly — a full Bevy app is far too slow per exec.
   Contract for every target: no panic/hang/abort; errors are values.
@@ -397,8 +423,9 @@ known gaps:
     manifests); regression tests in `src/fuzz.rs`.
   - [x] The arbtest harness (`tests/arbtest.rs`) covers the pipeline end to
     end with arbitrary bytes; its first run found the failed-stylesheet hang
-    (fixed in `build.rs`, see Gotchas). proptest strategies could add
-    structure-aware generation later.
+    (fixed in `build.rs`, see Gotchas).
+  - [ ] Structure-aware generation (proptest strategies or `arbitrary`
+    grammars for CSS/FTL/HTML) to get past the parsers more often.
 - [ ] **6. Mutation testing** (measures vector strength). `cargo-mutants`
   mutates the code and reports mutations no test catches. Run occasionally;
   each survivor is a missing vector or dump field.
@@ -465,7 +492,11 @@ Known limits (each skipped/ignored value is logged at `debug`):
   Fine for panel-sized UIs; large or per-frame-updated documents will churn.
 - **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
   CJK (wrapped CJK source lines become spaces); `decode_entities` handles only
-  the five escapes Tera emits (no numeric references).
+  the five escapes Tera emits (no numeric references). Mixed inline content
+  directly in a container (`<div>Mixed <b>bold</b> text</div>`, also from a
+  translation) becomes one anonymous block per text piece, not one line.
+- **Fluent:** numbers format without locale grouping (fluent-rs; bevy_fluent's
+  shared bundle exposes no custom formatter) — pre-format in Tera if needed.
 - **Fonts:** no bundled CJK font; Japanese relies on `system_fonts`.
 
 Next steps (roughly in order of value):

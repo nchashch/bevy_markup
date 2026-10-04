@@ -3,8 +3,9 @@
 //! ordinary `cargo test` runs, then drives them with AFLplus:
 //!
 //! ```sh
-//! cargo test-fuzz gen fuzz_html     # from this directory (also: css, ftl)
-//! cargo test-fuzz run fuzz_html -- -V 60
+//! cargo test                                     # from this directory: seeds the corpus
+//! cargo +nightly test-fuzz fuzz_html             # target-name substring (also: css, ftl)
+//! cargo +nightly test-fuzz fuzz_html --max-total-time 60
 //! ```
 //!
 //! Contract: never panics. (Needs `cargo install cargo-test-fuzz cargo-afl`

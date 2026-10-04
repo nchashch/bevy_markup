@@ -19,8 +19,6 @@ use common::*;
 use bevy::prelude::*;
 use p23::prelude::*;
 
-use std::path::PathBuf;
-
 // ---------------------------------------------------------------------------
 // Vectors
 // ---------------------------------------------------------------------------
@@ -171,6 +169,68 @@ html-ui
     );
 }
 
+/// Deliberate differences from `@fluent/dom` (which the Fluent oracle
+/// vectors leave out): translation markup isn't sanitized. Nested elements
+/// keep their styling (fluent-dom flattens them to text), `class`/`id` from
+/// a translation apply (fluent-dom drops non-localizable attributes), and
+/// any element is styled, not only text-level ones (fluent-dom turns `div`
+/// into text). String args stay text: see `fluent_localization`.
+#[test]
+fn fluent_permissive_markup() {
+    let mut ui = TestUi::new(
+        "fluent-permissive",
+        &[
+            (
+                "page.html",
+                r#"<p data-l10n-id="nested"></p>
+<p data-l10n-id="class-attr"></p>
+<p data-l10n-id="block-element"></p>"#,
+            ),
+            (
+                "style.css",
+                r#"
+html { color: #ffffff; font-family: Spectral; font-size: 20px }
+b { font-weight: bold }
+i { font-style: italic }
+.hot { color: #ff0000 }
+div { color: #00ff00 }
+"#,
+            ),
+            (
+                "locales/en-US/main.ftl.ron",
+                r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+            ),
+            (
+                "locales/en-US/ui.ftl",
+                r#"
+nested = Text <b>bold <i>both</i></b>
+class-attr = Plain <span class="hot">hot</span>
+block-element = Before <div>block</div> after
+"#,
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .locale("locales/en-US/main.ftl.ron")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "Text " serif 20px #ffffff
+    "bold " serif-bold 20px #ffffff
+    "both" serif-bold-italic 20px #ffffff
+  p
+    "Plain " serif 20px #ffffff
+    "hot" serif 20px #ff0000
+  p
+    "Before " serif 20px #ffffff
+    "block" serif 20px #00ff00
+    " after" serif 20px #ffffff
+"#,
+    );
+}
+
 /// Box model: `border-image` on the root (`html` rule), on a block (wrapper
 /// node + inner `Text`) and on a container; px and % slices (% of the 32×24
 /// image: top/bottom of the height, left/right of the width); tiling; borders,
@@ -297,23 +357,15 @@ html-ui padding=3,3,3,3
 /// compared against the browser's computed styles: per non-whitespace
 /// character (face, size, color) and per block/container element (padding,
 /// border widths, border-image, background, gap). Deliberate differences are
-/// listed in [`ALLOWED_DIFFERENCES`].
+/// listed in the comment above `FIXTURE_SIZE`.
 #[test]
 fn browser_oracle() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors");
-    let mut vectors: Vec<String> = std::fs::read_dir(&root)
-        .unwrap()
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            path.join("browser.json").exists().then(|| path.file_name()?.to_str().map(str::to_owned))?
-        })
-        .collect();
-    vectors.sort();
+    let vectors = vectors_with("browser.json");
     assert!(!vectors.is_empty(), "no oracle vectors found");
 
     let mut failures = Vec::new();
     for name in &vectors {
-        let json = std::fs::read_to_string(root.join(name).join("browser.json")).unwrap();
+        let json = std::fs::read_to_string(vectors_dir().join(name).join("browser.json")).unwrap();
         let oracle: serde_json::Value = serde_json::from_str(&json).unwrap();
         let mut ui = TestUi::from_vector(name);
         ui.settle();
@@ -327,6 +379,68 @@ fn browser_oracle() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+// ---------------------------------------------------------------------------
+// Fluent oracle
+// ---------------------------------------------------------------------------
+
+/// Every `tests/vectors/*/` with a `fluent.html` (written by
+/// `scripts/fluent_oracle.sh`: Fluent's reference DOM bindings, `@fluent/dom`,
+/// translating `page.html` with `messages.ftl`) must build the same world
+/// localized by p23 as unlocalized from that reference translation — same
+/// nodes, runs, faces, sizes and colors.
+#[test]
+fn fluent_oracle() {
+    let vectors = vectors_with("fluent.html");
+    assert!(!vectors.is_empty(), "no Fluent oracle vectors found");
+
+    let mut failures = Vec::new();
+    for name in &vectors {
+        let mut localized = TestUi::from_vector(name);
+        let ours = localized.settle().dump();
+        let mut reference = TestUi::vector_page(name, "fluent.html", false);
+        let theirs = reference.settle().dump();
+        if ours != theirs {
+            failures.push(format!("{name} (- @fluent/dom, + p23):\n{}", line_diff(&theirs, &ours)));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} vector(s) differ from @fluent/dom:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// Lines only in `old` as `- `, only in `new` as `+ `, shared as `  `
+/// (longest common subsequence; dumps are small).
+fn line_diff(old: &str, new: &str) -> String {
+    let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
+    let mut lcs = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            lcs[i][j] = if a[i] == b[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let (mut i, mut j, mut out) = (0, 0, String::new());
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            out += &format!("  {}\n", a[i]);
+            (i, j) = (i + 1, j + 1);
+        } else if j < b.len() && (i == a.len() || lcs[i][j + 1] >= lcs[i + 1][j]) {
+            out += &format!("+ {}\n", b[j]);
+            j += 1;
+        } else {
+            out += &format!("- {}\n", a[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 // Deliberate, documented differences from browsers (skipped by

@@ -6,3 +6,4 @@
 /fuzzcheck/fuzz
 /test-fuzz/target
 /honggfuzz/target
+/scripts/fluent-oracle/node_modules

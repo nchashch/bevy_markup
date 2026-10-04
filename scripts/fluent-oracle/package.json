@@ -1,0 +1,11 @@
+{
+  "name": "p23-fluent-oracle",
+  "private": true,
+  "description": "Reference Fluent DOM translation (@fluent/dom in jsdom) for p23 test vectors",
+  "type": "module",
+  "dependencies": {
+    "@fluent/bundle": "0.19.1",
+    "@fluent/dom": "0.10.2",
+    "jsdom": "30.1.1"
+  }
+}

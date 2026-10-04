@@ -6,17 +6,35 @@
 //! <p data-l10n-id="hp-status" data-l10n-args='{"hp": 7, "max": 10}'></p>
 //! ```
 //!
-//! An element with `data-l10n-id` gets the message's formatted value as its
-//! content, replacing its children; its own content is the fallback when the
-//! message is missing or no [`ActiveLocale`] is set. `data-l10n-args` is a JSON
-//! object of Fluent variables (numbers stay numbers, so plural selectors work);
-//! a whole map can come from one Tera variable: `data-l10n-args='{{ args }}'`.
+//! Any element with `data-l10n-id` (block, container or inline) gets the
+//! message's formatted value as its content, replacing its children; its own
+//! content is the fallback when the message is missing or no [`ActiveLocale`]
+//! is set. `data-l10n-args` is a JSON object of Fluent variables (numbers stay
+//! numbers, so plural selectors work); a whole map can come from one Tera
+//! variable: `data-l10n-args='{{ args }}'`.
 //!
 //! Translations are markup, like fluent-dom's "DOM overlays": a value may
 //! contain inline elements (`Press <kbd>Ctrl</kbd>…`), styled by the CSS like
 //! document elements. In `.ftl` values write a literal `<`/`&` as
-//! `&lt;`/`&amp;` and a literal `{`/`}` as `{"{"}`/`{"}"}`. String args are
-//! HTML-escaped before formatting, so values like `Ada <The Brave>` stay text.
+//! `&lt;`/`&amp;` and a literal `{`/`}` as `{"{"}`/`{"}"}`.
+//!
+//! Named elements keep the source's attributes while translators own the
+//! text and word order: a translation's `<b data-l10n-name="who">Ada</b>` is
+//! styled as the translated element's own `data-l10n-name="who"` descendant
+//! (its tag, `id` and classes). Each source element can be used once; a name
+//! with no unused source element of the same tag is plain text.
+//!
+//! ```html
+//! <p data-l10n-id="meet">Meet <b data-l10n-name="who" class="hero"></b>.</p>
+//! ```
+//!
+//! Deliberate differences from fluent-dom (verified against it by the
+//! `fluent_oracle` test vectors): translation markup isn't sanitized —
+//! nested elements, `class`/`id` and non-text-level elements in a translation
+//! are kept and styled (Bevy UI has no scripts or links to protect); string
+//! args are HTML-escaped before formatting, so values like `Ada <The Brave>`
+//! stay text; and numbers format as fluent-rs does (`1234.5`, no locale
+//! grouping like `1,234.5`).
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;

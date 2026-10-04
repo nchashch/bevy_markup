@@ -70,8 +70,9 @@
 //!   `font-weight`, `font-style` (inherited); `border-image` (9-slice),
 //!   `border-width`, `padding`, `background-color` on blocks, containers and
 //!   the `HtmlUi` node (`html` rule, except background); `gap` on containers.
-//! - **Fluent** ([`l10n`]): `data-l10n-id` / `data-l10n-args` (fluent-dom
-//!   convention); translations may contain inline markup.
+//! - **Fluent** ([`l10n`]): `data-l10n-id` / `data-l10n-args` /
+//!   `data-l10n-name` (fluent-dom convention) on any element; translations
+//!   may contain inline markup.
 //! - **Tera** ([`template`](mod@template)): full Tera 2 syntax in `.html` files, rendered with
 //!   the entity's [`TemplateContext`](html::TemplateContext).
 //! - **9-slice frames**: in CSS via `border-image` (see [`style`]), or for

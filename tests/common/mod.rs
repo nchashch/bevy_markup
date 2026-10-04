@@ -43,6 +43,26 @@ pub fn face_label(source: &FontSource) -> String {
 #[derive(Resource, Default)]
 pub struct Builds(pub usize);
 
+/// `tests/vectors/`.
+#[allow(dead_code)] // not every test binary exercises every helper
+pub fn vectors_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
+}
+
+/// Names of the vectors holding `file`, sorted.
+#[allow(dead_code)] // not every test binary exercises every helper
+pub fn vectors_with(file: &str) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(vectors_dir())
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            path.join(file).exists().then(|| path.file_name()?.to_str().map(str::to_owned))?
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 pub struct TestUi {
     app: App,
     dir: PathBuf,
@@ -108,16 +128,32 @@ impl TestUi {
         }
     }
 
-    /// A plain-HTML vector from `tests/vectors/<name>/` (`page.html` +
-    /// `style.css`), spawned with an empty context.
+    /// A plain-HTML vector from `tests/vectors/<name>/`: `page.html` +
+    /// `style.css`, spawned with an empty context, and localized with the
+    /// vector's `messages.ftl` (as the en-US bundle) if it has one.
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn from_vector(name: &str) -> Self {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors").join(name);
+        Self::vector_page(name, "page.html", true)
+    }
+
+    /// `page` from vector `name` with its `style.css`; `localized` makes the
+    /// vector's `messages.ftl` (if any) the active en-US bundle.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn vector_page(name: &str, page: &str, localized: bool) -> Self {
+        const BUNDLE: &str = "locales/en-US/main.ftl.ron";
+        let dir = vectors_dir().join(name);
         let read = |file: &str| std::fs::read_to_string(dir.join(file)).unwrap();
-        let (page, css) = (read("page.html"), read("style.css"));
-        Self::new(name, &[("page.html", &page), ("style.css", &css)])
-            .stylesheet("style.css")
-            .spawn("page.html", TemplateContext::new(), Node::default())
+        let (html, css) = (read(page), read("style.css"));
+        let messages = dir.join("messages.ftl");
+        let messages = (localized && messages.exists()).then(|| read("messages.ftl"));
+        let mut files = vec![(page, html.as_str()), ("style.css", css.as_str())];
+        if let Some(messages) = &messages {
+            files.push((BUNDLE, r#"(locale: "en-US", resources: ["messages.ftl"])"#));
+            files.push(("locales/en-US/messages.ftl", messages));
+        }
+        let ui = Self::new(name, &files).stylesheet("style.css");
+        let ui = if messages.is_some() { ui.locale(BUNDLE) } else { ui };
+        ui.spawn(page, TemplateContext::new(), Node::default())
     }
 
     pub fn load<A: Asset>(&mut self, path: &str) -> Handle<A> {

@@ -1,0 +1,7 @@
+html { color: #ffffff; font-family: Spectral; font-size: 20px }
+b { font-weight: bold }
+i { font-style: italic }
+.hot { color: #ff0000 }
+#hero { color: #ffcc00 }
+div { color: #00ff00 }
+.panel { color: #88ccff; gap: 4px }

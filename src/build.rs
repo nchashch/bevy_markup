@@ -1,5 +1,7 @@
 //! Rendered + localized DOM → styled Bevy UI children of the `HtmlUi` entity.
 
+use std::cell::RefCell;
+
 use bevy::asset::{AssetEvent, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
@@ -604,8 +606,72 @@ fn apply_root_box(
 /// Walk context shared by every node.
 struct Ctx<'a, 'p, 'buf> {
     parser: &'p tl::Parser<'buf>,
+    /// Translations by node of `parser`'s document (empty inside a
+    /// translation: its markup isn't localized again).
     localized: &'a HashMap<tl::NodeHandle, Result<String, String>>,
     styler: &'a Styler<'a>,
+    /// Inside a translation: the source element's `data-l10n-name`
+    /// descendants, each usable once (fluent-dom's named overlays).
+    named: Option<&'a RefCell<Vec<(String, HtmlElement)>>>,
+}
+
+impl Ctx<'_, '_, '_> {
+    /// The element `tag` is styled as. In a translation, a `data-l10n-name`
+    /// element takes the source element of that name (tag, id, classes);
+    /// `None` when there is no unused one of the same tag — its content is
+    /// then plain text, as in fluent-dom.
+    fn element(&self, tag: &tl::HTMLTag) -> Option<HtmlElement> {
+        let element = element_of(tag);
+        let (Some(named), Some(name)) = (self.named, tag.attributes().get("data-l10n-name").flatten())
+        else {
+            return Some(element);
+        };
+        let name = decode_entities(&name.as_utf8_str());
+        let mut named = named.borrow_mut();
+        let index = named.iter().position(|(source, _)| *source == name)?;
+        if named[index].1.tag != element.tag {
+            return None;
+        }
+        Some(named.remove(index).1)
+    }
+}
+
+/// Walks the markup of `source`'s translation with `walk` (a fragment
+/// context with `source`'s named elements). `false` when `source` has no
+/// translation, or it doesn't parse: the caller walks the own content.
+fn walk_translation(
+    ctx: &Ctx,
+    handle: tl::NodeHandle,
+    source: &tl::HTMLTag,
+    walk: impl FnOnce(&Ctx, &[tl::NodeHandle]),
+) -> bool {
+    let Some(Ok(translation)) = ctx.localized.get(&handle) else {
+        return false;
+    };
+    let Ok(fragment) = tl::parse(translation, tl::ParserOptions::default()) else {
+        return false;
+    };
+    let named: Vec<(String, HtmlElement)> = source
+        .children()
+        .all(ctx.parser)
+        .iter()
+        .filter_map(|node| {
+            let tag = node.as_tag()?;
+            let name = tag.attributes().get("data-l10n-name").flatten()?;
+            Some((decode_entities(&name.as_utf8_str()), element_of(tag)))
+        })
+        .collect();
+    let named = RefCell::new(named);
+    // Fragment handles index the fragment, not the source document.
+    let unlocalized = HashMap::default();
+    let fragment_ctx = Ctx {
+        parser: fragment.parser(),
+        localized: &unlocalized,
+        styler: ctx.styler,
+        named: Some(&named),
+    };
+    walk(&fragment_ctx, fragment.children());
+    true
 }
 
 fn collect_items(
@@ -618,6 +684,7 @@ fn collect_items(
         parser: dom.parser(),
         localized,
         styler,
+        named: None,
     };
     let mut items = Vec::new();
     for handle in dom.children() {
@@ -635,7 +702,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         tl::Node::Raw(_) => {
             // Anonymous block: inherits the container's style.
             let mut runs = Vec::new();
-            push_children_runs(ctx, handle, inherited, &mut runs);
+            push_runs(ctx, handle, inherited, &mut runs);
             let runs = collapse_runs(runs);
             if !runs.is_empty() {
                 items.push(Item::Block(Block {
@@ -650,7 +717,13 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         tl::Node::Comment(_) => return,
     };
 
-    let element = element_of(tag);
+    let Some(element) = ctx.element(tag) else {
+        // Unmatched `data-l10n-name` in a translation: content only.
+        for child in tag.children().top().iter() {
+            collect_node(ctx, *child, inherited, items);
+        }
+        return;
+    };
     let style = ctx.styler.style_of(&element, inherited);
     let kind = match element.tag.as_str() {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
@@ -658,38 +731,38 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         "li" => BlockKind::ListItem,
         "pre" => BlockKind::Preformatted,
         "head" | "script" | "style" => return,
-        name if CONTAINERS.contains(&name) => {
+        // Containers hold their children's nodes; other elements outside a
+        // block (`html`, `body`, unknown tags) are walked through, no node.
+        // Either way a translation replaces the children.
+        name => {
+            let container = CONTAINERS.contains(&name);
             let mut children = Vec::new();
-            for child in tag.children().top().iter() {
-                collect_node(ctx, *child, style, &mut children);
+            let target = if container { &mut children } else { &mut *items };
+            let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
+                for node in nodes {
+                    collect_node(fragment, *node, style, target);
+                }
+            });
+            if !translated {
+                for child in tag.children().top().iter() {
+                    collect_node(ctx, *child, style, target);
+                }
             }
-            items.push(Item::Container { element, children });
-            return;
-        }
-        // Other elements outside a block (`html`, `body`, unknown tags):
-        // walked through, no node.
-        _ => {
-            for child in tag.children().top().iter() {
-                collect_node(ctx, *child, style, items);
+            if container {
+                items.push(Item::Container { element, children });
             }
             return;
         }
     };
+    // A missing translation falls back to the element's own content.
     let preformatted = matches!(kind, BlockKind::Preformatted);
-    let runs = match ctx.localized.get(&handle) {
-        Some(Ok(translation)) => translation_runs(ctx, translation, style, preformatted),
-        // Missing translation: fall back to the element's own content.
-        _ => {
-            let mut runs = Vec::new();
-            push_children_runs(ctx, handle, style, &mut runs);
-            finish_runs(runs, preformatted)
-        }
-    };
+    let mut runs = Vec::new();
+    push_content_runs(ctx, handle, tag, style, &mut runs);
     items.push(Item::Block(Block {
         kind,
         element: Some(element),
         style,
-        runs,
+        runs: finish_runs(runs, preformatted),
     }));
 }
 
@@ -718,29 +791,27 @@ fn element_tag(tag: &str) -> HtmlElement {
     }
 }
 
-/// Styled runs of a translation. Translations are markup (fluent-dom style
-/// overlays): inline elements in them are styled by the stylesheet like
-/// elements in the document; entities are decoded.
-fn translation_runs(ctx: &Ctx, translation: &str, style: Style, preformatted: bool) -> Vec<Run> {
-    let Ok(fragment) = tl::parse(translation, tl::ParserOptions::default()) else {
-        return finish_runs(
-            vec![Run {
-                text: decode_entities(translation),
-                style,
-            }],
-            preformatted,
-        );
-    };
-    let fragment_ctx = Ctx {
-        parser: fragment.parser(),
-        localized: ctx.localized,
-        styler: ctx.styler,
-    };
-    let mut runs = Vec::new();
-    for child in fragment.children() {
-        push_runs(&fragment_ctx, *child, style, &mut runs);
+/// Runs for `tag`'s content: its translation if it has one, else its
+/// children. Translations are markup (fluent-dom style overlays): inline
+/// elements in them are styled by the stylesheet like elements in the
+/// document; entities are decoded.
+fn push_content_runs(
+    ctx: &Ctx,
+    handle: tl::NodeHandle,
+    tag: &tl::HTMLTag,
+    style: Style,
+    runs: &mut Vec<Run>,
+) {
+    let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
+        for node in nodes {
+            push_runs(fragment, *node, style, runs);
+        }
+    });
+    if !translated {
+        for child in tag.children().top().iter() {
+            push_runs(ctx, *child, style, runs);
+        }
     }
-    finish_runs(runs, preformatted)
 }
 
 /// Whitespace handling for a block's runs: collapsed as in HTML, or for `pre`
@@ -766,20 +837,6 @@ fn finish_runs(mut runs: Vec<Run>, preformatted: bool) -> Vec<Run> {
     runs
 }
 
-/// Runs for `handle`'s content: its children for an element (whose own style
-/// is already in `style`), the text itself for a text node.
-fn push_children_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run>) {
-    match handle.get(ctx.parser) {
-        Some(tl::Node::Tag(tag)) => {
-            for child in tag.children().top().iter() {
-                push_runs(ctx, *child, style, runs);
-            }
-        }
-        Some(tl::Node::Raw(_)) => push_runs(ctx, handle, style, runs),
-        Some(tl::Node::Comment(_)) | None => {}
-    }
-}
-
 fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run>) {
     match handle.get(ctx.parser) {
         Some(tl::Node::Raw(text)) => {
@@ -790,10 +847,11 @@ fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run
             }
         }
         Some(tl::Node::Tag(tag)) => {
-            let style = ctx.styler.style_of(&element_of(tag), style);
-            for child in tag.children().top().iter() {
-                push_runs(ctx, *child, style, runs);
-            }
+            // An unmatched `data-l10n-name` element is plain text.
+            let style = ctx
+                .element(tag)
+                .map_or(style, |element| ctx.styler.style_of(&element, style));
+            push_content_runs(ctx, handle, tag, style, runs);
         }
         Some(tl::Node::Comment(_)) | None => {}
     }

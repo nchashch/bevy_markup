@@ -15,7 +15,8 @@ the parent element's text style per non-whitespace text node. The Rust test
 browser is needed to run the tests.
 
 Oracle vectors must be plain HTML (no Tera syntax, no `data-l10n-id`): the
-browser sees the file as-is.
+browser sees the file as-is. Vectors with a `messages.ftl` belong to the
+Fluent oracle (`scripts/fluent_oracle.sh`) and are skipped by default.
 
 Usage:
     scripts/browser_oracle.py [--browser PATH] [VECTOR_DIR ...]
@@ -136,10 +137,15 @@ def record(browser, vector):
             timeout=60,
             check=True,
         )
+        base = Path(tmp).as_uri() + "/"
     match = re.search(r'<pre id="p23-oracle">(.*?)</pre>', result.stdout, re.S)
     if not match:
         sys.exit(f"{vector}: collector output missing; browser stderr:\n{result.stderr}")
-    return json.loads(html.unescape(match.group(1)))
+    data = json.loads(html.unescape(match.group(1)))
+    # Computed url()s are absolute; the temp directory differs per run.
+    for element in data["elements"]:
+        element["borderImageSource"] = element["borderImageSource"].replace(base, "")
+    return data
 
 
 def to_json(generator, data):
@@ -162,7 +168,9 @@ def main():
     browser = find_browser(args.browser)
     version = browser_version(browser)
     vectors = args.vectors or sorted(
-        path.parent for path in VECTORS.glob("*/style.css") if (path.parent / "page.html").exists()
+        path.parent
+        for path in VECTORS.glob("*/style.css")
+        if (path.parent / "page.html").exists() and not (path.parent / "messages.ftl").exists()
     )
     for vector in vectors:
         data = record(browser, vector)
