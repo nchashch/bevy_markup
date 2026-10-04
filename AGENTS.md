@@ -1,15 +1,18 @@
 # p23
 
-Bevy 0.19 prototype. Current focus: UI built from assets — ratatui panels
+Bevy 0.19 library + demo. Current focus: UI built from assets — ratatui panels
 rendered to textures, 9-slice framed Bevy UI, and an HTML → Bevy UI pipeline
-(Tera templating, `tl` parsing, Fluent localization).
+(Tera templating, `tl` parsing, Fluent localization, CSS styling).
+
+Run the demo: `cargo run --example demo`.
 
 ## Layout
 
 ```
+examples/
+  demo.rs            App: DefaultPlugins + P23Plugin, Camera2d, ClearColor
 src/
-  main.rs            App: DefaultPlugins + system::SystemPlugins
-  system/mod.rs      SystemPlugins: registers AssetsPlugin, TuiPlugin, UiPlugin; ClearColor; Camera2d
+  lib.rs             P23Plugin (the only public item) = AssetsPlugin + TuiPlugin + UiPlugin
   consts/mod.rs      Shared paths and styles (fonts, frame, colors)
   assets/
     mod.rs           AssetsPlugin = CssPlugin + HtmlPlugin + L10nPlugin
@@ -40,7 +43,9 @@ assets/              (gitignored — see Gotchas)
 
 ## Conventions
 
-- One plugin per module; `SystemPlugins` wires them. Panels expose `spawn`
+- One plugin per module; `P23Plugin` (`lib.rs`) wires them. The library
+  doesn't spawn cameras or set `ClearColor` — that's the app's (example's)
+  job. Panels expose `spawn`
   (Startup) and their update systems as `pub(super)` fns registered in the
   module's `mod.rs`.
 - Shared paths/styles live in `consts`: four faces per family —
@@ -196,7 +201,7 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
 
 ## Verification
 
-- `cargo build` must be warning-free.
+- `cargo build --all-targets` (library + example) must be warning-free.
 - For visual changes, run the app and capture an in-app screenshot (desktop
   screenshots grab whatever workspace is visible). Throwaway system, removed
   afterwards:
@@ -211,7 +216,7 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   });
   ```
 
-- The HTML pipeline logs each DOM outline at `info`; `timeout 10 cargo run`
+- The HTML pipeline logs each DOM outline at `info`; `timeout 15 cargo run --example demo`
   and read the log to check templating/localization without a screenshot.
 - Pointer interaction can be tested in-app by writing
   `bevy::window::WindowEvent::{CursorMoved, MouseWheel, MouseButtonInput}`

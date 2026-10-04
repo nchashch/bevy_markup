@@ -1,7 +1,5 @@
 use bevy::prelude::*;
 
-pub const CLEAR_COLOR: Color = Color::srgb_u8(20, 24, 32);
-
 pub const MONO_FONT_PATH: &str = "fonts/IosevkaSlabMono-Regular.ttf";
 pub const MONO_BOLD_FONT_PATH: &str = "fonts/IosevkaSlabMono-Bold.ttf";
 pub const MONO_ITALIC_FONT_PATH: &str = "fonts/IosevkaSlabMono-Italic.ttf";
