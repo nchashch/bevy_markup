@@ -619,6 +619,19 @@ known gaps:
     (`mutants.yml`: unit + html_ui + stateful, 4 shards; survivors in each
     shard's job summary and the `mutants-shard-N` artifacts). Line numbers
     below are from `e1b910c`.
+  - [x] First optimized CI run (2026-10-04, run 37236608548, 4 shards of
+    105 mutants: 28–49 min each). Per mutant: build median 4.7–8.0 s
+    (was 194 s), tests 0.3–0.7 s (was 39 s) — all mutants of a shard take
+    9–19 min. The rest is the one-time baseline build (18–30 min): a
+    cache miss, because rust-cache's key includes an environment hash and
+    the `env:` block had changed. The run saved a 670 MiB
+    `v0-rust-mutants-…` cache; later runs should spend minutes, not half an
+    hour, on the baseline. GitHub evicts caches unused for 7 days, so a
+    weekly schedule can lose it: if baselines stay cold, run it twice a
+    week. Survivors: the 6 documented equivalents plus `l10n.rs`
+    `localize` `delete !` (turning localization off left stale
+    translations; the state machine only caught it by chance): now killed by
+    `turning_localization_off_restores_own_content`.
   - [x] Triage the first CI run (2026-10-04, run 37223937948: 420 mutants;
     278 caught, 51 missed, 46 unviable across 8 shards of 25–44 min). All 51
     rerun against the full suite (+ properties, quickcheck,

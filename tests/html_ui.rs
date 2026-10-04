@@ -102,6 +102,28 @@ html-ui
     );
 }
 
+/// Turning localization off (`ActiveLocale(None)`) brings back the
+/// elements' own content: no stale translation stays on screen.
+#[test]
+fn turning_localization_off_restores_own_content() {
+    let mut ui = TestUi::new(
+        "locale-off",
+        &[
+            ("page.html", r#"<p data-l10n-id="title">Own title</p>"#),
+            ("style.css", "html { color: #ffffff; font-size: 20px }"),
+            ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
+            ("locales/en-US/ui.ftl", "title = Translated title"),
+        ],
+    )
+    .stylesheet("style.css")
+    .locale("locales/en-US/main.ftl.ron")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump("\nhtml-ui\n  p\n    \"Translated title\" default 20px #ffffff\n");
+
+    ui.world_mut().resource_mut::<ActiveLocale>().0 = None;
+    ui.settle().assert_dump("\nhtml-ui\n  p\n    \"Own title\" default 20px #ffffff\n");
+}
+
 /// Fluent: `data-l10n-id` replaces content; args (numbers for plurals,
 /// strings HTML-escaped); markup in translations is parsed and styled; a
 /// missing message falls back to the element's own content.
