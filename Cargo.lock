@@ -4493,6 +4493,7 @@ dependencies = [
  "bevy",
  "bevy_fluent",
  "fluent",
+ "fluent-syntax",
  "lightningcss",
  "proptest",
  "proptest-stateful",

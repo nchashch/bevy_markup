@@ -1,0 +1,19 @@
+/* Golden scene: 9-slice frames from tests/fixtures/frame.png (32x24, red
+   rim around a black center): the root (`html` rule), a tiled container,
+   a stretched wrapper block; padding, border widths, gap. */
+html {
+  color: #ffffff; font-size: 14px;
+  border-image: url("frame.png") 8 fill stretch;
+  border-width: 8px; padding: 6px; gap: 8px;
+}
+h2 { font-size: 20px; color: #ffe08a }
+.panel {
+  border-image: url("frame.png") 8 fill round;
+  border-width: 8px; padding: 6px; gap: 2px;
+}
+.note { color: #ff9a9a }
+.boxed {
+  border-image: url("frame.png") 25% fill stretch;
+  border-width: 6px 12px; padding: 4px 10px;
+  color: #b0ffb0;
+}

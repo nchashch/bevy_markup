@@ -1,0 +1,19 @@
+/* Layout vector: default font only (FiraMono, 0.6em advance), line height
+   1.2. Font sizes keep 1.2 x size whole: Bevy rounds each text node up to
+   whole pixels, browsers don't (see AGENTS.md limits). */
+html { font-size: 20px; padding: 10px }
+.box { width: 200px; height: 100px; padding: 5px; border-style: solid; border-width: 2px }
+.bb { box-sizing: border-box; width: 200px; padding: 5px; border-style: solid; border-width: 2px }
+.max { max-width: 300px }
+.min { min-height: 50px; min-width: 100px; align-self: flex-start }
+.auto { width: 400px; margin: 0 auto }
+.margins { margin: 5px 10px 15px 20px }
+.pct { margin-left: 10% }
+.block { display: block }
+.m { margin: 10px 0 }
+.padded { padding: 2px 4px }
+.framed { border-style: solid; border-width: 3px; padding: 1px }
+.basis { flex-direction: row }
+.b1 { flex-basis: 150px }
+.b2 { flex-basis: 25% }
+.vw { width: 50vw }

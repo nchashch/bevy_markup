@@ -141,6 +141,178 @@ fn cascade_winner_matches_precedence_model(case: CascadeCase) {
 }
 
 // ---------------------------------------------------------------------------
+// Selector lists, per-declaration importance, several elements
+// ---------------------------------------------------------------------------
+
+/// One compound selector: `p`/`*`, id part (0 none, 1 `#i0`, 2 `#i1`, 3
+/// `#ghost`), class parts from `c0`…`c2`.
+#[derive(Clone, Debug)]
+struct Selector {
+    tag: bool,
+    id: u8,
+    classes: Vec<u8>,
+}
+
+/// A rule with a selector list and two independently cascaded
+/// declarations, each optionally `!important`.
+#[derive(Clone, Debug)]
+struct ListRule {
+    selectors: Vec<Selector>,
+    color: Option<([u8; 3], bool)>,
+    size: Option<(u8, bool)>,
+}
+
+/// A `<p>` element: id (0 none, 1 `i0`, 2 `i1`) and a class bit set over
+/// `c0`/`c1` (`c2` never occurs).
+#[derive(Clone, Debug)]
+struct ListElement {
+    id: u8,
+    classes: u8,
+}
+
+#[derive(Clone, Debug)]
+struct ListCase {
+    elements: Vec<ListElement>,
+    rules: Vec<ListRule>,
+}
+
+impl Arbitrary for Selector {
+    fn arbitrary(g: &mut Gen) -> Self {
+        let n_classes = *g.choose(&[0usize, 0, 1, 2]).unwrap();
+        Self {
+            tag: bool::arbitrary(g),
+            id: *g.choose(&[0u8, 0, 1, 2, 3]).unwrap(),
+            classes: (0..n_classes).map(|_| *g.choose(&[0u8, 1, 2]).unwrap()).collect(),
+        }
+    }
+}
+
+impl Arbitrary for ListRule {
+    fn arbitrary(g: &mut Gen) -> Self {
+        let n_selectors = *g.choose(&[1usize, 1, 2, 3]).unwrap();
+        let color = [u8::arbitrary(g), u8::arbitrary(g), u8::arbitrary(g)];
+        let size = *g.choose(&[8u8, 10, 12, 14, 24, 30, 36]).unwrap();
+        // At least one declaration, so every rule can matter.
+        let (has_color, has_size) = *g.choose(&[(true, false), (false, true), (true, true)]).unwrap();
+        Self {
+            selectors: (0..n_selectors).map(|_| Selector::arbitrary(g)).collect(),
+            color: has_color.then(|| (color, *g.choose(&[false, false, true]).unwrap())),
+            size: has_size.then(|| (size, *g.choose(&[false, false, true]).unwrap())),
+        }
+    }
+}
+
+impl Arbitrary for ListCase {
+    fn arbitrary(g: &mut Gen) -> Self {
+        let n_rules = *g.choose(&[1usize, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        Self {
+            elements: (0..3)
+                .map(|_| ListElement {
+                    id: *g.choose(&[0u8, 1, 2]).unwrap(),
+                    classes: *g.choose(&[0u8, 1, 2, 3]).unwrap(),
+                })
+                .collect(),
+            rules: (0..n_rules).map(|_| ListRule::arbitrary(g)).collect(),
+        }
+    }
+}
+
+fn selector_matches(selector: &Selector, element: &ListElement) -> bool {
+    let id_ok = selector.id == 0 || selector.id == element.id;
+    id_ok && selector.classes.iter().all(|&class| class < 2 && element.classes & (1 << class) != 0)
+}
+
+/// The rule's specificity *for this element*: the most specific of its
+/// selectors that match (CSS Selectors 4 §17), `None` if none match.
+fn list_specificity(rule: &ListRule, element: &ListElement) -> Option<(u8, u8, u8)> {
+    rule.selectors
+        .iter()
+        .filter(|selector| selector_matches(selector, element))
+        .map(|selector| ((selector.id > 0) as u8, selector.classes.len() as u8, selector.tag as u8))
+        .max()
+}
+
+/// Per property: among matching rules declaring it, the max of
+/// (importance, specificity, source order); else the `html` value.
+fn cascaded<T: Copy>(
+    case: &ListCase,
+    element: &ListElement,
+    declared: impl Fn(&ListRule) -> Option<(T, bool)>,
+    inherited: T,
+) -> T {
+    case.rules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, rule)| {
+            let (value, important) = declared(rule)?;
+            Some(((important, list_specificity(rule, element)?, index), value))
+        })
+        .max_by_key(|(key, _)| *key)
+        .map_or(inherited, |(_, value)| value)
+}
+
+fn list_rule_css(rule: &ListRule) -> String {
+    let selectors: Vec<String> = rule
+        .selectors
+        .iter()
+        .map(|selector| {
+            let mut css = if selector.tag { "p".to_owned() } else { "*".to_owned() };
+            css.push_str(["", "#i0", "#i1", "#ghost"][selector.id as usize]);
+            for class in &selector.classes {
+                css.push_str(&format!(".c{class}"));
+            }
+            css
+        })
+        .collect();
+    let bang = |important: bool| if important { " !important" } else { "" };
+    let mut declarations = Vec::new();
+    if let Some(([r, g, b], important)) = rule.color {
+        declarations.push(format!("color: #{r:02x}{g:02x}{b:02x}{}", bang(important)));
+    }
+    if let Some((size, important)) = rule.size {
+        declarations.push(format!("font-size: {size}px{}", bang(important)));
+    }
+    format!("{} {{ {} }}\n", selectors.join(", "), declarations.join("; "))
+}
+
+/// Several elements under one stylesheet of selector-list rules whose
+/// declarations carry their own `!important`: each element's color and
+/// size are what CSS precedence picks for that element, per property.
+/// Catches a list rule using one specificity for all elements (its first
+/// or most specific selector, matching or not), importance applied per
+/// rule instead of per declaration, and a style cache keyed too coarsely
+/// (elements sharing a tag getting each other's styles).
+#[quickcheck]
+fn selector_lists_cascade_per_element_and_property(case: ListCase) {
+    let mut page = String::new();
+    for (k, element) in case.elements.iter().enumerate() {
+        let id = ["", " id=\"i0\"", " id=\"i1\""][element.id as usize];
+        let classes: Vec<&str> = ["c0", "c1"]
+            .into_iter()
+            .enumerate()
+            .filter(|(bit, _)| element.classes & (1 << bit) != 0)
+            .map(|(_, class)| class)
+            .collect();
+        page.push_str(&format!("<p{id} class=\"{}\">E{k}</p>", classes.join(" ")));
+    }
+    let css = format!("{BASE_CSS}\n{}", case.rules.iter().map(list_rule_css).collect::<String>());
+
+    let mut ui = TestUi::new("qc-lists", &[("page.html", &page), ("style.css", &css)])
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    let dump = ui.settle().dump();
+    for (k, element) in case.elements.iter().enumerate() {
+        let [r, g, b] = cascaded(&case, element, |rule| rule.color, [0xff; 3]);
+        let size = cascaded(&case, element, |rule| rule.size, 20);
+        let expected = format!("\"E{k}\" default {size}px #{r:02x}{g:02x}{b:02x}");
+        assert!(
+            dump.contains(&expected),
+            "expected run {expected:?} for {element:?}\nCSS:\n{css}\n--- dump ---\n{dump}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Arbitrary text round trips through the template
 // ---------------------------------------------------------------------------
 

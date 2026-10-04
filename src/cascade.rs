@@ -6,7 +6,13 @@ use std::cell::RefCell;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightningcss::properties::Property;
-use lightningcss::properties::align::GapValue;
+use lightningcss::properties::align::{
+    self as css_align, BaselinePosition, ContentDistribution, ContentPosition, GapValue,
+    SelfPosition,
+};
+use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
+use lightningcss::properties::flex as css_flex;
+use lightningcss::properties::size::{self as css_size, MaxSize, Size};
 use lightningcss::properties::border::BorderSideWidth;
 use lightningcss::properties::border_image::{
     BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
@@ -67,6 +73,67 @@ pub(crate) struct BorderImageDecl {
     pub tile: Option<bool>,
 }
 
+/// Declared flex, size and margin properties of a container or block, as
+/// Bevy values (`None` = not declared).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LayoutDecl {
+    pub display: Option<Display>,
+    pub flex_direction: Option<FlexDirection>,
+    pub flex_wrap: Option<FlexWrap>,
+    pub justify_content: Option<JustifyContent>,
+    pub align_items: Option<AlignItems>,
+    pub align_content: Option<AlignContent>,
+    pub align_self: Option<AlignSelf>,
+    pub flex_grow: Option<f32>,
+    pub flex_shrink: Option<f32>,
+    pub flex_basis: Option<Val>,
+    pub width: Option<Val>,
+    pub height: Option<Val>,
+    pub min_width: Option<Val>,
+    pub min_height: Option<Val>,
+    pub max_width: Option<Val>,
+    pub max_height: Option<Val>,
+    /// `[top, right, bottom, left]`.
+    pub margin: [Option<Val>; 4],
+    /// `column-gap` (or `gap`'s column part) in px.
+    pub column_gap: Option<f32>,
+    /// `box-sizing` (p23's nodes default to CSS's `content-box`).
+    pub box_sizing: Option<BoxSizing>,
+}
+
+impl LayoutDecl {
+    /// Overrides `node`'s fields with the declared ones.
+    pub fn apply_to(&self, node: &mut Node) {
+        fn set<T: Clone>(target: &mut T, value: &Option<T>) {
+            if let Some(value) = value {
+                *target = value.clone();
+            }
+        }
+        set(&mut node.display, &self.display);
+        set(&mut node.flex_direction, &self.flex_direction);
+        set(&mut node.flex_wrap, &self.flex_wrap);
+        set(&mut node.justify_content, &self.justify_content);
+        set(&mut node.align_items, &self.align_items);
+        set(&mut node.align_content, &self.align_content);
+        set(&mut node.align_self, &self.align_self);
+        set(&mut node.flex_grow, &self.flex_grow);
+        set(&mut node.flex_shrink, &self.flex_shrink);
+        set(&mut node.flex_basis, &self.flex_basis);
+        set(&mut node.width, &self.width);
+        set(&mut node.height, &self.height);
+        set(&mut node.min_width, &self.min_width);
+        set(&mut node.min_height, &self.min_height);
+        set(&mut node.max_width, &self.max_width);
+        set(&mut node.max_height, &self.max_height);
+        set(&mut node.margin.top, &self.margin[0]);
+        set(&mut node.margin.right, &self.margin[1]);
+        set(&mut node.margin.bottom, &self.margin[2]);
+        set(&mut node.margin.left, &self.margin[3]);
+        set(&mut node.column_gap, &self.column_gap.map(Val::Px));
+        set(&mut node.box_sizing, &self.box_sizing);
+    }
+}
+
 /// Declared (not computed) style for one element type.
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ElementStyle {
@@ -84,6 +151,8 @@ pub(crate) struct ElementStyle {
     pub padding: [Option<f32>; 4],
     /// `row-gap` (or `gap`'s row part) in px, for containers.
     pub row_gap: Option<f32>,
+    /// Flex, size and margin properties (containers and blocks).
+    pub layout: LayoutDecl,
 }
 
 /// Every `border-image-source` URL in `sheet`, as written.
@@ -324,7 +393,54 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::PaddingBottom(value) => style.padding[2] = length_px(value),
         Property::PaddingLeft(value) => style.padding[3] = length_px(value),
         Property::RowGap(gap) => style.row_gap = gap_px(gap),
-        Property::Gap(gap) => style.row_gap = gap_px(&gap.row),
+        Property::ColumnGap(gap) => style.layout.column_gap = gap_px(gap),
+        Property::Gap(gap) => {
+            style.row_gap = gap_px(&gap.row);
+            style.layout.column_gap = gap_px(&gap.column);
+        }
+        Property::Display(value) => style.layout.display = display(value),
+        Property::FlexDirection(direction, _) => {
+            style.layout.flex_direction = Some(flex_direction(direction));
+        }
+        Property::FlexWrap(wrap, _) => style.layout.flex_wrap = Some(flex_wrap(wrap)),
+        Property::FlexFlow(flow, _) => {
+            style.layout.flex_direction = Some(flex_direction(&flow.direction));
+            style.layout.flex_wrap = Some(flex_wrap(&flow.wrap));
+        }
+        Property::FlexGrow(grow, _) => style.layout.flex_grow = Some(*grow),
+        Property::FlexShrink(shrink, _) => style.layout.flex_shrink = Some(*shrink),
+        Property::FlexBasis(basis, _) => style.layout.flex_basis = auto_val(basis),
+        Property::Flex(flex, _) => {
+            style.layout.flex_grow = Some(flex.grow);
+            style.layout.flex_shrink = Some(flex.shrink);
+            style.layout.flex_basis = auto_val(&flex.basis);
+        }
+        Property::JustifyContent(value, _) => {
+            style.layout.justify_content = justify_content(value);
+        }
+        Property::AlignItems(value, _) => style.layout.align_items = align_items(value),
+        Property::AlignContent(value, _) => style.layout.align_content = align_content(value),
+        Property::AlignSelf(value, _) => style.layout.align_self = align_self(value),
+        Property::Width(size) => style.layout.width = size_val(size),
+        Property::Height(size) => style.layout.height = size_val(size),
+        Property::MinWidth(size) => style.layout.min_width = size_val(size),
+        Property::MinHeight(size) => style.layout.min_height = size_val(size),
+        Property::MaxWidth(size) => style.layout.max_width = max_size_val(size),
+        Property::MaxHeight(size) => style.layout.max_height = max_size_val(size),
+        Property::Margin(margin) => {
+            style.layout.margin =
+                [&margin.top, &margin.right, &margin.bottom, &margin.left].map(auto_val);
+        }
+        Property::MarginTop(value) => style.layout.margin[0] = auto_val(value),
+        Property::MarginRight(value) => style.layout.margin[1] = auto_val(value),
+        Property::MarginBottom(value) => style.layout.margin[2] = auto_val(value),
+        Property::MarginLeft(value) => style.layout.margin[3] = auto_val(value),
+        Property::BoxSizing(sizing, _) => {
+            style.layout.box_sizing = Some(match sizing {
+                css_size::BoxSizing::ContentBox => BoxSizing::ContentBox,
+                css_size::BoxSizing::BorderBox => BoxSizing::BorderBox,
+            });
+        }
         _ => {}
     }
 }
@@ -378,6 +494,167 @@ fn gap_px(gap: &GapValue) -> Option<f32> {
             None
         }
     }
+}
+
+/// `display`: `none`, block-level `flow`/`flow-root` (Bevy block layout) and
+/// `flex`; other values (inline, grid, table, …) are unsupported.
+fn display(value: &css_display::Display) -> Option<Display> {
+    match value {
+        css_display::Display::Keyword(css_display::DisplayKeyword::None) => Some(Display::None),
+        css_display::Display::Pair(pair) => match (&pair.outside, &pair.inside) {
+            (_, DisplayInside::Flex(_)) => Some(Display::Flex),
+            (DisplayOutside::Block, DisplayInside::Flow | DisplayInside::FlowRoot) => {
+                Some(Display::Block)
+            }
+            _ => unsupported("display value"),
+        },
+        css_display::Display::Keyword(_) => unsupported("display value"),
+    }
+}
+
+fn flex_direction(direction: &css_flex::FlexDirection) -> FlexDirection {
+    match direction {
+        css_flex::FlexDirection::Row => FlexDirection::Row,
+        css_flex::FlexDirection::RowReverse => FlexDirection::RowReverse,
+        css_flex::FlexDirection::Column => FlexDirection::Column,
+        css_flex::FlexDirection::ColumnReverse => FlexDirection::ColumnReverse,
+    }
+}
+
+fn flex_wrap(wrap: &css_flex::FlexWrap) -> FlexWrap {
+    match wrap {
+        css_flex::FlexWrap::NoWrap => FlexWrap::NoWrap,
+        css_flex::FlexWrap::Wrap => FlexWrap::Wrap,
+        css_flex::FlexWrap::WrapReverse => FlexWrap::WrapReverse,
+    }
+}
+
+fn justify_content(value: &css_align::JustifyContent) -> Option<JustifyContent> {
+    Some(match value {
+        css_align::JustifyContent::Normal => JustifyContent::Default,
+        css_align::JustifyContent::ContentDistribution(distribution) => match distribution {
+            ContentDistribution::SpaceBetween => JustifyContent::SpaceBetween,
+            ContentDistribution::SpaceAround => JustifyContent::SpaceAround,
+            ContentDistribution::SpaceEvenly => JustifyContent::SpaceEvenly,
+            ContentDistribution::Stretch => JustifyContent::Stretch,
+        },
+        css_align::JustifyContent::ContentPosition { value, .. } => match value {
+            ContentPosition::Center => JustifyContent::Center,
+            ContentPosition::Start => JustifyContent::Start,
+            ContentPosition::End => JustifyContent::End,
+            ContentPosition::FlexStart => JustifyContent::FlexStart,
+            ContentPosition::FlexEnd => JustifyContent::FlexEnd,
+        },
+        css_align::JustifyContent::Left { .. } | css_align::JustifyContent::Right { .. } => {
+            return unsupported("justify-content left/right");
+        }
+    })
+}
+
+fn align_content(value: &css_align::AlignContent) -> Option<AlignContent> {
+    Some(match value {
+        css_align::AlignContent::Normal => AlignContent::Default,
+        css_align::AlignContent::ContentDistribution(distribution) => match distribution {
+            ContentDistribution::SpaceBetween => AlignContent::SpaceBetween,
+            ContentDistribution::SpaceAround => AlignContent::SpaceAround,
+            ContentDistribution::SpaceEvenly => AlignContent::SpaceEvenly,
+            ContentDistribution::Stretch => AlignContent::Stretch,
+        },
+        css_align::AlignContent::ContentPosition { value, .. } => match value {
+            ContentPosition::Center => AlignContent::Center,
+            ContentPosition::Start => AlignContent::Start,
+            ContentPosition::End => AlignContent::End,
+            ContentPosition::FlexStart => AlignContent::FlexStart,
+            ContentPosition::FlexEnd => AlignContent::FlexEnd,
+        },
+        css_align::AlignContent::BaselinePosition(_) => {
+            return unsupported("align-content baseline");
+        }
+    })
+}
+
+fn align_items(value: &css_align::AlignItems) -> Option<AlignItems> {
+    Some(match value {
+        css_align::AlignItems::Normal => AlignItems::Default,
+        css_align::AlignItems::Stretch => AlignItems::Stretch,
+        css_align::AlignItems::BaselinePosition(BaselinePosition::First) => AlignItems::Baseline,
+        css_align::AlignItems::BaselinePosition(BaselinePosition::Last) => {
+            return unsupported("last baseline");
+        }
+        css_align::AlignItems::SelfPosition { value, .. } => match value {
+            SelfPosition::Center => AlignItems::Center,
+            SelfPosition::Start | SelfPosition::SelfStart => AlignItems::Start,
+            SelfPosition::End | SelfPosition::SelfEnd => AlignItems::End,
+            SelfPosition::FlexStart => AlignItems::FlexStart,
+            SelfPosition::FlexEnd => AlignItems::FlexEnd,
+        },
+    })
+}
+
+fn align_self(value: &css_align::AlignSelf) -> Option<AlignSelf> {
+    Some(match value {
+        css_align::AlignSelf::Auto => AlignSelf::Auto,
+        // `normal` behaves as `stretch` for flex items.
+        css_align::AlignSelf::Normal | css_align::AlignSelf::Stretch => AlignSelf::Stretch,
+        css_align::AlignSelf::BaselinePosition(BaselinePosition::First) => AlignSelf::Baseline,
+        css_align::AlignSelf::BaselinePosition(BaselinePosition::Last) => {
+            return unsupported("last baseline");
+        }
+        css_align::AlignSelf::SelfPosition { value, .. } => match value {
+            SelfPosition::Center => AlignSelf::Center,
+            SelfPosition::Start | SelfPosition::SelfStart => AlignSelf::Start,
+            SelfPosition::End | SelfPosition::SelfEnd => AlignSelf::End,
+            SelfPosition::FlexStart => AlignSelf::FlexStart,
+            SelfPosition::FlexEnd => AlignSelf::FlexEnd,
+        },
+    })
+}
+
+/// `width`/`height`/`min-*`: `auto`, lengths, `%`.
+fn size_val(size: &Size) -> Option<Val> {
+    match size {
+        Size::Auto => Some(Val::Auto),
+        Size::LengthPercentage(value) => length_percentage_val(value),
+        _ => unsupported("intrinsic size keyword"),
+    }
+}
+
+/// `max-*`: `none` (no limit), lengths, `%`.
+fn max_size_val(size: &MaxSize) -> Option<Val> {
+    match size {
+        MaxSize::None => Some(Val::Auto),
+        MaxSize::LengthPercentage(value) => length_percentage_val(value),
+        _ => unsupported("intrinsic size keyword"),
+    }
+}
+
+/// `margin`/`flex-basis`: `auto`, lengths, `%`.
+fn auto_val(value: &LengthPercentageOrAuto) -> Option<Val> {
+    match value {
+        LengthPercentageOrAuto::Auto => Some(Val::Auto),
+        LengthPercentageOrAuto::LengthPercentage(value) => length_percentage_val(value),
+    }
+}
+
+/// Absolute lengths, viewport units and `%` (of the parent, as in CSS);
+/// font-relative units and `calc()` are unsupported.
+fn length_percentage_val(value: &LengthPercentage) -> Option<Val> {
+    match value {
+        LengthPercentage::Dimension(length) => match length {
+            LengthValue::Vw(vw) => Some(Val::Vw(*vw)),
+            LengthValue::Vh(vh) => Some(Val::Vh(*vh)),
+            LengthValue::Vmin(v) => Some(Val::VMin(*v)),
+            LengthValue::Vmax(v) => Some(Val::VMax(*v)),
+            length => length.to_px().map(Val::Px).or_else(|| unsupported("relative length")),
+        },
+        LengthPercentage::Percentage(percentage) => Some(Val::Percent(percentage.0 * 100.0)),
+        LengthPercentage::Calc(_) => unsupported("calc()"),
+    }
+}
+
+fn unsupported<T>(what: &str) -> Option<T> {
+    debug!("html css: unsupported {what}");
+    None
 }
 
 /// `padding` in px; `auto`, `%` and `calc()` are unsupported.

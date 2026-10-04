@@ -175,3 +175,75 @@ impl AssetLoader for HtmlTemplateLoader {
         &["html", "htm"]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Text dense in markup characters and entity look-alikes (`&lt;`
+    /// typed as text), plus arbitrary characters.
+    const MARKUP_TEXT: &str = "(?s)(&lt;|&gt;|&amp;|&quot;|&#39;|[<>&\"';# a-z]|.){0,24}";
+
+    /// Each of the five references Tera's autoescaping emits decodes to its
+    /// character. Catches a dropped or misspelled entry (e.g. `&#x27;`
+    /// instead of `&#39;`), which would show raw entities in the UI.
+    #[test]
+    fn decodes_the_five_escapes() {
+        assert_eq!(decode_entities("&lt;b&gt; &quot;x&quot; &#39;y&#39; &amp;"), "<b> \"x\" 'y' &");
+    }
+
+    /// Decoding undoes exactly one level of escaping: an escaped entity
+    /// (`&amp;lt;`, what Tera emits for a literal `&lt;`) becomes the entity
+    /// text, not the character. Catches decoding `&amp;` before the others
+    /// (or decoding repeatedly), which turns authored `&lt;` into `<`.
+    #[test]
+    fn decodes_one_level_only() {
+        assert_eq!(decode_entities("&amp;lt;"), "&lt;");
+        assert_eq!(decode_entities("&amp;amp;"), "&amp;");
+        assert_eq!(decode_entities("&amp;quot;&amp;#39;"), "&quot;&#39;");
+    }
+
+    /// References outside the five (named, numeric, malformed) and bare `&`
+    /// are left as written (documented limit), never mangled into a
+    /// partial decode such as `&amp;nbsp;` → `&nbsp;` → something else.
+    #[test]
+    fn other_references_are_left_alone() {
+        for text in ["&nbsp;", "&#169;", "&#x3C;", "&copy;", "a & b", "&lt", "&;", "&#39"] {
+            assert_eq!(decode_entities(text), text);
+        }
+    }
+
+    /// Concatenated text of every raw node in `document`, decoded.
+    fn decoded_text(document: &HtmlDocument) -> String {
+        let dom = document.dom();
+        dom.nodes()
+            .iter()
+            .filter_map(|node| match node {
+                tl::Node::Raw(text) => Some(decode_entities(&text.as_utf8_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        /// Any string from a Tera variable (`.html` name → autoescaping)
+        /// reads back verbatim after `tl` parsing and `decode_entities`:
+        /// Tera's escape set and ours must match exactly (a Tera upgrade
+        /// emitting `&#x27;`/`&apos;`, or a missing decode, shows entities
+        /// in the UI; a missing escape lets data inject markup).
+        #[test]
+        fn rendered_variables_round_trip(s in MARKUP_TEXT) {
+            let mut tera = tera::Tera::new();
+            tera.add_raw_template("t.html", "<p>{{ s }}</p>").unwrap();
+            let template = HtmlTemplate { tera, name: "t.html".to_owned() };
+            let mut context = tera::Context::new();
+            context.insert("s", &s);
+            let document = template.render(&context).unwrap();
+            prop_assert_eq!(document.dom().query_selector("p").unwrap().count(), 1);
+            prop_assert_eq!(decoded_text(&document), s);
+        }
+    }
+}

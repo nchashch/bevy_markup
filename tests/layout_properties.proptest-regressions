@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c9b2e11e7a135d8c7c292bcb9a24094b25c1c5da1b4478170d3329728354a385 # shrinks to input = _SpaceBetweenSpreadsItemsArgs { widths: [10, 10] }
+cc 1c7fd1909e060d717b1da5925773d27ede61529beab0c462406d288e85a61080 # shrinks to input = _RowReverseMirrorsRowArgs { widths: [10] }

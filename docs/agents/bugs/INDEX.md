@@ -4,7 +4,7 @@ Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below
 (bug_0001–0005: property testing, stateful testing and fuzzing — the fuzzers
-immediately paid for themselves; bug_0006–0007: the Fluent oracle).
+immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle).
 
 ## Bugs
 
@@ -17,6 +17,12 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle).
 | [bug_0005](bug_0005.md) | fluent-syntax panics slicing FTL source inside a multi-byte character | upstream `fluent-syntax` 0.11.1 | high | fixed locally via vendored patch (`042782f`); **upstream unfixed** | honggfuzz `ftl` target |
 | [bug_0006](bug_0006.md) | `data-l10n-id` on containers and inline elements is silently ignored | `build.rs` (translation walk) | medium | fixed (uncommitted, on `1169ca4`) | Fluent oracle (`fluent_oracle`) |
 | [bug_0007](bug_0007.md) | `data-l10n-name` overlays unsupported: source attributes lost | `build.rs` (translation walk) | medium | fixed (uncommitted, on `1169ca4`) | Fluent oracle (`fluent_oracle`) |
+| [bug_0008](bug_0008.md) | Removing a per-entity `HtmlStylesheet` never rebuilds | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | targeted probe while designing proptest-stateful ops |
+| [bug_0009](bug_0009.md) | Entity with a failed `HtmlStylesheet` ignores `DefaultStylesheet` swaps | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | probe, then proptest-stateful |
+| [bug_0010](bug_0010.md) | Re-requesting a failed stylesheet eats the change signal | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | proptest-stateful, minimal `[SetLocale(En), SetOwnSheet(Broken), SetTheme(Broken)]`, ~1 in 3 runs |
+| [bug_0011](bug_0011.md) | NBSP and other Unicode spaces were collapsed and trimmed | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | arbtest structure-aware document model |
+| [bug_0012](bug_0012.md) | `HtmlElements` lookups were breadth-first, not document order | `src/html.rs` | medium | fixed (uncommitted, on `e1b910c`) | unit test + arbtest model |
+| [bug_0013](bug_0013.md) | CSS padding on a boxed `pre` added to the default 8px | `src/build.rs` | low | fixed (uncommitted, on `e1b910c`) | code reading while adding layout support; confirmed by the layout oracle |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -79,3 +85,10 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   first run's eight differences, two were these bugs; the other six were
   triaged with the user as deliberate (no sanitizing, escaped string args,
   fluent-rs number formatting) and are pinned by hand-written vectors.
+
+## Discovery session metadata: bug_0008–0013
+
+- **Date:** 2026-10-04, ~12:00–13:00 +04:00; same machine and toolchain.
+- **Session start HEAD:** `e1b910c` — "Add browser based layout oracle".
+- **Harnesses:** proptest-stateful ops for `HtmlStylesheet`/`FontFamilies`, a structure-aware arbtest document model (PropertyTests subagent), and the layout oracle extended to flex/sizes/margins.
+- **Discovery agent:** `anthropic/claude-opus-5-5:high` with subagents.

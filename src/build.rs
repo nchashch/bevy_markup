@@ -6,7 +6,7 @@ use bevy::asset::{AssetEvent, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
-use crate::cascade::{HtmlStyles, SliceValue};
+use crate::cascade::{HtmlStyles, LayoutDecl, SliceValue};
 use crate::fonts::FontFamilies;
 use crate::html::{HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, RenderedHtml};
 use crate::l10n::LocalizedText;
@@ -79,7 +79,7 @@ enum Item {
 }
 
 /// Resolved box properties of an element: `border-width`, `padding`,
-/// `background-color`, `border-image`.
+/// `background-color`, `border-image`, plus layout (flex, sizes, margins).
 #[derive(Default)]
 pub(crate) struct BoxStyle {
     pub(crate) border: [Option<f32>; 4],
@@ -88,6 +88,8 @@ pub(crate) struct BoxStyle {
     pub(crate) image: Option<(Handle<Image>, TextureSlicer)>,
     /// `row-gap` for containers (not part of `is_empty`: blocks ignore it).
     pub(crate) row_gap: Option<f32>,
+    /// Not part of `is_empty`: a `Text` node takes these itself.
+    pub(crate) layout: LayoutDecl,
 }
 
 impl BoxStyle {
@@ -218,6 +220,7 @@ impl Styler<'_> {
             background: declared.background,
             image,
             row_gap: declared.row_gap,
+            layout: declared.layout.clone(),
         }
     }
 }
@@ -272,9 +275,13 @@ pub(crate) fn build_html_ui(
     >,
     mut roots: Query<(&mut Node, Option<&CssRootBox>), With<HtmlUi>>,
     mut removed_outlines: RemovedComponents<HtmlDebugOutline>,
+    mut removed_sheets: RemovedComponents<HtmlStylesheet>,
+    // Entities whose change arrived while their stylesheet was loading.
+    mut deferred: Local<HashSet<Entity>>,
 ) {
-    // Removals aren't `Ref` changes; the outline must still un-stick.
-    let removed_outlines: HashSet<Entity> = removed_outlines.read().collect();
+    // Removals aren't `Ref` changes; the outline must still un-stick, and a
+    // removed override falls back to the default stylesheet.
+    let removed: HashSet<Entity> = removed_outlines.read().chain(removed_sheets.read()).collect();
     let reloaded_sheets: HashSet<AssetId<Stylesheet>> = sheet_events
         .read()
         .filter_map(|event| match event {
@@ -293,6 +300,7 @@ pub(crate) fn build_html_ui(
             _ => None,
         })
         .collect();
+    deferred.retain(|entity| views.contains(*entity));
 
     for (entity, rendered, localized, own_sheet, outline) in &views {
         // A stylesheet that failed to load is treated as absent — a broken
@@ -309,23 +317,47 @@ pub(crate) fn build_html_ui(
             None if matches!(server.load_state(handle.id()), LoadState::Failed(_)) => Sheet::Failed,
             None => Sheet::Loading,
         };
-        let css = match (&own_sheet, &default_sheet.0) {
+        // Change signals, gathered before a still-loading sheet defers the
+        // build: re-requesting an already failed sheet reads as `Loading` for
+        // a frame, and a signal seen only in that frame must not be lost.
+        let own_ready = own_sheet.as_ref().is_some_and(|own| sheets.contains(&own.0));
+        // The default stylesheet applies unless a ready override replaces it.
+        let default_applies = !own_ready;
+        let reloaded = |handle: &Handle<Stylesheet>| reloaded_sheets.contains(&handle.id());
+        let changed = rendered.is_changed()
+            || localized.is_changed()
+            || own_sheet.as_ref().is_some_and(|own| own.is_changed() || reloaded(&own.0))
+            || (default_applies
+                && (default_sheet.is_changed() || default_sheet.0.as_ref().is_some_and(reloaded)))
+            || removed.contains(&entity)
+            || fonts.is_changed()
+            || outline.as_ref().is_some_and(|outline| outline.is_changed());
+        let resolved = match (&own_sheet, &default_sheet.0) {
             (Some(own), _) => match state(&own.0) {
-                Sheet::Ready(css) => css,
-                Sheet::Loading => continue,
+                Sheet::Ready(css) => Some(css),
+                Sheet::Loading => None,
                 Sheet::Failed => match default_sheet.0.as_ref().map(state) {
-                    Some(Sheet::Ready(css)) => css,
-                    Some(Sheet::Loading) => continue,
-                    _ => None,
+                    Some(Sheet::Ready(css)) => Some(css),
+                    Some(Sheet::Loading) => None,
+                    _ => Some(None),
                 },
             },
             (None, Some(default)) => match state(default) {
-                Sheet::Ready(css) => css,
-                Sheet::Loading => continue,
-                Sheet::Failed => None,
+                Sheet::Ready(css) => Some(css),
+                Sheet::Loading => None,
+                Sheet::Failed => Some(None),
             },
-            (None, None) => None,
+            (None, None) => Some(None),
         };
+        let Some(css) = resolved else {
+            // Still loading: its load event (or failure) builds; keep the
+            // signal for then.
+            if changed {
+                deferred.insert(entity);
+            }
+            continue;
+        };
+        let was_deferred = deferred.remove(&entity);
         let sheet_handle = match &own_sheet {
             Some(own) => Some(&own.0),
             None => default_sheet.0.as_ref(),
@@ -338,23 +370,12 @@ pub(crate) fn build_html_ui(
             .filter(|handle| matches!(state(handle), Sheet::Failed));
         let newly_failed = failed_handle
             .is_some_and(|handle| !failed_sheets.0.contains(&(entity, handle.id())));
-        let sheet_changed = match &own_sheet {
-            Some(own) => own.is_changed(),
-            None => default_sheet.is_changed(),
-        } || sheet_handle.is_some_and(|sheet| reloaded_sheets.contains(&sheet.id()))
-            || css.is_some_and(|css| {
-                css.images()
-                    .iter()
-                    .any(|image| loaded_images.contains(&image.id()))
-            });
-        let dirty = rendered.is_changed()
-            || localized.is_changed()
-            || sheet_changed
-            || newly_failed
-            || removed_outlines.contains(&entity)
-            || fonts.is_changed()
-            || outline.as_ref().is_some_and(|outline| outline.is_changed());
-        if !dirty {
+        let images_loaded = css.is_some_and(|css| {
+            css.images()
+                .iter()
+                .any(|image| loaded_images.contains(&image.id()))
+        });
+        if !(changed || was_deferred || newly_failed || images_loaded) {
             continue;
         }
         if let Some(handle) = failed_handle {
@@ -437,17 +458,18 @@ fn spawn_item(parent: &mut ChildSpawnerCommands, styler: &Styler, item: Item, de
         Item::Container { element, children } => (element, children),
     };
     let boxed = styler.box_of(&element);
-    let mut container = parent.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            flex_shrink: 0.0,
-            row_gap: boxed.row_gap.map_or(default_gap, Val::Px),
-            border: rect_over(UiRect::DEFAULT, boxed.border),
-            padding: rect_over(UiRect::DEFAULT, boxed.padding),
-            ..default()
-        },
-        element,
-    ));
+    let mut node = Node {
+        flex_direction: FlexDirection::Column,
+        flex_shrink: 0.0,
+        // CSS sizes the content box; Bevy defaults to the border box.
+        box_sizing: BoxSizing::ContentBox,
+        row_gap: boxed.row_gap.map_or(default_gap, Val::Px),
+        border: rect_over(UiRect::DEFAULT, boxed.border),
+        padding: rect_over(UiRect::DEFAULT, boxed.padding),
+        ..default()
+    };
+    boxed.layout.apply_to(&mut node);
+    let mut container = parent.spawn((node, element));
     if let Some(background) = boxed.background {
         container.insert(BackgroundColor(background));
     }
@@ -475,19 +497,24 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
         BlockKind::ListItem => UiRect::left(Val::Px(12.0)),
         _ => UiRect::DEFAULT,
     };
+    // `pre`'s default padding; CSS padding replaces it per side.
+    let padding = rect_over(
+        match block.kind {
+            BlockKind::Preformatted => UiRect::all(Val::Px(8.0)),
+            _ => UiRect::DEFAULT,
+        },
+        boxed.padding,
+    );
     // Blocks keep their height (`flex_shrink: 0`) so a scrolling parent
     // overflows instead of squashing them.
-    let text_node = match block.kind {
-        BlockKind::Preformatted => Node {
-            flex_shrink: 0.0,
-            padding: UiRect::all(Val::Px(8.0)),
-            overflow: Overflow::clip_x(),
-            ..default()
+    let text_node = Node {
+        flex_shrink: 0.0,
+        box_sizing: BoxSizing::ContentBox,
+        overflow: match block.kind {
+            BlockKind::Preformatted => Overflow::clip_x(),
+            _ => Overflow::DEFAULT,
         },
-        BlockKind::Heading | BlockKind::Paragraph | BlockKind::ListItem => Node {
-            flex_shrink: 0.0,
-            ..default()
-        },
+        ..default()
     };
     let text = (
         Text::new(prefix),
@@ -506,7 +533,13 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
     let no_wrap = matches!(block.kind, BlockKind::Preformatted);
 
     if boxed.is_empty() {
-        let mut entity = parent.spawn((text, Node { margin: indent, ..text_node }));
+        let mut node = Node {
+            margin: indent,
+            padding,
+            ..text_node
+        };
+        boxed.layout.apply_to(&mut node);
+        let mut entity = parent.spawn((text, node));
         if let Some(element) = block.element {
             entity.insert(element);
         }
@@ -519,13 +552,16 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
 
     // Box properties go on a wrapper node: a node can't be both `Text` and
     // `ImageNode` (both size it from content).
-    let mut wrapper = parent.spawn(Node {
+    let mut node = Node {
         flex_shrink: 0.0,
+        box_sizing: BoxSizing::ContentBox,
         margin: indent,
         border: rect_over(UiRect::DEFAULT, boxed.border),
-        padding: rect_over(UiRect::DEFAULT, boxed.padding),
+        padding,
         ..default()
-    });
+    };
+    boxed.layout.apply_to(&mut node);
+    let mut wrapper = parent.spawn(node);
     if let Some(element) = block.element {
         wrapper.insert(element);
     }
@@ -830,7 +866,7 @@ fn finish_runs(mut runs: Vec<Run>, preformatted: bool) -> Vec<Run> {
         }
     }
     if let Some(last) = runs.last_mut() {
-        let trimmed = last.text.trim_end().len();
+        let trimmed = last.text.trim_end_matches(is_html_whitespace).len();
         last.text.truncate(trimmed);
     }
     runs.retain(|run| !run.text.is_empty());
@@ -857,6 +893,12 @@ fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run
     }
 }
 
+/// HTML whitespace (space, tab, LF, FF, CR): what collapsing and trimming
+/// touch. NBSP, U+3000 and other Unicode spaces are content.
+fn is_html_whitespace(c: char) -> bool {
+    c.is_ascii_whitespace()
+}
+
 /// HTML whitespace collapsing across run boundaries: whitespace sequences
 /// become one space, leading/trailing space of the block is dropped, and
 /// emptied runs are removed.
@@ -867,7 +909,7 @@ fn collapse_runs(runs: Vec<Run>) -> Vec<Run> {
     for run in runs {
         let mut text = String::with_capacity(run.text.len());
         for c in run.text.chars() {
-            if c.is_whitespace() {
+            if is_html_whitespace(c) {
                 if !after_space {
                     text.push(' ');
                     after_space = true;
@@ -885,7 +927,7 @@ fn collapse_runs(runs: Vec<Run>) -> Vec<Run> {
         }
     }
     if let Some(last) = out.last_mut() {
-        let trimmed = last.text.trim_end().len();
+        let trimmed = last.text.trim_end_matches(is_html_whitespace).len();
         last.text.truncate(trimmed);
         if last.text.is_empty() {
             out.pop();

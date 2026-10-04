@@ -1,0 +1,1288 @@
+//! Lint tests over the real content in `assets/`: the bugs content authors
+//! hit (a locale missing a message, a hard-coded English string, a template
+//! that fails to render, a stylesheet pointing at a moved image).
+//!
+//! `assets/` is gitignored, so a fresh clone has no content to lint: every
+//! content test then returns early with an `eprintln!` note instead of
+//! failing (there is nothing wrong to report, and `cargo test` must pass in
+//! any checkout). The checkers themselves are unit-tested on inline inputs
+//! below and always run.
+//!
+//! The checks:
+//! 1. FTL: each locale of a bundle family defines the same messages (value +
+//!    attributes) as its `en-US`; extra messages are allowed only as helpers
+//!    referenced from inside that bundle (`item-name`). Parse errors,
+//!    duplicate ids, and manifests naming another locale are reported too.
+//! 2. Templates compile (as the loader does) and render through the real
+//!    pipeline with the examples' context and stylesheets; every
+//!    `data-l10n-id` resolves (no `l10n error`) in every locale.
+//! 3. Localized templates hold no hard-coded text outside `data-l10n-id`
+//!    elements (see [`needs_translation`] for the rule).
+//! 4. Every CSS file parses; every `url()` resolves to a file in `assets/`.
+//! 5. A pseudo-locale generated from `en-US` (accented, bracketed, ~30%
+//!    longer) leaves no untranslated text run in the rendered UI.
+
+mod common;
+use common::TestUi;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
+
+use bevy::prelude::*;
+use fluent_syntax::ast;
+use p23::l10n::LocalizedText;
+use p23::prelude::*;
+use p23::tl;
+use serde_json::{Value, json};
+
+// ---------------------------------------------------------------------------
+// Content inventory
+// ---------------------------------------------------------------------------
+
+/// `assets/`, or `None` with a note when the checkout has none (gitignored).
+fn assets(test: &str) -> Option<PathBuf> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
+    if dir.is_dir() {
+        Some(dir)
+    } else {
+        eprintln!("{test}: skipped, no assets/ (gitignored; absent in a fresh clone)");
+        None
+    }
+}
+
+/// Top-level `assets/` directories the pages never load, so they aren't
+/// copied into the test asset roots.
+const NOT_CONTENT: &[&str] = &[
+    // Font files (~80 MB): apps register families, the harness fakes them.
+    "fonts", // Artwork sources (.kra) for the UI images.
+    "src",
+];
+
+/// One template as an example shows it.
+struct Page {
+    /// Asset path.
+    template: &'static str,
+    /// The Tera context(s) the example passes, as JSON objects.
+    contexts: fn() -> Vec<Value>,
+    /// Stylesheets the example shows it with.
+    stylesheets: &'static [&'static str],
+    /// Bundle family (the directory holding `<locale>/main.ftl.ron`).
+    locales: &'static str,
+    /// `Some(reason)`: deliberately not localized, exempt from checks 3 and 5.
+    unlocalized: Option<&'static str>,
+}
+
+const DEMO_THEMES: &[&str] = &[
+    "ui/themes/crimson.css",
+    "ui/themes/parchment.css",
+    "ui/themes/terminal.css",
+    "ui/themes/large_print.css",
+];
+
+/// `examples/demo/panels.rs` `demo_context()`.
+fn demo_contexts() -> Vec<Value> {
+    vec![json!({
+        "player": "ada <the brave>",
+        "hp": 7,
+        "max_hp": 10,
+        "items": [
+            { "name": "torch", "count": 3 },
+            { "name": "rope", "count": 1 },
+            { "name": "key", "count": 0 },
+        ],
+    })]
+}
+
+/// `examples/quickstart.rs`: starts at 0 coins, each click adds one (so the
+/// zero, one and other plural forms all show).
+fn quickstart_contexts() -> Vec<Value> {
+    (0..3)
+        .map(|coins| json!({ "player": "Ada", "coins": coins }))
+        .collect()
+}
+
+/// Every template under `assets/` (`every_template_is_listed` keeps this
+/// complete).
+const PAGES: &[Page] = &[
+    Page {
+        template: "ui/content/test.html",
+        contexts: demo_contexts,
+        stylesheets: DEMO_THEMES,
+        locales: "locales",
+        unlocalized: Some("plain-HTML sample, shown only as a DOM outline (debug panel)"),
+    },
+    Page {
+        template: "ui/content/inventory.html",
+        contexts: demo_contexts,
+        stylesheets: DEMO_THEMES,
+        locales: "locales",
+        unlocalized: Some("Tera-only sample, shown only as a DOM outline (debug panel)"),
+    },
+    Page {
+        template: "ui/content/l10n.html",
+        contexts: demo_contexts,
+        stylesheets: DEMO_THEMES,
+        locales: "locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "quickstart/hello.html",
+        contexts: quickstart_contexts,
+        stylesheets: &["quickstart/style.css"],
+        locales: "quickstart/locales",
+        unlocalized: None,
+    },
+];
+
+const REFERENCE_LOCALE: &str = "en-US";
+
+/// Files under `dir` (recursive), sorted.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// `path` relative to `assets`, `/`-separated (an asset path).
+fn asset_path(assets: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(assets).unwrap();
+    let parts: Vec<&str> = relative.iter().map(|part| part.to_str().unwrap()).collect();
+    parts.join("/")
+}
+
+/// Content files under `assets/` with extension `ext`, as asset paths.
+fn content_files(assets: &Path, ext: &str) -> Vec<String> {
+    walk(assets)
+        .iter()
+        .map(|path| asset_path(assets, path))
+        .filter(|path| !NOT_CONTENT.contains(&path.split('/').next().unwrap()))
+        .filter(|path| path.ends_with(&format!(".{ext}")))
+        .collect()
+}
+
+/// A headless app whose asset root is a copy of the content.
+fn content_ui(assets: &Path) -> TestUi {
+    let mut ui = TestUi::new("content-lint", &[]);
+    for path in walk(assets) {
+        let path = asset_path(assets, &path);
+        if !NOT_CONTENT.contains(&path.split('/').next().unwrap()) {
+            ui = ui.with_file(&path, &std::fs::read(assets.join(&path)).unwrap());
+        }
+    }
+    ui
+}
+
+fn template_context(value: &Value) -> TemplateContext {
+    value
+        .as_object()
+        .expect("contexts are JSON objects")
+        .iter()
+        .fold(TemplateContext::new(), |context, (key, value)| {
+            context.with(key.clone(), value)
+        })
+}
+
+/// The string leaves of `values`: data interpolated into the page.
+fn data_strings(values: &[Value]) -> Vec<String> {
+    fn collect(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::String(string) => out.push(string.clone()),
+            Value::Array(items) => items.iter().for_each(|item| collect(item, out)),
+            Value::Object(map) => map.values().for_each(|item| collect(item, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    values.iter().for_each(|value| collect(value, &mut out));
+    out
+}
+
+/// Renders `page` with `context`, `stylesheet` and the bundle at `bundle`
+/// (asset path), plus `extra` files in the asset root. A template that
+/// doesn't compile fails its load and would never render, and a stylesheet
+/// with a dangling `url()` never finishes loading its dependencies; neither
+/// would settle, so both are checked first and reported instead.
+fn render(
+    assets: &Path,
+    page: &Page,
+    context: &Value,
+    stylesheet: &str,
+    bundle: &str,
+    extra: &[(String, String)],
+) -> Result<TestUi, String> {
+    compile(assets, page.template).map_err(|err| format!("doesn't compile: {err}"))?;
+    let css = std::fs::read_to_string(assets.join(stylesheet))
+        .map_err(|err| format!("{stylesheet}: {err}"))?;
+    let css_problems = stylesheet_problems(assets, stylesheet, &css);
+    if !css_problems.is_empty() {
+        return Err(css_problems.join("; "));
+    }
+    let mut ui = content_ui(assets);
+    for (path, contents) in extra {
+        ui = ui.with_file(path, contents.as_bytes());
+    }
+    let mut ui = ui.stylesheet(stylesheet).locale(bundle).spawn(
+        page.template,
+        template_context(context),
+        Node::default(),
+    );
+    ui.settle();
+    Ok(ui)
+}
+
+fn bundle_path(page: &Page, locale: &str) -> String {
+    format!("{}/{locale}/main.ftl.ron", page.locales)
+}
+
+/// Every text run (`Text` and `TextSpan`) under the `HtmlUi`, in order.
+fn text_runs(ui: &mut TestUi) -> Vec<String> {
+    let root = ui.root();
+    let world = ui.world_mut();
+    let mut runs = Vec::new();
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        let entity = world.entity(entity);
+        if let Some(text) = entity.get::<Text>()
+            && !text.0.is_empty()
+        {
+            runs.push(text.0.clone());
+        }
+        if let Some(span) = entity.get::<TextSpan>() {
+            runs.push(span.0.clone());
+        }
+        if let Some(children) = entity.get::<Children>() {
+            stack.extend(children.iter().rev());
+        }
+    }
+    runs
+}
+
+fn assert_no_problems(what: &str, problems: &[String]) {
+    assert!(problems.is_empty(), "{what}:\n  {}", problems.join("\n  "));
+}
+
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = err.to_string();
+    let mut source = err.source();
+    while let Some(err) = source {
+        message.push_str(&format!(": {err}"));
+        source = err.source();
+    }
+    message
+}
+
+#[test]
+fn every_template_is_listed() {
+    let Some(assets) = assets("every_template_is_listed") else {
+        return;
+    };
+    let on_disk: BTreeSet<String> = content_files(&assets, "html").into_iter().collect();
+    let listed: BTreeSet<String> = PAGES.iter().map(|page| page.template.to_owned()).collect();
+    let mut problems: Vec<String> = on_disk
+        .difference(&listed)
+        .map(|path| format!("{path}: not in PAGES (add it with the example's context)"))
+        .collect();
+    problems.extend(
+        listed
+            .difference(&on_disk)
+            .map(|path| format!("{path}: listed, not on disk")),
+    );
+    assert_no_problems("templates vs PAGES", &problems);
+}
+
+// ---------------------------------------------------------------------------
+// 1. Every locale defines the en-US messages
+// ---------------------------------------------------------------------------
+
+/// What a locale must match per message: value presence and attribute names.
+#[derive(Debug, PartialEq)]
+struct Shape {
+    value: bool,
+    attributes: BTreeSet<String>,
+}
+
+impl std::fmt::Display for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.value { "value" } else { "no value" })?;
+        for attribute in &self.attributes {
+            write!(f, " .{attribute}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The messages of one locale's bundle (all its resources).
+#[derive(Default)]
+struct Catalog {
+    messages: BTreeMap<String, Shape>,
+    /// Messages referenced from inside the bundle (`{ other-message }`).
+    references: BTreeSet<String>,
+    /// Parse errors and duplicate ids.
+    problems: Vec<String>,
+}
+
+/// Parses `files` (`(name, FTL source)`) into one catalog.
+fn catalog(files: &[(String, String)]) -> Catalog {
+    let mut catalog = Catalog::default();
+    for (name, source) in files {
+        let resource = match fluent_syntax::parser::parse(source.as_str()) {
+            Ok(resource) => resource,
+            Err((resource, errors)) => {
+                for error in errors {
+                    let line = source
+                        .get(..error.pos.start)
+                        .map_or(0, |s| s.lines().count());
+                    catalog.problems.push(format!("{name}:{line}: {error}"));
+                }
+                resource
+            }
+        };
+        for entry in &resource.body {
+            match entry {
+                ast::Entry::Message(message) => {
+                    let id = message.id.name.to_owned();
+                    let shape = Shape {
+                        value: message.value.is_some(),
+                        attributes: message
+                            .attributes
+                            .iter()
+                            .map(|attribute| attribute.id.name.to_owned())
+                            .collect(),
+                    };
+                    if catalog.messages.insert(id.clone(), shape).is_some() {
+                        catalog
+                            .problems
+                            .push(format!("{name}: `{id}` defined twice"));
+                    }
+                    message
+                        .value
+                        .iter()
+                        .for_each(|value| pattern_refs(value, &mut catalog.references));
+                    for attribute in &message.attributes {
+                        pattern_refs(&attribute.value, &mut catalog.references);
+                    }
+                }
+                ast::Entry::Term(term) => {
+                    pattern_refs(&term.value, &mut catalog.references);
+                    for attribute in &term.attributes {
+                        pattern_refs(&attribute.value, &mut catalog.references);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    catalog
+}
+
+fn pattern_refs(pattern: &ast::Pattern<&str>, out: &mut BTreeSet<String>) {
+    for element in &pattern.elements {
+        if let ast::PatternElement::Placeable { expression } = element {
+            expression_refs(expression, out);
+        }
+    }
+}
+
+fn expression_refs(expression: &ast::Expression<&str>, out: &mut BTreeSet<String>) {
+    match expression {
+        ast::Expression::Select { selector, variants } => {
+            inline_refs(selector, out);
+            for variant in variants {
+                pattern_refs(&variant.value, out);
+            }
+        }
+        ast::Expression::Inline(inline) => inline_refs(inline, out),
+    }
+}
+
+fn inline_refs(inline: &ast::InlineExpression<&str>, out: &mut BTreeSet<String>) {
+    match inline {
+        ast::InlineExpression::MessageReference { id, .. } => {
+            out.insert(id.name.to_owned());
+        }
+        ast::InlineExpression::FunctionReference { arguments, .. } => {
+            for argument in &arguments.positional {
+                inline_refs(argument, out);
+            }
+            for argument in &arguments.named {
+                inline_refs(&argument.value, out);
+            }
+        }
+        ast::InlineExpression::Placeable { expression } => expression_refs(expression, out),
+        _ => {}
+    }
+}
+
+/// How `locale` differs from `reference` (the en-US catalog). Terms are
+/// locale-private by Fluent's design and not compared. A message missing
+/// from en-US is fine only as a helper the locale references itself (like
+/// the demo's `item-name`, which maps English item ids); anything else extra
+/// is a stale or misspelled id.
+fn locale_problems(reference: &Catalog, locale: &Catalog) -> Vec<String> {
+    let mut problems = locale.problems.clone();
+    for (id, shape) in &reference.messages {
+        match locale.messages.get(id) {
+            None => problems.push(format!("missing `{id}`")),
+            Some(own) if own != shape => {
+                problems.push(format!("`{id}`: {own} ({REFERENCE_LOCALE}: {shape})"))
+            }
+            Some(_) => {}
+        }
+    }
+    for id in locale.messages.keys() {
+        if !reference.messages.contains_key(id) && !locale.references.contains(id) {
+            problems.push(format!(
+                "extra `{id}` (not in {REFERENCE_LOCALE}, not referenced in this bundle)"
+            ));
+        }
+    }
+    problems
+}
+
+/// `main.ftl.ron` as bevy_fluent reads it.
+#[derive(serde::Deserialize)]
+struct Manifest {
+    locale: String,
+    resources: Vec<String>,
+}
+
+/// A locale's resources (`(asset path, source)`) per its `main.ftl.ron`, and
+/// problems reading them.
+fn read_bundle(assets: &Path, locale_dir: &Path) -> (Vec<(String, String)>, Vec<String>) {
+    let manifest_path = locale_dir.join("main.ftl.ron");
+    let name = asset_path(assets, &manifest_path);
+    let manifest: Manifest = match ron::from_str(&std::fs::read_to_string(&manifest_path).unwrap())
+    {
+        Ok(manifest) => manifest,
+        Err(err) => return (Vec::new(), vec![format!("{name}: {err}")]),
+    };
+    let mut problems = Vec::new();
+    let dir_locale = locale_dir.file_name().unwrap().to_str().unwrap();
+    if manifest.locale != dir_locale {
+        problems.push(format!(
+            "{name}: locale `{}` in the `{dir_locale}` directory",
+            manifest.locale
+        ));
+    }
+    let mut files = Vec::new();
+    for resource in &manifest.resources {
+        let path = locale_dir.join(resource);
+        match std::fs::read_to_string(&path) {
+            Ok(source) => files.push((asset_path(assets, &path), source)),
+            Err(err) => problems.push(format!("{name}: resource `{resource}`: {err}")),
+        }
+    }
+    (files, problems)
+}
+
+/// Bundle families: directories whose subdirectories hold `main.ftl.ron`,
+/// mapped to those locale directories.
+fn families(assets: &Path) -> BTreeMap<PathBuf, Vec<PathBuf>> {
+    let mut families: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for path in walk(assets) {
+        if path.file_name().is_some_and(|name| name == "main.ftl.ron") {
+            let locale_dir = path.parent().unwrap().to_owned();
+            let family = locale_dir.parent().unwrap().to_owned();
+            families.entry(family).or_default().push(locale_dir);
+        }
+    }
+    families
+}
+
+#[test]
+fn every_locale_defines_the_en_us_messages() {
+    let Some(assets) = assets("every_locale_defines_the_en_us_messages") else {
+        return;
+    };
+    let families = families(&assets);
+    assert!(!families.is_empty(), "no bundle families under assets/");
+    let mut problems = Vec::new();
+    for (family, locale_dirs) in &families {
+        let family_name = asset_path(&assets, family);
+        let Some(reference_dir) = locale_dirs
+            .iter()
+            .find(|dir| dir.ends_with(REFERENCE_LOCALE))
+        else {
+            problems.push(format!("{family_name}: no {REFERENCE_LOCALE} bundle"));
+            continue;
+        };
+        let (files, read_problems) = read_bundle(&assets, reference_dir);
+        let reference = catalog(&files);
+        let prefix = format!("{family_name}/{REFERENCE_LOCALE}");
+        problems.extend(
+            read_problems
+                .iter()
+                .chain(&reference.problems)
+                .map(|p| format!("{prefix}: {p}")),
+        );
+        for locale_dir in locale_dirs.iter().filter(|dir| *dir != reference_dir) {
+            let (files, read_problems) = read_bundle(&assets, locale_dir);
+            let prefix = asset_path(&assets, locale_dir);
+            let found = read_problems
+                .into_iter()
+                .chain(locale_problems(&reference, &catalog(&files)));
+            problems.extend(found.map(|p| format!("{prefix}: {p}")));
+        }
+    }
+    assert_no_problems("locale bundles differ from en-US", &problems);
+}
+
+fn ftl(name: &str, source: &str) -> (String, String) {
+    (name.to_owned(), source.to_owned())
+}
+
+#[test]
+fn locale_check_reports_missing_extra_and_mismatched_messages() {
+    let reference = catalog(&[ftl(
+        "en.ftl",
+        "a = A\n\
+         b = B\n    .title = T\n\
+         c = { -term }\n\
+         d = D\n\
+         only-attrs =\n    .label = L\n\
+         -term = Term\n",
+    )]);
+    let locale = catalog(&[
+        ftl(
+            "one.ftl",
+            // `helper` is referenced (from a select variant), `stale` isn't;
+            // terms (`-own`) are private to a locale.
+            "b = B\n    .label = L\n\
+             c = { $n ->\n        [one] { helper }\n       *[other] { -own }\n    }\n\
+             helper = H\n\
+             stale = S\n\
+             only-attrs = V\n    .label = L\n\
+             -own = Own\n",
+        ),
+        ftl("two.ftl", "d = D\nd = again\nbroken = {\n"),
+    ]);
+    let problems = locale_problems(&reference, &locale);
+    // The parse error's wording is fluent-syntax's; its location is ours.
+    assert!(problems[0].starts_with("two.ftl:3: "), "{problems:#?}");
+    assert_eq!(
+        problems[1..],
+        [
+            "two.ftl: `d` defined twice",
+            "missing `a`",
+            "`b`: value .label (en-US: value .title)",
+            "`only-attrs`: value .label (en-US: no value .label)",
+            "extra `stale` (not in en-US, not referenced in this bundle)",
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2. Templates compile and render; every data-l10n-id resolves
+// ---------------------------------------------------------------------------
+
+/// Compiles `template` the way the `HtmlTemplate` loader does (name = asset
+/// path, so `.html` autoescapes).
+fn compile(assets: &Path, template: &str) -> Result<(), String> {
+    let source = std::fs::read_to_string(assets.join(template)).map_err(|err| err.to_string())?;
+    let mut tera = p23::tera::Tera::new();
+    tera.add_raw_template(template, &source)
+        .map_err(|err| error_chain(&err))
+}
+
+/// `None` when the root rendered; otherwise why not.
+fn render_failure(ui: &mut TestUi) -> Option<String> {
+    let root = ui.root();
+    match ui.world_mut().entity(root).get::<RenderedHtml>() {
+        Some(RenderedHtml::Ready(_)) => None,
+        Some(RenderedHtml::Failed(message)) => Some(format!("failed to render: {message}")),
+        Some(RenderedHtml::Pending) | None => Some("never rendered".to_owned()),
+    }
+}
+
+#[test]
+fn templates_render_with_the_examples_context_and_stylesheets() {
+    let Some(assets) = assets("templates_render_with_the_examples_context_and_stylesheets") else {
+        return;
+    };
+    let mut problems = Vec::new();
+    for page in PAGES {
+        if let Err(err) = compile(&assets, page.template) {
+            problems.push(format!("{}: doesn't compile: {err}", page.template));
+            continue;
+        }
+        for (index, context) in (page.contexts)().iter().enumerate() {
+            for stylesheet in page.stylesheets {
+                let label = format!("{} (context {index}, {stylesheet})", page.template);
+                let bundle = bundle_path(page, REFERENCE_LOCALE);
+                let mut ui = match render(&assets, page, context, stylesheet, &bundle, &[]) {
+                    Ok(ui) => ui,
+                    Err(err) => {
+                        problems.push(format!("{label}: {err}"));
+                        continue;
+                    }
+                };
+                if let Some(failure) = render_failure(&mut ui) {
+                    problems.push(format!("{label}: {failure}"));
+                }
+                // `render` checked the sheet statically; this is the real loader.
+                let world = ui.world_mut();
+                let sheet = world.resource::<DefaultStylesheet>().0.clone().unwrap();
+                if world
+                    .resource::<AssetServer>()
+                    .load_state(sheet.id())
+                    .is_failed()
+                {
+                    problems.push(format!("{label}: stylesheet failed to load"));
+                }
+            }
+        }
+    }
+    assert_no_problems("templates", &problems);
+}
+
+/// The `l10n error` lines of `ui`'s DOM outline: elements whose translation
+/// failed (missing message, no value, formatting error such as a variable
+/// the template doesn't pass) and fall back to their own content.
+fn l10n_errors(ui: &mut TestUi) -> Vec<String> {
+    let root = ui.root();
+    let entity = ui.world_mut().entity(root);
+    let (Some(RenderedHtml::Ready(document)), Some(localized)) =
+        (entity.get::<RenderedHtml>(), entity.get::<LocalizedText>())
+    else {
+        return vec!["not rendered".to_owned()];
+    };
+    document
+        .outline(localized)
+        .lines()
+        .filter_map(|line| {
+            line.trim_start()
+                .strip_prefix("l10n error: ")
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+#[test]
+fn every_l10n_id_resolves_in_every_locale() {
+    let Some(assets) = assets("every_l10n_id_resolves_in_every_locale") else {
+        return;
+    };
+    let families = families(&assets);
+    let mut problems = Vec::new();
+    'pages: for page in PAGES {
+        let family = families
+            .get(&assets.join(page.locales))
+            .unwrap_or_else(|| panic!("{}: no bundle family `{}`", page.template, page.locales));
+        for locale_dir in family {
+            let locale = locale_dir.file_name().unwrap().to_str().unwrap();
+            for (index, context) in (page.contexts)().iter().enumerate() {
+                let bundle = bundle_path(page, locale);
+                let mut ui = match render(&assets, page, context, page.stylesheets[0], &bundle, &[])
+                {
+                    Ok(ui) => ui,
+                    Err(err) => {
+                        problems.push(format!("{}: {err}", page.template));
+                        continue 'pages;
+                    }
+                };
+                for error in l10n_errors(&mut ui) {
+                    problems.push(format!(
+                        "{} ({locale}, context {index}): {error}",
+                        page.template
+                    ));
+                }
+            }
+        }
+    }
+    assert_no_problems("unresolved data-l10n-id", &problems);
+}
+
+// ---------------------------------------------------------------------------
+// 3. No hard-coded text outside data-l10n-id
+// ---------------------------------------------------------------------------
+
+/// Whether visible `text` needs a translation: it does if letters remain
+/// after removing the interpolated `data` (case-insensitively, as Tera
+/// filters like `title`/`upper` change case). Digits, punctuation and
+/// symbols (`+`, `×`, `★`, `•`) read the same in every locale, and data
+/// values (player names, item ids) aren't strings to translate — Fluent
+/// receives them as arguments. Everything else needs a `data-l10n-id`,
+/// including code samples (their comments are prose; cf. `code-sample`).
+fn needs_translation(text: &str, data: &[String]) -> bool {
+    let mut residue = text.to_lowercase();
+    for value in data.iter().filter(|value| !value.is_empty()) {
+        residue = residue.replace(&value.to_lowercase(), " ");
+    }
+    residue.chars().any(char::is_alphabetic)
+}
+
+/// Undoes the escapes Tera's autoescaping and authors use (`tl` keeps them).
+fn decode_entities(text: &str) -> String {
+    text.replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// Visible text in `dom` that isn't under a `data-l10n-id` element and
+/// [needs translation](needs_translation), as `tag > tag: "text"`. Skips what
+/// p23 never shows: `head`, `script`, `style`, comments.
+fn hard_coded_text(dom: &tl::VDom, data: &[String]) -> Vec<String> {
+    fn visit(
+        parser: &tl::Parser,
+        handle: tl::NodeHandle,
+        path: &mut Vec<String>,
+        data: &[String],
+        out: &mut Vec<String>,
+    ) {
+        match handle.get(parser) {
+            Some(tl::Node::Tag(tag)) => {
+                let name = tag.name().as_utf8_str().to_ascii_lowercase();
+                let hidden = matches!(name.as_str(), "head" | "script" | "style");
+                if hidden || tag.attributes().get("data-l10n-id").is_some() {
+                    return;
+                }
+                path.push(name);
+                for &child in tag.children().top().iter() {
+                    visit(parser, child, path, data, out);
+                }
+                path.pop();
+            }
+            Some(tl::Node::Raw(text)) => {
+                let text = decode_entities(&text.as_utf8_str());
+                let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                if needs_translation(&text, data) {
+                    out.push(format!("{}: {text:?}", path.join(" > ")));
+                }
+            }
+            Some(tl::Node::Comment(_)) | None => {}
+        }
+    }
+    let mut out = Vec::new();
+    for &handle in dom.children() {
+        visit(dom.parser(), handle, &mut Vec::new(), data, &mut out);
+    }
+    out
+}
+
+#[test]
+fn hard_coded_text_check_finds_untranslated_text() {
+    let html = r#"<head><title>Title</title><style>p { color: red }</style></head>
+        <h1 data-l10n-id="t">Fallback <b>kept</b></h1>
+        <div data-l10n-id="c"><p>Translated container</p></div>
+        <p>Loose</p>
+        <div><span>Nested</span> &amp; tail</div>
+        <!-- a comment -->
+        <script>let x = 1;</script>
+        <p>3 × 4 + ★ — 42%</p>
+        <p>&lt;&gt;</p>
+        <p>Ada &lt;The Brave&gt;</p>
+        <p>Welcome, ADA &lt;the brave&gt;</p>
+        <li>TORCH 3</li>"#;
+    let dom = tl::parse(html, tl::ParserOptions::default()).unwrap();
+    let data = ["ada <the brave>".to_owned(), "torch".to_owned()];
+    assert_eq!(
+        hard_coded_text(&dom, &data),
+        [
+            r#"p: "Loose""#,
+            r#"div > span: "Nested""#,
+            r#"div: "& tail""#,
+            r#"p: "Welcome, ADA <the brave>""#,
+        ]
+    );
+}
+
+#[test]
+fn localized_templates_have_no_hard_coded_text() {
+    let Some(assets) = assets("localized_templates_have_no_hard_coded_text") else {
+        return;
+    };
+    let mut problems = Vec::new();
+    'pages: for page in PAGES.iter().filter(|page| page.unlocalized.is_none()) {
+        let contexts = (page.contexts)();
+        let data = data_strings(&contexts);
+        for (index, context) in contexts.iter().enumerate() {
+            let bundle = bundle_path(page, REFERENCE_LOCALE);
+            let mut ui = match render(&assets, page, context, page.stylesheets[0], &bundle, &[]) {
+                Ok(ui) => ui,
+                Err(err) => {
+                    problems.push(format!("{}: {err}", page.template));
+                    continue 'pages;
+                }
+            };
+            let root = ui.root();
+            let Some(RenderedHtml::Ready(document)) =
+                ui.world_mut().entity(root).get::<RenderedHtml>()
+            else {
+                problems.push(format!("{} (context {index}): not rendered", page.template));
+                continue;
+            };
+            for text in hard_coded_text(document.dom(), &data) {
+                problems.push(format!("{} (context {index}): {text}", page.template));
+            }
+        }
+    }
+    assert_no_problems("text outside data-l10n-id", &problems);
+}
+
+// ---------------------------------------------------------------------------
+// 4. CSS parses; url()s resolve
+// ---------------------------------------------------------------------------
+
+/// Every `url(...)` argument in `css`, as written (quotes removed). Skips
+/// comments and string literals, so only real `url` tokens count.
+fn css_urls(css: &str) -> Vec<String> {
+    let chars: Vec<char> = css.chars().collect();
+    let is_ident = |c: char| c.is_alphanumeric() || c == '-' || c == '_' || !c.is_ascii();
+    // Index after the string literal opened at `start`.
+    let skip_string = |start: usize| {
+        let quote = chars[start];
+        let mut i = start + 1;
+        while i < chars.len() && chars[i] != quote {
+            i += if chars[i] == '\\' { 2 } else { 1 };
+        }
+        i + 1
+    };
+    let mut urls = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '/' && chars.get(i + 1) == Some(&'*') {
+            i += 2;
+            while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+                i += 1;
+            }
+            i += 2;
+        } else if c == '"' || c == '\'' {
+            i = skip_string(i);
+        } else if is_ident(c) {
+            let start = i;
+            while i < chars.len() && is_ident(chars[i]) {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            if !ident.eq_ignore_ascii_case("url") || chars.get(i) != Some(&'(') {
+                continue;
+            }
+            i += 1;
+            while chars.get(i).is_some_and(|c| c.is_whitespace()) {
+                i += 1;
+            }
+            let start = i;
+            if matches!(chars.get(i), Some('"' | '\'')) {
+                i = skip_string(i);
+                urls.push(chars[start + 1..i - 1].iter().collect());
+            } else {
+                while i < chars.len() && chars[i] != ')' && !chars[i].is_whitespace() {
+                    i += 1;
+                }
+                urls.push(chars[start..i].iter().collect());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    urls
+}
+
+/// The asset path `url` in the stylesheet at asset path `css` refers to
+/// (relative to the `.css`, `/…` from the asset root), or why it can't be one.
+fn resolve_url(css: &str, url: &str) -> Result<String, String> {
+    if url.contains("://") || url.starts_with("data:") {
+        return Err("not an asset path".to_owned());
+    }
+    let (base, url) = match url.strip_prefix('/') {
+        Some(rooted) => ("", rooted),
+        None => (css.rsplit_once('/').map_or("", |(dir, _)| dir), url),
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for component in Path::new(base).join(url).components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_str().unwrap().to_owned()),
+            Component::ParentDir => {
+                parts.pop().ok_or("leaves the asset root")?;
+            }
+            _ => {}
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+/// Problems with the stylesheet at asset path `css` (source `source`) under
+/// the asset root `root`: parse errors (lightningcss, as the `Stylesheet`
+/// loader parses) and `url()`s that don't resolve to a file.
+fn stylesheet_problems(root: &Path, css: &str, source: &str) -> Vec<String> {
+    use p23::lightningcss::stylesheet::{ParserOptions, StyleSheet};
+    let mut problems = Vec::new();
+    let options = ParserOptions {
+        filename: css.to_owned(),
+        ..ParserOptions::default()
+    };
+    if let Err(err) = StyleSheet::parse(source, options) {
+        problems.push(format!("{css}: {err}"));
+    }
+    for url in css_urls(source) {
+        match resolve_url(css, &url) {
+            Ok(path) if root.join(&path).is_file() => {}
+            Ok(path) => problems.push(format!("{css}: url({url:?}): no file {path}")),
+            Err(err) => problems.push(format!("{css}: url({url:?}): {err}")),
+        }
+    }
+    problems
+}
+
+#[test]
+fn css_url_scanner_finds_only_url_tokens() {
+    let css = r#"a { b: url(x.png); c: url( "y z.png" ) }
+        /* url(commented.png) */
+        d { content: "url(in-string.png)"; e: URL('q\'s.png') }
+        f { background: myurl(not.png); g: url(../up/r.png) }"#;
+    assert_eq!(
+        css_urls(css),
+        ["x.png", "y z.png", r"q\'s.png", "../up/r.png"]
+    );
+}
+
+#[test]
+fn stylesheet_check_reports_parse_errors_and_dangling_urls() {
+    let root = std::env::temp_dir().join(format!("p23-content-lint-css-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("ui/themes")).unwrap();
+    std::fs::write(root.join("ui/frame.png"), common::FRAME_PNG).unwrap();
+    std::fs::write(root.join("ui/themes/near.png"), common::FRAME_PNG).unwrap();
+
+    let ok = r#"html { border-image: url("../frame.png") 16 fill; }
+        p { border-image-source: url(near.png); }
+        h1 { border-image-source: url(/ui/frame.png); }"#;
+    assert_eq!(
+        stylesheet_problems(&root, "ui/themes/a.css", ok),
+        Vec::<String>::new()
+    );
+
+    let bad = r#"p { border-image-source: url("frame.png"); }
+        h1 { border-image-source: url(../../../outside.png); }
+        h2 { border-image-source: url(https://example.com/x.png); }
+        { not css"#;
+    let problems = stylesheet_problems(&root, "ui/themes/b.css", bad);
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(problems.len(), 4, "{problems:#?}");
+    assert!(
+        problems[0].starts_with("ui/themes/b.css: "),
+        "parse error: {}",
+        problems[0]
+    );
+    assert_eq!(
+        problems[1..],
+        [
+            r#"ui/themes/b.css: url("frame.png"): no file ui/themes/frame.png"#,
+            r#"ui/themes/b.css: url("../../../outside.png"): leaves the asset root"#,
+            r#"ui/themes/b.css: url("https://example.com/x.png"): not an asset path"#,
+        ]
+    );
+}
+
+#[test]
+fn every_stylesheet_parses_and_its_urls_resolve() {
+    let Some(assets) = assets("every_stylesheet_parses_and_its_urls_resolve") else {
+        return;
+    };
+    let sheets = content_files(&assets, "css");
+    assert!(!sheets.is_empty(), "no stylesheets under assets/");
+    let problems: Vec<String> = sheets
+        .iter()
+        .flat_map(|css| {
+            let source = std::fs::read_to_string(assets.join(css)).unwrap();
+            stylesheet_problems(&assets, css, &source)
+        })
+        .collect();
+    assert_no_problems("stylesheets", &problems);
+}
+
+// ---------------------------------------------------------------------------
+// 5. Pseudo-locale
+// ---------------------------------------------------------------------------
+
+/// Letter → accented look-alike (pseudo-localization).
+#[rustfmt::skip]
+const ACCENTS: [(char, char); 52] = [
+    ('a', 'à'), ('b', 'ƀ'), ('c', 'ç'), ('d', 'ð'), ('e', 'é'), ('f', 'ƒ'), ('g', 'ĝ'),
+    ('h', 'ĥ'), ('i', 'î'), ('j', 'ĵ'), ('k', 'ķ'), ('l', 'ļ'), ('m', 'ɱ'), ('n', 'ñ'),
+    ('o', 'ö'), ('p', 'þ'), ('q', 'ǫ'), ('r', 'ŕ'), ('s', 'š'), ('t', 'ţ'), ('u', 'û'),
+    ('v', 'ṽ'), ('w', 'ŵ'), ('x', 'ẋ'), ('y', 'ý'), ('z', 'ž'),
+    ('A', 'À'), ('B', 'Ɓ'), ('C', 'Ç'), ('D', 'Ð'), ('E', 'É'), ('F', 'Ƒ'), ('G', 'Ĝ'),
+    ('H', 'Ĥ'), ('I', 'Î'), ('J', 'Ĵ'), ('K', 'Ķ'), ('L', 'Ļ'), ('M', 'Ṁ'), ('N', 'Ñ'),
+    ('O', 'Ö'), ('P', 'Þ'), ('Q', 'Ǫ'), ('R', 'Ŕ'), ('S', 'Š'), ('T', 'Ţ'), ('U', 'Û'),
+    ('V', 'Ṽ'), ('W', 'Ŵ'), ('X', 'Ẋ'), ('Y', 'Ý'), ('Z', 'Ž'),
+];
+
+/// Pseudo-localized text: has a wrap marker or an accented letter.
+fn is_pseudo(text: &str) -> bool {
+    text.chars()
+        .any(|c| c == '[' || c == ']' || ACCENTS.iter().any(|&(_, accented)| accented == c))
+}
+
+/// Accents the letters of FTL text outside markup: tags (`<…>`, attributes
+/// included) and character references (`&lt;`, `&#42;`) stay as written.
+/// `in_tag` carries the state across a pattern's elements (a placeable can
+/// sit inside a tag). Returns the text and its letter count.
+fn accent(text: &str, in_tag: &mut bool) -> (String, usize) {
+    let mut out = String::with_capacity(text.len() * 2);
+    let mut letters = 0;
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let reference = (c == '&' && !*in_tag)
+            .then(|| rest[1..].find(';').map(|end| &rest[..end + 2]))
+            .flatten()
+            .filter(|r| {
+                r.len() > 2
+                    && r[1..r.len() - 1]
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '#')
+            });
+        if let Some(reference) = reference {
+            out.push_str(reference);
+            rest = &rest[reference.len()..];
+            continue;
+        }
+        if *in_tag {
+            *in_tag = c != '>';
+            out.push(c);
+        } else if c == '<' {
+            *in_tag = true;
+            out.push(c);
+        } else {
+            letters += usize::from(c.is_alphabetic());
+            out.push(
+                ACCENTS
+                    .iter()
+                    .find(|&&(plain, _)| plain == c)
+                    .map_or(c, |&(_, a)| a),
+            );
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    (out, letters)
+}
+
+/// Accents every text element of `pattern` (select variants included; keys,
+/// selectors and literals untouched). Returns the letter count of the
+/// longest variant path.
+fn accent_pattern(pattern: &mut ast::Pattern<String>, in_tag: &mut bool) -> usize {
+    let mut letters = 0;
+    for element in &mut pattern.elements {
+        match element {
+            ast::PatternElement::TextElement { value } => {
+                let (text, count) = accent(value, in_tag);
+                *value = text;
+                letters += count;
+            }
+            ast::PatternElement::Placeable { expression } => {
+                letters += accent_expression(expression, in_tag);
+            }
+        }
+    }
+    letters
+}
+
+fn accent_expression(expression: &mut ast::Expression<String>, in_tag: &mut bool) -> usize {
+    match expression {
+        ast::Expression::Select { variants, .. } => variants
+            .iter_mut()
+            .map(|variant| accent_pattern(&mut variant.value, &mut in_tag.clone()))
+            .max()
+            .unwrap_or(0),
+        ast::Expression::Inline(ast::InlineExpression::Placeable { expression }) => {
+            accent_expression(expression, in_tag)
+        }
+        ast::Expression::Inline(_) => 0,
+    }
+}
+
+/// Accents `pattern`, pads it by 30% of its letters with `~`, and wraps it
+/// in `[`…`]`. The markers are string-literal placeables: a text `[` at the
+/// start of a line would read as a variant key.
+fn pseudo_pattern(pattern: &mut ast::Pattern<String>) {
+    let letters = accent_pattern(pattern, &mut false);
+    let literal = |value: String| ast::PatternElement::Placeable {
+        expression: ast::Expression::Inline(ast::InlineExpression::StringLiteral { value }),
+    };
+    let padding = "~".repeat((letters * 3).div_ceil(10));
+    pattern.elements.insert(0, literal("[".to_owned()));
+    pattern.elements.push(literal(format!("{padding}]")));
+}
+
+/// A pseudo-localized copy of FTL `source`: message values and attributes
+/// accented, wrapped and lengthened; placeables, markup and character
+/// references intact. Term values are accented but not wrapped (they show
+/// inside messages); term attributes stay as written (selectors match them).
+fn pseudo_localize(source: &str) -> String {
+    let mut resource = fluent_syntax::parser::parse(source.to_owned())
+        .unwrap_or_else(|(_, errors)| panic!("FTL doesn't parse: {errors:?}"));
+    for entry in &mut resource.body {
+        match entry {
+            ast::Entry::Message(message) => {
+                message.value.iter_mut().for_each(pseudo_pattern);
+                for attribute in &mut message.attributes {
+                    pseudo_pattern(&mut attribute.value);
+                }
+            }
+            ast::Entry::Term(term) => {
+                accent_pattern(&mut term.value, &mut false);
+            }
+            _ => {}
+        }
+    }
+    let pseudo = fluent_syntax::serializer::serialize(&resource);
+    if let Err((_, errors)) = fluent_syntax::parser::parse(pseudo.as_str()) {
+        panic!("pseudo FTL doesn't parse: {errors:?}\n{pseudo}");
+    }
+    pseudo
+}
+
+#[test]
+fn accent_keeps_markup_and_character_references() {
+    let (text, letters) = accent(
+        r#"Plain <b class="x">bold</b> &lt;hi&gt; &amp; &#42; & done"#,
+        &mut false,
+    );
+    assert_eq!(
+        text,
+        r#"Þļàîñ <b class="x">ƀöļð</b> &lt;ĥî&gt; &amp; &#42; & ðöñé"#
+    );
+    assert_eq!(letters, 15);
+    // A tag split by a placeable (`<a title="{ $t }">`) stays a tag.
+    let mut in_tag = false;
+    assert_eq!(accent(r#"<a title=""#, &mut in_tag).0, r#"<a title=""#);
+    assert_eq!(
+        accent(r#"" class="link">go</a>"#, &mut in_tag).0,
+        r#"" class="link">ĝö</a>"#
+    );
+}
+
+#[test]
+fn pseudo_locale_keeps_placeables_markup_and_selectors() {
+    use fluent::{FluentArgs, FluentBundle, FluentResource};
+
+    let source = r#"greeting = Welcome back, { $name }!
+    .title = Hi
+count =
+    { $n ->
+        [one] One { $item }
+       *[other] { $n } items
+    }
+code = fn main() {"{"} <b>42</b> {"}"}
+notes =
+    First line
+    second line.
+-brand = Acme
+    .gender = neuter
+uses-brand =
+    { -brand.gender ->
+        [neuter] { -brand } rocks
+       *[other] nope
+    }
+"#;
+    let pseudo = pseudo_localize(source);
+    // Same messages and attributes as the source.
+    let (original, localized) = (
+        catalog(&[ftl("en", source)]),
+        catalog(&[ftl("xa", &pseudo)]),
+    );
+    assert_eq!(original.messages, localized.messages);
+
+    let mut bundle = FluentBundle::new(vec!["en-US".parse().unwrap()]);
+    bundle.set_use_isolating(false);
+    bundle
+        .add_resource(FluentResource::try_new(pseudo).unwrap())
+        .unwrap();
+    let format = |id: &str, attribute: Option<&str>, args: &[(&str, fluent::FluentValue)]| {
+        let message = bundle.get_message(id).unwrap();
+        let pattern = match attribute {
+            Some(name) => message.get_attribute(name).unwrap().value(),
+            None => message.value().unwrap(),
+        };
+        let args = FluentArgs::from_iter(args.iter().cloned());
+        let mut errors = Vec::new();
+        let text = bundle
+            .format_pattern(pattern, Some(&args), &mut errors)
+            .into_owned();
+        assert!(errors.is_empty(), "{id}: {errors:?}");
+        text
+    };
+    // Letters: "Welcome back" = 11 → ⌈3.3⌉ = 4 `~`.
+    assert_eq!(
+        format("greeting", None, &[("name", "Ada".into())]),
+        "[Ŵéļçöɱé ƀàçķ, Ada!~~~~]"
+    );
+    assert_eq!(format("greeting", Some("title"), &[]), "[Ĥî~]");
+    // Longest variant " items" = 5 → 2 `~`; `[one]` still selects.
+    let one = [("n", 1.into()), ("item", "key".into())];
+    assert_eq!(format("count", None, &one), "[Öñé key~~]");
+    assert_eq!(format("count", None, &[("n", 3.into())]), "[3 îţéɱš~~]");
+    assert_eq!(format("code", None, &[]), "[ƒñ ɱàîñ() { <b>42</b> }~~]");
+    // 19 letters → 6 `~`; the `[` placeable starts an indented line.
+    assert_eq!(
+        format("notes", None, &[]),
+        "[Ƒîŕšţ ļîñé\nšéçöñð ļîñé.~~~~~~]"
+    );
+    // Term value accented, its `.gender` still matches `[neuter]`.
+    assert_eq!(format("uses-brand", None, &[]), "[Àçɱé ŕöçķš~~]");
+}
+
+#[test]
+fn pseudo_locale_shows_every_string_translated() {
+    let Some(assets) = assets("pseudo_locale_shows_every_string_translated") else {
+        return;
+    };
+    let mut problems = Vec::new();
+    'pages: for page in PAGES.iter().filter(|page| page.unlocalized.is_none()) {
+        // The pseudo bundle: en-US's resources, pseudo-localized, as en-XA.
+        let reference_dir = assets.join(page.locales).join(REFERENCE_LOCALE);
+        let (files, read_problems) = read_bundle(&assets, &reference_dir);
+        assert_no_problems("en-US bundle", &read_problems);
+        let pseudo_dir = format!("{}/en-XA", page.locales);
+        let mut extra = Vec::new();
+        let mut resources = Vec::new();
+        let reference_prefix = format!("{}/{REFERENCE_LOCALE}/", page.locales);
+        for (path, source) in &files {
+            let resource = path.strip_prefix(&reference_prefix).unwrap();
+            extra.push((format!("{pseudo_dir}/{resource}"), pseudo_localize(source)));
+            resources.push(format!("{resource:?}"));
+        }
+        let manifest = format!("(locale: \"en-XA\", resources: [{}])", resources.join(", "));
+        extra.push((format!("{pseudo_dir}/main.ftl.ron"), manifest));
+
+        let contexts = (page.contexts)();
+        let data = data_strings(&contexts);
+        for (index, context) in contexts.iter().enumerate() {
+            let bundle = format!("{pseudo_dir}/main.ftl.ron");
+            let mut ui = match render(&assets, page, context, page.stylesheets[0], &bundle, &extra)
+            {
+                Ok(ui) => ui,
+                Err(err) => {
+                    problems.push(format!("{}: {err}", page.template));
+                    continue 'pages;
+                }
+            };
+            let runs = text_runs(&mut ui);
+            assert!(
+                runs.iter().any(|run| is_pseudo(run)),
+                "{}: pseudo bundle not applied: {runs:?}",
+                page.template
+            );
+            for run in runs {
+                if !is_pseudo(&run) && needs_translation(&run, &data) {
+                    problems.push(format!("{} (context {index}): {run:?}", page.template));
+                }
+            }
+        }
+    }
+    assert_no_problems("untranslated text runs under the pseudo-locale", &problems);
+}

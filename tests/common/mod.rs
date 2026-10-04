@@ -343,6 +343,45 @@ impl TestUi {
             "\n--- actual ---\n{actual}\n--- expected ---\n{expected}"
         );
     }
+
+    /// Adds `contents` at `path` in the asset root — binary-safe, for files
+    /// [`new`](Self::new) can't take as `&str` (images). Call before anything
+    /// loads `path`.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn with_file(self, path: &str, contents: &[u8]) -> Self {
+        let path = self.dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+        self
+    }
+
+    /// [`settle`](Self::settle) for a change that legitimately rebuilds
+    /// nothing (e.g. swapping `DefaultStylesheet` under an entity with its
+    /// own `HtmlStylesheet`): updates until every tracked asset is loaded
+    /// (or failed) and the build count stayed put for a few frames. A
+    /// rebuild is allowed but not required; either way it counts as seen.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn settle_quiet(&mut self) -> &mut Self {
+        let mut stable = 0;
+        let mut last_builds = usize::MAX;
+        for _ in 0..3000 {
+            self.app.update();
+            let server = self.app.world().resource::<AssetServer>();
+            let loaded = self.tracked.iter().all(|handle| {
+                server.is_loaded_with_dependencies(handle.id())
+                    || server.load_state(handle.id()).is_failed()
+            });
+            let builds = self.app.world().resource::<Builds>().0;
+            stable = if loaded && builds == last_builds { stable + 1 } else { 0 };
+            if stable >= 5 {
+                self.builds_seen = builds;
+                return self;
+            }
+            last_builds = builds;
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("UI never settled (assets loading or builds churning); dump:\n{}", self.dump());
+    }
 }
 
 impl Drop for TestUi {

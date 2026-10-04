@@ -59,19 +59,33 @@ examples/
                    scroll.rs, selector.rs, locale_panel.rs, theme_panel.rs, consts.rs
 tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
-  properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips, …)
-  quickcheck.rs    quickcheck structured-input properties (cascade vs reference model, text round trip)
-  arbtest.rs       arbtest robustness properties: arbitrary HTML/CSS/Fluent/args bytes through the pipeline
-  stateful.rs      proptest-stateful machine: random op sequences (theme/locale/context/outline) vs a reference model
+  properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips,
+                   selector lists/formatting/duplicates, color notations, relative font sizes, 9-slice manifests)
+  quickcheck.rs    quickcheck structured-input properties (cascade vs reference models — single rule winner and
+                   selector lists × per-declaration importance × several elements — and text round trip)
+  arbtest.rs       arbtest: arbitrary bytes through the pipeline (robustness) + structure-aware random documents
+                   vs an HTML model (node tree, collapsed text, HtmlElements order)
+  stateful.rs      proptest-stateful machine: random op sequences (default theme, own HtmlStylesheet set/remove,
+                   locale, context, outline toggle, FontFamilies swap) vs a reference model
+  layout_properties.rs  flexbox invariants on real headless layout (row-reverse mirror, auto margins,
+                   grow shares, space-between, wrap without overlap)
+  content_lint.rs  lint tests over the real assets/ content (skipped without assets/): locale parity,
+                   templates render (+ every data-l10n-id resolves), no hard-coded text, CSS url()s, pseudo-locale
+  golden.rs        golden images (#[ignore]d): tests/golden/<scene>/ rendered offscreen by real Bevy,
+                   compared with expected.png within a tolerance (see Testing)
   common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump; with_layout = Bevy UI layout)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (CSS oracle output);
                    Fluent vectors add messages.ftl + fluent.html (Fluent oracle output);
                    layout_* vectors also get rects in browser.json (layout oracle)
+  golden/<scene>/  page.html, style.css, [messages.ftl], expected.png (text, frame, l10n)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
   fluent_oracle.sh   @fluent/dom in jsdom → tests/vectors/*/fluent.html (Node + npm;
                      pinned packages in fluent-oracle/, node_modules gitignored)
+  mutants.sh         mutation testing (cargo-mutants) with cache parking; see Testing TODO 6
+  golden.sh          golden-image test on Mesa lavapipe (`--update` rewrites references; fetches
+                     Arch's vulkan-swrast into target/golden-lavapipe/ if no lavapipe ICD)
   fuzz-<driver>.sh   run one fuzzer over one target:
                      `scripts/fuzz-{libfuzzer,honggfuzz,fuzzcheck,test-fuzz}.sh
                      <html|css|ftl> [seconds=60]` (details in each script's
@@ -187,8 +201,16 @@ assets/            (gitignored — see Gotchas)
   font matching), `font-style`; blocks:
   `background-color`. `html` is the
   starting point even without `<html>`; nothing declared → white, Bevy's
-  default font, 16px. Missing font faces fall back bold-italic → bold →
-  italic → regular.
+  default font, 16px. Missing font faces fall back as CSS font matching does
+  (style before weight): bold-italic → italic → bold → regular.
+- Layout properties (`LayoutDecl` in `cascade.rs`, applied by
+  `LayoutDecl::apply_to` in `build.rs` over p23's defaults): `display`
+  (`none`/`block`/`flex`), `flex-*`, `justify-content`, `align-*`, sizes
+  (px/%/vw…/auto), margins (px/%/auto, over `li`'s 12px indent), `gap` both
+  axes, `box-sizing` — on containers and on a block's outer node (the text
+  node, or its box wrapper). Containers stay flex columns unless
+  `flex-direction`/`display: block` says otherwise; blocks and containers
+  keep `flex_shrink: 0`; nodes default to `BoxSizing::ContentBox`.
 - Box properties (`cascade.rs` → `build.rs`): `border-image` (shorthand +
   `-source`/`-slice`/`-repeat`), `border-width`, `padding` (absolute lengths)
   on blocks, containers and the `html` rule; `background-color` on blocks and
@@ -246,6 +268,31 @@ assets/            (gitignored — see Gotchas)
 - Headless apps: `ImagePlugin` only pre-registers its loader; `bevy_render`
   registers the real one. Without rendering, register
   `ImageLoader::new(CompressedImageFormats::empty())` yourself.
+- Bevy's `Query::iter_descendants` is breadth-first; use `iter_descendants_depth_first` for document order (`HtmlElements`).
+- HTML white-space collapsing covers ASCII whitespace only (space, `\t`, `\n`, `\f`, `\r`); `char::is_whitespace` would also eat NBSP/U+3000.
+- Tests: `TestUi::settle()` demands a new build; for a change that legitimately rebuilds nothing (e.g. a `DefaultStylesheet` swap under a ready own `HtmlStylesheet`) use `settle_quiet()`.
+- CLDR plural operand `n` is the absolute value: English `-1` selects `one`.
+- Offscreen rendering (`tests/golden.rs`): pipelines compile asynchronously and
+  a draw whose pipeline isn't ready is silently skipped; wait until the render
+  world's `PipelineCache::waiting_pipelines()` is empty (disable
+  `PipelinedRenderingPlugin` to inspect it inside `app.update()`). Without
+  `App::run`, poll `plugins_state()`, then `finish()` and `cleanup()`.
+- wgpu's GL backend isn't usable for software rendering (Bevy 0.19 doesn't
+  enable wgpu `gles`; llvmpipe GL can't compile some of Bevy's GLSL): use
+  lavapipe (Vulkan).
+- `rustfmt tests/<file>.rs` also formats `tests/common/mod.rs` (it follows
+  `mod common;`), whose code isn't rustfmt-formatted; use
+  `--config skip_children=true`, or don't format.
+- `TestUi::settle` never returns for a stylesheet whose `url()` image is
+  missing (the sheet loads, its dependency fails); check sheets first (as
+  `content_lint` does).
+- A pseudo-locale opening marker must not be a text `[` at the start of a
+  line (FTL reads a variant key); use a string-literal placeable `{"["}`.
+- Bevy/taffy size the border box by default; p23 nodes set
+  `BoxSizing::ContentBox` (CSS initial); `box-sizing` overrides.
+- `cargo mutants` copies the source tree and ignores nested `.gitignore`s:
+  park the fuzz drivers' `target/`/corpus dirs first and point `TMPDIR` at
+  a disk with room (each job builds its own target dir).
 - Headless UI layout (no window, no renderer, verified in `tests/common`):
   `UiPlugin` sizes roots from their camera's `computed.target_info`, which
   bevy_render's `camera_system` would fill — set it by hand on a camera with
@@ -325,6 +372,44 @@ fuzzers/property harnesses below) are filed in `docs/agents/bugs/` — see
   (mixed inline content in a container, mixed font sizes on one line,
   `border-image` wrapper block, root border, nested containers). Both agree
   with Chromium to the pixel.
+- **Unit tests** (`cargo test --lib`; `--features fuzzing` adds `src/fuzz.rs`):
+  besides the cascade tests, `template.rs` (entity decoding: five escapes,
+  one level only, others untouched; Tera-autoescape round trip proptest),
+  `l10n.rs` (escape/decode identity, `data-l10n-args` typing: numbers stay
+  numbers for CLDR plurals, bools → strings, bad JSON → error naming the
+  message; only FSI/PDI stripped), `fonts.rs` (face fallback chain
+  exhaustively, `resolve` list order / case / generics), `nine_slice.rs`
+  (manifest defaults and errors), `html.rs` (`HtmlElements` document order),
+  `fuzz.rs` (style cache transparency proptest).
+- **Layout properties** (`tests/layout_properties.rs`): flexbox invariants over
+  generated sizes on real headless layout, 1px tolerance: `row-reverse` mirrors
+  `row`, `margin: auto` centers, zero-basis `flex-grow` splits by factor,
+  `space-between` spreads evenly, wrapped items stay inside without overlap.
+- **Content lint** (`tests/content_lint.rs`): checks the real `assets/`
+  content; without `assets/` (gitignored) each content test prints a skip note
+  and passes (checker unit tests always run). `PAGES` lists every template with
+  the examples' context, stylesheets, bundle family and an optional
+  `unlocalized` reason (`every_template_is_listed` keeps it complete). Checks:
+  locale message/attribute parity with en-US; templates render for every
+  context × stylesheet and every `data-l10n-id` resolves in every locale; no
+  visible text outside `data-l10n-id` that keeps letters once context strings
+  are removed; CSS parses and `url()`s name files; a generated `en-XA`
+  pseudo-locale leaves no untranslated text run. New template → add to `PAGES`.
+- **Golden images** (`tests/golden.rs`, `scripts/golden.sh`; `#[ignore]`d,
+  so plain `cargo test` never needs a GPU): scenes in `tests/golden/<scene>/`
+  (`text`: sizes, colors, wrapping, inline runs, background, `pre`; `frame`:
+  root/container/block `border-image` stretch/round/% slices; `l10n`: Fluent
+  markup, plurals, fallback) are rendered by full Bevy without a window
+  (DefaultPlugins minus winit/audio/gilrs/pipelined rendering) into a
+  `RenderTarget::Image`, captured with `Screenshot::image` and compared with
+  `expected.png`. Committed inputs only (default font, `frame.png`). The
+  script pins Mesa lavapipe via `VK_DRIVER_FILES` (an installed
+  `lvp_icd*.json`, else Arch's `vulkan-swrast` matching `pacman -Q mesa`,
+  fetched once into `target/golden-lavapipe/`, no root): bit-identical run to
+  run. Tolerance: a pixel differs above channel delta 8; a scene fails above
+  0.05% differing pixels (NVIDIA ≤5, RADV ≤1 delta vs lavapipe; one changed
+  letter is ~0.1%). `scripts/golden.sh --update` rewrites references;
+  mismatches write `target/tmp/golden/<scene>.{actual,diff}.png`.
 - **Fluent oracle** (`fluent_oracle` test): every `tests/vectors/*/` with a
   `fluent.html` must build the same dump localized by p23 (`page.html` +
   `messages.ftl` as the en-US bundle, via `TestUi::from_vector`) as
@@ -392,21 +477,30 @@ known gaps:
     Note: quickcheck 1.1's `Gen` RNG is private (edition-2024 `gen` keyword) —
     build `Arbitrary` impls from `T::arbitrary(g)` + `g.choose`;
     the `#[quickcheck]` attribute comes from `quickcheck_macros`.
+  - [x] More metamorphic/model properties: selector list ≡ expanded rules ≡
+    commented/duplicated sheet; color notations (`#rgb`/hex/`rgb()`/named);
+    em/%/rem bases; 9-slice manifest sides; quickcheck selector lists with
+    per-declaration `!important` over several elements; stateful ops for
+    per-entity `HtmlStylesheet` set/remove and `FontFamilies` swaps. The
+    stateful ops found three rebuild bugs (override removal never rebuilt; a
+    failed override ignored default swaps; a re-requested failed sheet's
+    one-frame `Loading` ate the swap signal).
   - [ ] Shrink quality: stateful ops shrink only by removal; proptest value
     shrinking inside an op isn't supported by the framework.
 - [x] **3. Headless layout checks** (fixes weakness 3, mostly): Bevy UI
   layout runs headlessly (`TestUi::with_layout`); `layout_column_stacking`
   (hand-derived) and `layout_oracle` (Chromium rects) over `layout_*`
   vectors. See Testing.
-  - [ ] Extend the layout vectors and `P23_CSS` with each CSS layout property
-    p23 gains (next step 1: flex layout, sizes, margins).
-- [ ] **4. Lint tests over real content** (content bugs, the ones you'll hit):
-  - every locale defines the same message ids
-  - every visible text node in a template sits under a `data-l10n-id`
-  - every template compiles with representative data
-  - every CSS file parses; every `url()` resolves to an existing file
-  - a pseudo-locale (e.g. `[Ĩñvéñtöŕý~~~]`, longer and accented) exposing
-    untranslated strings and overflow in the UI
+  - [x] Flex layout, sizes, margins, `box-sizing`: vectors `layout_flex`,
+    `layout_sizes` (match Chromium to the pixel); `P23_CSS` models p23's
+    `flex-shrink: 0`; `tests/layout_properties.rs` checks flexbox invariants.
+    The oracle found Bevy's border-box default (p23 now uses content-box).
+- [x] **4. Lint tests over real content** (`tests/content_lint.rs`, see
+  Testing): locale parity, templates render with the examples' data and every
+  `data-l10n-id` resolves, no hard-coded text, CSS `url()`s, pseudo-locale run.
+  No content bugs found; each check spot-checked by breaking the content.
+  - [ ] Overflow: lay out the pseudo-locale (`TestUi::with_layout`) against a
+    size budget per panel.
 - [x] **5. Fuzzing** (robustness). Four drivers over the same
   `#[doc(hidden)]` `p23::fuzz` harness (feature `fuzzing`), which calls the
   internal glue directly — a full Bevy app is far too slow per exec.
@@ -456,53 +550,32 @@ known gaps:
   - [x] The arbtest harness (`tests/arbtest.rs`) covers the pipeline end to
     end with arbitrary bytes; its first run found the failed-stylesheet hang
     (fixed in `build.rs`, see Gotchas).
-  - [ ] Structure-aware generation (proptest strategies or `arbitrary`
-    grammars for CSS/FTL/HTML) to get past the parsers more often.
-- [ ] **6. Mutation testing** (measures vector strength). `cargo-mutants`
-  mutates the code and reports mutations no test catches. Run occasionally;
-  each survivor is a missing vector or dump field.
-- [ ] **7. Golden images, sparingly** (fixes the rest of weakness 3, and
-  weakness 4). Render two or three reference scenes with a software adapter
-  (Mesa lavapipe/llvmpipe with wgpu) and compare screenshots within a
-  tolerance — the only layer that sees real fonts, wrapping, 9-slice drawing
-  and CJK fallback. Brittle across drivers and font versions: a smoke check,
-  not a spec.
-
-## Bug reports
-
-Bugs found by the automated testing above — or by any other means — are
-filed in `docs/agents/bugs/` as `bug_NNNN.md`, numbered sequentially in
-discovery order, with an `INDEX.md` title/metadata page linking all reports.
-File one for every real defect a fuzzer, property test, vector, or manual
-investigation uncovers, *at minimum when the fix lands* (don't let the
-analysis live only in commit messages or chat logs).
-
-Per-bug file, whatever is known and useful:
-
-- **Status** (open / fixed / upstream-unfixed) and **severity**; reachable
-  from user data = high, even if only panics.
-- **Component** and **symptoms** (the observable misbehavior, not the cause).
-- **Discovery**: which tool/target found it (fuzz target, stateful op
-  sequence, seed, minimizing commit), the repository commit at discovery, the
-  agent/model, and the date.
-- **Minimal reproduction** — a minimized input or op sequence, not the raw
-  fuzzer artifact.
-- **Root cause**, the **fix** (with commit), and the **regression test** that
-  now guards it; upstream bugs note the affected/pinned versions and where
-  the local patch (`[patch.crates-io]` + `vendor/`) is wired.
-
-`INDEX.md` carries the shared metadata: date range, machine, OS/kernel,
-toolchain and dependency versions, and the discovery agent. Keep it current
-when new bugs are added; see the existing entries (bug_0001–bug_0005) as
-templates.
+  - [x] Structure-aware generation, HTML: `generated_documents_build_the_html_model`
+    (arbtest) builds random well-formed documents and compares the built
+    tree with an HTML model. Found `HtmlElements` iterating breadth-first
+    (fixed: depth-first), and Unicode-whitespace collapsing of NBSP/U+3000
+    (fixed: ASCII whitespace only). CSS/FTL grammars remain open.
+- [ ] **6. Mutation testing** (measures vector strength): `scripts/mutants.sh`
+  (`--full` adds the property suites; `--file src/x.rs` narrows). Slow (each
+  mutant relinks Bevy test binaries: ~1 h default, ~4 h `--full`): run
+  occasionally in the background; results in `target/mutants.out/`, reruns
+  skip caught mutants (`--iterate`). The script parks the fuzz caches
+  (cargo-mutants copies the tree, ignoring nested `.gitignore`s) and restores
+  them on exit. A first partial run (29 of 396) found survivors only in
+  `build_html_ui`'s reload/failure paths and `BoxStyle::is_empty`
+  (`&&`→`||`, and `!=`→`==` at the reload-event filter): triage them when a
+  full run completes — add a test or note why the mutant is equivalent.
+- [x] **7. Golden images, sparingly** (fixes the rest of weakness 3 and part of weakness 4: real font rasterization, wrapping and 9-slice drawing; CJK fallback is still untested, since only committed fonts are used). `tests/golden.rs` + `scripts/golden.sh` on Mesa lavapipe; three scenes (`text`, `frame`, `l10n`); see Testing. Brittle across drivers and font versions: a smoke check, not a spec.
+  - [ ] A CJK/fallback scene would need a committed CJK font (or `system_fonts`, which isn't reproducible).
 
 ## Limits and next steps
 
 Known limits (each skipped/ignored value is logged at `debug`):
 
-- **Layout:** containers are always vertical columns; no `display`,
-  `flex-direction`, `width`/`height`, `margin`, alignment, `position`. Text
-  blocks and containers only stack. The `HtmlUi` node's default `Node` is a
+- **Layout:** flex layout, sizes, margins and `box-sizing` work on blocks and
+  containers (see the CSS subset), not on the `html` rule (the `HtmlUi` node's
+  `Node` stays the app's); no `position`, grid, `order`, `gap` in `%`, or
+  font-relative lengths (`em`/`rem`) for layout. The `HtmlUi` node's default `Node` is a
   flex *row*, so apps must set `flex_direction: Column` themselves (as the
   guide's example does), or blocks sit side by side.
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
@@ -513,7 +586,7 @@ Known limits (each skipped/ignored value is logged at `debug`):
 - **Properties:** no `text-align`, `line-height`, `letter-spacing`,
   `text-decoration`, `opacity`, `border-radius`, `border-color`/solid
   borders, `overflow`. Lengths: px/em/rem/% for `font-size`, absolute only
-  for box properties.
+  for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins.
 - **border-image:** center always drawn, `-width`/`-outset` ignored, one
   repeat mode for all sides (Bevy `TextureSlicer` limits).
 - **Inline:** no inline boxes — `background`, borders, frames and padding on
@@ -537,8 +610,7 @@ Known limits (each skipped/ignored value is logged at `debug`):
 
 Next steps (roughly in order of value):
 
-1. Flex layout from CSS: `display: flex`, `flex-direction`, `justify-content`,
-   `align-items`, `width`/`height`/`min-`/`max-`, `margin` → `Node`.
+1. ~~Flex layout from CSS~~ (done: flex, sizes, margins, `box-sizing`).
 2. Descendant/child combinators (`.panel p`, `.panel > p`) — needs the
    ancestor chain during matching; specificity sums.
 3. `:hover` / `:active` via `Interaction` or picking, re-styling without a full

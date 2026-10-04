@@ -32,8 +32,8 @@ pub enum GenericFamily {
     SystemUi,
 }
 
-/// The faces of one family. Missing faces fall back: bold-italic → bold →
-/// italic → regular.
+/// The faces of one family. Missing faces fall back as CSS font matching
+/// does (style narrows before weight): bold-italic → italic → bold → regular.
 #[derive(Clone, Debug)]
 pub struct FontFaces {
     pub regular: Handle<Font>,
@@ -70,11 +70,13 @@ impl FontFaces {
     /// The face for this weight/style, with fallbacks.
     pub fn face(&self, bold: bool, italic: bool) -> Handle<Font> {
         let pick = match (bold, italic) {
+            // CSS font matching: an italic face (bold synthesized) beats an
+            // upright bold one.
             (true, true) => self
                 .bold_italic
                 .as_ref()
-                .or(self.bold.as_ref())
-                .or(self.italic.as_ref()),
+                .or(self.italic.as_ref())
+                .or(self.bold.as_ref()),
             (true, false) => self.bold.as_ref(),
             (false, true) => self.italic.as_ref(),
             (false, false) => None,
@@ -136,4 +138,106 @@ impl FontFamilies {
 pub(crate) enum FamilyRef {
     Named(String),
     Generic(GenericFamily),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::asset::uuid::Uuid;
+
+    fn font(id: u128) -> Handle<Font> {
+        Handle::Uuid(Uuid::from_u128(id), std::marker::PhantomData)
+    }
+
+    fn named(name: &str) -> FamilyRef {
+        FamilyRef::Named(name.to_owned())
+    }
+
+    /// Every combination of present faces × requested weight/style follows
+    /// the documented fallback (bold-italic → italic → bold → regular; bold
+    /// or italic alone → regular), and a present exact face always wins.
+    /// Catches a wrong arm (e.g. italic requests getting the bold face).
+    #[test]
+    fn face_fallback_chain() {
+        let (regular, bold, italic, bold_italic) = (font(1), font(2), font(3), font(4));
+        for mask in 0..8u8 {
+            let mut faces = FontFaces::new(regular.clone());
+            let has = |bit: u8| mask & bit != 0;
+            if has(1) {
+                faces = faces.with_bold(bold.clone());
+            }
+            if has(2) {
+                faces = faces.with_italic(italic.clone());
+            }
+            if has(4) {
+                faces = faces.with_bold_italic(bold_italic.clone());
+            }
+            let pick = |chain: &[(u8, &Handle<Font>)]| {
+                chain
+                    .iter()
+                    .find(|(bit, _)| has(*bit))
+                    .map_or(regular.clone(), |(_, face)| (*face).clone())
+            };
+            let expected = [
+                ((false, false), regular.clone()),
+                ((true, false), pick(&[(1, &bold)])),
+                ((false, true), pick(&[(2, &italic)])),
+                ((true, true), pick(&[(4, &bold_italic), (2, &italic), (1, &bold)])),
+            ];
+            for ((b, i), face) in expected {
+                assert_eq!(faces.face(b, i), face, "faces mask {mask:03b}, bold {b}, italic {i}");
+            }
+        }
+    }
+
+    fn families() -> FontFamilies {
+        let mut families = FontFamilies::default();
+        families
+            .insert("Spectral", FontFaces::new(font(1)))
+            .insert("Iosevka Slab", FontFaces::new(font(2)))
+            .set_generic(GenericFamily::Monospace, "iosevka slab")
+            // Mapped to a name that was never registered.
+            .set_generic(GenericFamily::Serif, "Missing");
+        families
+    }
+
+    /// The *list* order decides, not registration order; names match ASCII
+    /// case-insensitively (CSS family names are case-insensitive).
+    #[test]
+    fn first_registered_name_in_list_wins() {
+        let families = families();
+        let spectral = families.resolve(&[named("spectral")]);
+        let iosevka = families.resolve(&[named("IOSEVKA SLAB")]);
+        assert!(spectral.is_some() && iosevka.is_some() && spectral != iosevka);
+        assert_eq!(families.resolve(&[named("Iosevka Slab"), named("Spectral")]), iosevka);
+        assert_eq!(families.resolve(&[named("Nope"), named("Spectral")]), spectral);
+        assert_eq!(families.faces(spectral.unwrap()).unwrap().regular, font(1));
+    }
+
+    /// Unregistered names, unmapped generics and generics mapped to
+    /// unregistered names are skipped, and a list with nothing registered
+    /// resolves to `None` (Bevy's default font), not the first entry.
+    #[test]
+    fn unresolvable_entries_are_skipped() {
+        let families = families();
+        let iosevka = families.resolve(&[named("Iosevka Slab")]);
+        let serif = FamilyRef::Generic(GenericFamily::Serif);
+        let cursive = FamilyRef::Generic(GenericFamily::Cursive);
+        let mono = FamilyRef::Generic(GenericFamily::Monospace);
+        assert_eq!(families.resolve(&[serif.clone(), cursive.clone(), mono]), iosevka);
+        assert_eq!(families.resolve(&[named("Nope"), serif, cursive]), None);
+        assert_eq!(families.resolve(&[]), None);
+    }
+
+    /// Re-registering a name (in any case) replaces its faces in place:
+    /// no duplicate entry shadows it, and other families keep resolving.
+    #[test]
+    fn insert_replaces_case_insensitively() {
+        let mut families = families();
+        let before = families.resolve(&[named("Spectral")]);
+        families.insert("SPECTRAL", FontFaces::new(font(9)));
+        assert_eq!(families.resolve(&[named("Spectral")]), before);
+        assert_eq!(families.get("spectral").unwrap().regular, font(9));
+        assert_eq!(families.get("Iosevka Slab").unwrap().regular, font(2));
+    }
 }

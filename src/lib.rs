@@ -69,7 +69,8 @@
 //!   specificity; `color`, `font-family`, `font-size`,
 //!   `font-weight`, `font-style` (inherited); `border-image` (9-slice),
 //!   `border-width`, `padding`, `background-color` on blocks, containers and
-//!   the `HtmlUi` node (`html` rule, except background); `gap` on containers.
+//!   the `HtmlUi` node (`html` rule, except background); `gap` on containers;
+//!   flex layout, sizes, margins and `box-sizing` on blocks and containers.
 //! - **Fluent** ([`l10n`]): `data-l10n-id` / `data-l10n-args` /
 //!   `data-l10n-name` (fluent-dom convention) on any element; translations
 //!   may contain inline markup.

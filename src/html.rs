@@ -157,7 +157,7 @@ impl HtmlElements<'_, '_> {
     /// All element nodes below `root`, in document order.
     pub fn iter(&self, root: Entity) -> impl Iterator<Item = (Entity, &HtmlElement)> + '_ {
         self.children
-            .iter_descendants(root)
+            .iter_descendants_depth_first(root)
             .filter_map(|entity| Some((entity, self.elements.get(entity).ok()?)))
     }
 
@@ -215,5 +215,56 @@ pub(crate) fn render_templates(
                 RenderedHtml::Failed(message)
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn element(tag: &str, id: Option<&str>, classes: &[&str]) -> HtmlElement {
+        HtmlElement {
+            tag: tag.to_owned(),
+            id: id.map(str::to_owned),
+            classes: classes.iter().map(|c| (*c).to_owned()).collect(),
+        }
+    }
+
+    /// `iter`/`by_id`/`by_class`/`by_tag` walk the built tree in document
+    /// (depth-first pre-) order, skipping anonymous nodes. Bevy's plain
+    /// `iter_descendants` is breadth-first: with it, `by_id` returned a
+    /// later, shallower duplicate id instead of the first one in the
+    /// document, and `by_class` listed siblings before nested elements.
+    #[test]
+    fn lookups_follow_document_order() {
+        let mut world = World::new();
+        // <div.a><p#x.a>…</p></div> <anonymous text> <p#x.b> <section><p.a></section>
+        let root = world.spawn_empty().id();
+        let div = world.spawn((element("div", None, &["a"]), ChildOf(root))).id();
+        let nested = world.spawn((element("p", Some("x"), &["a"]), ChildOf(div))).id();
+        let anonymous = world.spawn(ChildOf(root)).id();
+        let shallow = world.spawn((element("p", Some("x"), &["b"]), ChildOf(root))).id();
+        let section = world.spawn((element("section", None, &[]), ChildOf(root))).id();
+        let deep = world.spawn((element("p", None, &["a"]), ChildOf(section))).id();
+        let elsewhere = world.spawn(element("p", Some("x"), &["a"])).id();
+
+        let found = world
+            .run_system_once(move |elements: HtmlElements| {
+                (
+                    elements.iter(root).map(|(entity, _)| entity).collect::<Vec<_>>(),
+                    elements.by_id(root, "x"),
+                    elements.by_class(root, "a").collect::<Vec<_>>(),
+                    elements.by_tag(root, "p").collect::<Vec<_>>(),
+                    elements.by_id(root, "missing"),
+                )
+            })
+            .unwrap();
+        assert_eq!(found.0, [div, nested, shallow, section, deep]);
+        assert_eq!(found.1, Some(nested));
+        assert_eq!(found.2, [div, nested, deep]);
+        assert_eq!(found.3, [nested, shallow, deep]);
+        assert_eq!(found.4, None);
+        assert!(!found.0.contains(&anonymous) && !found.0.contains(&elsewhere));
     }
 }

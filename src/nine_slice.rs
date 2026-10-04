@@ -161,3 +161,61 @@ pub(crate) fn apply_nine_slices(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(ron: &str) -> Result<NineSliceDescriptor, ron::error::SpannedError> {
+        ron::de::from_str(ron)
+    }
+
+    /// The module docs' example parses, with each side read from its own
+    /// field and `Tile(x)` carrying its stretch value.
+    #[test]
+    fn documented_example_parses() {
+        let desc = parse(
+            r#"(
+                image: "frame.png",
+                border: (left: 1, right: 2, top: 3, bottom: 4),
+                sides: Tile(1.5),
+                center: Stretch,
+                max_corner_scale: 2.0,
+            )"#,
+        )
+        .unwrap();
+        assert_eq!(desc.image, "frame.png");
+        let b = desc.border;
+        assert_eq!([b.left, b.right, b.top, b.bottom], [1.0, 2.0, 3.0, 4.0]);
+        assert!(matches!(SliceScaleMode::from(desc.sides), SliceScaleMode::Tile { stretch_value } if stretch_value == 1.5));
+        assert!(matches!(SliceScaleMode::from(desc.center), SliceScaleMode::Stretch));
+        assert_eq!(desc.max_corner_scale, 2.0);
+    }
+
+    /// Optional fields default to stretch sides/center and a corner scale
+    /// of 1 (corners at image size). Catches a `0.0` default (corners
+    /// collapse to nothing) or a `Tile` default.
+    #[test]
+    fn optional_fields_default() {
+        let desc = parse(r#"(image: "f.png", border: (left: 16, right: 16, top: 16, bottom: 16))"#).unwrap();
+        assert!(matches!(SliceScaleMode::from(desc.sides), SliceScaleMode::Stretch));
+        assert!(matches!(SliceScaleMode::from(desc.center), SliceScaleMode::Stretch));
+        assert_eq!(desc.max_corner_scale, 1.0);
+    }
+
+    /// Missing required fields, missing border sides and unknown scale
+    /// modes fail the load instead of silently drawing a wrong frame.
+    #[test]
+    fn invalid_manifests_are_errors() {
+        for ron in [
+            r#"(border: (left: 1, right: 1, top: 1, bottom: 1))"#,
+            r#"(image: "f.png")"#,
+            r#"(image: "f.png", border: (left: 1, right: 1, top: 1))"#,
+            r#"(image: "f.png", border: (left: 1, right: 1, top: 1, bottom: 1), sides: Repeat)"#,
+            r#"(image: "f.png", border: (left: 1, right: 1, top: 1, bottom: 1), sides: Tile)"#,
+            "",
+        ] {
+            assert!(parse(ron).is_err(), "{ron}");
+        }
+    }
+}

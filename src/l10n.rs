@@ -209,3 +209,147 @@ fn escape_html(text: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fluent::FluentBundle;
+    use proptest::prelude::*;
+
+    /// An en-US bundle with Fluent's default bidi isolation on (as
+    /// bevy_fluent's bundles have it).
+    fn bundle(ftl: &str) -> FluentBundle<FluentResource> {
+        // The element type is inferred: `unic-langid` is only a direct
+        // dependency with the `fuzzing` feature.
+        let mut bundle = FluentBundle::new(vec!["en-US".parse().unwrap()]);
+        bundle.add_resource(FluentResource::try_new(ftl.to_owned()).unwrap()).unwrap();
+        bundle
+    }
+
+    const ITEMS: &str = "items = { $n ->\n    [one] one item\n   *[other] { $n } items\n}\n";
+
+    /// Text dense in markup characters and entity look-alikes (`&lt;`
+    /// typed as text), plus arbitrary characters other than the bidi
+    /// isolation marks `translate` strips.
+    const MARKUP_TEXT: &str = "(&lt;|&gt;|&amp;|&quot;|&#39;|[<>&\"';# a-z]|[^\u{2068}\u{2069}]){0,24}";
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// `escape_html` is undone exactly by `decode_entities` and leaves no
+        /// markup-significant character behind. Catches an escape the
+        /// decoder doesn't know (entities shown in the UI) or a missing one
+        /// (string args injecting markup into translations).
+        #[test]
+        fn escape_then_decode_is_identity(s in MARKUP_TEXT) {
+            let escaped = escape_html(&s);
+            prop_assert!(!escaped.contains(['<', '>', '"', '\'']), "{escaped:?}");
+            prop_assert_eq!(decode_entities(&escaped), s);
+        }
+
+        /// JSON numbers stay Fluent numbers, so English plural selection
+        /// follows CLDR (`one` for exactly 1, `other` otherwise) and numbers
+        /// print as fluent-rs formats them (no grouping). Catches args
+        /// passed as strings (always `other`, `1 items`).
+        #[test]
+        fn integer_args_select_english_plurals(n in prop_oneof![0u32..4, 0u32..100_000]) {
+            let expected = if n == 1 { "one item".to_owned() } else { format!("{n} items") };
+            let json = format!(r#"{{"n": {n}}}"#);
+            prop_assert_eq!(translate(&bundle(ITEMS), "items", Some(&json)), Ok(expected));
+        }
+
+        /// A string arg comes out as markup that decodes back to the
+        /// string: escaped for the translation parser, and only the bidi
+        /// marks Fluent adds are removed.
+        #[test]
+        fn string_args_survive_as_escaped_text(s in MARKUP_TEXT) {
+            let json = serde_json::json!({ "s": s }).to_string();
+            let text = translate(&bundle("m = [{ $s }]"), "m", Some(&json)).unwrap();
+            prop_assert!(!text.contains('<'), "{text:?}");
+            prop_assert_eq!(decode_entities(&text), format!("[{s}]"));
+        }
+    }
+
+    /// Float JSON numbers are numbers too: `1.0` is `one` (as `JSON.parse`
+    /// gives fluent-dom the number 1), `1.5` is `other` and keeps its
+    /// fraction. Catches stringifying numbers (`"1.0"` → `other`).
+    #[test]
+    fn float_args_are_numbers() {
+        let bundle = bundle(ITEMS);
+        assert_eq!(translate(&bundle, "items", Some(r#"{"n": 1.0}"#)), Ok("one item".to_owned()));
+        assert_eq!(translate(&bundle, "items", Some(r#"{"n": 1.5}"#)), Ok("1.5 items".to_owned()));
+        // CLDR plural operand `n` is the absolute value: -1 is `one` too.
+        assert_eq!(translate(&bundle, "items", Some(r#"{"n": -1}"#)), Ok("one item".to_owned()));
+        assert_eq!(translate(&bundle, "items", Some(r#"{"n": -2}"#)), Ok("-2 items".to_owned()));
+        // A *string* "1" is not the number 1: it matches only a `[1]` key.
+        assert_eq!(translate(&bundle, "items", Some(r#"{"n": "1"}"#)), Ok("1 items".to_owned()));
+    }
+
+    /// Bools become the strings `true`/`false`, usable as selector keys.
+    #[test]
+    fn bool_args_are_strings() {
+        let bundle = bundle("m = { $on ->\n    [true] on\n   *[false] off\n}\nraw = { $on }\n");
+        assert_eq!(translate(&bundle, "m", Some(r#"{"on": true}"#)), Ok("on".to_owned()));
+        assert_eq!(translate(&bundle, "m", Some(r#"{"on": false}"#)), Ok("off".to_owned()));
+        assert_eq!(translate(&bundle, "raw", Some(r#"{"on": true}"#)), Ok("true".to_owned()));
+    }
+
+    /// Arg names are taken verbatim, including the `-`/`_` Fluent
+    /// identifiers allow.
+    #[test]
+    fn arg_names_with_dashes_and_underscores() {
+        let bundle = bundle("m = { $a-b }/{ $c_d }");
+        assert_eq!(
+            translate(&bundle, "m", Some(r#"{"c_d": "y", "a-b": 2}"#)),
+            Ok("2/y".to_owned())
+        );
+    }
+
+    /// Unsupported or malformed `data-l10n-args` are errors naming the
+    /// message (the element falls back to its own content), never a
+    /// half-formatted translation with a missing variable.
+    #[test]
+    fn bad_args_are_errors() {
+        let bundle = bundle(ITEMS);
+        for json in [
+            r#"{"n": null}"#,
+            r#"{"n": [1]}"#,
+            r#"{"n": {"v": 1}}"#,
+            "[1]",
+            "3",
+            r#""n""#,
+            "{n: 1}",
+            "",
+        ] {
+            let result = translate(&bundle, "items", Some(json));
+            assert!(
+                result.as_ref().is_err_and(|err| err.contains("`items`")),
+                "{json:?} gave {result:?}"
+            );
+        }
+    }
+
+    /// Missing messages, value-less messages and unresolved variables are
+    /// errors, not text (which would replace the fallback content).
+    #[test]
+    fn unresolvable_messages_are_errors() {
+        let bundle = bundle("attrs-only =\n    .title = T\nneeds = { $x }\n");
+        assert!(translate(&bundle, "absent", None).is_err());
+        assert!(translate(&bundle, "attrs-only", None).is_err());
+        assert!(translate(&bundle, "needs", None).is_err());
+        assert!(translate(&bundle, "needs", Some("{}")).is_err());
+    }
+
+    /// Only the FSI/PDI marks Fluent wraps placeables in are stripped;
+    /// other bidi controls authored in the message stay. Catches a strip
+    /// that's too broad (RTL text loses its marks) or missing (invisible
+    /// characters in every placeable).
+    #[test]
+    fn strips_only_placeable_isolation_marks() {
+        let bundle = bundle("m = \u{200f}a { $x } \u{200e}b");
+        assert_eq!(
+            translate(&bundle, "m", Some(r#"{"x": "y"}"#)),
+            Ok("\u{200f}a y \u{200e}b".to_owned())
+        );
+    }
+}

@@ -1,0 +1,9 @@
+/* Golden scene: text blocks of several sizes and colors, wrapping in a
+   300px content box, inline runs, a block background, `pre`. Bevy's
+   default font only (no font-family): committed inputs only. */
+html { color: #e8e8e8; padding: 10px; gap: 4px }
+h1 { font-size: 25px; color: #ff6a3d }
+.small { font-size: 12px; color: #9fd0ff }
+.accent { color: #ffd23f }
+.big { font-size: 30px; color: #7ee081; background-color: #3a3f6b }
+pre { color: #c0c0c0; background-color: #000000 }

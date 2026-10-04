@@ -1,0 +1,18 @@
+/* Layout vector: default font only (FiraMono, 0.6em advance), line height
+   1.2. Font sizes keep 1.2 x size whole: Bevy rounds each text node up to
+   whole pixels, browsers don't (see AGENTS.md limits). */
+html { font-size: 20px }
+.row { flex-direction: row; gap: 10px }
+.between { justify-content: space-between; align-items: center; height: 60px; padding: 0 10px }
+.small { font-size: 10px }
+.large { font-size: 30px }
+.grow { width: 400px }
+.g1 { flex-grow: 1 }
+.g3 { flex-grow: 3 }
+.wrap { flex-wrap: wrap; width: 250px; row-gap: 4px; column-gap: 6px }
+.w { width: 100px }
+.reverse { flex-direction: row-reverse }
+.center { align-items: center }
+.half { width: 50% }
+.end { align-self: flex-end }
+.hidden { display: none }

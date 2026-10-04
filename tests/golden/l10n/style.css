@@ -1,0 +1,8 @@
+/* Golden scene: a Fluent-localized page (en-US bundle from messages.ftl):
+   markup inside translations styled by these rules, plural selection,
+   the untranslated fallback. */
+html { color: #f4f1e8; font-size: 15px; padding: 12px; gap: 6px }
+h2 { font-size: 20px; color: #e05050 }
+.name { color: #50c8ff }
+em { color: #ffcc33 }
+i { color: #a0a0a0 }

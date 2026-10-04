@@ -54,16 +54,17 @@ DEFAULT_FONT = "FiraMono-subset.ttf"
 # stylesheet. Keep in sync with `src/build.rs`: the `HtmlUi` root (the test
 # spawns a full-width column) and containers are flex columns, so mixed
 # inline content in them becomes one item per piece, as p23 does; blocks are
-# blocks; text defaults to white in Bevy's default font at Bevy's default
-# line height (1.2); `li` gets p23's indent and bullet text; `pre` keeps
-# whitespace, doesn't wrap and has p23's 8px padding.
+# blocks; containers and blocks don't shrink (p23's `flex_shrink: 0`); text
+# defaults to white in Bevy's default font at Bevy's default line height
+# (1.2); `li` gets p23's indent and bullet text; `pre` keeps whitespace,
+# doesn't wrap and has p23's 8px padding.
 P23_CSS = """
 @font-face { font-family: "p23 default"; src: url("FiraMono-subset.ttf"); }
 html { display: flex; flex-direction: column; color: #ffffff;
        font-family: "p23 default"; font-size: 16px; line-height: 1.2; }
 body, div, section, article, header, footer, main, nav, aside, ul, ol,
-blockquote, figure, form { display: flex; flex-direction: column; }
-h1, h2, h3, h4, h5, h6, p, li, pre { display: block; }
+blockquote, figure, form { display: flex; flex-direction: column; flex-shrink: 0; }
+h1, h2, h3, h4, h5, h6, p, li, pre { display: block; flex-shrink: 0; }
 li { margin-left: 12px; }
 li::before { content: "\\2022  "; }
 pre { white-space: pre; padding: 8px; }

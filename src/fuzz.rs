@@ -152,4 +152,44 @@ mod tests {
         let ftl = format!("x = {}{{{}", "é".repeat(48), "é");
         let _ = translate(&ftl, "", "");
     }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        /// The cascade's per-element style cache is transparent: the second
+        /// round over the same elements (all cache hits) reports exactly
+        /// what the first computed, for stylesheets built from selectors
+        /// matching the harness elements and every mapped property. Catches
+        /// a cache key missing a part (id/classes) or a cached value that
+        /// depends on the first caller's inherited style.
+        #[test]
+        fn style_cache_is_transparent(
+            rules in proptest::collection::vec(
+                (
+                    proptest::sample::select(&["html", "p", "p#lead", ".note", "div.panel.wide", ".wide", "*", "li", "pre"][..]),
+                    proptest::sample::select(&[
+                        "color: #123456", "font-size: 1.5em", "font-size: 2rem", "font-size: 12px",
+                        "font-weight: bold", "font-style: italic", "padding: 3px 4px", "border-width: 2px",
+                        "background-color: red", "gap: 5px", "font-family: serif",
+                        r#"border-image: url("f.png") 25% fill round"#,
+                    ][..]),
+                    proptest::bool::ANY,
+                ),
+                1..8,
+            )
+        ) {
+            let css: String = rules
+                .iter()
+                .map(|(selector, declaration, important)| {
+                    format!("{selector} {{ {declaration}{} }}\n", if *important { " !important" } else { "" })
+                })
+                .collect();
+            let out = cascade(&css).unwrap();
+            let (first, second): (Vec<&str>, Vec<&str>) = out.lines().partition(|line| line.starts_with("round 0 "));
+            proptest::prop_assert_eq!(first.len(), second.len());
+            for (a, b) in first.iter().zip(&second) {
+                proptest::prop_assert_eq!(&a["round 0 ".len()..], &b["round 1 ".len()..], "css:\n{}", css);
+            }
+        }
+    }
 }

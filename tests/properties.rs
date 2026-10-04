@@ -225,3 +225,223 @@ fn locale_and_context_round_trip(
     ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("n", &v);
     prop_assert_eq!(start, ui.settle().dump());
 }
+
+/// Selectors for the generated stylesheets below: each matches some
+/// element of [`LIST_PAGE`] or nothing (`#ghost`), and `div p` is a valid
+/// but unsupported (combinator) selector.
+const SELECTORS: &[&str] = &["p", ".a", "#x", "p.a", "*", "div", ".b", "p#x.a", "#ghost", "div p"];
+const LIST_PAGE: &str =
+    r#"<p id="x" class="a">One</p><p class="b">Two <b class="a">bold</b></p><div class="a"><p>Three</p></div>"#;
+
+/// A rule: selector list, color, `!important`.
+type ListRule = (Vec<&'static str>, String, bool);
+
+fn list_rules() -> impl Strategy<Value = Vec<ListRule>> {
+    let selectors = proptest::collection::vec(proptest::sample::select(SELECTORS), 1..4);
+    proptest::collection::vec((selectors, hex6(), proptest::bool::weighted(0.2)), 1..6)
+}
+
+fn declaration(color: &str, important: bool) -> String {
+    format!("color: #{color}{}", if important { " !important" } else { "" })
+}
+
+/// Metamorphic CSS identities over generated stylesheets, all of which
+/// must build the same world:
+/// - a selector list `a, b { X }` ≡ `a { X } b { X }` in its place (each
+///   selector matches with its own specificity — catches a list taking its
+///   first or highest selector's specificity, or dropping the whole list
+///   when one selector is unsupported);
+/// - comments, line breaks and spacing between tokens are insignificant,
+///   and repeating the whole sheet changes nothing (catches source-order
+///   or cache bookkeeping that depends on rule count or formatting).
+#[proptest(cases = 16)]
+fn selector_lists_formatting_and_duplicates_change_nothing(
+    #[strategy(list_rules())] rules: Vec<ListRule>,
+) {
+    let base = "html { color: #ffffff; font-size: 20px }\n";
+    let mut lists = base.to_owned();
+    let mut expanded = base.to_owned();
+    let mut noisy = String::new();
+    for (selectors, color, important) in &rules {
+        let declaration = declaration(color, *important);
+        lists.push_str(&format!("{} {{ {declaration} }}\n", selectors.join(",")));
+        for selector in selectors {
+            expanded.push_str(&format!("{selector} {{ {declaration} }}\n"));
+        }
+        noisy.push_str(&format!(
+            "/* rule */\n{}\n/* before block */{{\n\t{} /* end */ ;\n}}\n\n",
+            selectors.join(" ,\n  "),
+            declaration.replace(": ", " :\n   ")
+        ));
+    }
+    let noisy = format!("/* top */ {base}{noisy}{noisy}");
+    let mut dumps = Vec::new();
+    for (name, css) in [("prop-lists", &lists), ("prop-expanded", &expanded), ("prop-noisy", &noisy)] {
+        let mut ui = TestUi::new(name, &[("page.html", LIST_PAGE), ("style.css", css)])
+            .stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        dumps.push(ui.settle().dump());
+    }
+    prop_assert_eq!(&dumps[0], &dumps[1], "selector list vs expanded:\n{}\n---\n{}", lists, expanded);
+    prop_assert_eq!(&dumps[0], &dumps[2], "compact vs noisy+duplicated:\n{}\n---\n{}", lists, noisy);
+}
+
+/// Every sRGB notation of one color lands on the same color: `#rrggbb`,
+/// upper-case hex, `#rrggbbaa` with opaque alpha, `rgb()` in comma and
+/// space syntax, `rgba(…, 1)`, `#rgb` when the channels allow it. The
+/// expected hex is computed from the channels, so a channel swap or a
+/// dropped notation shows up as a wrong or inherited (white) color.
+#[proptest(cases = 16)]
+fn color_notations_agree(
+    #[strategy(proptest::array::uniform3(0u8..=255))] rgb: [u8; 3],
+    #[strategy(proptest::array::uniform3(0u8..16))] short: [u8; 3],
+) {
+    let [r, g, b] = rgb;
+    let notations = [
+        format!("#{r:02x}{g:02x}{b:02x}"),
+        format!("#{r:02X}{g:02X}{b:02X}"),
+        format!("#{r:02x}{g:02x}{b:02x}ff"),
+        format!("rgb({r}, {g}, {b})"),
+        format!("rgb({r} {g} {b})"),
+        format!("rgba({r}, {g}, {b}, 1)"),
+    ];
+    // `#rgb` doubles each digit: channel = digit × 17.
+    let [sr, sg, sb] = short;
+    let short_hex = format!("#{sr:x}{sg:x}{sb:x}");
+    let short_expected = format!("#{:02x}{:02x}{:02x}", sr * 17, sg * 17, sb * 17);
+
+    let mut page = String::new();
+    // Not white, so an ignored declaration (inherited white) can't pass.
+    let mut css = "html { color: #010203; font-size: 20px }\n".to_owned();
+    for (i, notation) in notations.iter().chain([&short_hex]).enumerate() {
+        page.push_str(&format!("<p class=\"c{i}\">c{i}</p>"));
+        css.push_str(&format!(".c{i} {{ color: {notation} }}\n"));
+    }
+    let mut ui = TestUi::new("prop-colors", &[("page.html", &page), ("style.css", &css)])
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    let dump = ui.settle().dump();
+    let expected = format!("#{r:02x}{g:02x}{b:02x}");
+    for (i, notation) in notations.iter().enumerate() {
+        let run = format!("\"c{i}\" default 20px {expected}");
+        prop_assert!(dump.contains(&run), "{notation} should be {expected}:\n{dump}");
+    }
+    let run = format!("\"c{}\" default 20px {short_expected}", notations.len());
+    prop_assert!(dump.contains(&run), "{short_hex} should be {short_expected}:\n{dump}");
+}
+
+/// CSS named colors are the sRGB values the spec lists (checked against a
+/// hand-copied table), including mixed case.
+#[proptest(cases = 4)]
+fn named_colors_match_the_spec(#[any] upper: bool) {
+    const NAMED: &[(&str, &str)] = &[
+        ("red", "#ff0000"),
+        ("Lime", "#00ff00"),
+        ("navy", "#000080"),
+        ("teal", "#008080"),
+        ("rebeccapurple", "#663399"),
+        ("GoldenRod", "#daa520"),
+        ("gray", "#808080"),
+        ("grey", "#808080"),
+    ];
+    let mut page = String::new();
+    let mut css = "html { color: #010203; font-size: 20px }\n".to_owned();
+    for (i, (name, _)) in NAMED.iter().enumerate() {
+        let name = if upper { name.to_ascii_uppercase() } else { (*name).to_owned() };
+        page.push_str(&format!("<p class=\"c{i}\">c{i}</p>"));
+        css.push_str(&format!(".c{i} {{ color: {name} }}\n"));
+    }
+    let mut ui = TestUi::new("prop-named", &[("page.html", &page), ("style.css", &css)])
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    let dump = ui.settle().dump();
+    for (i, (name, hex)) in NAMED.iter().enumerate() {
+        prop_assert!(dump.contains(&format!("\"c{i}\" default 20px {hex}")), "{name} → {hex}:\n{dump}");
+    }
+}
+
+/// Relative font sizes resolve against the right base: `Nem` and `N×100%`
+/// against the parent's size, `Nrem` against the root's, nested `em` on
+/// an inline element against the enclosing block's computed size. Bases
+/// and factors are multiples of 1/4, so every expected size is exact.
+/// Catches `rem` resolved against the parent (or `em` against the root),
+/// `%` not divided by 100, and inline `em` compounding twice.
+#[proptest(cases = 16)]
+fn relative_font_sizes_resolve_against_their_base(
+    #[strategy(8u16..40)] root: u16,
+    #[strategy(8u16..40)] parent: u16,
+    #[strategy(1u16..16)] quarters: u16,
+) {
+    let k = f32::from(quarters) / 4.0;
+    let percent = u32::from(quarters) * 25;
+    let css = format!(
+        "html {{ color: #ffffff; font-size: {root}px }}\n\
+         div {{ font-size: {parent}px }}\n\
+         .em {{ font-size: {k}em }}\n\
+         .pct {{ font-size: {percent}% }}\n\
+         .rem {{ font-size: {k}rem }}\n\
+         .half {{ font-size: 0.5em }}\n"
+    );
+    let page = r#"<div><p class="em">em <b class="half">half</b></p><p class="pct">pct</p><p class="rem">rem</p><p>inherit</p></div>"#;
+    let mut ui = TestUi::new("prop-font-size", &[("page.html", page), ("style.css", &css)])
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    let dump = ui.settle().dump();
+    let (root, parent) = (f32::from(root), f32::from(parent));
+    for (text, size) in [
+        ("em ", parent * k),
+        ("half", parent * k * 0.5),
+        ("pct", parent * k),
+        ("rem", root * k),
+        ("inherit", parent),
+    ] {
+        let run = format!("{text:?} default {size}px #ffffff");
+        prop_assert!(dump.contains(&run), "missing {run:?}\n{css}\n{dump}");
+    }
+}
+
+/// A `*.slice.ron` manifest reaches the frame node side by side: `left`
+/// and `top` are the min insets, `right` and `bottom` the max insets,
+/// `sides`/`center` the scale modes, drawn over the border box. Catches
+/// swapped or mirrored sides (invisible for symmetric frames).
+#[proptest(cases = 8)]
+fn nine_slice_manifest_maps_each_side(
+    #[strategy(proptest::array::uniform4(0u8..12))] sides: [u8; 4],
+    #[any] tile_sides: bool,
+    #[any] tile_center: bool,
+) {
+    let [left, right, top, bottom] = sides;
+    let mode = |tile: bool| if tile { "Tile(2.0)" } else { "Stretch" };
+    let manifest = format!(
+        r#"(image: "frame.png", border: (left: {left}, right: {right}, top: {top}, bottom: {bottom}),
+            sides: {}, center: {})"#,
+        mode(tile_sides),
+        mode(tile_center)
+    );
+    let mut ui = TestUi::new(
+        "prop-nine-slice",
+        &[("page.html", "<p>x</p>"), ("frame.slice.ron", &manifest)],
+    )
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    let slice: Handle<NineSlice> = ui.load("frame.slice.ron");
+    let frame = ui.world_mut().spawn(NineSliceFrame(slice)).id();
+    ui.settle();
+
+    let image = ui.world_mut().get::<ImageNode>(frame).expect("frame got an ImageNode");
+    prop_assert_eq!(image.visual_box, VisualBox::BorderBox);
+    prop_assert_eq!(
+        image.image.path().map(|path| path.path().display().to_string()),
+        Some("frame.png".to_owned())
+    );
+    let NodeImageMode::Sliced(slicer) = &image.image_mode else {
+        panic!("not sliced: {:?}", image.image_mode);
+    };
+    let border = slicer.border;
+    prop_assert_eq!(
+        [border.min_inset.x, border.max_inset.x, border.min_inset.y, border.max_inset.y],
+        sides.map(f32::from)
+    );
+    let tiles = |mode: &SliceScaleMode| matches!(mode, SliceScaleMode::Tile { stretch_value } if *stretch_value == 2.0);
+    prop_assert_eq!(tiles(&slicer.sides_scale_mode), tile_sides);
+    prop_assert_eq!(tiles(&slicer.center_scale_mode), tile_center);
+}
