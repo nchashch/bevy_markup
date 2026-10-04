@@ -10,5 +10,9 @@ case "${1:-}" in
 esac
 duration=${2:-60}
 
-exec cargo +nightly fuzz run "$target" -- \
+# cargo-fuzz defaults --target to the triple *it* was built for; prebuilt
+# binaries (e.g. CI's install-action) are musl, which ASan can't use.
+host=$(rustc +nightly -vV | sed -n 's/^host: //p')
+
+exec cargo +nightly fuzz run --target "$host" "$target" -- \
     -max_total_time="$duration" -max_len=65536

@@ -586,6 +586,11 @@ known gaps:
     (`mutants.yml`: unit + html_ui + stateful, 8 shards; survivors in each
     shard's job summary and the `mutants-shard-N` artifacts). Line numbers
     below are from `e1b910c`.
+  - [ ] Triage the first CI run (2026-10-04, triggered by hand:
+    `gh run view 37223937948`; 8 shards of ~53 mutants, ~1–2 h each):
+    collect survivors from the job summaries / `mutants-shard-N` artifacts
+    (`gh run download 37223937948`) and triage them like the first batch
+    below — a killing test, or a note why the mutant is equivalent.
   - [x] Triage the survivors of the partial runs (`e1b910c`; reruns with
     unit + html_ui + stateful). Killed by new tests:
     - `BoxStyle::is_empty` `&&`→`||` (background-only block lost its
@@ -697,6 +702,15 @@ Next steps (roughly in order of value):
   is stale), fuzzes each cargo-fuzz target for 60 s and builds the other
   fuzz drivers. Nightly failures are reports to triage, not merge blockers.
   `assets/` isn't in the repo, so `content_lint` skips in CI.
+  GitHub moves `ubuntu-latest` to Ubuntu 26 from 2026-10-19: that can change
+  Mesa (golden images: lavapipe rendering vs the references) and the apt
+  package names (Bevy/honggfuzz build dependencies). If the nightly breaks
+  around then, suspect the image first (`golden-diffs` artifact, apt
+  errors); pinning `runs-on: ubuntu-24.04` is the quick fallback.
+  First CI runs (2026-10-04): CI and nightly golden, browser oracle and
+  fuzz-driver builds green; the cargo-fuzz jobs needed
+  `fuzz-libfuzzer.sh` to pass `--target` (the prebuilt cargo-fuzz defaults
+  to musl, which ASan rejects).
 - Warning-free: `cargo check --lib` (minimal Bevy features), `cargo build
   --all-targets`, `cargo doc --no-deps`. `cargo test` must pass: cascade unit
   tests, the headless test vectors, and the `no_run` doc examples (see
