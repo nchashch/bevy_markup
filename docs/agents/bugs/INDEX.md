@@ -1,5 +1,8 @@
 # Bug Reports — Index
 
+Upstream defects (in dependencies and tools) are also tracked in
+[UPSTREAM.md](UPSTREAM.md) until they're reported and fixed upstream.
+
 Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below

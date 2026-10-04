@@ -697,6 +697,42 @@ known gaps:
 - [x] **7. Golden images, sparingly** (fixes the rest of weakness 3 and part of weakness 4: real font rasterization, wrapping and 9-slice drawing; CJK fallback is still untested, since only committed fonts are used). `tests/golden.rs` + `scripts/golden.sh` on Mesa lavapipe; three scenes (`text`, `frame`, `l10n`); see Testing. Brittle across drivers and font versions: a smoke check, not a spec.
   - [ ] A CJK/fallback scene would need a committed CJK font (or `system_fonts`, which isn't reproducible).
 
+## Bug reports
+
+Bugs found by the automated testing above — or by any other means — are
+filed in `docs/agents/bugs/` as `bug_NNNN.md`, numbered sequentially in
+discovery order, with an `INDEX.md` title/metadata page linking all reports.
+File one for every real defect a fuzzer, property test, vector, or manual
+investigation uncovers, *at minimum when the fix lands* (don't let the
+analysis live only in commit messages or chat logs).
+
+Per-bug file, whatever is known and useful:
+
+- **Status** (open / fixed / upstream-unfixed) and **severity**; reachable
+  from user data = high, even if only panics.
+- **Component** and **symptoms** (the observable misbehavior, not the cause).
+- **Discovery**: which tool/target found it (fuzz target, stateful op
+  sequence, seed, minimizing commit), the repository commit at discovery, the
+  agent/model, and the date.
+- **Minimal reproduction** — a minimized input or op sequence, not the raw
+  fuzzer artifact.
+- **Root cause**, the **fix** (with commit), and the **regression test** that
+  now guards it; upstream bugs note the affected/pinned versions and where
+  the local patch (`[patch.crates-io]` + `vendor/`) is wired.
+
+`INDEX.md` carries the shared metadata: date range, machine, OS/kernel,
+toolchain and dependency versions, and the discovery agent. Keep it current
+when new bugs are added; see the existing entries (bug_0001–bug_0005) as
+templates.
+
+Upstream defects — in dependencies and tools, whether or not they also have
+a `bug_NNNN.md` — go in `docs/agents/bugs/UPSTREAM.md` until they're fixed
+upstream: project and affected versions, reproduction, the local workaround
+and where it lives, a PR sketch, and a status (unreported → reported → PR
+open → fixed upstream → workaround removed). Add an entry whenever you
+vendor/patch a dependency or work around a tool; when bumping a dependency,
+check its entries and drop workarounds upstream has made unnecessary.
+
 ## Limits and next steps
 
 Known limits (each skipped/ignored value is logged at `debug`):

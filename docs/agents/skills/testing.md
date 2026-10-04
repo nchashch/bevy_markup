@@ -419,6 +419,12 @@ discovery order) and a row in `docs/agents/bugs/INDEX.md`. Include:
 
 Use the existing reports as templates.
 
+A defect in a dependency or tool (whether found as a p23 bug or while
+setting up a tool) also gets an entry in `docs/agents/bugs/UPSTREAM.md`:
+reproduction, the local workaround and where it lives, a PR sketch, and a
+status from unreported to fixed upstream. That's the list to work from when
+reporting upstream or removing a vendored patch.
+
 ## CI
 
 - `.github/workflows/ci.yml` (every push and PR, blocks merges): the
