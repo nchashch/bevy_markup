@@ -597,6 +597,13 @@ known gaps:
   from the Bevy guide (Cranelift, `-Zshare-generics`) need nightly and
   aren't worth it at this point. `-j`/`--minimum-test-timeout` are set by
   the script: use `P23_MUTANTS_JOBS` / `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT`.
+  No mold on CI (measured, not worth it): rustc ≥ 1.90 already links
+  through its bundled `rust-lld` on x86_64 Linux (`-fuse-ld=lld` + its own
+  `gcc-ld` dir), so `rui314/setup-mold` — which swaps `/usr/bin/ld` — never
+  takes effect, and forcing mold via `RUSTFLAGS` measured the same as lld
+  without debug info (4.6 s vs 4.2 s rebuild of all targets, 68 s vs 65 s
+  cold). The main CI job is ~3–4 min with a warm cache (build 37 s, tests
+  ~38 s).
   - [ ] Complete a `--full` run locally, or read the weekly CI results
     (`mutants.yml`: unit + html_ui + stateful, 4 shards; survivors in each
     shard's job summary and the `mutants-shard-N` artifacts). Line numbers
