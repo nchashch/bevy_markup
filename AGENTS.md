@@ -74,7 +74,7 @@ tests/
                    templates render (+ every data-l10n-id resolves), no hard-coded text, CSS url()s, pseudo-locale
   golden.rs        golden images (#[ignore]d): tests/golden/<scene>/ rendered offscreen by real Bevy,
                    compared with expected.png within a tolerance (see Testing)
-  fuzz_corpus.rs   replays local fuzz/corpus/* through p23::fuzz (#[ignore]d, --features fuzzing) for coverage
+  fuzz_corpus.rs   replays fuzz/seeds/* + local fuzz/corpus/* through p23::fuzz (#[ignore]d, --features fuzzing) for coverage
   common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump; with_layout = Bevy UI layout)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (CSS oracle output);
                    Fluent vectors add messages.ftl + fluent.html (Fluent oracle output);
@@ -104,7 +104,8 @@ scripts/
                      described under Testing TODO 5)
 fuzz/
   fuzz_targets/      cargo-fuzz targets (`html`, `css`, `ftl`) over `p23::fuzz`
-  corpus/, artifacts/, coverage/  gitignored
+  seeds/<target>/    committed minimized seed corpora (read-only extra input to every fuzz run)
+  corpus/, artifacts/, coverage/  gitignored (corpus/ = working corpus; CI carries it over nightly)
 honggfuzz/
   targets/           the same three harnesses driven by honggfuzz (`cargo +nightly hfuzz run <t>`)
   vendor/honggfuzz/  vendored honggfuzz crate (patched bfd.c for current binutils)
@@ -825,7 +826,8 @@ Next steps (roughly in order of value):
   `assets/` isn't in the repo, so `content_lint` skips in CI. The nightly
   `coverage` job runs `scripts/coverage.py --html`: the per-layer table goes
   to the job summary, the reports to the `coverage` artifact (without
-  `assets/` and fuzz corpora, those two layers cover nothing in CI).
+  `assets/`, content lint covers nothing in CI; the fuzz-corpora layer
+  replays the committed seeds).
   First local measurement (2026-10-04): 94.3% of 1684 library lines
   covered by some layer. Its two gaps are closed: the template
   *render*-failure path (`template_render_failure_shows_the_error_and_recovers`

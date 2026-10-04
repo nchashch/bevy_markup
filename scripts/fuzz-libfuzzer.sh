@@ -17,5 +17,10 @@ toolchain=${P23_NIGHTLY:-nightly}
 # binaries (e.g. CI's install-action) are musl, which ASan can't use.
 host=$(rustc "+$toolchain" -vV | sed -n 's/^host: //p')
 
-exec cargo "+$toolchain" fuzz run --target "$host" "$target" -- \
+# The working corpus (gitignored; in CI carried over between nights) comes
+# first: libFuzzer writes new inputs only there. The committed seeds
+# (fuzz/seeds/<target>, minimized) are read-only extra input.
+mkdir -p "fuzz/corpus/$target"
+exec cargo "+$toolchain" fuzz run --target "$host" "$target" \
+    "fuzz/corpus/$target" "fuzz/seeds/$target" -- \
     -max_total_time="$duration" -max_len=65536

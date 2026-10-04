@@ -308,9 +308,24 @@ Input formats (bytes are decoded lossily, capped at 64 KiB):
 | fuzzcheck | `scripts/fuzz-fuzzcheck.sh <target> [s]` | vendored, patched for LLVM 21+ coverage records |
 | test-fuzz (AFLplus) | `scripts/fuzz-test-fuzz.sh <target> [s]` | corpus seeds come from plain `cargo test` runs |
 
-All need a nightly toolchain. Corpora and crashes live in gitignored
+All need a nightly toolchain. Crashes and working corpora live in gitignored
 directories (`fuzz/corpus/`, `fuzz/artifacts/`, `hfuzz_workspace/`,
 `test-fuzz/target/`).
+
+The cargo-fuzz targets also read committed seeds, `fuzz/seeds/<target>/`
+(minimized, read-only: libFuzzer writes new inputs only to the first
+corpus directory, `fuzz/corpus/<target>/`). First seeded 2026-10-05 from a
+local corpus (2940 html, 4868 css, 1181 ftl inputs; 580 KB). To refresh
+them from a grown local corpus, merge both into a fresh directory and
+replace the seeds (inputs are named by content hash, so git only stores
+the new ones):
+
+```sh
+cd fuzz && host=$(rustc +nightly -vV | sed -n 's/^host: //p')
+t=html; rm -rf /tmp/seed && mkdir /tmp/seed
+cargo +nightly fuzz run --target "$host" $t /tmp/seed corpus/$t seeds/$t -- -merge=1
+rm -rf seeds/$t && mv /tmp/seed seeds/$t
+```
 
 To add a fuzz target: add the glue function to `src/fuzz.rs`, then a target
 per driver. Regression tests for fuzz-found crashes go in `src/fuzz.rs`'s
@@ -368,8 +383,8 @@ scripts/coverage.py --layer stateful --layer unit
   code (test modules must stay at the end of their file for this).
 - The `fuzz-corpora` layer replays the local cargo-fuzz corpora through the
   same harnesses (`tests/fuzz_corpus.rs`, `#[ignore]`d, feature
-  `fuzzing`). It covers what fuzzing has reached so far; run the fuzzers
-  longer to grow it. Without corpora (CI, fresh clones) it covers nothing.
+  `fuzzing`). It covers what fuzzing has reached so far: the committed
+  seeds everywhere, plus the local working corpus where there is one.
 - Golden images and doc tests aren't measured.
 - Read `uncovered.txt` for gaps, but remember that coverage only shows a
   line *ran*, not that a test checked its result. Mutation testing measures

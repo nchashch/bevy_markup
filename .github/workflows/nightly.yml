@@ -91,7 +91,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      - name: Measure (content lint and fuzz corpora skip in CI; their inputs are gitignored)
+      - name: Measure (content lint skips in CI; assets/ is gitignored)
         run: |
           scripts/coverage.py --html | tee coverage.txt
           { echo '### Line coverage of src/ per testing layer'; echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
