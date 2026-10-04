@@ -42,6 +42,7 @@ Re-exported crates (their types appear in the API): `tera`, `tl`,
 ## Layout
 
 ```
+README.md        human-facing overview: what p23 is, how it works, testing strategy (keep in sync)
 src/
   lib.rs           crate docs (guide), HtmlUiPlugin, HtmlUiSystems, prelude, re-exports
   html.rs          HtmlUi, TemplateContext, RenderedHtml, HtmlDebugOutline, HtmlElement,
