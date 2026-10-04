@@ -61,6 +61,7 @@ tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
   properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips, …)
   quickcheck.rs    quickcheck structured-input properties (cascade vs reference model, text round trip)
+  arbtest.rs       arbtest robustness properties: arbitrary HTML/CSS/Fluent/args bytes through the pipeline
   common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (oracle output)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
@@ -85,6 +86,10 @@ assets/            (gitignored — see Gotchas)
 - Asset-backed state reacts to `AssetEvent::LoadedWithDependencies` /
   `Modified` plus change detection, so hot reload works with Bevy's
   `file_watcher` (not enabled in the examples).
+- A stylesheet that *fails* to load emits no asset event; `build.rs` latches
+  failures (`FailedSheets`) and builds unstyled once (a failed per-entity
+  `HtmlStylesheet` falls back to `DefaultStylesheet`). Only *loading*
+  stylesheets defer the build.
 - Demo typography: headers IosevkaSlabQP (red), body Spectral (off-white),
   code/debug Iosevka Slab Mono — in the CSS themes for HTML, in
   `examples/demo/consts.rs` for plain Bevy UI panels.
@@ -299,6 +304,17 @@ known gaps:
   HTML, CSS, FTL and JSON args through the pipeline: no panic, no hang, always
   some output (e.g. the error paragraph). Targets our glue: entity decoding,
   whitespace collapsing, slice arithmetic, `data-l10n-args` handling.
+  - [x] Started with `arbtest` (`tests/arbtest.rs`): arbitrary bytes (lossy
+    UTF-8) as HTML template, CSS, Fluent bundle body and `data-l10n-args`,
+    asserting settle + non-empty dump, 400 ms budget each. First run found a
+    real bug: a stylesheet that fails to load left the `HtmlUi` blank forever
+    (loading and failed assets were indistinguishable via `Assets::get`) —
+    fixed in `build.rs`: failed sheet = unstyled build (latched
+    `FailedSheets`, since failures emit no asset event), failed per-entity
+    override falls back to the default. Regression vector:
+    `failed_stylesheet_still_renders`.
+  - Remaining: structure-aware generation (proptest strategies, cargo-fuzz)
+    for deeper glue coverage.
 - [ ] **6. Mutation testing** (measures vector strength). `cargo-mutants`
   mutates the code and reports mutations no test catches. Run occasionally;
   each survivor is a missing vector or dump field.

@@ -1,5 +1,6 @@
 //! Rendered + localized DOM → styled Bevy UI children of the `HtmlUi` entity.
 
+use bevy::asset::{AssetEvent, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
@@ -219,6 +220,11 @@ impl Styler<'_> {
     }
 }
 
+/// Stylesheets whose load has failed, so the failure is rebuilt around
+/// exactly once (asset failures emit no asset event).
+#[derive(Resource, Default)]
+pub(crate) struct FailedSheets(HashSet<AssetId<Stylesheet>>);
+
 /// The `html` rule's values (the starting point even for fragments without
 /// `<html>`), over the defaults.
 fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Assets<Image>) -> Style {
@@ -244,6 +250,8 @@ pub(crate) fn build_html_ui(
     mut sheet_events: MessageReader<AssetEvent<Stylesheet>>,
     mut image_events: MessageReader<AssetEvent<Image>>,
     sheets: Res<Assets<Stylesheet>>,
+    server: Res<AssetServer>,
+    mut failed_sheets: ResMut<FailedSheets>,
     images: Res<Assets<Image>>,
     default_sheet: Res<DefaultStylesheet>,
     fonts: Res<FontFamilies>,
@@ -262,7 +270,11 @@ pub(crate) fn build_html_ui(
     let reloaded_sheets: HashSet<AssetId<Stylesheet>> = sheet_events
         .read()
         .filter_map(|event| match event {
-            AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => Some(*id),
+            AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => {
+                // Reloaded after a failure: let a later failure latch again.
+                failed_sheets.0.remove(id);
+                Some(*id)
+            }
             _ => None,
         })
         .collect();
@@ -275,18 +287,47 @@ pub(crate) fn build_html_ui(
         .collect();
 
     for (entity, rendered, localized, own_sheet, outline) in &views {
+        // A stylesheet that failed to load is treated as absent — a broken
+        // CSS file renders unstyled instead of blocking the UI forever —
+        // while one that is still loading defers the build to its load
+        // event. A failed per-entity override falls back to the default.
+        enum Sheet<'a> {
+            Ready(Option<&'a Stylesheet>),
+            Loading,
+            Failed,
+        }
+        let state = |handle: &Handle<Stylesheet>| match sheets.get(handle) {
+            Some(sheet) => Sheet::Ready(Some(sheet)),
+            None if matches!(server.load_state(handle.id()), LoadState::Failed(_)) => Sheet::Failed,
+            None => Sheet::Loading,
+        };
+        let css = match (&own_sheet, &default_sheet.0) {
+            (Some(own), _) => match state(&own.0) {
+                Sheet::Ready(css) => css,
+                Sheet::Loading => continue,
+                Sheet::Failed => match default_sheet.0.as_ref().map(state) {
+                    Some(Sheet::Ready(css)) => css,
+                    Some(Sheet::Loading) => continue,
+                    _ => None,
+                },
+            },
+            (None, Some(default)) => match state(default) {
+                Sheet::Ready(css) => css,
+                Sheet::Loading => continue,
+                Sheet::Failed => None,
+            },
+            (None, None) => None,
+        };
         let sheet_handle = match &own_sheet {
             Some(own) => Some(&own.0),
             None => default_sheet.0.as_ref(),
         };
-        let css = match sheet_handle {
-            Some(handle) => match sheets.get(handle) {
-                Some(css) => Some(css),
-                // Still loading: its load event triggers the build.
-                None => continue,
-            },
-            None => None,
-        };
+        // Failures emit no asset event, so latch them to rebuild once.
+        let failed_handle = sheet_handle
+            .filter(|handle| !sheets.contains(*handle))
+            .filter(|handle| matches!(state(handle), Sheet::Failed));
+        let newly_failed =
+            failed_handle.is_some_and(|handle| !failed_sheets.0.contains(&handle.id()));
         let sheet_changed = match &own_sheet {
             Some(own) => own.is_changed(),
             None => default_sheet.is_changed(),
@@ -299,10 +340,14 @@ pub(crate) fn build_html_ui(
         let dirty = rendered.is_changed()
             || localized.is_changed()
             || sheet_changed
+            || newly_failed
             || fonts.is_changed()
             || outline.as_ref().is_some_and(|outline| outline.is_changed());
         if !dirty {
             continue;
+        }
+        if let Some(handle) = failed_handle {
+            failed_sheets.0.insert(handle.id());
         }
 
         let styles = css

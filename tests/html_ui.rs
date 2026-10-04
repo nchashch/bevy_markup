@@ -193,6 +193,25 @@ html-ui border=16,16,16,16 padding=10,20,10,20 slice=frame.png 4,4,4,4 stretch
     );
 }
 
+/// A stylesheet that fails to load renders the UI unstyled (like a browser)
+/// instead of leaving it blank forever.
+#[test]
+fn failed_stylesheet_still_renders() {
+    let mut ui = TestUi::new(
+        "failed_css",
+        &[("page.html", "<p>Text</p>"), ("style.css", "{ not css")],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "Text" default 16px #ffffff
+"#,
+    );
+}
+
 /// Runtime: mutating `TemplateContext` re-renders, switching `ActiveLocale`
 /// re-localizes, swapping `DefaultStylesheet` restyles — and dropping the
 /// `html` rule's box properties restores the app's own `Node` values.

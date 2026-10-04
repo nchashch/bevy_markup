@@ -152,6 +152,7 @@ impl Plugin for HtmlUiPlugin {
             .init_resource::<style::DefaultStylesheet>()
             .init_resource::<l10n::ActiveLocale>()
             .init_resource::<fonts::FontFamilies>()
+            .init_resource::<build::FailedSheets>()
             .configure_sets(
                 PostUpdate,
                 (
