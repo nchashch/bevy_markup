@@ -1,0 +1,23 @@
+/* Browser-oracle vector: font-size keywords and relative units, !important
+   vs id specificity, numeric weights, shorthand vs longhand, per-side and
+   keyword border widths, border-image longhands overriding a shorthand. */
+html { color: #eeeeee; font-family: Spectral; font-size: 16px }
+.kw-small { font-size: small }
+.kw-xl { font-size: x-large }
+.nest { font-size: 20px; gap: 3px }
+.em { font-size: 1.25em }
+.smaller { font-size: smaller }
+.larger { font-size: larger; font-weight: 600 }
+p.imp { color: #00ff00 !important }
+#imp { color: #ff0000 }
+.semi { font-weight: 550 }
+.pad-short { padding: 1px 2px 3px }
+.pad-long { padding-top: 1px; padding-right: 2px; padding-bottom: 3px; padding-left: 2px }
+.sides { border-style: solid; border-width: 1px; border-left-width: 5px; border-top-width: thick }
+.override {
+  border-style: solid;
+  border-image: url("frame.png") 4 fill stretch;
+  border-image-slice: 25% fill;
+  border-image-repeat: round;
+  border-width: 8px;
+}

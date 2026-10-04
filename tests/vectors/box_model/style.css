@@ -1,0 +1,18 @@
+/* `border-style: solid` is ignored by p23 but needed by browsers, which
+   compute border widths as 0 without a style. */
+html {
+  color: #ffffff; font-family: Spectral; font-size: 20px;
+  border-image: url("frame.png") 4 fill stretch;
+  border-style: solid; border-width: 16px; padding: 10px 20px;
+}
+.framed {
+  border-image-source: url("frame.png");
+  border-image-slice: 25% fill;
+  border-image-repeat: repeat;
+  border-style: solid; border-width: 6px 8px;
+  background-color: #102030;
+}
+.panel {
+  border-image: url("frame.png") 2 3 4 5 fill stretch;
+  border-style: solid; border-width: 12px; padding: 4px; gap: 7px; background-color: #333333;
+}

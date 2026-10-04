@@ -58,8 +58,11 @@ examples/
   demo/            main.rs (setup: fonts), panels.rs (plain / rendered / outline panels),
                    scroll.rs, selector.rs, locale_panel.rs, theme_panel.rs, consts.rs
 tests/
-  html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump (see Testing)
+  html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
+  vectors/<name>/  file-based vectors: page.html, style.css, browser.json (oracle output)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
+scripts/
+  browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
 assets/            (gitignored — see Gotchas)
   fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
@@ -120,9 +123,10 @@ assets/            (gitignored — see Gotchas)
   `debug`), matched per element (`HtmlElement` tag/id/classes, cached per
   combination) with CSS precedence: `!important`, then specificity (ids,
   classes, type), then source order. Inherited `color`, `font-family` (first name registered in
-  `FontFamilies`, generics via `set_generic`; no registered name → inherited),
-  `font-size` (`px`, `em`/`%`, `rem`, keywords with medium = 16px,
-  `smaller`/`larger`), `font-weight` (bold at 600+), `font-style`; blocks:
+  `FontFamilies`, generics via `set_generic`; no registered name → Bevy's
+  default font, as browsers do), `font-size` (`px`, `em`/`%`, `rem`, keywords
+  with medium = 16px, `smaller`/`larger`), `font-weight` (bold above 500, CSS
+  font matching), `font-style`; blocks:
   `background-color`. `html` is the
   starting point even without `<html>`; nothing declared → white, Bevy's
   default font, 16px. Missing font faces fall back bold-italic → bold →
@@ -205,13 +209,94 @@ Two layers, both deterministic and headless:
   `padding=`, `margin=` as t,r,b,l, `gap=`, `bg=`, `slice=file t,r,b,l
   stretch|tile`), one indented line per text run (`"text" face size color`).
   Vectors: Tera structure, CSS cascade + fonts, Fluent, box model, runtime
-  changes (context / locale / stylesheet swaps, root box restore).
+  changes (context / locale / stylesheet swaps, root box restore). Plain-HTML
+  vectors live as files in `tests/vectors/<name>/` (`TestUi::from_vector`).
 - Adding a vector: write the inputs, derive the expected dump **by hand from
   HTML/CSS/Fluent semantics** (don't paste actual output), run. When a vector
   fails, decide whether the code or the expectation is wrong before editing
   either. Keep the dump format stable; extend it only for newly mapped
   properties. A vector should fail when its feature is broken (spot-check by
   breaking the code once).
+- **Browser oracle** (`browser_oracle` test): every `tests/vectors/*/` with a
+  `browser.json` is built and compared with Chromium's computed styles — per
+  non-whitespace character (face from CSS font matching over the harness's
+  registered families, size, color) and per root/block/container (padding,
+  border widths, border-image file/slices/repeat with `%` resolved on the
+  32×24 fixture, background, container gap). Regenerate after changing a
+  vector's inputs: `scripts/browser_oracle.py [tests/vectors/<name>]`, then
+  review the `browser.json` diff (one record per line) and commit it. The page
+  is `* { all: unset }` + `style.css` + `page.html`, so vectors must be plain
+  HTML (no Tera / `data-l10n-id`; the script refuses them), set `color` on
+  `html` (browsers default to black, p23 to white) and `border-style: solid`
+  where widths matter. Deliberate differences (`pre` padding, root background,
+  `border-style`, `li` bullets) are skipped and listed above
+  `FIXTURE_SIZE` in `tests/html_ui.rs`; add new ones there with a reason. The
+  oracle's first run found two real bugs (unregistered `font-family` kept the
+  inherited family; weight 501–599 wasn't bold).
+
+### Testing TODO
+
+Work through in order. Weakness numbers refer to the current methodology's
+known gaps:
+
+1. Expectations come from the same head as the code (shared misreadings of
+   CSS/Fluent pass).
+2. The dump is a projection: unprinted components (`flex_shrink`,
+   `TextLayout::no_wrap`, `Overflow`, entity counts, …) are unchecked.
+3. Components, not layout or pixels: positions, wrapping and drawing are
+   untested.
+4. Fake font handles: font loading, glyph fallback, CJK untested.
+5. `settle()` polls with a sleep and a frame cap (possible flakiness).
+6. Coverage by example only.
+
+- [x] **1. Real browser as the oracle** (fixes weakness 1) — CSS part done:
+  `scripts/browser_oracle.py` + `browser_oracle` test + vectors `cascade`,
+  `box_model`, `units` (see Testing).
+  - [ ] Fluent part: `@fluent/dom` (needs npm + a DOM, e.g. jsdom) translating
+    the same DOM, as the reference for the overlay and markup behaviour.
+  - [ ] More oracle vectors as CSS support grows (every new property gets one).
+- [ ] **2. Metamorphic and property-based tests** (fixes weakness 6). Check
+  relationships that must always hold, over generated inputs (proptest):
+  - Shorthand = longhands: `padding: 1px 2px` builds the same world as the
+    four longhands; likewise `border-image`, `border-width`.
+  - Unmatched rules don't matter: adding a rule that matches nothing changes
+    nothing.
+  - Order only breaks ties: swapping two rules changes the result only with
+    equal specificity and overlap.
+  - Specificity monotonicity: adding a class to a selector never makes it
+    lose to the original.
+  - Round trips: locale A → B → A, theme X → Y → X, context v → w → v end in
+    a dump identical to the start.
+  - Idempotence: a forced rebuild with no input change gives an identical
+    dump.
+  - No duplicates: each rebuild leaves exactly one generation of children,
+    no leaked entities.
+- [ ] **3. Headless layout checks** (fixes weakness 3, mostly). Run Bevy UI's
+  layout headless with a fixed viewport; assert node rects (`ComputedNode`,
+  `UiGlobalTransform`). Essential once flex layout lands (next step 1); then
+  Chromium's `getBoundingClientRect` is the oracle for the supported subset.
+  Unverified whether Bevy 0.19 UI layout runs without a camera/window target —
+  spike first.
+- [ ] **4. Lint tests over real content** (content bugs, the ones you'll hit):
+  - every locale defines the same message ids
+  - every visible text node in a template sits under a `data-l10n-id`
+  - every template compiles with representative data
+  - every CSS file parses; every `url()` resolves to an existing file
+  - a pseudo-locale (e.g. `[Ĩñvéñtöŕý~~~]`, longer and accented) exposing
+    untranslated strings and overflow in the UI
+- [ ] **5. Fuzzing** (robustness). cargo-fuzz or proptest-generated arbitrary
+  HTML, CSS, FTL and JSON args through the pipeline: no panic, no hang, always
+  some output (e.g. the error paragraph). Targets our glue: entity decoding,
+  whitespace collapsing, slice arithmetic, `data-l10n-args` handling.
+- [ ] **6. Mutation testing** (measures vector strength). `cargo-mutants`
+  mutates the code and reports mutations no test catches. Run occasionally;
+  each survivor is a missing vector or dump field.
+- [ ] **7. Golden images, sparingly** (fixes the rest of weakness 3, and
+  weakness 4). Render two or three reference scenes with a software adapter
+  (Mesa lavapipe/llvmpipe with wgpu) and compare screenshots within a
+  tolerance — the only layer that sees real fonts, wrapping, 9-slice drawing
+  and CJK fallback. Brittle across drivers and font versions: a smoke check,
+  not a spec.
 
 ## Limits and next steps
 

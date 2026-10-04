@@ -1,0 +1,15 @@
+{
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py"},
+ "elements": [
+  {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [10, 20, 10, 20], "border": [16, 16, 16, 16], "borderImageSource": "url(\"file:///tmp/p23-oracle-cmj1snpo/frame.png\")", "borderImageSlice": "4 fill", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": null, "classes": ["framed"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [6, 8, 6, 8], "borderImageSource": "url(\"file:///tmp/p23-oracle-cmj1snpo/frame.png\")", "borderImageSlice": "25% fill", "borderImageRepeat": "repeat", "rowGap": "normal", "backgroundColor": "rgb(16, 32, 48)"},
+  {"tag": "div", "id": null, "classes": ["panel"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [4, 4, 4, 4], "border": [12, 12, 12, 12], "borderImageSource": "url(\"file:///tmp/p23-oracle-cmj1snpo/frame.png\")", "borderImageSlice": "2 3 4 5 fill", "borderImageRepeat": "stretch", "rowGap": "7px", "backgroundColor": "rgb(51, 51, 51)"},
+  {"tag": "p", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"}
+ ],
+ "runs": [
+  {"text": "Framed", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral"},
+  {"text": "One", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral"},
+  {"text": "Two", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral"}
+ ]
+}

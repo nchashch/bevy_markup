@@ -25,9 +25,11 @@
 //! `font-family` uses the first name registered in
 //! [`FontFamilies`](crate::fonts::FontFamilies) (generic keywords via
 //! [`FontFamilies::set_generic`](crate::fonts::FontFamilies::set_generic)); a
-//! list with no registered name keeps the inherited family. `font-size`:
+//! list with no registered name means Bevy's default font (like a browser's
+//! default font), not the inherited family. `font-size`:
 //! `px`, `em`/`%` (of the inherited size), `rem` (of the root size), keywords
-//! (`medium` = 16px), `smaller`/`larger`. `font-weight`: bold at 600+.
+//! (`medium` = 16px), `smaller`/`larger`. `font-weight`: bold above 500 (CSS
+//! font matching with regular/bold faces).
 //! `font-style`: `italic`/`oblique` vs `normal`.
 //!
 //! ## 9-slice frames with `border-image`

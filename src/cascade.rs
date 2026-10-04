@@ -275,7 +275,8 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             style.bold = Some(match weight {
                 FontWeight::Absolute(AbsoluteFontWeight::Bold) | FontWeight::Bolder => true,
                 FontWeight::Absolute(AbsoluteFontWeight::Normal) | FontWeight::Lighter => false,
-                FontWeight::Absolute(AbsoluteFontWeight::Weight(weight)) => *weight >= 600.0,
+                // CSS font matching: above 500 prefers the heavier face.
+                FontWeight::Absolute(AbsoluteFontWeight::Weight(weight)) => *weight > 500.0,
             });
         }
         Property::FontStyle(font_style) => {

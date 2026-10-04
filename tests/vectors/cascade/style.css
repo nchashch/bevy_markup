@@ -1,0 +1,12 @@
+html { color: #ffffff; font-family: Spectral; font-size: 20px }
+#lead { color: #00ff00 }
+.note { color: #ff0000; font-size: 1.5em }
+p { color: #0000ff }
+b { font-weight: 700 }
+i { font-style: italic }
+code { font-family: Nonexistent, monospace; color: #888888 }
+.a { color: #111111 }
+.b { color: #222222 }
+p.a { font-family: Nonexistent }
+h2 { font-size: 2rem; font-weight: bold }
+.small { font-size: 50% }

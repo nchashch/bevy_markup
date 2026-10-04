@@ -1,0 +1,26 @@
+{
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py"},
+ "elements": [
+  {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": "lead", "classes": ["note"], "color": "rgb(0, 255, 0)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "b", "id": null, "classes": [], "color": "rgb(0, 255, 0)", "fontSize": 30, "fontWeight": 700, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "i", "id": null, "classes": [], "color": "rgb(0, 255, 0)", "fontSize": 30, "fontWeight": 700, "fontStyle": "italic", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": null, "classes": ["note"], "color": "rgb(255, 0, 0)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "code", "id": null, "classes": [], "color": "rgb(136, 136, 136)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Nonexistent, monospace", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "b", "id": null, "classes": [], "color": "rgb(136, 136, 136)", "fontSize": 30, "fontWeight": 700, "fontStyle": "normal", "fontFamily": "Nonexistent, monospace", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": null, "classes": ["a", "b"], "color": "rgb(34, 34, 34)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Nonexistent", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "h2", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 40, "fontWeight": 700, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "span", "id": null, "classes": ["small"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 700, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"}
+ ],
+ "runs": [
+  {"text": "Lead ", "color": "rgb(0, 255, 0)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral"},
+  {"text": "bold ", "color": "rgb(0, 255, 0)", "fontSize": 30, "fontWeight": 700, "fontStyle": "normal", "fontFamily": "Spectral"},
+  {"text": "both", "color": "rgb(0, 255, 0)", "fontSize": 30, "fontWeight": 700, "fontStyle": "italic", "fontFamily": "Spectral"},
+  {"text": "Note ", "color": "rgb(255, 0, 0)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral"},
+  {"text": "mono ", "color": "rgb(136, 136, 136)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Nonexistent, monospace"},
+  {"text": "bold?", "color": "rgb(136, 136, 136)", "fontSize": 30, "fontWeight": 700, "fontStyle": "normal", "fontFamily": "Nonexistent, monospace"},
+  {"text": "Two classes", "color": "rgb(34, 34, 34)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Nonexistent"},
+  {"text": "Heading ", "color": "rgb(255, 255, 255)", "fontSize": 40, "fontWeight": 700, "fontStyle": "normal", "fontFamily": "Spectral"},
+  {"text": "small", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 700, "fontStyle": "normal", "fontFamily": "Spectral"}
+ ]
+}

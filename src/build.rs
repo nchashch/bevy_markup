@@ -141,11 +141,12 @@ impl Styler<'_> {
         let declared = self.styles.get(element);
         Style {
             color: declared.color.unwrap_or(inherited.color),
-            family: declared
-                .font_family
-                .as_deref()
-                .and_then(|list| self.fonts.resolve(list))
-                .or(inherited.family),
+            // A declared list with no registered family falls back to the
+            // default font (as in browsers), not to the inherited family.
+            family: match declared.font_family.as_deref() {
+                Some(list) => self.fonts.resolve(list),
+                None => inherited.family,
+            },
             size: declared
                 .font_size
                 .map_or(inherited.size, |size| size.resolve(inherited.size, self.root_size)),
