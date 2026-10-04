@@ -73,6 +73,10 @@ jobs:
 
   coverage:
     name: Coverage per testing layer
+    # After the fuzz jobs, so the fuzz-corpora layer replays tonight's
+    # corpora (restored below); also when a fuzz job failed.
+    needs: fuzz
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

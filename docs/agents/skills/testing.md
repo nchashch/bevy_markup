@@ -333,7 +333,8 @@ for t in html css ftl; do
 done
 ```
 
-The nightly coverage job restores the same corpus caches, so its
+The nightly coverage job runs after the fuzz jobs (`needs: fuzz`, also
+when one failed) and restores the corpus caches they just saved, so its
 fuzz-corpora layer measures seeds plus everything CI has found so far.
 
 To add a fuzz target: add the glue function to `src/fuzz.rs`, then a target
