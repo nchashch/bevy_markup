@@ -22,6 +22,7 @@ reasons behind each piece; this file is the how-to.
 | Fuzz one target | `scripts/fuzz-libfuzzer.sh <html\|css\|ftl> [seconds]` | 60 s default |
 | Other fuzzers | `scripts/fuzz-{honggfuzz,fuzzcheck,test-fuzz}.sh <target> [seconds]` | |
 | Mutation testing | `scripts/mutants.sh [--full] [--file src/x.rs]` | ~15 min full run (estimate) |
+| Coverage per layer | `scripts/coverage.py [--html] [--layer NAME]` | ~1.5 min warm |
 
 Rules that always hold:
 - `cargo test` and the three warning-free checks must pass before any change
@@ -52,6 +53,7 @@ Rules that always hold:
 | Golden images | `tests/golden.rs` (`#[ignore]`d) | real rendering: glyphs, wrapping, 9-slice drawing |
 | Fuzzers | `fuzz/`, `honggfuzz/`, `fuzzcheck/`, `test-fuzz/` | panics and hangs in parsing/glue code |
 | Mutation testing | `scripts/mutants.sh`, `.github/workflows/mutants.yml` | gaps in all of the above |
+| Coverage | `scripts/coverage.py`, nightly `coverage` job | which library lines each layer reaches |
 
 The bugs found so far (`docs/agents/bugs/INDEX.md`) came almost entirely from
 the generated-input layers and the oracles, not from hand-written examples.
@@ -345,6 +347,34 @@ it only changes whether a `debug!` line is logged). Copy survivors into
 `AGENTS.md`: `target/mutants.out/` is overwritten by every run. For the
 weekly CI run: `gh run download <run-id>` and read each shard's
 `missed.txt`.
+
+## Coverage (`scripts/coverage.py`)
+
+Source-based line coverage (`cargo-llvm-cov`) of the library code in `src/`,
+per testing layer and merged. Each layer runs alone; the table shows the
+lines it covers and the lines *only* it covers (what dropping that layer
+would lose). Layers: `unit`, `vectors+oracles`, `properties`, `arbtest`,
+`stateful`, `content-lint`, `fuzz-corpora`.
+
+```sh
+scripts/coverage.py                 # table + target/coverage/uncovered.txt
+scripts/coverage.py --html          # + target/coverage/html/index.html
+scripts/coverage.py --layer stateful --layer unit
+```
+
+- Needs `cargo install cargo-llvm-cov` and
+  `rustup component add llvm-tools-preview`.
+- `src/fuzz.rs` and `#[cfg(test)]` modules are excluded: they aren't library
+  code (test modules must stay at the end of their file for this).
+- The `fuzz-corpora` layer replays the local cargo-fuzz corpora through the
+  same harnesses (`tests/fuzz_corpus.rs`, `#[ignore]`d, feature
+  `fuzzing`). It covers what fuzzing has reached so far; run the fuzzers
+  longer to grow it. Without corpora (CI, fresh clones) it covers nothing.
+- Golden images and doc tests aren't measured.
+- Read `uncovered.txt` for gaps, but remember that coverage only shows a
+  line *ran*, not that a test checked its result. Mutation testing measures
+  checking. They complement each other: mutants can't target an arm of an
+  exhaustive `match`, coverage shows whether that arm ever runs.
 
 ## Discovering bugs: the workflow
 

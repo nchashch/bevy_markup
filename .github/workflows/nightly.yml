@@ -56,6 +56,35 @@ jobs:
             exit 1
           fi
 
+  coverage:
+    name: Coverage per testing layer
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space (full-Bevy builds are large)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install Bevy's Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Measure (content lint and fuzz corpora skip in CI; their inputs are gitignored)
+        run: |
+          scripts/coverage.py --html | tee coverage.txt
+          { echo '### Line coverage of src/ per testing layer'; echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: target/coverage/
+
   fuzz:
     name: Fuzz ${{ matrix.target }} (cargo-fuzz, 60 s)
     runs-on: ubuntu-latest

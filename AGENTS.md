@@ -74,6 +74,7 @@ tests/
                    templates render (+ every data-l10n-id resolves), no hard-coded text, CSS url()s, pseudo-locale
   golden.rs        golden images (#[ignore]d): tests/golden/<scene>/ rendered offscreen by real Bevy,
                    compared with expected.png within a tolerance (see Testing)
+  fuzz_corpus.rs   replays local fuzz/corpus/* through p23::fuzz (#[ignore]d, --features fuzzing) for coverage
   common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump; with_layout = Bevy UI layout)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (CSS oracle output);
                    Fluent vectors add messages.ftl + fluent.html (Fluent oracle output);
@@ -91,6 +92,7 @@ scripts/
   fluent_oracle.sh   @fluent/dom in jsdom → tests/vectors/*/fluent.html (Node + npm;
                      pinned packages in fluent-oracle/, node_modules gitignored)
   mutants.sh         mutation testing (cargo-mutants), fast settings + cache parking; see Testing TODO 6
+  coverage.py        line coverage of src/ per testing layer and merged (cargo-llvm-cov); see Testing
   golden.sh          golden-image test on Mesa lavapipe (`--update` rewrites references; fetches
                      Arch's vulkan-swrast into target/golden-lavapipe/ if no lavapipe ICD)
   fuzz-<driver>.sh   run one fuzzer over one target:
@@ -759,7 +761,18 @@ Next steps (roughly in order of value):
   (ignoring the generator line; a failure means Chrome changed or a vector
   is stale), fuzzes each cargo-fuzz target for 60 s and builds the other
   fuzz drivers. Nightly failures are reports to triage, not merge blockers.
-  `assets/` isn't in the repo, so `content_lint` skips in CI.
+  `assets/` isn't in the repo, so `content_lint` skips in CI. The nightly
+  `coverage` job runs `scripts/coverage.py --html`: the per-layer table goes
+  to the job summary, the reports to the `coverage` artifact (without
+  `assets/` and fuzz corpora, those two layers cover nothing in CI).
+  First local measurement (2026-10-04): 94.3% of 1684 library lines
+  covered by some layer; vectors+oracles 82.4%, properties 77.5%, unit
+  33.9% (but 102 lines only they reach), fuzz corpora 13.4%. Open gaps from
+  it: the template *render*-failure path (`html.rs` render error →
+  `failed to render:` paragraph) is never exercised, and many CSS mapping
+  arms (most `justify-content`/`align-items`/`align-self` values, font-size
+  keywords, `vmin`/`vmax`) never run. Mutants can't see the latter (no arm
+  of an exhaustive match can be deleted).
   GitHub moves `ubuntu-latest` to Ubuntu 26 from 2026-10-19: that can change
   Mesa (golden images: lavapipe rendering vs the references) and the apt
   package names (Bevy/honggfuzz build dependencies). If the nightly breaks
