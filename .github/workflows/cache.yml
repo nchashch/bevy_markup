@@ -1,0 +1,88 @@
+# Builds the dependency caches the scheduled workflows restore, once per
+# dependency or toolchain change instead of once per job: `mutants` for the
+# mutation shards (mutants.yml) and `fuzz` for the cargo-fuzz jobs
+# (nightly.yml). The CI `test` job produces the third, `dev`, which the
+# golden job restores. Consumers only restore (`save-if: false`).
+#
+# Runs on every push to main and daily before the schedules. When the exact
+# cache already exists it only restores it (a minute or two): that skips the
+# build and keeps the entry from GitHub's 7-day eviction.
+#
+# rust-cache keys on the toolchain version, every CARGO*/RUST*/CC* variable
+# set when it runs, and the manifests and lockfiles. A consumer hits the cache
+# only if all of these match its producer: keep each job's `env` and
+# toolchain equal to its consumer's. Consumers warn on a miss.
+name: Build caches
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 1 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: build-caches
+  cancel-in-progress: false
+
+jobs:
+  mutants:
+    name: Mutants build (profile mutants, dynamic Bevy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env: # = mutants.yml
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space (full-Bevy test builds are large)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: dtolnay/rust-toolchain@stable
+      - id: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mutants
+      - name: Install Bevy's Linux build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig-dev
+      # Exactly cargo-mutants' baseline build (its log shows the command):
+      # with this cache its baseline compiles nothing.
+      - name: Build what the mutants baseline builds
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: >-
+          cargo test --no-run --profile mutants --features bevy/dynamic_linking
+          --lib --test html_ui --test stateful
+
+  fuzz:
+    name: cargo-fuzz build (pinned nightly, ASan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env: # = nightly.yml
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      P23_NIGHTLY: nightly-2026-09-09 # = nightly.yml
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.P23_NIGHTLY }}
+      - id: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fuzz
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          tool: cargo-fuzz
+      # `cargo fuzz build` builds every target with the flags `cargo fuzz
+      # run` (scripts/fuzz-libfuzzer.sh) uses, so the dependencies match.
+      - name: Build the fuzz targets
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: fuzz
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          cargo "+$P23_NIGHTLY" fuzz build --target "$host"

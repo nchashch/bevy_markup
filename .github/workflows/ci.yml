@@ -38,7 +38,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig-dev
       - uses: dtolnay/rust-toolchain@stable
+      # Saves the `dev` cache the nightly golden job restores (nightly.yml
+      # mirrors this workflow's env for it).
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dev
       - name: Library with minimal Bevy features
         run: cargo check --lib
       - name: All targets

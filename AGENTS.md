@@ -85,8 +85,10 @@ tests/
   ci.yml           per push to main / PR: -D warnings check/build/doc, cargo test, fuzzing-feature
                    tests, Fluent oracle references current
   nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 60 s
-                   cargo-fuzz per target, other fuzz drivers build
+                   cargo-fuzz per target, other fuzz drivers build (fuzz on pinned P23_NIGHTLY)
   mutants.yml      weekly mutation testing, 4 shards, --in-place, fast settings, informational
+  cache.yml        builds the shared `mutants` and `fuzz` dependency caches once (push to main,
+                   daily); scheduled jobs only restore them (see Testing, CI)
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
   fluent_oracle.sh   @fluent/dom in jsdom → tests/vectors/*/fluent.html (Node + npm;
@@ -624,11 +626,10 @@ known gaps:
     (was 194 s), tests 0.3–0.7 s (was 39 s) — all mutants of a shard take
     9–19 min. The rest is the one-time baseline build (18–30 min): a
     cache miss, because rust-cache's key includes an environment hash and
-    the `env:` block had changed. The run saved a 670 MiB
-    `v0-rust-mutants-…` cache; later runs should spend minutes, not half an
-    hour, on the baseline. GitHub evicts caches unused for 7 days, so a
-    weekly schedule can lose it: if baselines stay cold, run it twice a
-    week. Survivors: the 6 documented equivalents plus `l10n.rs`
+    the `env:` block had changed. Since then `cache.yml` builds the
+    `mutants` cache once per dependency change and restores it daily
+    (beating the 7-day eviction); the shards only restore it (see the CI
+    notes below). Survivors: the 6 documented equivalents plus `l10n.rs`
     `localize` `delete !` (turning localization off left stale
     translations; the state machine only caught it by chance): now killed by
     `turning_localization_off_restores_own_content`.
@@ -840,6 +841,19 @@ Next steps (roughly in order of value):
   fuzz-driver builds green; the cargo-fuzz jobs needed
   `fuzz-libfuzzer.sh` to pass `--target` (the prebuilt cargo-fuzz defaults
   to musl, which ASan rejects).
+  Shared build caches (2026-10-05): every job used to build its own
+  dependencies; the 3 cargo-fuzz jobs rebuilt from scratch daily (a new
+  nightly changes rust-cache's key: 11–19 min each for 60 s of fuzzing) and
+  the mutants shards missed after a week. Now `cache.yml` builds the
+  `mutants` and `fuzz` caches once, CI's `test` job the `dev` cache, and
+  consumers only restore them; the fuzz jobs pin `P23_NIGHTLY`
+  (`nightly-2026-09-09`, the nightly every fuzz driver was verified on
+  locally; bump it in nightly.yml and cache.yml together). Verified locally
+  in a fresh target dir: after the producer commands, cargo-mutants'
+  baseline, `cargo test --test golden` (under CI's env) and `cargo fuzz
+  build` → `run` compile no dependencies. Details and the producer/consumer
+  table: `docs/agents/skills/testing.md`, CI. A consumer's `::warning::`
+  "no exact … build cache" means the pair's env, toolchain or keys drifted.
 - Warning-free: `cargo check --lib` (minimal Bevy features), `cargo build
   --all-targets`, `cargo doc --no-deps`. `cargo test` must pass: cascade unit
   tests, the headless test vectors, and the `no_run` doc examples (see

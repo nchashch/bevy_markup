@@ -36,7 +36,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig-dev
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # Restores the `mutants` cache cache.yml builds (env must stay equal).
+      - id: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mutants
+          save-if: false
+      - name: Warn on a build-cache miss
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: echo "::warning::no exact 'mutants' build cache (dependencies or toolchain changed since cache.yml last ran, or this job's env differs from cache.yml's); building from scratch"
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants

@@ -435,6 +435,29 @@ reporting upstream or removing a vendored patch.
   the other fuzz drivers. Failures are reports to triage, not blockers.
 - `mutants.yml` (weekly, 4 shards): informational. Survivors are in each
   shard's job summary and the `mutants-shard-N` artifacts.
+- `cache.yml` (every push to main, and daily before the schedules): builds
+  dependency caches once so jobs don't each build Bevy from scratch.
+
+Shared build caches (`Swatinem/rust-cache` `shared-key`):
+
+| Cache | Built by | Restored by |
+|---|---|---|
+| `dev` | ci.yml `test` | nightly `golden` |
+| `mutants` | cache.yml `mutants` | the 4 mutants shards |
+| `fuzz` | cache.yml `fuzz` | nightly `fuzz` (3 targets) |
+
+Consumers restore with `save-if: false`; the producer builds only when the
+exact entry is missing and otherwise just restores it, which also keeps it
+from GitHub's 7-day eviction. The key is the toolchain version plus every
+`CARGO*`/`RUST*`/`CC*` variable set when rust-cache runs plus the
+manifests and lockfiles, so producer and consumer must agree on all of them:
+change a job's `env` or toolchain only together with its pair (comments in
+the workflows mark them). A consumer that misses logs a `::warning::` and
+builds from scratch. The fuzz jobs use a dated nightly (`P23_NIGHTLY` in
+nightly.yml and cache.yml; `scripts/fuzz-libfuzzer.sh` honours it), because
+a floating nightly changes the key every day. Coverage (instrumented
+`RUSTFLAGS`) and the fuzz-driver checks keep their own per-job caches;
+nothing else builds the way they do.
 
 Trigger the scheduled ones by hand with `gh workflow run nightly.yml` or
 `gh workflow run mutants.yml`, and read logs with
