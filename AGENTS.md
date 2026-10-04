@@ -85,12 +85,12 @@ tests/
                    tests, Fluent oracle references current
   nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 60 s
                    cargo-fuzz per target, other fuzz drivers build
-  mutants.yml      weekly mutation testing, 8 shards, --in-place, informational
+  mutants.yml      weekly mutation testing, 4 shards, --in-place, fast settings, informational
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
   fluent_oracle.sh   @fluent/dom in jsdom → tests/vectors/*/fluent.html (Node + npm;
                      pinned packages in fluent-oracle/, node_modules gitignored)
-  mutants.sh         mutation testing (cargo-mutants) with cache parking; see Testing TODO 6
+  mutants.sh         mutation testing (cargo-mutants), fast settings + cache parking; see Testing TODO 6
   golden.sh          golden-image test on Mesa lavapipe (`--update` rewrites references; fetches
                      Arch's vulkan-swrast into target/golden-lavapipe/ if no lavapipe ICD)
   fuzz-<driver>.sh   run one fuzzer over one target:
@@ -576,14 +576,29 @@ known gaps:
     (fixed: depth-first), and Unicode-whitespace collapsing of NBSP/U+3000
     (fixed: ASCII whitespace only). CSS/FTL grammars remain open.
 - [ ] **6. Mutation testing** (measures vector strength): `scripts/mutants.sh`
-  (`--full` adds the property suites; `--file src/x.rs` narrows). Slow (each
-  mutant relinks Bevy test binaries: ~1 h default, ~4 h `--full`): run
-  occasionally in the background; results in `target/mutants.out/` (not
+  (default: unit + html_ui + stateful, like CI; `--full` adds the property
+  suites; `--file src/x.rs` narrows). Results in `target/mutants.out/` (not
   committed, overwritten per run — copy survivors here), reruns skip caught
   mutants (`--iterate`). The script parks the fuzz caches (cargo-mutants
   copies the tree, ignoring nested `.gitignore`s) and restores them on exit.
+  Speed (measured): a mutant costs ~4–8 s build + ~0.5 s tests (was 45 s +
+  9 s locally, 194 s + 39 s on CI), after a one-time ~150 s dependency build
+  per job — a full run is minutes, not hours. Three settings, each measured:
+  - Only the tests that run get built: target flags go in `--cargo-arg`.
+    `--cargo-test-arg` reaches only the test run; cargo-mutants' build step
+    (`cargo test --no-run`) then links every test binary and example (11
+    Bevy links per mutant; 28 s → 3.6 s).
+  - The `mutants` cargo profile (`Cargo.toml`): no debug info (it dominates
+    Bevy link times) and dependencies at `opt-level = 3` (tests ~40%
+    faster; Bevy's recommended dev setting, scoped to mutation runs).
+  - Bevy linked dynamically (`--cargo-arg=--features=bevy/dynamic_linking`,
+    the Bevy guide's biggest fast-compile win): each relink is ~1 s.
+  With these, the build is 0.8 s per mutant in a warm tree. Further options
+  from the Bevy guide (Cranelift, `-Zshare-generics`) need nightly and
+  aren't worth it at this point. `-j`/`--minimum-test-timeout` are set by
+  the script: use `P23_MUTANTS_JOBS` / `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT`.
   - [ ] Complete a `--full` run locally, or read the weekly CI results
-    (`mutants.yml`: unit + html_ui + stateful, 8 shards; survivors in each
+    (`mutants.yml`: unit + html_ui + stateful, 4 shards; survivors in each
     shard's job summary and the `mutants-shard-N` artifacts). Line numbers
     below are from `e1b910c`.
   - [x] Triage the first CI run (2026-10-04, run 37223937948: 420 mutants;

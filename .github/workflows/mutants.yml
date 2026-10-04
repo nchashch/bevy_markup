@@ -3,7 +3,10 @@
 # mutants (some are documented equivalents); survivors are listed in each
 # shard's job summary and uploaded, to be triaged into tests or notes.
 # `--in-place` mutates the disposable checkout (no tree copies, unlike
-# scripts/mutants.sh locally).
+# scripts/mutants.sh locally). Fast settings as in scripts/mutants.sh: the
+# `mutants` profile, dynamic Bevy, and only the tests that run get built
+# (`--cargo-arg`; a build per mutant then takes seconds, so the one-time
+# dependency build dominates each shard).
 name: Mutants
 
 on:
@@ -13,18 +16,16 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   mutants:
-    name: Mutants shard ${{ matrix.shard }}/8
+    name: Mutants shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - name: Free disk space (full-Bevy test builds are large)
@@ -42,9 +43,10 @@ jobs:
       - name: Mutate and test (unit tests, vectors and oracles, state machine)
         run: |
           status=0
-          cargo mutants --in-place --shard ${{ matrix.shard }}/8 \
+          cargo mutants --in-place --shard ${{ matrix.shard }}/4 \
+            --profile mutants --cargo-arg=--features=bevy/dynamic_linking \
             -e src/fuzz.rs -e src/lib.rs \
-            --cargo-test-arg=--lib --cargo-test-arg=--test=html_ui --cargo-test-arg=--test=stateful \
+            --cargo-arg=--lib --cargo-arg=--test=html_ui --cargo-arg=--test=stateful \
             --minimum-test-timeout 120 -o target || status=$?
           echo "cargo mutants exit status: $status"
           # 0: all caught; 2: survivors; 3: timeouts. Anything else is a setup error.
@@ -53,7 +55,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Mutants shard ${{ matrix.shard }}/8"
+            echo "### Mutants shard ${{ matrix.shard }}/4"
             for kind in missed timeout; do
               file=target/mutants.out/$kind.txt
               if [ -s "$file" ]; then

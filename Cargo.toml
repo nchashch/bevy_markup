@@ -64,3 +64,16 @@ test-strategy = "0.3.1"
 # as required by bevy_fluent 0.15.
 [patch.crates-io]
 fluent-syntax = { path = "vendor/fluent-syntax" }
+
+# Mutation testing (scripts/mutants.sh, .github/workflows/mutants.yml).
+# Every mutant rebuilds p23 and relinks its test binaries: no debug info
+# (it dominates Bevy link times) and optimized dependencies (faster tests;
+# built once per target dir). Those runs also link Bevy dynamically
+# (`--features bevy/dynamic_linking`) and build only the tests they run —
+# measured ~35× faster per mutant than a default `cargo test --no-run`.
+[profile.mutants]
+inherits = "dev"
+debug = false
+
+[profile.mutants.package."*"]
+opt-level = 3
