@@ -8,11 +8,13 @@
 //! - `p`: body font
 //! - `li`: body font with a bullet
 //! - loose text directly inside a container: body font
+//! - inline `b`/`strong` and `i`/`em`: the family's Bold / Italic face
 //!
 //! Any other element is walked through for its children; `head`, `script`, and
 //! `style` are skipped. A block's text is its Fluent translation when it has a
-//! `data-l10n-id` that resolved, otherwise its own text (inline tags such as
-//! `<b>` contribute their text, unstyled). Whitespace collapses as in HTML.
+//! `data-l10n-id` that resolved (plain, unstyled), otherwise its own content.
+//! Whitespace collapses as in HTML. Each block is one `Text` with a `TextSpan`
+//! child per styled run.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -21,7 +23,11 @@ use super::NineSliceFrame;
 use super::dom_panel::{L10N_PATH, demo_context};
 use crate::assets::html::{HtmlView, RenderedHtml, decode_entities};
 use crate::assets::l10n::LocalizedText;
-use crate::consts::{BODY_COLOR, BODY_FONT_PATH, FRAME_PATH, HEADER_COLOR, HEADER_FONT_PATH};
+use crate::consts::{
+    BODY_BOLD_FONT_PATH, BODY_BOLD_ITALIC_FONT_PATH, BODY_COLOR, BODY_FONT_PATH,
+    BODY_ITALIC_FONT_PATH, FRAME_PATH, HEADER_BOLD_FONT_PATH, HEADER_BOLD_ITALIC_FONT_PATH,
+    HEADER_COLOR, HEADER_FONT_PATH, HEADER_ITALIC_FONT_PATH,
+};
 
 const BODY_SIZE: f32 = 20.0;
 
@@ -30,10 +36,61 @@ const BODY_SIZE: f32 = 20.0;
 #[require(Node)]
 pub struct HtmlUi;
 
-enum Block {
-    Heading { level: u8, text: String },
-    Paragraph(String),
-    ListItem(String),
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Style {
+    bold: bool,
+    italic: bool,
+}
+
+/// A stretch of text in one style.
+struct Run {
+    text: String,
+    style: Style,
+}
+
+enum BlockKind {
+    Heading(u8),
+    Paragraph,
+    ListItem,
+}
+
+struct Block {
+    kind: BlockKind,
+    runs: Vec<Run>,
+}
+
+/// One typeface in its four faces.
+struct Family {
+    regular: Handle<Font>,
+    bold: Handle<Font>,
+    italic: Handle<Font>,
+    bold_italic: Handle<Font>,
+}
+
+impl Family {
+    fn load(
+        asset_server: &AssetServer,
+        regular: &'static str,
+        bold: &'static str,
+        italic: &'static str,
+        bold_italic: &'static str,
+    ) -> Self {
+        Self {
+            regular: asset_server.load(regular),
+            bold: asset_server.load(bold),
+            italic: asset_server.load(italic),
+            bold_italic: asset_server.load(bold_italic),
+        }
+    }
+
+    fn face(&self, style: Style) -> Handle<Font> {
+        match (style.bold, style.italic) {
+            (true, true) => self.bold_italic.clone(),
+            (true, false) => self.bold.clone(),
+            (false, true) => self.italic.clone(),
+            (false, false) => self.regular.clone(),
+        }
+    }
 }
 
 pub(super) fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -68,54 +125,82 @@ pub(super) fn build_html_ui(
         ),
     >,
 ) {
+    if views.is_empty() {
+        return;
+    }
+    let header = Family::load(
+        &asset_server,
+        HEADER_FONT_PATH,
+        HEADER_BOLD_FONT_PATH,
+        HEADER_ITALIC_FONT_PATH,
+        HEADER_BOLD_ITALIC_FONT_PATH,
+    );
+    let body = Family::load(
+        &asset_server,
+        BODY_FONT_PATH,
+        BODY_BOLD_FONT_PATH,
+        BODY_ITALIC_FONT_PATH,
+        BODY_BOLD_ITALIC_FONT_PATH,
+    );
+
     for (entity, rendered, localized) in &views {
         let blocks = match rendered {
             RenderedHtml::Pending => continue,
             RenderedHtml::Ready(document) => collect_blocks(document.dom(), &localized.0),
-            RenderedHtml::Failed(message) => {
-                vec![Block::Paragraph(format!("failed to render: {message}"))]
-            }
+            RenderedHtml::Failed(message) => vec![Block {
+                kind: BlockKind::Paragraph,
+                runs: vec![Run {
+                    text: format!("failed to render: {message}"),
+                    style: Style::default(),
+                }],
+            }],
         };
-
-        let header_font: Handle<Font> = asset_server.load(HEADER_FONT_PATH);
-        let body_font = TextFont::default()
-            .with_font(asset_server.load(BODY_FONT_PATH))
-            .with_font_size(BODY_SIZE);
 
         commands
             .entity(entity)
             .despawn_related::<Children>()
             .with_children(|parent| {
                 for block in blocks {
-                    match block {
-                        Block::Heading { level, text } => {
-                            parent.spawn((
-                                Text::new(text),
-                                TextFont::default()
-                                    .with_font(header_font.clone())
-                                    .with_font_size(heading_size(level)),
-                                TextColor(HEADER_COLOR),
-                            ));
+                    let (family, size, color, node) = match block.kind {
+                        BlockKind::Heading(level) => {
+                            (&header, heading_size(level), HEADER_COLOR, Node::default())
                         }
-                        Block::Paragraph(text) => {
-                            parent.spawn((
-                                Text::new(text),
-                                body_font.clone(),
-                                TextColor(BODY_COLOR),
-                            ));
-                        }
-                        Block::ListItem(text) => {
-                            parent.spawn((
-                                Text::new(format!("• {text}")),
-                                body_font.clone(),
-                                TextColor(BODY_COLOR),
-                                Node {
-                                    margin: UiRect::left(Val::Px(12.0)),
-                                    ..default()
-                                },
-                            ));
-                        }
-                    }
+                        BlockKind::Paragraph => (&body, BODY_SIZE, BODY_COLOR, Node::default()),
+                        BlockKind::ListItem => (
+                            &body,
+                            BODY_SIZE,
+                            BODY_COLOR,
+                            Node {
+                                margin: UiRect::left(Val::Px(12.0)),
+                                ..default()
+                            },
+                        ),
+                    };
+                    let prefix = match block.kind {
+                        BlockKind::ListItem => "• ",
+                        _ => "",
+                    };
+
+                    parent
+                        .spawn((
+                            Text::new(prefix),
+                            TextFont::default()
+                                .with_font(family.regular.clone())
+                                .with_font_size(size),
+                            TextColor(color),
+                            node,
+                        ))
+                        .with_children(|spans| {
+                            for run in block.runs {
+                                spans.spawn((
+                                    TextSpan::new(run.text),
+                                    TextFont::default()
+                                        .with_font(family.face(run.style))
+                                        .with_font_size(size),
+                                    TextColor(color),
+                                ));
+                            }
+                        });
                 }
             });
     }
@@ -154,9 +239,12 @@ fn collect_node(
     let tag = match node {
         tl::Node::Tag(tag) => tag,
         tl::Node::Raw(_) => {
-            let text = collapse_whitespace(&inline_text(parser, handle));
-            if !text.is_empty() {
-                blocks.push(Block::Paragraph(text));
+            let runs = inline_runs(parser, handle);
+            if !runs.is_empty() {
+                blocks.push(Block {
+                    kind: BlockKind::Paragraph,
+                    runs,
+                });
             }
             return;
         }
@@ -164,46 +252,95 @@ fn collect_node(
     };
 
     let name = tag.name().as_utf8_str().to_ascii_lowercase();
-    let block_text = || match localized.get(&handle) {
-        Some(Ok(text)) => text.clone(),
-        // Missing translation: fall back to the element's own content.
-        _ => collapse_whitespace(&inline_text(parser, handle)),
-    };
-    match name.as_str() {
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => blocks.push(Block::Heading {
-            level: name.as_bytes()[1] - b'0',
-            text: block_text(),
-        }),
-        "p" => blocks.push(Block::Paragraph(block_text())),
-        "li" => blocks.push(Block::ListItem(block_text())),
-        "head" | "script" | "style" => {}
+    let kind = match name.as_str() {
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading(name.as_bytes()[1] - b'0'),
+        "p" => BlockKind::Paragraph,
+        "li" => BlockKind::ListItem,
+        "head" | "script" | "style" => return,
         _ => {
             for child in tag.children().top().iter() {
                 collect_node(parser, localized, *child, blocks);
             }
+            return;
         }
-    }
+    };
+    let runs = match localized.get(&handle) {
+        Some(Ok(text)) => collapse_runs(vec![Run {
+            text: text.clone(),
+            style: Style::default(),
+        }]),
+        // Missing translation: fall back to the element's own content.
+        _ => inline_runs(parser, handle),
+    };
+    blocks.push(Block { kind, runs });
 }
 
-/// Concatenated text of `handle` and its descendants, entities decoded.
-fn inline_text(parser: &tl::Parser, handle: tl::NodeHandle) -> String {
-    let mut out = String::new();
-    push_inline_text(parser, handle, &mut out);
-    out
+/// Styled text runs of `handle` and its descendants, whitespace collapsed.
+fn inline_runs(parser: &tl::Parser, handle: tl::NodeHandle) -> Vec<Run> {
+    let mut runs = Vec::new();
+    push_runs(parser, handle, Style::default(), &mut runs);
+    collapse_runs(runs)
 }
 
-fn push_inline_text(parser: &tl::Parser, handle: tl::NodeHandle, out: &mut String) {
+fn push_runs(parser: &tl::Parser, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run>) {
     match handle.get(parser) {
-        Some(tl::Node::Raw(text)) => out.push_str(&decode_entities(&text.as_utf8_str())),
+        Some(tl::Node::Raw(text)) => {
+            let text = decode_entities(&text.as_utf8_str());
+            match runs.last_mut() {
+                Some(last) if last.style == style => last.text.push_str(&text),
+                _ => runs.push(Run { text, style }),
+            }
+        }
         Some(tl::Node::Tag(tag)) => {
+            let style = match tag.name().as_utf8_str().to_ascii_lowercase().as_str() {
+                "b" | "strong" => Style { bold: true, ..style },
+                "i" | "em" => Style {
+                    italic: true,
+                    ..style
+                },
+                _ => style,
+            };
             for child in tag.children().top().iter() {
-                push_inline_text(parser, *child, out);
+                push_runs(parser, *child, style, runs);
             }
         }
         Some(tl::Node::Comment(_)) | None => {}
     }
 }
 
-fn collapse_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+/// HTML whitespace collapsing across run boundaries: whitespace sequences
+/// become one space, leading/trailing space of the block is dropped, and
+/// emptied runs are removed.
+fn collapse_runs(runs: Vec<Run>) -> Vec<Run> {
+    let mut out: Vec<Run> = Vec::with_capacity(runs.len());
+    // Start as if after a space so the block's leading whitespace is dropped.
+    let mut after_space = true;
+    for run in runs {
+        let mut text = String::with_capacity(run.text.len());
+        for c in run.text.chars() {
+            if c.is_whitespace() {
+                if !after_space {
+                    text.push(' ');
+                    after_space = true;
+                }
+            } else {
+                text.push(c);
+                after_space = false;
+            }
+        }
+        if !text.is_empty() {
+            out.push(Run {
+                text,
+                style: run.style,
+            });
+        }
+    }
+    if let Some(last) = out.last_mut() {
+        let trimmed = last.text.trim_end().len();
+        last.text.truncate(trimmed);
+        if last.text.is_empty() {
+            out.pop();
+        }
+    }
+    out
 }

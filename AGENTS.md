@@ -25,7 +25,7 @@ src/
     dom_panel.rs     Debug panels: DOM outline of test/inventory/l10n.html; demo_context()
     html_ui.rs       HtmlUi: renders an HtmlView's DOM as Bevy UI nodes
 assets/              (gitignored — see Gotchas)
-  fonts/             IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
+  fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
   ui/frame.png       256x256 frame; ui/frame.slice.ron slices it (16px borders)
   ui/content/        test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent)
   locales/en-US/     main.ftl.ron (bundle manifest), ui.ftl (messages)
@@ -37,8 +37,10 @@ assets/              (gitignored — see Gotchas)
   (Startup) and their update systems as `pub(super)` fns registered in the
   module's `mod.rs`.
 - Shared paths/styles live in `consts`: `FONT_PATH` (mono), `HEADER_FONT_PATH`
-  + `HEADER_COLOR`, `BODY_FONT_PATH` + `BODY_COLOR`, `FRAME_PATH`. Don't
-  hard-code these in panels.
+  / `HEADER_BOLD_FONT_PATH` / `HEADER_ITALIC_FONT_PATH` /
+  `HEADER_BOLD_ITALIC_FONT_PATH` + `HEADER_COLOR`, the same four
+  `BODY_*_FONT_PATH` + `BODY_COLOR`, `FRAME_PATH`. Don't hard-code these in
+  panels.
 - Typography: headers IosevkaSlabQP (red), body Spectral (off-white),
   monospace/debug Iosevka Slab Mono.
 - Framed panels: `NineSliceFrame(asset_server.load(FRAME_PATH))` on the panel's
@@ -96,7 +98,10 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
 - `HtmlUi` on a node with `HtmlView` rebuilds its children on change. Supported:
   `h1`–`h6` (header font, 28/24/22/20px), `p` (body 20px), `li` (bulleted body),
   loose text (body). Other elements are traversed; `head`/`script`/`style`
-  skipped. Inline tags contribute unstyled text; whitespace collapses.
+  skipped. Each block is a `Text` with one `TextSpan` per styled run:
+  `b`/`strong` → Bold face, `i`/`em` → Italic face of the block's family, both
+  nested → BoldItalic face. Fluent translations are plain text (one
+  regular run). Whitespace collapses across run boundaries as in HTML.
 - `HtmlDocument::outline(&LocalizedText)` gives an indented debug tree (used by
   `dom_panel.rs`, also logged at `info`).
 
