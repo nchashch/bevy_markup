@@ -80,6 +80,12 @@ tests/
                    layout_* vectors also get rects in browser.json (layout oracle)
   golden/<scene>/  page.html, style.css, [messages.ftl], expected.png (text, frame, l10n)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
+.github/workflows/
+  ci.yml           per push to main / PR: -D warnings check/build/doc, cargo test, fuzzing-feature
+                   tests, Fluent oracle references current
+  nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 60 s
+                   cargo-fuzz per target, other fuzz drivers build
+  mutants.yml      weekly mutation testing, 8 shards, --in-place, informational
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
   fluent_oracle.sh   @fluent/dom in jsdom → tests/vectors/*/fluent.html (Node + npm;
@@ -576,8 +582,10 @@ known gaps:
   committed, overwritten per run — copy survivors here), reruns skip caught
   mutants (`--iterate`). The script parks the fuzz caches (cargo-mutants
   copies the tree, ignoring nested `.gitignore`s) and restores them on exit.
-  - [ ] Complete a `--full` run (only 29 of 396 mutants ran so far, at
-    `e1b910c` + working tree; line numbers below are from then).
+  - [ ] Complete a `--full` run locally, or read the weekly CI results
+    (`mutants.yml`: unit + html_ui + stateful, 8 shards; survivors in each
+    shard's job summary and the `mutants-shard-N` artifacts). Line numbers
+    below are from `e1b910c`.
   - [x] Triage the survivors of the partial runs (`e1b910c`; reruns with
     unit + html_ui + stateful). Killed by new tests:
     - `BoxStyle::is_empty` `&&`→`||` (background-only block lost its
@@ -608,7 +616,9 @@ known gaps:
     struct-field-deletion mutants (they always run); harmless, but a
     targeted rerun takes ~10 min instead of ~2.
   - [ ] After the full run: triage any new survivors the same way.
-  - [ ] Optionally run it in CI on a schedule (nightly), not per commit.
+  - [x] Scheduled in CI: `.github/workflows/mutants.yml`, weekly (Sundays),
+    informational — it never fails on survivors, since the documented
+    equivalents always survive.
   - Proptest regression seeds written while planting bugs by hand
     (`tests/layout_properties.proptest-regressions`,
     `proptest-regressions/*.txt`) are already covered: proptest replays them
@@ -676,6 +686,17 @@ Next steps (roughly in order of value):
 
 ## Verification
 
+- CI (`.github/workflows/`): `ci.yml` enforces the rules below on every push
+  to `main` and every PR (`RUSTFLAGS`/`RUSTDOCFLAGS=-D warnings`, debug info
+  off to fit the runner's disk), and that `tests/vectors/*/fluent.html` is
+  what `scripts/fluent_oracle.sh` produces. `nightly.yml` runs the golden
+  images on Ubuntu's lavapipe (references were recorded on Arch's Mesa 26.2;
+  if Ubuntu's Mesa renders differently beyond the tolerance, the job uploads
+  `golden-diffs`), checks `browser.json` against the runner's Chrome
+  (ignoring the generator line; a failure means Chrome changed or a vector
+  is stale), fuzzes each cargo-fuzz target for 60 s and builds the other
+  fuzz drivers. Nightly failures are reports to triage, not merge blockers.
+  `assets/` isn't in the repo, so `content_lint` skips in CI.
 - Warning-free: `cargo check --lib` (minimal Bevy features), `cargo build
   --all-targets`, `cargo doc --no-deps`. `cargo test` must pass: cascade unit
   tests, the headless test vectors, and the `no_run` doc examples (see

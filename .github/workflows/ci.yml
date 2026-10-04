@@ -1,0 +1,69 @@
+# Per commit / PR: the verification rules from AGENTS.md (warning-free
+# library, all targets and docs; all tests), plus the Fluent oracle's
+# committed references being current. Slow or environment-sensitive checks
+# (golden images, browser oracle drift, fuzzing, mutation testing) run on a
+# schedule: see nightly.yml and mutants.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Bevy's debug info dominates target/ size and nothing is debugged here.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  test:
+    name: Build, test, docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (full-Bevy test builds are large)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install Bevy's Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Library with minimal Bevy features
+        run: cargo check --lib
+      - name: All targets
+        run: cargo build --all-targets
+      - name: Tests (content lint skips without the gitignored assets/)
+        run: cargo test
+      - name: Fuzz harness unit tests
+        run: cargo test --lib --features fuzzing
+      - name: Docs
+        run: cargo doc --no-deps
+
+  fluent-oracle:
+    name: Fluent oracle references are current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Regenerate tests/vectors/*/fluent.html with @fluent/dom
+        run: scripts/fluent_oracle.sh
+      - name: Compare with the committed references
+        run: |
+          if ! git diff --exit-code -- tests/vectors; then
+            echo "::error::fluent.html is stale: run scripts/fluent_oracle.sh, review and commit the diff"
+            exit 1
+          fi

@@ -1,0 +1,109 @@
+# Nightly: checks that need a renderer, a browser or time. Failures here
+# are reports to triage (see AGENTS.md "Testing"), not merge blockers.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  golden:
+    name: Golden images (lavapipe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (full-Bevy builds are large)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install Bevy's build dependencies and Mesa's software Vulkan (lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev mesa-vulkan-drivers
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Render and compare (scripts/golden.sh picks the installed lavapipe ICD)
+        run: scripts/golden.sh
+      - name: Upload actual and diff images
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-diffs
+          path: target/tmp/golden/
+          if-no-files-found: ignore
+
+  browser-oracle:
+    name: Browser oracle references match current Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Regenerate tests/vectors/*/browser.json with headless Chrome
+        env:
+          P23_BROWSER: google-chrome
+        run: scripts/browser_oracle.py
+      - name: Compare with the committed references (ignoring the generator line)
+        run: |
+          if ! git diff --exit-code -I '"generator"' -- tests/vectors; then
+            echo "::error::Chrome computes differently from the committed browser.json: review; if the browser is right, regenerate and commit, then fix p23"
+            exit 1
+          fi
+
+  fuzz:
+    name: Fuzz ${{ matrix.target }} (cargo-fuzz, 60 s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [html, css, ftl]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz
+        run: scripts/fuzz-libfuzzer.sh ${{ matrix.target }} 60
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+
+  fuzz-drivers:
+    name: Other fuzz drivers build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the honggfuzz build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends binutils-dev libunwind-dev liblzma-dev
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            honggfuzz
+            test-fuzz
+            fuzzcheck
+      - name: honggfuzz
+        run: cargo check --manifest-path honggfuzz/Cargo.toml --all-targets
+      - name: test-fuzz
+        run: cargo check --manifest-path test-fuzz/Cargo.toml --all-targets
+      - name: fuzzcheck
+        working-directory: fuzzcheck
+        run: cargo check --tests

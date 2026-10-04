@@ -1,0 +1,72 @@
+# Weekly mutation testing (AGENTS.md Testing TODO 6), sharded so each job
+# fits the runner's time limit. Informational: it never fails on surviving
+# mutants (some are documented equivalents); survivors are listed in each
+# shard's job summary and uploaded, to be triaged into tests or notes.
+# `--in-place` mutates the disposable checkout (no tree copies, unlike
+# scripts/mutants.sh locally).
+name: Mutants
+
+on:
+  schedule:
+    - cron: "41 2 * * 0"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  mutants:
+    name: Mutants shard ${{ matrix.shard }}/8
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (full-Bevy test builds are large)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install Bevy's Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Mutate and test (unit tests, vectors and oracles, state machine)
+        run: |
+          status=0
+          cargo mutants --in-place --shard ${{ matrix.shard }}/8 \
+            -e src/fuzz.rs -e src/lib.rs \
+            --cargo-test-arg=--lib --cargo-test-arg=--test=html_ui --cargo-test-arg=--test=stateful \
+            --minimum-test-timeout 120 -o target || status=$?
+          echo "cargo mutants exit status: $status"
+          # 0: all caught; 2: survivors; 3: timeouts. Anything else is a setup error.
+          case $status in 0|2|3) ;; *) exit "$status" ;; esac
+      - name: Summarize survivors
+        if: always()
+        run: |
+          {
+            echo "### Mutants shard ${{ matrix.shard }}/8"
+            for kind in missed timeout; do
+              file=target/mutants.out/$kind.txt
+              if [ -s "$file" ]; then
+                echo "**$kind** ($(wc -l < "$file")):"
+                echo '```'
+                cat "$file"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: target/mutants.out/
+          if-no-files-found: ignore
