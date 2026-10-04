@@ -60,6 +60,7 @@ examples/
 tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
   properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips, …)
+  quickcheck.rs    quickcheck structured-input properties (cascade vs reference model, text round trip)
   common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (oracle output)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
@@ -271,9 +272,16 @@ known gaps:
   - [x] Round trips: locale A → B → A, theme X → Y → X, context v → w → v end in
     a dump identical to the start; a forced rebuild with no input change is
     idempotent (proxy for "no duplicate children").
-  - Remaining: `quickcheck` over structured inputs (e.g. cascade matching), and
-    `arbtest` robustness runs (arbitrary HTML/CSS/FTL through the pipeline: no
-    panic, always some output).
+  - [x] `quickcheck` over structured inputs: a generated many-rule stylesheet
+    checked against a reference CSS-precedence model (`cascade_winner_matches_
+    precedence_model`), and arbitrary text round-tripping through Tera
+    autoescaping (`context_text_round_trips_through_template`). The cascade
+    property catches a specificity mutation that all cascade unit tests miss.
+    Note: quickcheck 1.1's `Gen` RNG is private (edition-2024 `gen` keyword) —
+    build `Arbitrary` impls from `T::arbitrary(g)` + `g.choose`;
+    the `#[quickcheck]` attribute comes from `quickcheck_macros`.
+  - Remaining: `arbtest` robustness runs (arbitrary HTML/CSS/FTL through the
+    pipeline: no panic, always some output).
 - [ ] **3. Headless layout checks** (fixes weakness 3, mostly). Run Bevy UI's
   layout headless with a fixed viewport; assert node rects (`ComputedNode`,
   `UiGlobalTransform`). Essential once flex layout lands (next step 1); then

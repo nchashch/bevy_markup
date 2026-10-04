@@ -132,6 +132,7 @@ impl TestUi {
         self
     }
 
+    #[allow(dead_code)] // not every test binary exercises every helper
     pub fn locale(mut self, path: &str) -> Self {
         let bundle = self.load(path);
         self.app.insert_resource(ActiveLocale::new(bundle));
@@ -177,10 +178,12 @@ impl TestUi {
         panic!("UI never settled (assets loading or no rebuild); dump:\n{}", self.dump());
     }
 
+    #[allow(dead_code)] // not every test binary exercises every helper
     pub fn world_mut(&mut self) -> &mut World {
         self.app.world_mut()
     }
 
+    #[allow(dead_code)] // not every test binary exercises every helper
     pub fn root(&self) -> Entity {
         self.root.expect("spawned")
     }
