@@ -84,7 +84,7 @@ tests/
 .github/workflows/
   ci.yml           per push to main / PR: -D warnings check/build/doc, cargo test, fuzzing-feature
                    tests, Fluent oracle references current
-  nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 60 s
+  nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 5 min
                    cargo-fuzz per target, other fuzz drivers build (fuzz on pinned P23_NIGHTLY)
   mutants.yml      weekly mutation testing, 4 shards, --in-place, fast settings, informational
   cache.yml        builds the shared `mutants` and `fuzz` dependency caches once (push to main,
@@ -815,8 +815,13 @@ Next steps (roughly in order of value):
   if Ubuntu's Mesa renders differently beyond the tolerance, the job uploads
   `golden-diffs`), checks `browser.json` against the runner's Chrome
   (ignoring the generator line; a failure means Chrome changed or a vector
-  is stale), fuzzes each cargo-fuzz target for 60 s and builds the other
+  is stale), fuzzes each cargo-fuzz target for 5 min and builds the other
   fuzz drivers. Nightly failures are reports to triage, not merge blockers.
+  Fuzz corpora persist across nights as GitHub caches
+  (`fuzz-corpus-<target>-<run>`; restored from the newest, saved after
+  every run, also after a crash) and are minimized with `cargo fuzz cmin`
+  on Sundays. Before this (2026-10-05) every night started from an empty
+  corpus: 60 s reached cov 3830 on `html` vs 5572 for the local corpus.
   `assets/` isn't in the repo, so `content_lint` skips in CI. The nightly
   `coverage` job runs `scripts/coverage.py --html`: the per-layer table goes
   to the job summary, the reports to the `coverage` artifact (without

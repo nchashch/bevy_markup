@@ -101,9 +101,13 @@ jobs:
           path: target/coverage/
 
   fuzz:
-    name: Fuzz ${{ matrix.target }} (cargo-fuzz, 60 s)
+    name: Fuzz ${{ matrix.target }} (cargo-fuzz, 5 min)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # The corpus persists across nights as a GitHub cache: each run restores
+    # the newest `fuzz-corpus-<target>-*` entry, fuzzes on from there and
+    # saves a new entry (also after a crash). Old entries age out after 7
+    # days unused; if all of them do, fuzzing starts from scratch again.
     strategy:
       fail-fast: false
       matrix:
@@ -125,8 +129,33 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
+      - name: Restore the corpus from the last run
+        uses: actions/cache/restore@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      # Weekly (Sundays, UTC): drop inputs that add no coverage
+      # (libFuzzer -merge=1), so the corpus stays small and fast to replay.
+      - name: Minimize the corpus (Sundays)
+        run: |
+          dir=fuzz/corpus/${{ matrix.target }}
+          count() { find "$dir" -type f 2>/dev/null | wc -l; }
+          if [ "$(date -u +%u)" != 7 ] || [ "$(count)" = 0 ]; then exit 0; fi
+          before=$(count)
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          (cd fuzz && cargo "+$P23_NIGHTLY" fuzz cmin --target "$host" ${{ matrix.target }})
+          echo "corpus minimized: $before → $(count) inputs"
       - name: Fuzz
-        run: scripts/fuzz-libfuzzer.sh ${{ matrix.target }} 60
+        run: |
+          scripts/fuzz-libfuzzer.sh ${{ matrix.target }} 300
+          echo "corpus: $(find fuzz/corpus/${{ matrix.target }} -type f | wc -l) inputs"
+      - name: Save the corpus for the next run
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Upload crashing inputs
         if: failure()
         uses: actions/upload-artifact@v7

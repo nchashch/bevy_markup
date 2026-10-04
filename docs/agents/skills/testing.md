@@ -431,8 +431,10 @@ reporting upstream or removing a vendored patch.
   warning-free checks, `cargo test`, the `fuzzing`-feature tests, and that
   `fluent.html` matches what the script generates.
 - `nightly.yml`: golden images on Ubuntu's lavapipe, the browser oracle
-  against the runner's Chrome, 60 s of cargo-fuzz per target, and builds of
-  the other fuzz drivers. Failures are reports to triage, not blockers.
+  against the runner's Chrome, 5 min of cargo-fuzz per target, and builds of
+  the other fuzz drivers. Failures are reports to triage, not blockers. The
+  fuzz corpora carry over between nights (GitHub cache
+  `fuzz-corpus-<target>-*`, minimized with `cargo fuzz cmin` on Sundays).
 - `mutants.yml` (weekly, 4 shards): informational. Survivors are in each
   shard's job summary and the `mutants-shard-N` artifacts.
 - `cache.yml` (every push to main, and daily before the schedules): builds
