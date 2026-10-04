@@ -551,8 +551,11 @@ fn spawn_block(parent: &mut ChildSpawnerCommands, styler: &Styler, block: Block)
     }
 
     // Box properties go on a wrapper node: a node can't be both `Text` and
-    // `ImageNode` (both size it from content).
+    // `ImageNode` (both size it from content). It's a column so the text
+    // stretches to the content box and wraps there, like a CSS block (in a
+    // row the non-shrinking text kept its max-content width and overflowed).
     let mut node = Node {
+        flex_direction: FlexDirection::Column,
         flex_shrink: 0.0,
         box_sizing: BoxSizing::ContentBox,
         margin: indent,

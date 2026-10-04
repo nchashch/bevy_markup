@@ -17,3 +17,6 @@ html { font-size: 20px; padding: 10px }
 .b1 { flex-basis: 150px }
 .b2 { flex-basis: 25% }
 .vw { width: 50vw }
+.wpad { width: 100px; padding: 5px }
+.boxed { border-style: solid; border-width: 2px }
+.wpre { width: 100px }

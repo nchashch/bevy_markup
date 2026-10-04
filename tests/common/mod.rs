@@ -293,6 +293,23 @@ impl TestUi {
         self.root.expect("spawned")
     }
 
+    /// Runs `frames` app updates without waiting for anything (for checks
+    /// that something does *not* happen).
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn update(&mut self, frames: usize) -> &mut Self {
+        for _ in 0..frames {
+            self.app.update();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self
+    }
+
+    /// `HtmlUiBuilt` events so far (all `HtmlUi` entities).
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn builds(&self) -> usize {
+        self.app.world().resource::<Builds>().0
+    }
+
     pub fn dump(&mut self) -> String {
         let world = self.app.world_mut();
         let mut out = String::new();
@@ -469,6 +486,9 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         {
             write!(line, " gap={gap}").unwrap();
         }
+        if node.overflow != Overflow::DEFAULT {
+            write!(line, " overflow={:?},{:?}", node.overflow.x, node.overflow.y).unwrap();
+        }
     }
     if let Some(background) = entity_ref.get::<BackgroundColor>()
         && background.0 != Color::NONE
@@ -489,6 +509,10 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
             SliceScaleMode::Tile { .. } => "tile",
         };
         write!(line, " slice={file} {},{},{},{} {mode}", min.y, max.x, max.y, min.x).unwrap();
+        // CSS `border-image` covers the border box; flag anything else.
+        if !matches!(image.visual_box, VisualBox::BorderBox) {
+            write!(line, " visual-box={:?}", image.visual_box).unwrap();
+        }
     }
     writeln!(out, "{indent}{line}").unwrap();
 

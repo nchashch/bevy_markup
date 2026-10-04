@@ -16,3 +16,6 @@ html { font-size: 20px }
 .half { width: 50% }
 .end { align-self: flex-end }
 .hidden { display: none }
+.narrow { width: 100px }
+.fixed { width: 80px }
+.framed { border-style: solid; border-width: 1px }

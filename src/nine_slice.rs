@@ -170,6 +170,43 @@ mod tests {
         ron::de::from_str(ron)
     }
 
+    /// A frame gets its style's sliced image drawn over the border box (like
+    /// CSS `border-image`), whether it had no `ImageNode` yet or an existing
+    /// one (whose image, mode and box are replaced).
+    #[test]
+    fn frames_get_the_sliced_image_over_the_border_box() {
+        use bevy::ecs::message::Messages;
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<Messages<AssetEvent<NineSlice>>>();
+        let image = Handle::<Image>::default();
+        let slicer = TextureSlicer {
+            border: BorderRect { min_inset: Vec2::new(4.0, 3.0), max_inset: Vec2::new(2.0, 1.0) },
+            ..default()
+        };
+        let mut slices = Assets::<NineSlice>::default();
+        let style = slices.add(NineSlice { image: image.clone(), slicer: slicer.clone() });
+        world.insert_resource(slices);
+        let fresh = world.spawn(NineSliceFrame(style.clone())).id();
+        let existing = world
+            .spawn((NineSliceFrame(style), ImageNode::new(Handle::default())))
+            .id();
+
+        world.run_system_once(apply_nine_slices).unwrap();
+
+        for entity in [fresh, existing] {
+            let node = world.get::<ImageNode>(entity).expect("frame got an ImageNode");
+            assert!(matches!(node.visual_box, VisualBox::BorderBox), "{entity}: {:?}", node.visual_box);
+            assert_eq!(node.image, image);
+            let NodeImageMode::Sliced(applied) = &node.image_mode else {
+                panic!("{entity}: not sliced: {:?}", node.image_mode);
+            };
+            assert_eq!(applied.border.min_inset, slicer.border.min_inset);
+            assert_eq!(applied.border.max_inset, slicer.border.max_inset);
+        }
+    }
+
     /// The module docs' example parses, with each side read from its own
     /// field and `Tile(x)` carrying its stretch value.
     #[test]

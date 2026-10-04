@@ -70,7 +70,7 @@ html-ui
     "many" serif 20px #ffffff
   -
     "loose text" serif 20px #ffffff
-  pre padding=8,8,8,8
+  pre padding=8,8,8,8 overflow=Clip,Visible
     "a\n  b" serif 20px #ffffff
 "#,
     );
@@ -344,6 +344,161 @@ html-ui border=16,16,16,16 padding=10,10,10,10 slice=frame.png 4,4,4,4 stretch
 html-ui padding=3,3,3,3
   p
     "5 Dinge" default 10px #00ff00
+"#,
+    );
+}
+
+/// A block with only a background (no border) still gets its box: the
+/// background is drawn. A boxed `li` keeps its list indent on the box.
+#[test]
+fn background_only_block_keeps_its_background() {
+    let mut ui = TestUi::new(
+        "background-only",
+        &[
+            ("page.html", r#"<p class="shaded">Shaded</p><ul><li class="shaded">Item</li></ul>"#),
+            (
+                "style.css",
+                "html { color: #ffffff; font-family: Spectral; font-size: 20px } .shaded { background-color: #102030 }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p.shaded bg=#102030
+    -
+      "Shaded" serif 20px #ffffff
+  ul
+    li.shaded margin=0,0,0,12 bg=#102030
+      -
+        "• " serif 20px #ffffff
+        "Item" serif 20px #ffffff
+"#,
+    );
+}
+
+/// Counts `HtmlUiBuilt` per entity.
+#[derive(Resource, Default)]
+struct BuildsPer(bevy::platform::collections::HashMap<Entity, usize>);
+
+/// Editing a stylesheet asset in place (hot reload) rebuilds the UIs using
+/// it — and only those: a UI whose own stylesheet failed to load isn't
+/// rebuilt again because some other sheet reloaded.
+#[test]
+fn stylesheet_reload_rebuilds_only_its_users() {
+    let mut ui = TestUi::new(
+        "sheet-reload",
+        &[
+            ("page.html", "<p>Text</p>"),
+            ("good.css", "html { color: #ff0000 }"),
+            ("broken.css", "{ not css"),
+        ],
+    );
+    let good = ui.load::<Stylesheet>("good.css");
+    let broken = ui.load::<Stylesheet>("broken.css");
+    let template = ui.load::<HtmlTemplate>("page.html");
+    let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
+    let user = ui.root();
+    let world = ui.world_mut();
+    world.init_resource::<BuildsPer>();
+    world.add_observer(|built: On<HtmlUiBuilt>, mut per: ResMut<BuildsPer>| {
+        *per.0.entry(built.entity).or_default() += 1;
+    });
+    world.entity_mut(user).insert(HtmlStylesheet(good.clone()));
+    let failed = world.spawn((HtmlUi::new(template), HtmlStylesheet(broken))).id();
+    ui.settle();
+    let counts = |ui: &mut TestUi| {
+        let per = &ui.world_mut().resource::<BuildsPer>().0;
+        (per.get(&user).copied().unwrap_or(0), per.get(&failed).copied().unwrap_or(0))
+    };
+    let (user_before, failed_before) = counts(&mut ui);
+    assert!(user_before >= 1 && failed_before >= 1, "both built: {user_before}, {failed_before}");
+
+    // In-place edit: `AssetMut` emits `Modified` once dereferenced mutably.
+    {
+        let mut sheets = ui.world_mut().resource_mut::<Assets<Stylesheet>>();
+        let mut sheet = sheets.get_mut(&good).expect("good.css loaded");
+        let _: &mut Stylesheet = &mut sheet;
+    }
+    ui.settle();
+    assert_eq!(counts(&mut ui), (user_before + 1, failed_before));
+}
+
+/// A frame image that changes (hot reload, or one arriving after the
+/// stylesheet) re-slices `%` frames against its new size.
+#[test]
+fn image_change_reslices_percent_frames() {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+
+    let mut ui = TestUi::new(
+        "image-reload",
+        &[
+            ("page.html", r#"<p class="framed">Framed</p>"#),
+            (
+                "style.css",
+                r#"html { color: #ffffff; font-family: Spectral; font-size: 20px }
+.framed { border-image: url("frame.png") 25% fill stretch; border-width: 6px }"#,
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    let frame = ui.load::<Image>("frame.png");
+    // 25% of the 32×24 fixture: 6 (top/bottom), 8 (left/right).
+    let expected = |slices: &str| {
+        format!(
+            "\nhtml-ui\n  p.framed border=6,6,6,6 slice=frame.png {slices} stretch\n    -\n      \"Framed\" serif 20px #ffffff\n"
+        )
+    };
+    ui.settle().assert_dump(&expected("6,8,6,8"));
+
+    let bigger = Image::new_fill(
+        Extent3d { width: 64, height: 48, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        &[255; 4],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    ui.world_mut().resource_mut::<Assets<Image>>().insert(&frame, bigger).unwrap();
+    ui.settle().assert_dump(&expected("12,16,12,16"));
+}
+
+/// The UI isn't built while its stylesheet is still loading (no unstyled
+/// flash), and is built, styled, once it arrives.
+#[test]
+fn loading_stylesheet_defers_the_build() {
+    let mut ui = TestUi::new(
+        "sheet-loading",
+        &[("page.html", "<p>Text</p>"), ("style.css", "html { color: #ff0000 }")],
+    );
+    // A handle nothing will ever load: the stylesheet stays "loading".
+    let pending = ui.world_mut().resource::<Assets<Stylesheet>>().reserve_handle();
+    ui.world_mut().insert_resource(DefaultStylesheet::new(pending.clone()));
+    let real = ui.load::<Stylesheet>("style.css");
+    let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
+    let root = ui.root();
+    for _ in 0..3000 {
+        ui.update(1);
+        let world = ui.world_mut();
+        let rendered = matches!(world.get::<RenderedHtml>(root), Some(RenderedHtml::Ready(_)));
+        if rendered && world.resource::<Assets<Stylesheet>>().contains(&real) {
+            break;
+        }
+    }
+    ui.update(10);
+    assert_eq!(ui.builds(), 0, "built while the stylesheet was loading");
+
+    let mut sheets = ui.world_mut().resource_mut::<Assets<Stylesheet>>();
+    let sheet = sheets.remove(&real).expect("style.css loaded");
+    sheets.insert(&pending, sheet).unwrap();
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "Text" default 16px #ff0000
 "#,
     );
 }

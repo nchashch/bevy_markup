@@ -558,13 +558,47 @@ known gaps:
 - [ ] **6. Mutation testing** (measures vector strength): `scripts/mutants.sh`
   (`--full` adds the property suites; `--file src/x.rs` narrows). Slow (each
   mutant relinks Bevy test binaries: ~1 h default, ~4 h `--full`): run
-  occasionally in the background; results in `target/mutants.out/`, reruns
-  skip caught mutants (`--iterate`). The script parks the fuzz caches
-  (cargo-mutants copies the tree, ignoring nested `.gitignore`s) and restores
-  them on exit. A first partial run (29 of 396) found survivors only in
-  `build_html_ui`'s reload/failure paths and `BoxStyle::is_empty`
-  (`&&`→`||`, and `!=`→`==` at the reload-event filter): triage them when a
-  full run completes — add a test or note why the mutant is equivalent.
+  occasionally in the background; results in `target/mutants.out/` (not
+  committed, overwritten per run — copy survivors here), reruns skip caught
+  mutants (`--iterate`). The script parks the fuzz caches (cargo-mutants
+  copies the tree, ignoring nested `.gitignore`s) and restores them on exit.
+  - [ ] Complete a `--full` run (only 29 of 396 mutants ran so far, at
+    `e1b910c` + working tree; line numbers below are from then).
+  - [x] Triage the survivors of the partial runs (`e1b910c`; reruns with
+    unit + html_ui + stateful). Killed by new tests:
+    - `BoxStyle::is_empty` `&&`→`||` (background-only block lost its
+      background): `background_only_block_keeps_its_background`.
+    - `sliced_image` / `apply_nine_slices` dropping `VisualBox::BorderBox`:
+      the dump prints `visual-box=` for frames not over the border box;
+      `nine_slice::tests::frames_get_the_sliced_image_over_the_border_box`.
+    - stylesheet reload arm deleted, and `!=`→`==` in the failed-latch
+      cleanup (unrelated failed UIs rebuilt on any reload):
+      `stylesheet_reload_rebuilds_only_its_users` (per-entity build counts).
+    - image reload arm deleted: `image_change_reslices_percent_frames`.
+    - `LoadState::Failed` guard → `true` (unstyled flash while loading):
+      `loading_stylesheet_defers_the_build`.
+    - `||`→`&&` before the outline check: already killed by the stateful
+      machine (it was excluded from the first run).
+    - `flex_shrink`/`box_sizing`/`margin`/`overflow` field deletions in
+      `spawn_item`/`spawn_block`: layout cases in `layout_flex` (overfull
+      narrow rows: containers, plain/boxed blocks, unsized text) and
+      `layout_sizes` (width + padding blocks, sized `pre`); boxed `li`
+      indent in the background test; the dump prints non-default `overflow`.
+    The triage also found bug_0014 (text in boxed blocks never wrapped).
+    Equivalent (documented, not killable by behaviour):
+    - `build.rs` `Styler::box_of` `delete !` on `if !fill`: only decides
+      whether a `debug!` line is logged.
+    - `style.rs` `ParserOptions { filename }` deleted: only the file name in
+      CSS parse-error messages.
+  - Note — cargo-mutants 27.1.0 quirk: `--re`/`--exclude-re` don't filter
+    struct-field-deletion mutants (they always run); harmless, but a
+    targeted rerun takes ~10 min instead of ~2.
+  - [ ] After the full run: triage any new survivors the same way.
+  - [ ] Optionally run it in CI on a schedule (nightly), not per commit.
+  - Proptest regression seeds written while planting bugs by hand
+    (`tests/layout_properties.proptest-regressions`,
+    `proptest-regressions/*.txt`) are already covered: proptest replays them
+    first on every run.
 - [x] **7. Golden images, sparingly** (fixes the rest of weakness 3 and part of weakness 4: real font rasterization, wrapping and 9-slice drawing; CJK fallback is still untested, since only committed fonts are used). `tests/golden.rs` + `scripts/golden.sh` on Mesa lavapipe; three scenes (`text`, `frame`, `l10n`); see Testing. Brittle across drivers and font versions: a smoke check, not a spec.
   - [ ] A CJK/fallback scene would need a committed CJK font (or `system_fonts`, which isn't reproducible).
 

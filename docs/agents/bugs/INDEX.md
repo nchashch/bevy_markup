@@ -4,7 +4,7 @@ Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below
 (bug_0001–0005: property testing, stateful testing and fuzzing — the fuzzers
-immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle).
+immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage).
 
 ## Bugs
 
@@ -23,6 +23,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0011](bug_0011.md) | NBSP and other Unicode spaces were collapsed and trimmed | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | arbtest structure-aware document model |
 | [bug_0012](bug_0012.md) | `HtmlElements` lookups were breadth-first, not document order | `src/html.rs` | medium | fixed (uncommitted, on `e1b910c`) | unit test + arbtest model |
 | [bug_0013](bug_0013.md) | CSS padding on a boxed `pre` added to the default 8px | `src/build.rs` | low | fixed (uncommitted, on `e1b910c`) | code reading while adding layout support; confirmed by the layout oracle |
+| [bug_0014](bug_0014.md) | Text in a boxed block never wraps: it overflows the box | `src/build.rs` | medium | fixed (uncommitted) | mutation-testing triage (layout oracle case) |
 
 ## Discovery session metadata: bug_0001–0005
 
