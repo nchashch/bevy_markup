@@ -59,6 +59,8 @@ examples/
                    scroll.rs, selector.rs, locale_panel.rs, theme_panel.rs, consts.rs
 tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
+  properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips, …)
+  common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (oracle output)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
 scripts/
@@ -256,21 +258,21 @@ known gaps:
     the same DOM, as the reference for the overlay and markup behaviour.
   - [ ] More oracle vectors as CSS support grows (every new property gets one).
 - [ ] **2. Metamorphic and property-based tests** (fixes weakness 6). Check
-  relationships that must always hold, over generated inputs (proptest):
-  - Shorthand = longhands: `padding: 1px 2px` builds the same world as the
-    four longhands; likewise `border-image`, `border-width`.
-  - Unmatched rules don't matter: adding a rule that matches nothing changes
-    nothing.
-  - Order only breaks ties: swapping two rules changes the result only with
-    equal specificity and overlap.
-  - Specificity monotonicity: adding a class to a selector never makes it
-    lose to the original.
-  - Round trips: locale A → B → A, theme X → Y → X, context v → w → v end in
-    a dump identical to the start.
-  - Idempotence: a forced rebuild with no input change gives an identical
-    dump.
-  - No duplicates: each rebuild leaves exactly one generation of children,
-    no leaked entities.
+  relationships that must always hold, over generated inputs (`proptest`,
+  `quickcheck`, `arbtest` are dev-dependencies; pipeline properties live in
+  `tests/properties.rs` over the shared `tests/common` harness):
+  - [x] Shorthand = longhands: `padding: 1px 2px` builds the same world as the
+    four longhands; likewise `border-image`. (`border-width` has no longhands.)
+  - [x] Unmatched rules don't matter: adding a rule that matches nothing changes
+    nothing (even `!important`).
+  - [x] Order only breaks ties: swapping a class rule and a type rule never
+    changes the result; equal-specificity ties stay covered by unit tests.
+  - [x] Round trips: locale A → B → A, theme X → Y → X, context v → w → v end in
+    a dump identical to the start; a forced rebuild with no input change is
+    idempotent (proxy for "no duplicate children").
+  - Remaining: `quickcheck` over structured inputs (e.g. cascade matching), and
+    `arbtest` robustness runs (arbitrary HTML/CSS/FTL through the pipeline: no
+    panic, always some output).
 - [ ] **3. Headless layout checks** (fixes weakness 3, mostly). Run Bevy UI's
   layout headless with a fixed viewport; assert node rects (`ComputedNode`,
   `UiGlobalTransform`). Essential once flex layout lands (next step 1); then
