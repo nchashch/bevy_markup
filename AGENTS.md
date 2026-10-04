@@ -36,11 +36,11 @@ assets/              (gitignored — see Gotchas)
 - One plugin per module; `SystemPlugins` wires them. Panels expose `spawn`
   (Startup) and their update systems as `pub(super)` fns registered in the
   module's `mod.rs`.
-- Shared paths/styles live in `consts`: `FONT_PATH` (mono), `HEADER_FONT_PATH`
-  / `HEADER_BOLD_FONT_PATH` / `HEADER_ITALIC_FONT_PATH` /
-  `HEADER_BOLD_ITALIC_FONT_PATH` + `HEADER_COLOR`, the same four
-  `BODY_*_FONT_PATH` + `BODY_COLOR`, `FRAME_PATH`. Don't hard-code these in
-  panels.
+- Shared paths/styles live in `consts`: four faces per family —
+  `MONO_FONT_PATH` / `MONO_BOLD_FONT_PATH` / `MONO_ITALIC_FONT_PATH` /
+  `MONO_BOLD_ITALIC_FONT_PATH`, the same four `HEADER_*` + `HEADER_COLOR`, the
+  same four `BODY_*` + `BODY_COLOR` — and `FRAME_PATH`. Don't hard-code these
+  in panels.
 - Typography: headers IosevkaSlabQP (red), body Spectral (off-white),
   monospace/debug Iosevka Slab Mono.
 - Framed panels: `NineSliceFrame(asset_server.load(FRAME_PATH))` on the panel's
@@ -97,11 +97,14 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   with a map/struct in the context.
 - `HtmlUi` on a node with `HtmlView` rebuilds its children on change. Supported:
   `h1`–`h6` (header font, 28/24/22/20px), `p` (body 20px), `li` (bulleted body),
-  loose text (body). Other elements are traversed; `head`/`script`/`style`
-  skipped. Each block is a `Text` with one `TextSpan` per styled run:
-  `b`/`strong` → Bold face, `i`/`em` → Italic face of the block's family, both
-  nested → BoldItalic face. Fluent translations are plain text (one
-  regular run). Whitespace collapses across run boundaries as in HTML.
+  `pre` (mono 16px block, dark background, whitespace/newlines kept, no wrap;
+  a newline right after `<pre>` and trailing whitespace are dropped), loose text
+  (body). Other elements are traversed; `head`/`script`/`style` skipped. Each
+  block is a `Text` with one `TextSpan` per styled run: `b`/`strong` → Bold,
+  `i`/`em` → Italic, both → BoldItalic; `code`/`kbd`/`samp`/`tt` switch the run
+  to the mono family (bold/italic still apply, block size kept). Fluent
+  translations are plain text (one regular run). Outside `pre`, whitespace
+  collapses across run boundaries as in HTML.
 - `HtmlDocument::outline(&LocalizedText)` gives an indented debug tree (used by
   `dom_panel.rs`, also logged at `info`).
 

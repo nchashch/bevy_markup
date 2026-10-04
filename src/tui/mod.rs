@@ -5,7 +5,7 @@ mod panel;
 
 pub use panel::TuiPanel;
 
-use crate::consts::{FONT_PATH, FRAME_PATH};
+use crate::consts::{FRAME_PATH, MONO_FONT_PATH};
 use crate::ui::NineSliceFrame;
 
 const FONT_SIZE_PX: u32 = 64;
@@ -64,7 +64,7 @@ fn spawn_panel(mut commands: Commands, asset_server: Res<AssetServer>) {
                     PANEL_COLS,
                     PANEL_ROWS,
                     TuiFontSource::Asset {
-                        handle: asset_server.load(FONT_PATH),
+                        handle: asset_server.load(MONO_FONT_PATH),
                         size_px: FONT_SIZE_PX,
                     },
                 ),

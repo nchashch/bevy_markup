@@ -4,7 +4,7 @@ use serde::Serialize;
 use super::NineSliceFrame;
 use crate::assets::html::{HtmlView, RenderedHtml};
 use crate::assets::l10n::LocalizedText;
-use crate::consts::{FONT_PATH, FRAME_PATH};
+use crate::consts::{FRAME_PATH, MONO_FONT_PATH};
 
 const PLAIN_PATH: &str = "ui/content/test.html";
 const TEMPLATE_PATH: &str = "ui/content/inventory.html";
@@ -84,7 +84,7 @@ fn spawn_panel(
             DomPanelText,
             Text::new(format!("loading {path}…")),
             TextFont::default()
-                .with_font(asset_server.load(FONT_PATH))
+                .with_font(asset_server.load(MONO_FONT_PATH))
                 .with_font_size(16.0),
             TextColor(Color::srgb_u8(225, 225, 225)),
         )],
