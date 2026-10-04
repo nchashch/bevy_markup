@@ -382,6 +382,86 @@ fn browser_oracle() {
 }
 
 // ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+/// Bevy UI's headless layout of p23's column model, derived by hand: the
+/// default font (FiraMono) advances 0.6em per character and lines are 1.2em;
+/// the root's padding insets everything, a container's border and padding
+/// inset its children and `gap` separates them, text wraps at the content
+/// width (50 characters at 12px), `pre` adds p23's 8px padding.
+#[test]
+fn layout_column_stacking() {
+    let mut ui = TestUi::from_layout_vector("layout_blocks", UVec2::new(640, 480));
+    let actual = ui.settle().layout_dump();
+    let expected = "\
+html-ui 0,0 640x263
+  h1 20,10 600x48
+  p 20,58 600x48
+  div.panel 20,106 600x83
+    p 28,114 584x24
+    p.tall 28,145 584x36
+  pre 20,189 600x64";
+    assert_eq!(actual.trim_end(), expected, "\n--- actual ---\n{actual}");
+}
+
+/// Bevy rounds layout to whole pixels; Chromium keeps 1/64px fractions.
+const LAYOUT_TOLERANCE: f32 = 1.0;
+
+/// Every `tests/vectors/layout_*/` with a `browser.json` is laid out by Bevy
+/// UI headlessly (in the oracle's viewport, under a full-width column root)
+/// and each root/block/container border box compared with Chromium's
+/// `getBoundingClientRect` under the oracle's p23 layout stylesheet
+/// (`P23_CSS` in `scripts/browser_oracle.py`), within [`LAYOUT_TOLERANCE`]
+/// per value.
+#[test]
+fn layout_oracle() {
+    let vectors: Vec<String> = vectors_with("browser.json")
+        .into_iter()
+        .filter(|name| name.starts_with("layout_"))
+        .collect();
+    assert!(!vectors.is_empty(), "no layout oracle vectors found");
+
+    let mut failures = Vec::new();
+    for name in &vectors {
+        let json = std::fs::read_to_string(vectors_dir().join(name).join("browser.json")).unwrap();
+        let oracle: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let viewport = &oracle["generator"]["viewport"];
+        let viewport = UVec2::new(viewport[0].as_u64().unwrap() as u32, viewport[1].as_u64().unwrap() as u32);
+        let mut ui = TestUi::from_layout_vector(name, viewport);
+        ui.settle();
+        let root = ui.root();
+        let world = ui.world_mut();
+        let pairs = match pair_elements(world, root, &oracle) {
+            Ok(pairs) => pairs,
+            Err(problem) => {
+                failures.push(format!("{name}: {problem}"));
+                continue;
+            }
+        };
+        for (entity, record, label) in pairs {
+            let rect = node_rect(world, entity).expect("laid out");
+            let ours = [rect.min.x, rect.min.y, rect.width(), rect.height()];
+            let theirs: Vec<f32> = record["rect"]
+                .as_array()
+                .expect("layout vectors record rects")
+                .iter()
+                .map(|value| value.as_f64().unwrap() as f32)
+                .collect();
+            if ours.iter().zip(&theirs).any(|(a, b)| (a - b).abs() > LAYOUT_TOLERANCE) {
+                failures.push(format!("{name}: {label} [x, y, w, h]: p23 {ours:?} vs browser {theirs:?}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} layout difference(s) from the browser:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Fluent oracle
 // ---------------------------------------------------------------------------
 
@@ -445,8 +525,6 @@ fn line_diff(old: &str, new: &str) -> String {
 
 // Deliberate, documented differences from browsers (skipped by
 // `compare_with_browser`):
-// - `pre`: browsers' `pre` has no padding under `* { all: unset }`; p23 gives
-//   it a fixed 8px (see AGENTS.md limits).
 // - root `background-color`: p23 leaves the `HtmlUi` node's background to the
 //   app.
 // - `border-style`: p23 ignores it (a `border-width` always applies); vectors
@@ -541,41 +619,16 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
     }
 
     // Boxes: the root (`html`) and every block/container, in document order.
-    let mut our_elements = vec![root];
-    collect_elements(world, root, &mut our_elements);
-    let their_elements: Vec<&serde_json::Value> = oracle["elements"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|e| {
-            let tag = e["tag"].as_str().unwrap();
-            tag == "html" || BLOCKS.contains(&tag) || CONTAINERS.contains(&tag)
-        })
-        .collect();
-    if our_elements.len() != their_elements.len() {
-        problems.push(format!(
-            "element count: p23 {} vs browser {}",
-            our_elements.len(),
-            their_elements.len()
-        ));
-        return problems;
-    }
-    for (entity, theirs) in our_elements.into_iter().zip(their_elements) {
-        let tag = theirs["tag"].as_str().unwrap();
-        let label = match theirs["classes"].as_array().unwrap().as_slice() {
-            [] => tag.to_owned(),
-            classes => format!(
-                "{tag}.{}",
-                classes.iter().map(|c| c.as_str().unwrap()).collect::<Vec<_>>().join(".")
-            ),
-        };
-        let entity_ref = world.entity(entity);
-        if let Some(element) = entity_ref.get::<HtmlElement>()
-            && element.tag != tag
-        {
-            problems.push(format!("{label}: element order differs (p23 has {})", element.tag));
-            continue;
+    let pairs = match pair_elements(world, root, oracle) {
+        Ok(pairs) => pairs,
+        Err(problem) => {
+            problems.push(problem);
+            return problems;
         }
+    };
+    for (entity, theirs, label) in pairs {
+        let tag = theirs["tag"].as_str().unwrap();
+        let entity_ref = world.entity(entity);
         let node = entity_ref.get::<Node>().cloned().unwrap_or_default();
         let sides = |rect: UiRect| {
             [rect.top, rect.right, rect.bottom, rect.left].map(|v| match v {
@@ -593,10 +646,7 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
             }
         };
 
-        // `pre` padding: allowed difference.
-        if tag != "pre" {
-            check("padding", format!("{:?}", sides(node.padding)), format!("{:?}", floats("padding")));
-        }
+        check("padding", format!("{:?}", sides(node.padding)), format!("{:?}", floats("padding")));
         check("border", format!("{:?}", sides(node.border)), format!("{:?}", floats("border")));
 
         let our_slice = entity_ref.get::<ImageNode>().and_then(|image| match &image.image_mode {
@@ -695,6 +745,48 @@ fn collect_chars(world: &World, entity: Entity, out: &mut Vec<(char, String, f64
             collect_chars(world, child, out);
         }
     }
+}
+
+/// p23's root and block/container entities paired, in document order, with
+/// the browser's records of the same elements (inline elements have no
+/// entity), each labelled `tag.class…`.
+fn pair_elements<'o>(
+    world: &World,
+    root: Entity,
+    oracle: &'o serde_json::Value,
+) -> Result<Vec<(Entity, &'o serde_json::Value, String)>, String> {
+    let mut ours = vec![root];
+    collect_elements(world, root, &mut ours);
+    let theirs: Vec<&serde_json::Value> = oracle["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            let tag = e["tag"].as_str().unwrap();
+            tag == "html" || BLOCKS.contains(&tag) || CONTAINERS.contains(&tag)
+        })
+        .collect();
+    if ours.len() != theirs.len() {
+        return Err(format!("element count: p23 {} vs browser {}", ours.len(), theirs.len()));
+    }
+    let mut pairs = Vec::new();
+    for (entity, record) in ours.into_iter().zip(theirs) {
+        let tag = record["tag"].as_str().unwrap();
+        let label = match record["classes"].as_array().unwrap().as_slice() {
+            [] => tag.to_owned(),
+            classes => format!(
+                "{tag}.{}",
+                classes.iter().map(|c| c.as_str().unwrap()).collect::<Vec<_>>().join(".")
+            ),
+        };
+        if let Some(element) = world.entity(entity).get::<HtmlElement>()
+            && element.tag != tag
+        {
+            return Err(format!("{label}: element order differs (p23 has {})", element.tag));
+        }
+        pairs.push((entity, record, label));
+    }
+    Ok(pairs)
 }
 
 /// Entities with an `HtmlElement` below `entity`, in document order.

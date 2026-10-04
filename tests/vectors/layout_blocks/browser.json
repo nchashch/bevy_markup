@@ -1,0 +1,19 @@
+{
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py", "viewport": [640, 480]},
+ "elements": [
+  {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\"", "padding": [10, 20, 10, 20], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 0, 640, 263]},
+  {"tag": "h1", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 40, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [20, 10, 600, 48]},
+  {"tag": "p", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [20, 58, 600, 48]},
+  {"tag": "div", "id": null, "classes": ["panel"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\"", "padding": [5, 5, 5, 5], "border": [3, 3, 3, 3], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "7px", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [20, 106, 600, 83]},
+  {"tag": "p", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [28, 114, 584, 24]},
+  {"tag": "p", "id": null, "classes": ["tall"], "color": "rgb(255, 255, 255)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [28, 145, 584, 36]},
+  {"tag": "pre", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\"", "padding": [8, 8, 8, 8], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [20, 189, 600, 64]}
+ ],
+ "runs": [
+  {"text": "Title", "color": "rgb(255, 255, 255)", "fontSize": 40, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\""},
+  {"text": "A paragraph long enough to wrap onto a second line here.", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\""},
+  {"text": "One", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\""},
+  {"text": "Two", "color": "rgb(255, 255, 255)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\""},
+  {"text": "code indented", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"p23 default\""}
+ ]
+}

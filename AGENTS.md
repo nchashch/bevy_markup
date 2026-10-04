@@ -63,9 +63,10 @@ tests/
   quickcheck.rs    quickcheck structured-input properties (cascade vs reference model, text round trip)
   arbtest.rs       arbtest robustness properties: arbitrary HTML/CSS/Fluent/args bytes through the pipeline
   stateful.rs      proptest-stateful machine: random op sequences (theme/locale/context/outline) vs a reference model
-  common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump)
+  common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump; with_layout = Bevy UI layout)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (CSS oracle output);
-                   Fluent vectors add messages.ftl + fluent.html (Fluent oracle output)
+                   Fluent vectors add messages.ftl + fluent.html (Fluent oracle output);
+                   layout_* vectors also get rects in browser.json (layout oracle)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
@@ -245,6 +246,18 @@ assets/            (gitignored — see Gotchas)
 - Headless apps: `ImagePlugin` only pre-registers its loader; `bevy_render`
   registers the real one. Without rendering, register
   `ImageLoader::new(CompressedImageFormats::empty())` yourself.
+- Headless UI layout (no window, no renderer, verified in `tests/common`):
+  `UiPlugin` sizes roots from their camera's `computed.target_info`, which
+  bevy_render's `camera_system` would fill — set it by hand on a camera with
+  `RenderTarget::None { size }` + `IsDefaultUiCamera`. `UiPlugin`'s picking
+  and focus systems then need `InputPlugin`, a `WindowPlugin` with
+  `primary_window: None`, `DefaultPickingPlugins` and `TextureAtlasPlugin`;
+  text measurement needs `TextPlugin`. Missing-resource panics name the
+  system only with Bevy's `debug` feature (`--features bevy/debug`).
+- Bevy's text measure (`TextMeasure::measure`) ceils every text node to whole
+  pixels; browsers keep 1/64 px. With a fractional line height (16px × 1.2 =
+  19.2) each text block runs up to 1px taller than in a browser and the
+  drift accumulates down the page.
 
 ## Testing
 
@@ -284,15 +297,34 @@ fuzzers/property harnesses below) are filed in `docs/agents/bugs/` — see
   32×24 fixture, background, container gap). Regenerate after changing a
   vector's inputs: `scripts/browser_oracle.py [tests/vectors/<name>]`, then
   review the `browser.json` diff (one record per line) and commit it. The page
-  is `* { all: unset }` + `style.css` + `page.html`, so vectors must be plain
+  is `* { all: unset }` + `P23_CSS` (p23's defaults and layout model as CSS:
+  flex-column root and containers, block blocks, Bevy's default font at line
+  height 1.2, white text, `li` indent and bullet, `pre` 8px padding — keep in
+  sync with `build.rs`) + `style.css` + `page.html`, so vectors must be plain
   HTML (no Tera / `data-l10n-id`; the script refuses them and skips Fluent
   vectors), set `color` on
   `html` (browsers default to black, p23 to white) and `border-style: solid`
-  where widths matter. Deliberate differences (`pre` padding, root background,
+  where widths matter. Deliberate differences (root background,
   `border-style`, `li` bullets) are skipped and listed above
   `FIXTURE_SIZE` in `tests/html_ui.rs`; add new ones there with a reason. The
   oracle's first run found two real bugs (unregistered `font-family` kept the
   inherited family; weight 501–599 wasn't bold).
+- **Layout** (`TestUi::with_layout` / `from_layout_vector`, `layout_dump()`):
+  Bevy UI really lays out headlessly against a fixed-size camera (see
+  Gotchas). Text uses Bevy's embedded default font (FiraMono, 0.6em advance,
+  printable ASCII only); no fake families. `layout_column_stacking` pins
+  `layout_blocks` with hand-derived rects; the **layout oracle**
+  (`layout_oracle`) compares every root/block/container border box of each
+  `tests/vectors/layout_*/` with Chromium's `getBoundingClientRect` (recorded
+  in `browser.json` by `scripts/browser_oracle.py`: 640px viewport — headless
+  Chromium widens narrower windows — and the same FiraMono file, found via
+  `cargo metadata`) within 1px per value. Layout vectors: no
+  `font-family`, ASCII only (the script refuses others), font sizes whose
+  1.2 line height is whole (Bevy ceils text nodes, see Gotchas). Vectors:
+  `layout_blocks` (padding, borders, gap, wrapping, `pre`), `layout_mixed`
+  (mixed inline content in a container, mixed font sizes on one line,
+  `border-image` wrapper block, root border, nested containers). Both agree
+  with Chromium to the pixel.
 - **Fluent oracle** (`fluent_oracle` test): every `tests/vectors/*/` with a
   `fluent.html` must build the same dump localized by p23 (`page.html` +
   `messages.ftl` as the en-US bundle, via `TestUi::from_vector`) as
@@ -362,12 +394,12 @@ known gaps:
     the `#[quickcheck]` attribute comes from `quickcheck_macros`.
   - [ ] Shrink quality: stateful ops shrink only by removal; proptest value
     shrinking inside an op isn't supported by the framework.
-- [ ] **3. Headless layout checks** (fixes weakness 3, mostly). Run Bevy UI's
-  layout headless with a fixed viewport; assert node rects (`ComputedNode`,
-  `UiGlobalTransform`). Essential once flex layout lands (next step 1); then
-  Chromium's `getBoundingClientRect` is the oracle for the supported subset.
-  Unverified whether Bevy 0.19 UI layout runs without a camera/window target —
-  spike first.
+- [x] **3. Headless layout checks** (fixes weakness 3, mostly): Bevy UI
+  layout runs headlessly (`TestUi::with_layout`); `layout_column_stacking`
+  (hand-derived) and `layout_oracle` (Chromium rects) over `layout_*`
+  vectors. See Testing.
+  - [ ] Extend the layout vectors and `P23_CSS` with each CSS layout property
+    p23 gains (next step 1: flex layout, sizes, margins).
 - [ ] **4. Lint tests over real content** (content bugs, the ones you'll hit):
   - every locale defines the same message ids
   - every visible text node in a template sits under a `data-l10n-id`
@@ -470,7 +502,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
 
 - **Layout:** containers are always vertical columns; no `display`,
   `flex-direction`, `width`/`height`, `margin`, alignment, `position`. Text
-  blocks and containers only stack.
+  blocks and containers only stack. The `HtmlUi` node's default `Node` is a
+  flex *row*, so apps must set `flex_direction: Column` themselves (as the
+  guide's example does), or blocks sit side by side.
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
   hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
 - **Selectors:** compound only (type/`*` + `.class` + `#id`); no combinators
@@ -497,7 +531,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
   translation) becomes one anonymous block per text piece, not one line.
 - **Fluent:** numbers format without locale grouping (fluent-rs; bevy_fluent's
   shared bundle exposes no custom formatter) — pre-format in Tera if needed.
-- **Fonts:** no bundled CJK font; Japanese relies on `system_fonts`.
+- **Fonts:** no bundled CJK font; Japanese relies on `system_fonts`. Bevy's
+  default font covers printable ASCII only, so with no registered family even
+  the `li` bullet (`•`) comes from font fallback.
 
 Next steps (roughly in order of value):
 

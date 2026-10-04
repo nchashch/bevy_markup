@@ -1,5 +1,5 @@
 {
- "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py"},
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py", "viewport": [640, 480]},
  "elements": [
   {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [10, 20, 10, 20], "border": [16, 16, 16, 16], "borderImageSource": "url(\"frame.png\")", "borderImageSlice": "4 fill", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
   {"tag": "p", "id": null, "classes": ["framed"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [6, 8, 6, 8], "borderImageSource": "url(\"frame.png\")", "borderImageSlice": "25% fill", "borderImageRepeat": "repeat", "rowGap": "normal", "backgroundColor": "rgb(16, 32, 48)"},

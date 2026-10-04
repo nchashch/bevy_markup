@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bevy::asset::uuid::Uuid;
 use bevy::asset::{AssetMetaCheck, UntypedHandle};
+use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
 use bevy::image::{CompressedImageFormats, ImageLoader};
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource};
@@ -75,6 +76,19 @@ pub struct TestUi {
 impl TestUi {
     /// A headless app whose asset root holds `files` plus `frame.png`.
     pub fn new(name: &str, files: &[(&str, &str)]) -> Self {
+        Self::build(name, files, None)
+    }
+
+    /// Like [`new`](Self::new), plus Bevy UI layout and text measurement
+    /// against a `viewport`-sized camera — still no window or renderer. Text
+    /// uses Bevy's embedded default font (FiraMono, printable ASCII only): no
+    /// fake font families are registered, since layout needs real glyphs.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn with_layout(name: &str, files: &[(&str, &str)], viewport: UVec2) -> Self {
+        Self::build(name, files, Some(viewport))
+    }
+
+    fn build(name: &str, files: &[(&str, &str)], viewport: Option<UVec2>) -> Self {
         static RUN: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
             "p23-test-{name}-{}-{}",
@@ -106,18 +120,55 @@ impl TestUi {
         .init_resource::<Builds>()
         .add_observer(|_: On<HtmlUiBuilt>, mut builds: ResMut<Builds>| builds.0 += 1);
 
-        let mut fonts = app.world_mut().resource_mut::<FontFamilies>();
-        fonts
-            .insert(
-                "Spectral",
-                FontFaces::new(SERIF[0].clone())
-                    .with_bold(SERIF[1].clone())
-                    .with_italic(SERIF[2].clone())
-                    .with_bold_italic(SERIF[3].clone()),
-            )
-            // Regular only: bold/italic requests fall back to it.
-            .insert("Mono", FontFaces::new(MONO.clone()))
-            .set_generic(GenericFamily::Monospace, "Mono");
+        match viewport {
+            Some(size) => {
+                // `UiPlugin` lays roots out against their camera's target size,
+                // which bevy_render's `camera_system` would compute; set it by
+                // hand on a size-only target. Its picking and focus systems need
+                // the input, window, picking and texture-atlas resources.
+                app.add_plugins((
+                    bevy::input::InputPlugin,
+                    bevy::window::WindowPlugin {
+                        primary_window: None,
+                        exit_condition: bevy::window::ExitCondition::DontExit,
+                        ..default()
+                    },
+                    bevy::text::TextPlugin::default(),
+                    bevy::ui::UiPlugin::default(),
+                    bevy::picking::DefaultPickingPlugins,
+                    bevy::image::TextureAtlasPlugin,
+                ));
+                app.world_mut().spawn((
+                    Camera2d,
+                    Camera {
+                        computed: ComputedCameraValues {
+                            target_info: Some(RenderTargetInfo {
+                                physical_size: size,
+                                scale_factor: 1.0,
+                            }),
+                            ..default()
+                        },
+                        ..default()
+                    },
+                    RenderTarget::None { size },
+                    bevy::ui::IsDefaultUiCamera,
+                ));
+            }
+            None => {
+                app.world_mut()
+                    .resource_mut::<FontFamilies>()
+                    .insert(
+                        "Spectral",
+                        FontFaces::new(SERIF[0].clone())
+                            .with_bold(SERIF[1].clone())
+                            .with_italic(SERIF[2].clone())
+                            .with_bold_italic(SERIF[3].clone()),
+                    )
+                    // Regular only: bold/italic requests fall back to it.
+                    .insert("Mono", FontFaces::new(MONO.clone()))
+                    .set_generic(GenericFamily::Monospace, "Mono");
+            }
+        }
 
         Self {
             app,
@@ -126,6 +177,24 @@ impl TestUi {
             tracked: Vec::new(),
             builds_seen: 0,
         }
+    }
+
+    /// A layout vector from `tests/vectors/<name>/` (`page.html` +
+    /// `style.css`, see [`with_layout`](Self::with_layout)) under a
+    /// full-width column root, the way p23 apps set up their `HtmlUi` node.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn from_layout_vector(name: &str, viewport: UVec2) -> Self {
+        let dir = vectors_dir().join(name);
+        let read = |file: &str| std::fs::read_to_string(dir.join(file)).unwrap();
+        let (page, css) = (read("page.html"), read("style.css"));
+        let root = Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            ..default()
+        };
+        Self::with_layout(name, &[("page.html", &page), ("style.css", &css)], viewport)
+            .stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), root)
     }
 
     /// A plain-HTML vector from `tests/vectors/<name>/`: `page.html` +
@@ -231,6 +300,39 @@ impl TestUi {
         out
     }
 
+    /// The laid-out `HtmlUi` subtree (needs [`with_layout`](Self::with_layout)):
+    /// one line per node, `label x,y wxh` in logical px from the viewport's
+    /// top-left (border boxes; `TextSpan`s are part of their `Text` node).
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn layout_dump(&mut self) -> String {
+        fn walk(world: &World, entity: Entity, depth: usize, out: &mut String) {
+            let label = match (depth, world.entity(entity).get::<HtmlElement>()) {
+                (0, _) => "html-ui".to_owned(),
+                (_, Some(element)) => element_label(element),
+                (_, None) => "-".to_owned(),
+            };
+            let rect = node_rect(world, entity).expect("laid out (use TestUi::with_layout)");
+            writeln!(
+                out,
+                "{}{label} {},{} {}x{}",
+                "  ".repeat(depth),
+                rect.min.x,
+                rect.min.y,
+                rect.width(),
+                rect.height()
+            )
+            .unwrap();
+            for &child in world.entity(entity).get::<Children>().into_iter().flatten() {
+                if !world.entity(child).contains::<TextSpan>() {
+                    walk(world, child, depth + 1, out);
+                }
+            }
+        }
+        let mut out = String::new();
+        walk(self.app.world(), self.root(), 0, &mut out);
+        out
+    }
+
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn assert_dump(&mut self, expected: &str) {
         let actual = self.dump();
@@ -283,21 +385,34 @@ pub fn style_label(font: &TextFont, color: &TextColor) -> String {
     format!("{} {size} {}", face_label(&font.font), hex(color.0))
 }
 
+/// `tag#id.class…`.
+pub fn element_label(element: &HtmlElement) -> String {
+    let mut label = element.tag.clone();
+    if let Some(id) = &element.id {
+        write!(label, "#{id}").unwrap();
+    }
+    for class in &element.classes {
+        write!(label, ".{class}").unwrap();
+    }
+    label
+}
+
+/// `entity`'s laid-out border box in logical px from the viewport's top-left
+/// (`None` before layout ran). The harness camera has scale factor 1.
+#[allow(dead_code)] // not every test binary exercises every helper
+pub fn node_rect(world: &World, entity: Entity) -> Option<Rect> {
+    let entity_ref = world.entity(entity);
+    let size = entity_ref.get::<ComputedNode>()?.size;
+    let center = entity_ref.get::<UiGlobalTransform>()?.translation;
+    Some(Rect::from_center_size(center, size))
+}
+
 pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut String) {
     let entity_ref = world.entity(entity);
     let indent = "  ".repeat(depth);
     let mut line = match (depth, entity_ref.get::<HtmlElement>()) {
         (0, _) => "html-ui".to_owned(),
-        (_, Some(element)) => {
-            let mut label = element.tag.clone();
-            if let Some(id) = &element.id {
-                write!(label, "#{id}").unwrap();
-            }
-            for class in &element.classes {
-                write!(label, ".{class}").unwrap();
-            }
-            label
-        }
+        (_, Some(element)) => element_label(element),
         (_, None) => "-".to_owned(),
     };
     if let Some(node) = entity_ref.get::<Node>() {

@@ -1,5 +1,5 @@
 {
- "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py"},
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py", "viewport": [640, 480]},
  "elements": [
   {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
   {"tag": "p", "id": "lead", "classes": ["note"], "color": "rgb(0, 255, 0)", "fontSize": 30, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "Spectral", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},

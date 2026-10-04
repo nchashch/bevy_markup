@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-"""Record a real browser's computed styles for p23 test vectors.
+"""Record a real browser's computed styles (and layout) for p23 test vectors.
 
 For each vector directory (default: every `tests/vectors/*/` holding
 `page.html` + `style.css`) this builds a page with
 
-    <style>* { all: unset }</style>   (no UA stylesheet — p23 has none)
+    <style>* { all: unset }</style>   (no browser defaults)
+    <style>{P23_CSS}</style>          (p23's own defaults and layout model)
     <style>{style.css}</style>
     <body>{page.html}<script>{collector}</script></body>
 
-runs it in headless Chromium (`--dump-dom`), and writes `browser.json` next to
-the inputs: computed styles per element (document order, `html` first) and
-the parent element's text style per non-whitespace text node. The Rust test
-`browser_oracle` in `tests/html_ui.rs` compares p23's output against it; no
+runs it in headless Chromium (`--dump-dom`, a VIEWPORT-sized window), and
+writes `browser.json` next to the inputs: computed styles per element
+(document order, `html` first) and the parent element's text style per
+non-whitespace text node. For `layout_*` vectors each element also gets its
+border box (`getBoundingClientRect`). The Rust tests `browser_oracle` and
+`layout_oracle` in `tests/html_ui.rs` compare p23's output against it; no
 browser is needed to run the tests.
 
 Oracle vectors must be plain HTML (no Tera syntax, no `data-l10n-id`): the
 browser sees the file as-is. Vectors with a `messages.ftl` belong to the
 Fluent oracle (`scripts/fluent_oracle.sh`) and are skipped by default.
+Layout vectors must not set `font-family` and must stay printable ASCII:
+both engines then use the same font file, Bevy's embedded default font
+(located through `cargo metadata`), which covers nothing else.
 
 Usage:
     scripts/browser_oracle.py [--browser PATH] [VECTOR_DIR ...]
 
-Only the Python standard library is required, plus a Chromium/Chrome binary
-(found on PATH, or given with --browser / $P23_BROWSER).
+Only the Python standard library is required, plus cargo and a
+Chromium/Chrome binary (found on PATH, or given with --browser /
+$P23_BROWSER).
 """
 
 import argparse
@@ -39,10 +46,35 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 VECTORS = ROOT / "tests" / "vectors"
 BROWSERS = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"]
+# Headless Chromium widens narrower windows (500px was the minimum seen).
+VIEWPORT = (640, 480)
+DEFAULT_FONT = "FiraMono-subset.ttf"
+
+# p23's defaults and layout model as CSS, between the reset and the vector's
+# stylesheet. Keep in sync with `src/build.rs`: the `HtmlUi` root (the test
+# spawns a full-width column) and containers are flex columns, so mixed
+# inline content in them becomes one item per piece, as p23 does; blocks are
+# blocks; text defaults to white in Bevy's default font at Bevy's default
+# line height (1.2); `li` gets p23's indent and bullet text; `pre` keeps
+# whitespace, doesn't wrap and has p23's 8px padding.
+P23_CSS = """
+@font-face { font-family: "p23 default"; src: url("FiraMono-subset.ttf"); }
+html { display: flex; flex-direction: column; color: #ffffff;
+       font-family: "p23 default"; font-size: 16px; line-height: 1.2; }
+body, div, section, article, header, footer, main, nav, aside, ul, ol,
+blockquote, figure, form { display: flex; flex-direction: column; }
+h1, h2, h3, h4, h5, h6, p, li, pre { display: block; }
+li { margin-left: 12px; }
+li::before { content: "\\2022  "; }
+pre { white-space: pre; padding: 8px; }
+head, script, style { display: none; }
+"""
 
 COLLECTOR = r"""
 (() => {
+  const self = document.currentScript;
   const px = (value) => parseFloat(value);
+  const round = (value) => Math.round(value * 100) / 100;
   const text = (s) => ({
     color: s.color,
     fontSize: px(s.fontSize),
@@ -61,38 +93,56 @@ COLLECTOR = r"""
   });
   const record = (element) => {
     const s = getComputedStyle(element);
+    const r = element.getBoundingClientRect();
     return {
       tag: element.localName,
       id: element.id || null,
       classes: [...element.classList],
       ...text(s),
       ...box(s),
+      rect: [r.x, r.y, r.width, r.height].map(round),
     };
   };
-  const self = document.currentScript;
-  const elements = [record(document.documentElement)];
-  const runs = [];
-  const visit = (parent) => {
-    for (const node of parent.childNodes) {
-      if (node === self) continue;
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        elements.push(record(node));
-        visit(node);
-      } else if (node.nodeType === Node.TEXT_NODE && node.data.trim()) {
-        runs.push({
-          text: node.data.replace(/\s+/g, " "),
-          ...text(getComputedStyle(node.parentElement)),
-        });
+  // Layout needs the web font; dumping waits for it (--virtual-time-budget).
+  document.fonts.ready.then(() => {
+    const elements = [record(document.documentElement)];
+    const runs = [];
+    const visit = (parent) => {
+      for (const node of parent.childNodes) {
+        if (node === self) continue;
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          elements.push(record(node));
+          visit(node);
+        } else if (node.nodeType === Node.TEXT_NODE && node.data.trim()) {
+          runs.push({
+            text: node.data.replace(/\s+/g, " "),
+            ...text(getComputedStyle(node.parentElement)),
+          });
+        }
       }
-    }
-  };
-  visit(document.body);
-  const out = document.createElement("pre");
-  out.id = "p23-oracle";
-  out.textContent = JSON.stringify({ elements, runs });
-  document.body.append(out);
+    };
+    visit(document.body);
+    const out = document.createElement("pre");
+    out.id = "p23-oracle";
+    out.textContent = JSON.stringify({ elements, runs });
+    document.body.append(out);
+  });
 })();
 """
+
+
+def default_font():
+    """Bevy's embedded default font, from the bevy_text that Cargo.lock pins."""
+    result = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--manifest-path", str(ROOT / "Cargo.toml")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    for package in json.loads(result.stdout)["packages"]:
+        if package["name"] == "bevy_text":
+            return Path(package["manifest_path"]).parent / "src" / DEFAULT_FONT
+    sys.exit("bevy_text not found in `cargo metadata`")
 
 
 def find_browser(explicit):
@@ -107,28 +157,35 @@ def browser_version(browser):
     return result.stdout.strip()
 
 
-def record(browser, vector):
+def record(browser, vector, font):
     page = (vector / "page.html").read_text(encoding="utf-8")
     css = (vector / "style.css").read_text(encoding="utf-8")
     if re.search(r"\{\{|\{%|data-l10n-id", page):
         sys.exit(f"{vector}: oracle vectors must be plain HTML (no Tera, no data-l10n-id)")
+    layout = vector.resolve().name.startswith("layout_")
+    if layout and ("font-family" in css or not (page + css).isascii()):
+        sys.exit(f"{vector}: layout vectors use only the default font: no font-family, ASCII only")
 
     document = (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
-        "<style>* { all: unset; }</style>"
+        f"<style>* {{ all: unset; }}</style><style>{P23_CSS}</style>"
         f"<style>{css}</style></head><body>{page}"
         f"<script>{COLLECTOR}</script></body></html>"
     )
     with tempfile.TemporaryDirectory(prefix="p23-oracle-") as tmp:
         harness = Path(tmp) / "index.html"
         harness.write_text(document, encoding="utf-8")
+        shutil.copy(font, Path(tmp) / DEFAULT_FONT)
         result = subprocess.run(
             [
                 browser,
                 "--headless=new",
                 "--disable-gpu",
                 "--no-sandbox",
-                f"--user-data-dir={tmp}/profile",
+                "--hide-scrollbars",
+                "--force-device-scale-factor=1",
+                f"--window-size={VIEWPORT[0]},{VIEWPORT[1]}",
+                "--virtual-time-budget=5000",
                 "--dump-dom",
                 harness.as_uri(),
             ],
@@ -145,6 +202,9 @@ def record(browser, vector):
     # Computed url()s are absolute; the temp directory differs per run.
     for element in data["elements"]:
         element["borderImageSource"] = element["borderImageSource"].replace(base, "")
+        if not layout:
+            # Only layout vectors pin the font, so other rects aren't stable.
+            del element["rect"]
     return data
 
 
@@ -167,14 +227,15 @@ def main():
 
     browser = find_browser(args.browser)
     version = browser_version(browser)
+    font = default_font()
     vectors = args.vectors or sorted(
         path.parent
         for path in VECTORS.glob("*/style.css")
         if (path.parent / "page.html").exists() and not (path.parent / "messages.ftl").exists()
     )
     for vector in vectors:
-        data = record(browser, vector)
-        generator = {"browser": version, "script": "scripts/browser_oracle.py"}
+        data = record(browser, vector, font)
+        generator = {"browser": version, "script": "scripts/browser_oracle.py", "viewport": VIEWPORT}
         (vector / "browser.json").write_text(to_json(generator, data), encoding="utf-8")
         print(f"{vector.resolve().relative_to(ROOT)}: {len(data['elements'])} elements, {len(data['runs'])} text runs")
 

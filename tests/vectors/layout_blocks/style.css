@@ -1,0 +1,7 @@
+/* Layout vector: default font only (FiraMono, 0.6em advance), line height
+   1.2. Font sizes keep 1.2 x size whole: Bevy rounds each text node up to
+   whole pixels, browsers don't (see AGENTS.md limits). */
+html { font-size: 20px; padding: 10px 20px }
+h1 { font-size: 40px }
+.panel { padding: 5px; border-style: solid; border-width: 3px; gap: 7px }
+.tall { font-size: 30px }
