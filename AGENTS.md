@@ -1,8 +1,15 @@
 # p23
 
-Bevy 0.19 library + demo. Current focus: UI built from assets — ratatui panels
-rendered to textures, 9-slice framed Bevy UI, and an HTML → Bevy UI pipeline
-(Tera templating, `tl` parsing, Fluent localization, CSS styling).
+Bevy 0.19 library + demo. Focus: an HTML → Bevy UI pipeline (Tera
+templating, `tl` parsing, Fluent localization, CSS styling) in 9-slice framed
+panels. Dependencies are limited to that; don't add unrelated crates.
+
+The library depends on `bevy` with `default-features = false` and only the
+features its code uses (see comments in `Cargo.toml`); rendering, windowing
+and platform features are the app's choice. Examples get full Bevy via
+`[dev-dependencies]`, whose features never reach library users. A missing
+feature shows up in `cargo check --lib` (built without dev-deps), except
+asset formats like `png`, which only fail at runtime.
 
 Run the demo: `cargo run --example demo`.
 
@@ -12,16 +19,13 @@ Run the demo: `cargo run --example demo`.
 examples/
   demo.rs            App: DefaultPlugins + P23Plugin, Camera2d, ClearColor
 src/
-  lib.rs             P23Plugin (the only public item) = AssetsPlugin + TuiPlugin + UiPlugin
+  lib.rs             P23Plugin (the only public item) = AssetsPlugin + UiPlugin
   consts/mod.rs      Shared paths and styles (fonts, frame, colors)
   assets/
     mod.rs           AssetsPlugin = CssPlugin + HtmlPlugin + L10nPlugin
     css.rs           .css loader (lightningcss → owned StyleSheet<'static>)
     html.rs          .html loader (Tera template), HtmlView → RenderedHtml (tl DOM), decode_entities
     l10n.rs          Fluent: Locales (all bundles, preloaded), ActiveLocale, data-l10n-id/-args → LocalizedText
-  tui/
-    mod.rs           TuiPlugin: bevy_tui_texture terminal inside a 9-slice frame
-    panel.rs         TuiPanel marker + ratatui draw system (write ratatui code here)
   ui/
     mod.rs           UiPlugin: registers panels and systems below
     nine_slice.rs    *.slice.ron loader, NineSlice asset, NineSliceFrame component
@@ -34,7 +38,7 @@ src/
     locale_panel.rs  Language selector (Selector + LocaleSelector) sets ActiveLocale
     theme_panel.rs   Theme selector (Selector + ThemeSelector) swaps every HtmlStylesheet; THEMES list
 assets/              (gitignored — see Gotchas)
-  fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
+  fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (code, debug text), IosevkaSlabQP (headers), Spectral (body)
   ui/frame.png       256x256 frame; ui/frame.slice.ron slices it (16px borders)
   ui/themes/         CSS themes for html_ui: crimson (default), parchment, terminal, large_print
   ui/content/        test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent), test.css
@@ -83,14 +87,6 @@ assets/              (gitignored — see Gotchas)
 `NineSliceFrame(handle)` inserts/updates the entity's `ImageNode` once loaded,
 keeping any existing tint, with `visual_box: BorderBox`.
 
-### TUI (`tui/`)
-
-`TuiRequest::ui(cols, rows, TuiFontSource::Asset { .. })` spawned as a child of
-a framed node (the terminal owns its own `ImageNode`, so the frame must be on
-the parent). `Tui` appears once the font loads; draw systems run in
-`TerminalSystemSet::Render` and must tolerate `Tui` not existing yet. Panel
-aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
-
 ### HTML pipeline (`assets/html.rs`, `assets/l10n.rs`, `ui/html_ui.rs`)
 
 ```
@@ -124,9 +120,10 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   non-English bundles map them with an `item-name` message selecting on
   `$item`, referenced from `item-count`.
 - Fonts: Spectral/IosevkaSlabQP/IosevkaSlabMono cover Latin + Cyrillic, not
-  CJK. Japanese renders via Bevy's `system_font_discovery` feature (Parley
-  falls back per script to installed system fonts) — depends on the player's
-  OS having a CJK font; bundle one for shipping.
+  CJK. Japanese renders via Bevy's `system_font_discovery` (Parley falls back
+  per script to installed system fonts): opt-in for library users via the
+  `system_fonts` crate feature; the demo enables it through its dev-dependency.
+  Depends on the player's OS having a CJK font; bundle one for shipping.
 - `HtmlUi` on a node with `HtmlView` rebuilds its children on change (in the
   rendered panel that node is the scroll viewport). Tags only decide
   structure: blocks `h1`–`h6`, `p`, `li` (bulleted), `pre` (whitespace and
@@ -172,9 +169,10 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   scrolls, add `overflow_clip_margin: OverflowClipMargin::content_box()` or
   content draws over the frame.
 - Every UI `Node` is pickable and blocks pointer input to nodes below by
-  default. Invisible layout-only wrappers (e.g. the full-window root in
-  `tui/mod.rs`) must carry `Pickable::IGNORE`, or they swallow wheel/click/drag
-  for everything underneath — this is what broke `ScrollArea`/`Scrollbar`.
+  default. Invisible layout-only wrappers (e.g. a full-window root used to
+  resolve `Percent` sizes) must carry `Pickable::IGNORE`, or they swallow
+  wheel/click/drag for everything underneath — this is what once broke
+  `ScrollArea`/`Scrollbar`.
 - Bevy 0.19: `BorderRadius` is a `Node` field (`border_radius`), not a
   component.
 - `tl::VDom` borrows its input; assets use `tl::parse_owned` (unsafe fn, sound
@@ -201,7 +199,8 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
 
 ## Verification
 
-- `cargo build --all-targets` (library + example) must be warning-free.
+- `cargo check --lib` (library alone, minimal Bevy features) and
+  `cargo build --all-targets` (library + example) must both be warning-free.
 - For visual changes, run the app and capture an in-app screenshot (desktop
   screenshots grab whatever workspace is visible). Throwaway system, removed
   afterwards:
