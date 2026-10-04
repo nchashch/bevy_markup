@@ -12,7 +12,8 @@ src/
   system/mod.rs      SystemPlugins: registers AssetsPlugin, TuiPlugin, UiPlugin; ClearColor; Camera2d
   consts/mod.rs      Shared paths and styles (fonts, frame, colors)
   assets/
-    mod.rs           AssetsPlugin = HtmlPlugin + L10nPlugin
+    mod.rs           AssetsPlugin = CssPlugin + HtmlPlugin + L10nPlugin
+    css.rs           .css loader (lightningcss → owned StyleSheet<'static>); not consumed yet
     html.rs          .html loader (Tera template), HtmlView → RenderedHtml (tl DOM), decode_entities
     l10n.rs          Fluent: Locales (all bundles, preloaded), ActiveLocale, data-l10n-id/-args → LocalizedText
   tui/
@@ -29,7 +30,7 @@ src/
 assets/              (gitignored — see Gotchas)
   fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
   ui/frame.png       256x256 frame; ui/frame.slice.ron slices it (16px borders)
-  ui/content/        test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent)
+  ui/content/        test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent), test.css
   locales/<id>/      main.ftl.ron (bundle manifest) + ui.ftl, for en-US, ru, de, ja
 ```
 
