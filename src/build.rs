@@ -220,10 +220,13 @@ impl Styler<'_> {
     }
 }
 
-/// Stylesheets whose load has failed, so the failure is rebuilt around
-/// exactly once (asset failures emit no asset event).
+/// Stylesheet-load failures already handled, per `HtmlUi` entity, so each
+/// failure is rebuilt around exactly once (asset failures emit no asset
+/// event). Entries are cleared when the entity successfully styles with a
+/// ready sheet or when that sheet reloads, so re-selecting a broken sheet is
+/// a fresh failure.
 #[derive(Resource, Default)]
-pub(crate) struct FailedSheets(HashSet<AssetId<Stylesheet>>);
+pub(crate) struct FailedSheets(HashSet<(Entity, AssetId<Stylesheet>)>);
 
 /// The `html` rule's values (the starting point even for fragments without
 /// `<html>`), over the defaults.
@@ -266,13 +269,16 @@ pub(crate) fn build_html_ui(
         With<HtmlUi>,
     >,
     mut roots: Query<(&mut Node, Option<&CssRootBox>), With<HtmlUi>>,
+    mut removed_outlines: RemovedComponents<HtmlDebugOutline>,
 ) {
+    // Removals aren't `Ref` changes; the outline must still un-stick.
+    let removed_outlines: HashSet<Entity> = removed_outlines.read().collect();
     let reloaded_sheets: HashSet<AssetId<Stylesheet>> = sheet_events
         .read()
         .filter_map(|event| match event {
             AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => {
                 // Reloaded after a failure: let a later failure latch again.
-                failed_sheets.0.remove(id);
+                failed_sheets.0.retain(|(_, sheet)| sheet != id);
                 Some(*id)
             }
             _ => None,
@@ -322,12 +328,14 @@ pub(crate) fn build_html_ui(
             Some(own) => Some(&own.0),
             None => default_sheet.0.as_ref(),
         };
-        // Failures emit no asset event, so latch them to rebuild once.
+        // Failures emit no asset event, so latch them to rebuild once. The
+        // latch is per entity: re-selecting a failed sheet later is a new
+        // user action, even if this entity failed on it before.
         let failed_handle = sheet_handle
             .filter(|handle| !sheets.contains(*handle))
             .filter(|handle| matches!(state(handle), Sheet::Failed));
-        let newly_failed =
-            failed_handle.is_some_and(|handle| !failed_sheets.0.contains(&handle.id()));
+        let newly_failed = failed_handle
+            .is_some_and(|handle| !failed_sheets.0.contains(&(entity, handle.id())));
         let sheet_changed = match &own_sheet {
             Some(own) => own.is_changed(),
             None => default_sheet.is_changed(),
@@ -341,13 +349,18 @@ pub(crate) fn build_html_ui(
             || localized.is_changed()
             || sheet_changed
             || newly_failed
+            || removed_outlines.contains(&entity)
             || fonts.is_changed()
             || outline.as_ref().is_some_and(|outline| outline.is_changed());
         if !dirty {
             continue;
         }
         if let Some(handle) = failed_handle {
-            failed_sheets.0.insert(handle.id());
+            failed_sheets.0.insert((entity, handle.id()));
+        } else if css.is_some() {
+            // Styled with a ready sheet: any earlier failure of *other*
+            // sheets no longer applies to this entity.
+            failed_sheets.0.retain(|(owner, _)| *owner != entity);
         }
 
         let styles = css

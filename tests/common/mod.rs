@@ -41,7 +41,7 @@ pub fn face_label(source: &FontSource) -> String {
 }
 
 #[derive(Resource, Default)]
-pub struct Builds(usize);
+pub struct Builds(pub usize);
 
 pub struct TestUi {
     app: App,

@@ -62,6 +62,7 @@ tests/
   properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips, …)
   quickcheck.rs    quickcheck structured-input properties (cascade vs reference model, text round trip)
   arbtest.rs       arbtest robustness properties: arbitrary HTML/CSS/Fluent/args bytes through the pipeline
+  stateful.rs      proptest-stateful machine: random op sequences (theme/locale/context/outline) vs a reference model
   common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (oracle output)
   fixtures/        frame.png (32×24, committed; `assets/` is not)
@@ -87,9 +88,13 @@ assets/            (gitignored — see Gotchas)
   `Modified` plus change detection, so hot reload works with Bevy's
   `file_watcher` (not enabled in the examples).
 - A stylesheet that *fails* to load emits no asset event; `build.rs` latches
-  failures (`FailedSheets`) and builds unstyled once (a failed per-entity
-  `HtmlStylesheet` falls back to `DefaultStylesheet`). Only *loading*
-  stylesheets defer the build.
+  failures per entity (`FailedSheets`) and builds unstyled once (a failed
+  per-entity `HtmlStylesheet` falls back to `DefaultStylesheet`). Styling
+  with a ready sheet again, or the sheet reloading, clears the latch, so
+  re-selecting a broken sheet fails fresh. Only *loading* stylesheets defer
+  the build. Beware: re-requesting a failed asset can flip its state to
+  `Loading` for a frame, eating that frame's change signal — don't rely on
+  `is_changed` alone across a load-state transition.
 - Demo typography: headers IosevkaSlabQP (red), body Spectral (off-white),
   code/debug Iosevka Slab Mono — in the CSS themes for HTML, in
   `examples/demo/consts.rs` for plain Bevy UI panels.
@@ -105,9 +110,11 @@ assets/            (gitignored — see Gotchas)
 - Templates: compiled at load (syntax errors fail the load); name = asset path,
   so `.html` gets Tera HTML autoescaping. Plain HTML renders to itself.
 - Rebuild triggers: template/context change or reload, locale change or bundle
-  (re)load, stylesheet swap or (re)load, a stylesheet's `border-image` image
-  loading, `FontFamilies` change, outline marker added. The UI isn't built
-  while its stylesheet is loading (images may arrive later; their load rebuilds).
+  (re)load, stylesheet swap or (re)load (a failed sheet rebuilds unstyled
+  once, per entity), a stylesheet's `border-image` image loading,
+  `FontFamilies` change, outline marker added or removed. The UI isn't built
+  while its stylesheet is loading (images may arrive later; their load
+  rebuilds).
 - Structure (`build.rs`: DOM → `Item` tree → nodes): blocks `h1`–`h6`, `p`,
   `li` (bulleted), `pre` (whitespace kept, no wrap; leading newline and
   trailing whitespace dropped), loose text; containers (`CONTAINERS`: `div`,
@@ -277,6 +284,12 @@ known gaps:
   - [x] Round trips: locale A → B → A, theme X → Y → X, context v → w → v end in
     a dump identical to the start; a forced rebuild with no input change is
     idempotent (proxy for "no duplicate children").
+  - [x] Stateful sequences (`tests/stateful.rs`, `proptest_stateful`): random
+    op chains (theme × {framed, plain, broken}, locale, context, outline
+    toggle) against one long-lived `HtmlUi`, model-checked after every op.
+    Found two real bugs the pairwise tests missed: outline *removal* never
+    rebuilt (fixed via `RemovedComponents`), and a globally latched failed
+    sheet swallowed a later re-select (latch is now per entity).
   - [x] `quickcheck` over structured inputs: a generated many-rule stylesheet
     checked against a reference CSS-precedence model (`cascade_winner_matches_
     precedence_model`), and arbitrary text round-tripping through Tera
@@ -285,8 +298,8 @@ known gaps:
     Note: quickcheck 1.1's `Gen` RNG is private (edition-2024 `gen` keyword) —
     build `Arbitrary` impls from `T::arbitrary(g)` + `g.choose`;
     the `#[quickcheck]` attribute comes from `quickcheck_macros`.
-  - Remaining: `arbtest` robustness runs (arbitrary HTML/CSS/FTL through the
-    pipeline: no panic, always some output).
+  - Remaining: shrink quality (stateful ops shrink only by removal; proptest
+    value shrinking inside an op not supported by the framework).
 - [ ] **3. Headless layout checks** (fixes weakness 3, mostly). Run Bevy UI's
   layout headless with a fixed viewport; assert node rects (`ComputedNode`,
   `UiGlobalTransform`). Essential once flex layout lands (next step 1); then
