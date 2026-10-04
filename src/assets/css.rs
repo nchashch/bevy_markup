@@ -2,7 +2,7 @@
 //! tree (a CSSOM equivalent: rules → selectors + declarations).
 //!
 //! Parsing is strict: a syntax error fails the load (with line/column).
-//! Nothing consumes stylesheets yet.
+//! Consumed by `ui::html_style` (colors for HTML rendered as Bevy UI).
 
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
@@ -21,11 +21,9 @@ impl Plugin for CssPlugin {
 /// A parsed stylesheet. Owned (`'static`) via lightningcss's `into_owned`.
 #[derive(Asset, TypePath)]
 pub struct CssStyleSheet {
-    #[expect(dead_code, reason = "loader only for now; consumers come later")]
     sheet: StyleSheet<'static>,
 }
 
-#[expect(dead_code, reason = "loader only for now; consumers come later")]
 impl CssStyleSheet {
     pub fn sheet(&self) -> &StyleSheet<'static> {
         &self.sheet

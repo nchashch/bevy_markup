@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 mod dom_panel;
+mod html_style;
 mod html_ui;
 mod locale_panel;
 mod nine_slice;

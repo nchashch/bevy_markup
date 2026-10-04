@@ -13,7 +13,7 @@ src/
   consts/mod.rs      Shared paths and styles (fonts, frame, colors)
   assets/
     mod.rs           AssetsPlugin = CssPlugin + HtmlPlugin + L10nPlugin
-    css.rs           .css loader (lightningcss → owned StyleSheet<'static>); not consumed yet
+    css.rs           .css loader (lightningcss → owned StyleSheet<'static>)
     html.rs          .html loader (Tera template), HtmlView → RenderedHtml (tl DOM), decode_entities
     l10n.rs          Fluent: Locales (all bundles, preloaded), ActiveLocale, data-l10n-id/-args → LocalizedText
   tui/
@@ -25,11 +25,13 @@ src/
     panel.rs         Static Bevy UI panel (header + body text)
     dom_panel.rs     Debug panels: DOM outline of test/inventory/l10n.html (max 45vh, scrollable); demo_context()
     html_ui.rs       HtmlUi: renders an HtmlView's DOM as Bevy UI nodes (rendered panel: max 50vh, scrollable)
+    html_style.rs    Stylesheet → per-element color/background table for html_ui
     scroll.rs        Shared scroll pieces: viewport_node(), spawn_scrollbar(), toggle_scrollbars
     locale_panel.rs  Language selector: a button per Locales entry sets ActiveLocale
 assets/              (gitignored — see Gotchas)
   fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
   ui/frame.png       256x256 frame; ui/frame.slice.ron slices it (16px borders)
+  ui/html.css        Colors for HTML rendered by html_ui (HtmlStylesheet)
   ui/content/        test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent), test.css
   locales/<id>/      main.ftl.ron (bundle manifest) + ui.ftl, for en-US, ru, de, ja
 ```
@@ -110,7 +112,7 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
 - `HtmlUi` on a node with `HtmlView` rebuilds its children on change (in the
   rendered panel that node is the scroll viewport). Supported:
   `h1`–`h6` (header font, 28/24/22/20px), `p` (body 20px), `li` (bulleted body),
-  `pre` (mono 16px block, dark background, whitespace/newlines kept, no wrap;
+  `pre` (mono 16px block, whitespace/newlines kept, no wrap;
   a newline right after `<pre>` and trailing whitespace are dropped), loose text
   (body). Other elements are traversed; `head`/`script`/`style` skipped. Each
   block is a `Text` with one `TextSpan` per styled run: `b`/`strong` → Bold,
@@ -118,6 +120,14 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   to the mono family (bold/italic still apply, block size kept). Fluent
   translations are plain text (one regular run). Outside `pre`, whitespace
   collapses across run boundaries as in HTML.
+- Colors for `HtmlUi` come from its `HtmlStylesheet(Handle<CssStyleSheet>)`
+  (`assets/ui/html.css`), not code. Subset (`ui/html_style.rs`): type
+  selectors only (comma lists ok; others skipped at `debug`); `color`
+  (inherited down the tree, nearest element's rule wins) and
+  `background-color` (blocks); later rules win, `!important` beats normal. An
+  `html` rule is the starting color, also for fragments without `<html>`; no
+  rule → white. The UI isn't built until the sheet loads, and rebuilds on its
+  load/modify events.
 - `HtmlDocument::outline(&LocalizedText)` gives an indented debug tree (used by
   `dom_panel.rs`, also logged at `info`).
 

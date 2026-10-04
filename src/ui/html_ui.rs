@@ -1,17 +1,20 @@
 //! Renders an [`HtmlView`]'s DOM (after Tera and Fluent) as Bevy UI.
 //!
 //! Put [`HtmlUi`] next to an `HtmlView` on a UI node; its children are rebuilt
-//! whenever the view re-renders or re-localizes. Supported, deliberately
-//! minimal:
+//! whenever the view re-renders, re-localizes, or its [`HtmlStylesheet`]
+//! (re)loads. Supported, deliberately minimal:
 //!
 //! - `h1`–`h6`: header font, sizes descending from `h1`
 //! - `p`: body font
 //! - `li`: body font with a bullet
-//! - `pre`: monospace block on a dark background; whitespace and line breaks
-//!   kept, no wrapping
+//! - `pre`: monospace block; whitespace and line breaks kept, no wrapping
 //! - loose text directly inside a container: body font
 //! - inline `b`/`strong` and `i`/`em`: Bold / Italic / BoldItalic face
 //! - inline `code`/`kbd`/`samp`/`tt`: monospace family (bold/italic still apply)
+//!
+//! Colors come from the stylesheet (see [`super::html_style`]): `color` is
+//! inherited down the tree, `background-color` applies to blocks. Without a
+//! stylesheet (or a matching rule) text is white.
 //!
 //! Any other element is walked through for its children; `head`, `script`, and
 //! `style` are skipped. A block's text is its Fluent translation when it has a
@@ -19,25 +22,29 @@
 //! Outside `pre`, whitespace collapses as in HTML. Each block is one `Text`
 //! with a `TextSpan` child per styled run.
 
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 
 use super::NineSliceFrame;
 use super::dom_panel::{L10N_PATH, demo_context};
+use super::html_style::HtmlStyles;
 use super::scroll::{SCROLLBAR_GAP, spawn_scrollbar, viewport_node};
+use crate::assets::css::CssStyleSheet;
 use crate::assets::html::{HtmlView, RenderedHtml, decode_entities};
 use crate::assets::l10n::LocalizedText;
 use crate::consts::{
-    BODY_BOLD_FONT_PATH, BODY_BOLD_ITALIC_FONT_PATH, BODY_COLOR, BODY_FONT_PATH,
-    BODY_ITALIC_FONT_PATH, FRAME_PATH, HEADER_BOLD_FONT_PATH, HEADER_BOLD_ITALIC_FONT_PATH,
-    HEADER_COLOR, HEADER_FONT_PATH, HEADER_ITALIC_FONT_PATH, MONO_BOLD_FONT_PATH,
-    MONO_BOLD_ITALIC_FONT_PATH, MONO_FONT_PATH, MONO_ITALIC_FONT_PATH,
+    BODY_BOLD_FONT_PATH, BODY_BOLD_ITALIC_FONT_PATH, BODY_FONT_PATH, BODY_ITALIC_FONT_PATH,
+    FRAME_PATH, HEADER_BOLD_FONT_PATH, HEADER_BOLD_ITALIC_FONT_PATH, HEADER_FONT_PATH,
+    HEADER_ITALIC_FONT_PATH, MONO_BOLD_FONT_PATH, MONO_BOLD_ITALIC_FONT_PATH, MONO_FONT_PATH,
+    MONO_ITALIC_FONT_PATH,
 };
 
+const STYLESHEET_PATH: &str = "ui/html.css";
 const BODY_SIZE: f32 = 20.0;
 const PRE_SIZE: f32 = 16.0;
-const PRE_BACKGROUND: Color = Color::srgb_u8(28, 28, 34);
+/// Text color when no stylesheet rule applies.
+const DEFAULT_COLOR: Color = Color::WHITE;
 /// Top-anchored; capped so it stays clear of the debug panels along the bottom.
 const PANEL_MAX_HEIGHT_VH: f32 = 50.0;
 
@@ -46,11 +53,29 @@ const PANEL_MAX_HEIGHT_VH: f32 = 50.0;
 #[require(Node)]
 pub struct HtmlUi;
 
-#[derive(Clone, Copy, Default, PartialEq)]
+/// Stylesheet for an [`HtmlUi`]. While it is loading, the UI isn't built (so
+/// it never flashes unstyled); it's rebuilt whenever the sheet (re)loads.
+#[derive(Component)]
+pub struct HtmlStylesheet(pub Handle<CssStyleSheet>);
+
+/// Computed style of a text run.
+#[derive(Clone, Copy, PartialEq)]
 struct Style {
     bold: bool,
     italic: bool,
     mono: bool,
+    color: Color,
+}
+
+impl Style {
+    fn plain(color: Color) -> Self {
+        Self {
+            bold: false,
+            italic: false,
+            mono: false,
+            color,
+        }
+    }
 }
 
 /// A stretch of text in one style.
@@ -68,6 +93,9 @@ enum BlockKind {
 
 struct Block {
     kind: BlockKind,
+    /// The block's own computed color (bullet, runs without a rule of their own).
+    color: Color,
+    background: Option<Color>,
     runs: Vec<Run>,
 }
 
@@ -130,6 +158,7 @@ pub(super) fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
                         template: asset_server.load(L10N_PATH),
                         context: demo_context(),
                     },
+                    HtmlStylesheet(asset_server.load(STYLESHEET_PATH)),
                     ScrollArea,
                     Node {
                         row_gap: Val::Px(10.0),
@@ -144,63 +173,94 @@ pub(super) fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
 pub(super) fn build_html_ui(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mut sheet_events: MessageReader<AssetEvent<CssStyleSheet>>,
+    sheets: Res<Assets<CssStyleSheet>>,
     views: Query<
-        (Entity, &RenderedHtml, &LocalizedText),
         (
-            With<HtmlUi>,
-            Or<(Changed<RenderedHtml>, Changed<LocalizedText>)>,
+            Entity,
+            Ref<RenderedHtml>,
+            Ref<LocalizedText>,
+            Option<&HtmlStylesheet>,
         ),
+        With<HtmlUi>,
     >,
 ) {
-    if views.is_empty() {
-        return;
-    }
-    let header = Family::load(
-        &asset_server,
-        HEADER_FONT_PATH,
-        HEADER_BOLD_FONT_PATH,
-        HEADER_ITALIC_FONT_PATH,
-        HEADER_BOLD_ITALIC_FONT_PATH,
-    );
-    let body = Family::load(
-        &asset_server,
-        BODY_FONT_PATH,
-        BODY_BOLD_FONT_PATH,
-        BODY_ITALIC_FONT_PATH,
-        BODY_BOLD_ITALIC_FONT_PATH,
-    );
-    let mono = Family::load(
-        &asset_server,
-        MONO_FONT_PATH,
-        MONO_BOLD_FONT_PATH,
-        MONO_ITALIC_FONT_PATH,
-        MONO_BOLD_ITALIC_FONT_PATH,
-    );
+    let reloaded_sheets: HashSet<AssetId<CssStyleSheet>> = sheet_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
 
-    for (entity, rendered, localized) in &views {
-        let blocks = match rendered {
-            RenderedHtml::Pending => continue,
-            RenderedHtml::Ready(document) => collect_blocks(document.dom(), &localized.0),
-            RenderedHtml::Failed(message) => vec![Block {
-                kind: BlockKind::Paragraph,
-                runs: vec![Run {
-                    text: format!("failed to render: {message}"),
-                    style: Style::default(),
-                }],
-            }],
+    let mut fonts = None;
+    for (entity, rendered, localized, stylesheet) in &views {
+        let sheet_reloaded =
+            stylesheet.is_some_and(|sheet| reloaded_sheets.contains(&sheet.0.id()));
+        if !rendered.is_changed() && !localized.is_changed() && !sheet_reloaded {
+            continue;
+        }
+        let styles = match stylesheet {
+            Some(sheet) => match sheets.get(&sheet.0) {
+                Some(css) => HtmlStyles::from_sheet(css.sheet()),
+                // Still loading: its load event triggers the build.
+                None => continue,
+            },
+            None => HtmlStyles::default(),
         };
+
+        let blocks = match &*rendered {
+            RenderedHtml::Pending => continue,
+            RenderedHtml::Ready(document) => collect_blocks(document.dom(), &localized.0, &styles),
+            RenderedHtml::Failed(message) => {
+                let color = styles.get("html").color.unwrap_or(DEFAULT_COLOR);
+                vec![Block {
+                    kind: BlockKind::Paragraph,
+                    color,
+                    background: None,
+                    runs: vec![Run {
+                        text: format!("failed to render: {message}"),
+                        style: Style::plain(color),
+                    }],
+                }]
+            }
+        };
+
+        let [header, body, mono] = fonts.get_or_insert_with(|| {
+            [
+                Family::load(
+                    &asset_server,
+                    HEADER_FONT_PATH,
+                    HEADER_BOLD_FONT_PATH,
+                    HEADER_ITALIC_FONT_PATH,
+                    HEADER_BOLD_ITALIC_FONT_PATH,
+                ),
+                Family::load(
+                    &asset_server,
+                    BODY_FONT_PATH,
+                    BODY_BOLD_FONT_PATH,
+                    BODY_ITALIC_FONT_PATH,
+                    BODY_BOLD_ITALIC_FONT_PATH,
+                ),
+                Family::load(
+                    &asset_server,
+                    MONO_FONT_PATH,
+                    MONO_BOLD_FONT_PATH,
+                    MONO_ITALIC_FONT_PATH,
+                    MONO_BOLD_ITALIC_FONT_PATH,
+                ),
+            ]
+        });
 
         commands
             .entity(entity)
             .despawn_related::<Children>()
             .with_children(|parent| {
                 for block in blocks {
-                    let (family, size, color) = match block.kind {
-                        BlockKind::Heading(level) => (&header, heading_size(level), HEADER_COLOR),
-                        BlockKind::Paragraph | BlockKind::ListItem => {
-                            (&body, BODY_SIZE, BODY_COLOR)
-                        }
-                        BlockKind::Preformatted => (&mono, PRE_SIZE, BODY_COLOR),
+                    let (family, size) = match block.kind {
+                        BlockKind::Heading(level) => (&*header, heading_size(level)),
+                        BlockKind::Paragraph | BlockKind::ListItem => (&*body, BODY_SIZE),
+                        BlockKind::Preformatted => (&*mono, PRE_SIZE),
                     };
                     let prefix = match block.kind {
                         BlockKind::ListItem => "• ",
@@ -231,21 +291,24 @@ pub(super) fn build_html_ui(
                         TextFont::default()
                             .with_font(family.regular.clone())
                             .with_font_size(size),
-                        TextColor(color),
+                        TextColor(block.color),
                         node,
                     ));
                     if matches!(block.kind, BlockKind::Preformatted) {
-                        text.insert((TextLayout::no_wrap(), BackgroundColor(PRE_BACKGROUND)));
+                        text.insert(TextLayout::no_wrap());
+                    }
+                    if let Some(background) = block.background {
+                        text.insert(BackgroundColor(background));
                     }
                     text.with_children(|spans| {
                         for run in block.runs {
-                            let face = if run.style.mono { &mono } else { family };
+                            let face = if run.style.mono { &*mono } else { family };
                             spans.spawn((
                                 TextSpan::new(run.text),
                                 TextFont::default()
                                     .with_font(face.face(run.style))
                                     .with_font_size(size),
-                                TextColor(color),
+                                TextColor(run.style.color),
                             ));
                         }
                     });
@@ -263,34 +326,46 @@ fn heading_size(level: u8) -> f32 {
     }
 }
 
+/// Walk context shared by every node.
+struct Ctx<'a, 'p, 'buf> {
+    parser: &'p tl::Parser<'buf>,
+    localized: &'a HashMap<tl::NodeHandle, Result<String, String>>,
+    styles: &'a HtmlStyles,
+}
+
 fn collect_blocks(
     dom: &tl::VDom,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
+    styles: &HtmlStyles,
 ) -> Vec<Block> {
-    let parser = dom.parser();
+    let ctx = Ctx {
+        parser: dom.parser(),
+        localized,
+        styles,
+    };
+    // `html`'s color is the starting point even for fragments without <html>.
+    let root_color = styles.get("html").color.unwrap_or(DEFAULT_COLOR);
     let mut blocks = Vec::new();
     for handle in dom.children() {
-        collect_node(parser, localized, *handle, &mut blocks);
+        collect_node(&ctx, *handle, root_color, &mut blocks);
     }
     blocks
 }
 
-fn collect_node(
-    parser: &tl::Parser,
-    localized: &HashMap<tl::NodeHandle, Result<String, String>>,
-    handle: tl::NodeHandle,
-    blocks: &mut Vec<Block>,
-) {
-    let Some(node) = handle.get(parser) else {
+fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Color, blocks: &mut Vec<Block>) {
+    let Some(node) = handle.get(ctx.parser) else {
         return;
     };
     let tag = match node {
         tl::Node::Tag(tag) => tag,
         tl::Node::Raw(_) => {
-            let runs = inline_runs(parser, handle);
+            // Anonymous block: inherits the container's color.
+            let runs = inline_runs(ctx, handle, Style::plain(inherited));
             if !runs.is_empty() {
                 blocks.push(Block {
                     kind: BlockKind::Paragraph,
+                    color: inherited,
+                    background: None,
                     runs,
                 });
             }
@@ -300,6 +375,8 @@ fn collect_node(
     };
 
     let name = tag.name().as_utf8_str().to_ascii_lowercase();
+    let declared = ctx.styles.get(&name);
+    let color = declared.color.unwrap_or(inherited);
     let kind = match name.as_str() {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading(name.as_bytes()[1] - b'0'),
         "p" => BlockKind::Paragraph,
@@ -308,20 +385,21 @@ fn collect_node(
         "head" | "script" | "style" => return,
         _ => {
             for child in tag.children().top().iter() {
-                collect_node(parser, localized, *child, blocks);
+                collect_node(ctx, *child, color, blocks);
             }
             return;
         }
     };
     let preformatted = matches!(kind, BlockKind::Preformatted);
-    let runs = match localized.get(&handle) {
+    let style = Style {
+        mono: preformatted,
+        ..Style::plain(color)
+    };
+    let runs = match ctx.localized.get(&handle) {
         Some(Ok(text)) => {
             let run = Run {
                 text: text.clone(),
-                style: Style {
-                    mono: preformatted,
-                    ..Style::default()
-                },
+                style,
             };
             if preformatted {
                 vec![run]
@@ -330,28 +408,29 @@ fn collect_node(
             }
         }
         // Missing translation: fall back to the element's own content.
-        _ if preformatted => preformatted_runs(parser, handle),
-        _ => inline_runs(parser, handle),
+        _ if preformatted => preformatted_runs(ctx, handle, style),
+        _ => inline_runs(ctx, handle, style),
     };
-    blocks.push(Block { kind, runs });
+    blocks.push(Block {
+        kind,
+        color,
+        background: declared.background,
+        runs,
+    });
 }
 
-/// Styled text runs of `handle` and its descendants, whitespace collapsed.
-fn inline_runs(parser: &tl::Parser, handle: tl::NodeHandle) -> Vec<Run> {
+/// Styled text runs of `handle`'s content, whitespace collapsed.
+fn inline_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style) -> Vec<Run> {
     let mut runs = Vec::new();
-    push_runs(parser, handle, Style::default(), &mut runs);
+    push_children_runs(ctx, handle, style, &mut runs);
     collapse_runs(runs)
 }
 
-/// Styled runs of a `pre` element: monospace, whitespace kept. As in HTML, a
+/// Styled runs of a `pre` element's content, whitespace kept. As in HTML, a
 /// newline right after `<pre>` is dropped; so is trailing whitespace.
-fn preformatted_runs(parser: &tl::Parser, handle: tl::NodeHandle) -> Vec<Run> {
+fn preformatted_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style) -> Vec<Run> {
     let mut runs = Vec::new();
-    let style = Style {
-        mono: true,
-        ..Style::default()
-    };
-    push_runs(parser, handle, style, &mut runs);
+    push_children_runs(ctx, handle, style, &mut runs);
 
     if let Some(first) = runs.first_mut() {
         let stripped = first
@@ -370,8 +449,22 @@ fn preformatted_runs(parser: &tl::Parser, handle: tl::NodeHandle) -> Vec<Run> {
     runs
 }
 
-fn push_runs(parser: &tl::Parser, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run>) {
-    match handle.get(parser) {
+/// Runs for `handle`'s content: its children for an element (whose own style
+/// is already in `style`), the text itself for a text node.
+fn push_children_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run>) {
+    match handle.get(ctx.parser) {
+        Some(tl::Node::Tag(tag)) => {
+            for child in tag.children().top().iter() {
+                push_runs(ctx, *child, style, runs);
+            }
+        }
+        Some(tl::Node::Raw(_)) => push_runs(ctx, handle, style, runs),
+        Some(tl::Node::Comment(_)) | None => {}
+    }
+}
+
+fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run>) {
+    match handle.get(ctx.parser) {
         Some(tl::Node::Raw(text)) => {
             let text = decode_entities(&text.as_utf8_str());
             match runs.last_mut() {
@@ -380,7 +473,8 @@ fn push_runs(parser: &tl::Parser, handle: tl::NodeHandle, style: Style, runs: &m
             }
         }
         Some(tl::Node::Tag(tag)) => {
-            let style = match tag.name().as_utf8_str().to_ascii_lowercase().as_str() {
+            let name = tag.name().as_utf8_str().to_ascii_lowercase();
+            let mut style = match name.as_str() {
                 "b" | "strong" => Style { bold: true, ..style },
                 "i" | "em" => Style {
                     italic: true,
@@ -389,8 +483,11 @@ fn push_runs(parser: &tl::Parser, handle: tl::NodeHandle, style: Style, runs: &m
                 "code" | "kbd" | "samp" | "tt" => Style { mono: true, ..style },
                 _ => style,
             };
+            if let Some(color) = ctx.styles.get(&name).color {
+                style.color = color;
+            }
             for child in tag.children().top().iter() {
-                push_runs(parser, *child, style, runs);
+                push_runs(ctx, *child, style, runs);
             }
         }
         Some(tl::Node::Comment(_)) | None => {}
