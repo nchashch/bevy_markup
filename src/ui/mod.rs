@@ -4,6 +4,7 @@ mod dom_panel;
 mod html_ui;
 mod nine_slice;
 mod panel;
+mod scroll;
 
 pub use nine_slice::NineSliceFrame;
 
@@ -17,7 +18,7 @@ impl Plugin for UiPlugin {
             Update,
             (
                 dom_panel::show_outline,
-                dom_panel::toggle_scrollbars,
+                scroll::toggle_scrollbars,
                 html_ui::build_html_ui,
             ),
         );

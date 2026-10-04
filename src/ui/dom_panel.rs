@@ -1,18 +1,16 @@
 use bevy::prelude::*;
-use bevy::ui_widgets::{ControlOrientation, ScrollArea, Scrollbar, ScrollbarThumb};
+use bevy::ui_widgets::ScrollArea;
 use serde::Serialize;
 
 use super::NineSliceFrame;
+use super::scroll::{SCROLLBAR_GAP, spawn_scrollbar, viewport_node};
 use crate::assets::html::{HtmlView, RenderedHtml};
 use crate::assets::l10n::LocalizedText;
-use crate::consts::{FRAME_PATH, HEADER_COLOR, MONO_FONT_PATH};
+use crate::consts::{FRAME_PATH, MONO_FONT_PATH};
 
 /// Debug panels sit along the bottom edge; capping their height keeps the top
 /// of the screen free for the other panels.
 const PANEL_MAX_HEIGHT_VH: f32 = 45.0;
-const SCROLLBAR_WIDTH: f32 = 6.0;
-const SCROLLBAR_MIN_THUMB: f32 = 24.0;
-const SCROLLBAR_TRACK: Color = Color::srgb_u8(40, 40, 46);
 
 const PLAIN_PATH: &str = "ui/content/test.html";
 const TEMPLATE_PATH: &str = "ui/content/inventory.html";
@@ -91,32 +89,20 @@ fn spawn_panel(
                 width: Val::Px(420.0),
                 max_height: Val::Vh(PANEL_MAX_HEIGHT_VH),
                 padding: UiRect::all(Val::Px(28.0)),
-                column_gap: Val::Px(8.0),
+                column_gap: SCROLLBAR_GAP,
                 ..default()
             },
         ))
         .with_children(|panel| {
-            // The viewport scrolls; the scrollbar sits beside it so it doesn't
-            // scroll away with the content.
             let viewport = panel
                 .spawn((
                     ScrollArea,
-                    Node {
-                        flex_grow: 1.0,
-                        // Let the row's height cap the viewport instead of
-                        // its content sizing it.
-                        min_height: Val::Px(0.0),
-                        flex_direction: FlexDirection::Column,
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
+                    viewport_node(),
                     children![(
                         DomPanelText,
                         Text::new(format!("loading {path}…")),
                         text_font,
                         TextColor(Color::srgb_u8(225, 225, 225)),
-                        // Keep full height so the viewport scrolls instead of
-                        // squashing it.
                         Node {
                             flex_shrink: 0.0,
                             ..default()
@@ -124,43 +110,8 @@ fn spawn_panel(
                     )],
                 ))
                 .id();
-            panel.spawn((
-                Scrollbar::new(viewport, ControlOrientation::Vertical, SCROLLBAR_MIN_THUMB),
-                Node {
-                    width: Val::Px(SCROLLBAR_WIDTH),
-                    flex_shrink: 0.0,
-                    border_radius: BorderRadius::all(Val::Px(SCROLLBAR_WIDTH / 2.0)),
-                    ..default()
-                },
-                BackgroundColor(SCROLLBAR_TRACK),
-                children![(
-                    ScrollbarThumb {
-                        border_radius: BorderRadius::all(Val::Px(SCROLLBAR_WIDTH / 2.0)),
-                        ..default()
-                    },
-                    BackgroundColor(HEADER_COLOR),
-                )],
-            ));
+            spawn_scrollbar(panel, viewport);
         });
-}
-
-/// Hides a scrollbar while its viewport's content fits.
-pub(super) fn toggle_scrollbars(
-    mut scrollbars: Query<(&Scrollbar, &mut Visibility)>,
-    viewports: Query<&ComputedNode>,
-) {
-    for (scrollbar, mut visibility) in &mut scrollbars {
-        let Ok(viewport) = viewports.get(scrollbar.target) else {
-            continue;
-        };
-        let overflows = viewport.content_size().y > viewport.size().y + 0.5;
-        let wanted = if overflows {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        visibility.set_if_neq(wanted);
-    }
 }
 
 /// Rewrites the panel text whenever its view re-renders or re-localizes.

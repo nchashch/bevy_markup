@@ -21,9 +21,11 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 
 use super::NineSliceFrame;
 use super::dom_panel::{L10N_PATH, demo_context};
+use super::scroll::{SCROLLBAR_GAP, spawn_scrollbar, viewport_node};
 use crate::assets::html::{HtmlView, RenderedHtml, decode_entities};
 use crate::assets::l10n::LocalizedText;
 use crate::consts::{
@@ -36,6 +38,8 @@ use crate::consts::{
 const BODY_SIZE: f32 = 20.0;
 const PRE_SIZE: f32 = 16.0;
 const PRE_BACKGROUND: Color = Color::srgb_u8(28, 28, 34);
+/// Top-anchored; capped so it stays clear of the debug panels along the bottom.
+const PANEL_MAX_HEIGHT_VH: f32 = 50.0;
 
 /// Renders this entity's [`HtmlView`] as its Bevy UI children.
 #[derive(Component)]
@@ -102,24 +106,39 @@ impl Family {
 }
 
 pub(super) fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.spawn((
-        HtmlUi,
-        HtmlView {
-            template: asset_server.load(L10N_PATH),
-            context: demo_context(),
-        },
-        NineSliceFrame(asset_server.load(FRAME_PATH)),
-        Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(452.0),
-            top: Val::Px(16.0),
-            width: Val::Px(420.0),
-            padding: UiRect::all(Val::Px(28.0)),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(10.0),
-            ..default()
-        },
-    ));
+    commands
+        .spawn((
+            NineSliceFrame(asset_server.load(FRAME_PATH)),
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(452.0),
+                top: Val::Px(16.0),
+                width: Val::Px(420.0),
+                max_height: Val::Vh(PANEL_MAX_HEIGHT_VH),
+                padding: UiRect::all(Val::Px(28.0)),
+                column_gap: SCROLLBAR_GAP,
+                ..default()
+            },
+        ))
+        .with_children(|panel| {
+            // The viewport holds the rendered blocks (HtmlUi rebuilds its
+            // children) and scrolls them.
+            let viewport = panel
+                .spawn((
+                    HtmlUi,
+                    HtmlView {
+                        template: asset_server.load(L10N_PATH),
+                        context: demo_context(),
+                    },
+                    ScrollArea,
+                    Node {
+                        row_gap: Val::Px(10.0),
+                        ..viewport_node()
+                    },
+                ))
+                .id();
+            spawn_scrollbar(panel, viewport);
+        });
 }
 
 pub(super) fn build_html_ui(
@@ -188,32 +207,35 @@ pub(super) fn build_html_ui(
                         _ => "",
                     };
 
+                    // Blocks keep their height (`flex_shrink: 0`) so a
+                    // scrolling parent overflows instead of squashing them.
+                    let node = match block.kind {
+                        BlockKind::ListItem => Node {
+                            flex_shrink: 0.0,
+                            margin: UiRect::left(Val::Px(12.0)),
+                            ..default()
+                        },
+                        BlockKind::Preformatted => Node {
+                            flex_shrink: 0.0,
+                            padding: UiRect::all(Val::Px(8.0)),
+                            overflow: Overflow::clip_x(),
+                            ..default()
+                        },
+                        BlockKind::Heading(_) | BlockKind::Paragraph => Node {
+                            flex_shrink: 0.0,
+                            ..default()
+                        },
+                    };
                     let mut text = parent.spawn((
                         Text::new(prefix),
                         TextFont::default()
                             .with_font(family.regular.clone())
                             .with_font_size(size),
                         TextColor(color),
+                        node,
                     ));
-                    match block.kind {
-                        BlockKind::ListItem => {
-                            text.insert(Node {
-                                margin: UiRect::left(Val::Px(12.0)),
-                                ..default()
-                            });
-                        }
-                        BlockKind::Preformatted => {
-                            text.insert((
-                                TextLayout::no_wrap(),
-                                BackgroundColor(PRE_BACKGROUND),
-                                Node {
-                                    padding: UiRect::all(Val::Px(8.0)),
-                                    overflow: Overflow::clip_x(),
-                                    ..default()
-                                },
-                            ));
-                        }
-                        BlockKind::Heading(_) | BlockKind::Paragraph => {}
+                    if matches!(block.kind, BlockKind::Preformatted) {
+                        text.insert((TextLayout::no_wrap(), BackgroundColor(PRE_BACKGROUND)));
                     }
                     text.with_children(|spans| {
                         for run in block.runs {

@@ -22,8 +22,9 @@ src/
     mod.rs           UiPlugin: registers panels and systems below
     nine_slice.rs    *.slice.ron loader, NineSlice asset, NineSliceFrame component
     panel.rs         Static Bevy UI panel (header + body text)
-    dom_panel.rs     Debug panels: DOM outline of test/inventory/l10n.html (max 45vh, wheel + scrollbar); demo_context()
-    html_ui.rs       HtmlUi: renders an HtmlView's DOM as Bevy UI nodes
+    dom_panel.rs     Debug panels: DOM outline of test/inventory/l10n.html (max 45vh, scrollable); demo_context()
+    html_ui.rs       HtmlUi: renders an HtmlView's DOM as Bevy UI nodes (rendered panel: max 50vh, scrollable)
+    scroll.rs        Shared scroll pieces: viewport_node(), spawn_scrollbar(), toggle_scrollbars
 assets/              (gitignored — see Gotchas)
   fonts/             Regular/Bold/Italic/BoldItalic of IosevkaSlabMono (TUI, debug text), IosevkaSlabQP (headers), Spectral (body)
   ui/frame.png       256x256 frame; ui/frame.slice.ron slices it (16px borders)
@@ -95,7 +96,8 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
   the fallback. Args are a JSON object (numbers stay numbers for plurals).
   A whole args map can be one Tera variable: `data-l10n-args='{{ my_args }}'`
   with a map/struct in the context.
-- `HtmlUi` on a node with `HtmlView` rebuilds its children on change. Supported:
+- `HtmlUi` on a node with `HtmlView` rebuilds its children on change (in the
+  rendered panel that node is the scroll viewport). Supported:
   `h1`–`h6` (header font, 28/24/22/20px), `p` (body 20px), `li` (bulleted body),
   `pre` (mono 16px block, dark background, whitespace/newlines kept, no wrap;
   a newline right after `<pre>` and trailing whitespace are dropped), loose text
@@ -113,17 +115,20 @@ aspect ratio = `Tui::size_px()` (cols × cell width / rows × cell height).
 - `assets/` is gitignored: new asset files are not committed.
 - Bevy `ImageNode` defaults to `VisualBox::ContentBox` (draws inside padding);
   frames need `BorderBox`.
-- Scrollable panels (see `dom_panel.rs::spawn_panel`): framed row node with
-  `max_height` → children `[viewport, scrollbar]`. Viewport: `ScrollArea`
-  (wheel/trackpad, clamped), `overflow: Overflow::scroll_y()`, `flex_grow: 1`,
-  `min_height: 0` (else its content sizes it and nothing scrolls); its content
-  child gets `flex_shrink: 0.0`. Scrollbar: `bevy::ui_widgets::Scrollbar {
-  target: viewport }` as a *sibling* (a child of the scrolled node would scroll
-  away) with one `ScrollbarThumb` child (no `Node`; style via
-  `BackgroundColor` + its `border_radius`). `toggle_scrollbars` hides bars whose
-  content fits. Widgets are in `DefaultPlugins` via Bevy's default `ui`
-  feature. If a framed node itself scrolls, add `overflow_clip_margin:
-  OverflowClipMargin::content_box()` or content draws over the frame.
+- Scrollable panels (use `ui/scroll.rs`): framed row node with `max_height` and
+  `column_gap: SCROLLBAR_GAP` → children `[viewport, scrollbar]`. Viewport:
+  `ScrollArea` (wheel/trackpad, clamped) + `viewport_node()` (`overflow:
+  scroll_y`, `flex_grow: 1`, `min_height: 0` — else its content sizes it and
+  nothing scrolls). Every viewport child needs `flex_shrink: 0.0` (HtmlUi
+  blocks set it) or the column squashes them. `spawn_scrollbar(parent,
+  viewport)` adds `bevy::ui_widgets::Scrollbar` as a *sibling* (a child of the
+  scrolled node would scroll away) with a `ScrollbarThumb` (no `Node`; style via
+  `BackgroundColor` + its `border_radius`). It starts `Display::None`;
+  `toggle_scrollbars` puts it in layout only while content overflows, so short
+  content keeps the full width. Track click pages; thumb drags. Widgets are in
+  `DefaultPlugins` via Bevy's default `ui` feature. If a framed node itself
+  scrolls, add `overflow_clip_margin: OverflowClipMargin::content_box()` or
+  content draws over the frame.
 - Every UI `Node` is pickable and blocks pointer input to nodes below by
   default. Invisible layout-only wrappers (e.g. the full-window root in
   `tui/mod.rs`) must carry `Pickable::IGNORE`, or they swallow wheel/click/drag
