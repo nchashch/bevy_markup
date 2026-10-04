@@ -141,16 +141,22 @@ impl Compound {
         }
         let mut ids = Vec::new();
         let mut classes = Vec::new();
-        while let Some(kind) = rest.chars().next() {
-            let body = &rest[1..];
+        while let Some((_, kind)) = rest.char_indices().next() {
+            // Only `.class`/`#id` parts continue the selector; anything else
+            // (combinator, pseudo, or a non-ASCII ident character) is
+            // unsupported. Check before slicing: `kind.len_utf8()` may be > 1.
+            if kind != '.' && kind != '#' {
+                return None;
+            }
+            let body = &rest[kind.len_utf8()..];
             let end = body.find(|c| !is_ident(c)).unwrap_or(body.len());
             if end == 0 {
                 return None;
             }
-            match kind {
-                '.' => classes.push(body[..end].to_owned()),
-                '#' => ids.push(body[..end].to_owned()),
-                _ => return None,
+            if kind == '.' {
+                classes.push(body[..end].to_owned());
+            } else {
+                ids.push(body[..end].to_owned());
             }
             rest = &body[end..];
         }
@@ -520,5 +526,14 @@ mod tests {
         let css = "* { color: red } p { color: green } div p { color: blue } p:hover { color: blue }";
         assert_eq!(color(css, &element("p", None, &[])), Some(GREEN));
         assert_eq!(color(css, &element("span", None, &[])), Some(RED));
+    }
+
+    /// Non-ASCII selector characters are unsupported idents here: they must
+    /// skip the rule, not panic (a `[1..]` byte slice once crashed on them).
+    #[test]
+    fn multibyte_selector_characters_are_skipped() {
+        let css = "é { color: red } .é { color: red } p.é { color: red } p { color: green }";
+        assert_eq!(color(css, &element("p", None, &[])), Some(GREEN));
+        assert_eq!(color(css, &element("span", None, &[])), None);
     }
 }

@@ -1,0 +1,37 @@
+[package]
+name = "p23-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.p23]
+path = ".."
+features = ["fuzzing"]
+
+
+[[bin]]
+name = "html"
+path = "fuzz_targets/html.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "css"
+path = "fuzz_targets/css.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ftl"
+path = "fuzz_targets/ftl.rs"
+test = false
+doc = false
+bench = false

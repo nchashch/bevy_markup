@@ -17,9 +17,9 @@ use crate::l10n::LocalizedText;
 /// [`HtmlUi`](crate::html::HtmlUi).
 #[derive(Asset, TypePath)]
 pub struct HtmlTemplate {
-    tera: tera::Tera,
+    pub(crate) tera: tera::Tera,
     /// Template name inside `tera`: the asset path.
-    name: String,
+    pub(crate) name: String,
 }
 
 impl HtmlTemplate {

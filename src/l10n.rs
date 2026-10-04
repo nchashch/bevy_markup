@@ -124,7 +124,7 @@ where
     out
 }
 
-fn translate<R, M>(
+pub(crate) fn translate<R, M>(
     bundle: &FluentBundle<R, M>,
     id: &str,
     args_json: Option<&str>,

@@ -68,6 +68,9 @@ tests/
   fixtures/        frame.png (32×24, committed; `assets/` is not)
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
+fuzz/
+  fuzz_targets/      cargo-fuzz targets (`html`, `css`, `ftl`) over `p23::fuzz`
+  corpus/, artifacts/, coverage/  gitignored
 assets/            (gitignored — see Gotchas)
   fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
@@ -313,21 +316,20 @@ known gaps:
   - every CSS file parses; every `url()` resolves to an existing file
   - a pseudo-locale (e.g. `[Ĩñvéñtöŕý~~~]`, longer and accented) exposing
     untranslated strings and overflow in the UI
-- [ ] **5. Fuzzing** (robustness). cargo-fuzz or proptest-generated arbitrary
-  HTML, CSS, FTL and JSON args through the pipeline: no panic, no hang, always
-  some output (e.g. the error paragraph). Targets our glue: entity decoding,
-  whitespace collapsing, slice arithmetic, `data-l10n-args` handling.
-  - [x] Started with `arbtest` (`tests/arbtest.rs`): arbitrary bytes (lossy
-    UTF-8) as HTML template, CSS, Fluent bundle body and `data-l10n-args`,
-    asserting settle + non-empty dump, 400 ms budget each. First run found a
-    real bug: a stylesheet that fails to load left the `HtmlUi` blank forever
-    (loading and failed assets were indistinguishable via `Assets::get`) —
-    fixed in `build.rs`: failed sheet = unstyled build (latched
-    `FailedSheets`, since failures emit no asset event), failed per-entity
-    override falls back to the default. Regression vector:
-    `failed_stylesheet_still_renders`.
-  - Remaining: structure-aware generation (proptest strategies, cargo-fuzz)
-    for deeper glue coverage.
+- [ ] **5. Fuzzing** (robustness). `cargo fuzz` (`fuzz/`, targets `html`,
+  `css`, `ftl`; run with `cargo +nightly fuzz run <target> -- -max_total_time=60`).
+  They drive the `#[doc(hidden)]` `p23::fuzz` harness (feature `fuzzing`),
+  which calls the internal glue directly — a full Bevy app is far too slow
+  per exec. Contract for every target: no panic/hang/abort; errors are values.
+  - [x] Started with cargo-fuzz. First `css` run found a real crash: a
+    selector with a non-ASCII first character panicked in
+    `Compound::parse` (`&rest[1..]` byte-sliced past a multi-byte char).
+    Fixed to skip the rule (p23 idents are ASCII-only by design);
+    regression test `multibyte_selector_characters_are_skipped`.
+  - [x] The arbtest harness (`tests/arbtest.rs`) covers the pipeline end to
+    end with arbitrary bytes; its first run found the failed-stylesheet hang
+    (fixed in `build.rs`, see Gotchas). proptest strategies could add
+    structure-aware generation later.
 - [ ] **6. Mutation testing** (measures vector strength). `cargo-mutants`
   mutates the code and reports mutations no test catches. Run occasionally;
   each survivor is a missing vector or dump field.

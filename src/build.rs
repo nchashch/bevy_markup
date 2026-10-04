@@ -18,13 +18,13 @@ const DEFAULT_FONT_SIZE: f32 = 16.0;
 
 /// Computed (inherited) text style.
 #[derive(Clone, Copy, PartialEq)]
-struct Style {
-    color: Color,
+pub(crate) struct Style {
+    pub(crate) color: Color,
     /// Index into [`FontFamilies`]; `None` = Bevy's default font.
-    family: Option<usize>,
-    size: f32,
-    bold: bool,
-    italic: bool,
+    pub(crate) family: Option<usize>,
+    pub(crate) size: f32,
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
 }
 
 /// A stretch of text in one style.
@@ -79,13 +79,13 @@ enum Item {
 /// Resolved box properties of an element: `border-width`, `padding`,
 /// `background-color`, `border-image`.
 #[derive(Default)]
-struct BoxStyle {
-    border: [Option<f32>; 4],
-    padding: [Option<f32>; 4],
-    background: Option<Color>,
-    image: Option<(Handle<Image>, TextureSlicer)>,
+pub(crate) struct BoxStyle {
+    pub(crate) border: [Option<f32>; 4],
+    pub(crate) padding: [Option<f32>; 4],
+    pub(crate) background: Option<Color>,
+    pub(crate) image: Option<(Handle<Image>, TextureSlicer)>,
     /// `row-gap` for containers (not part of `is_empty`: blocks ignore it).
-    row_gap: Option<f32>,
+    pub(crate) row_gap: Option<f32>,
 }
 
 impl BoxStyle {
@@ -126,19 +126,19 @@ pub(crate) struct CssRootBox {
 }
 
 /// Computes styles from declared CSS + registered fonts.
-struct Styler<'a> {
-    styles: &'a HtmlStyles<'a>,
-    fonts: &'a FontFamilies,
+pub(crate) struct Styler<'a> {
+    pub(crate) styles: &'a HtmlStyles<'a>,
+    pub(crate) fonts: &'a FontFamilies,
     /// Root font size, for `rem`.
-    root_size: f32,
+    pub(crate) root_size: f32,
     /// For `border-image` sources.
-    sheet: Option<&'a Stylesheet>,
-    images: &'a Assets<Image>,
+    pub(crate) sheet: Option<&'a Stylesheet>,
+    pub(crate) images: &'a Assets<Image>,
 }
 
 impl Styler<'_> {
     /// `element`'s computed style: its declared values over `inherited`.
-    fn style_of(&self, element: &HtmlElement, inherited: Style) -> Style {
+    pub(crate) fn style_of(&self, element: &HtmlElement, inherited: Style) -> Style {
         let declared = self.styles.get(element);
         Style {
             color: declared.color.unwrap_or(inherited.color),
@@ -169,7 +169,7 @@ impl Styler<'_> {
 
     /// `element`'s box properties. A `border-image` whose `%` slices need the
     /// image size is skipped until the image has loaded (its load rebuilds).
-    fn box_of(&self, element: &HtmlElement) -> BoxStyle {
+    pub(crate) fn box_of(&self, element: &HtmlElement) -> BoxStyle {
         let declared = self.styles.get(element);
         let image = declared.border_image.as_ref().and_then(|decl| {
             let url = decl.source.as_ref()?.as_ref()?;
@@ -230,7 +230,7 @@ pub(crate) struct FailedSheets(HashSet<(Entity, AssetId<Stylesheet>)>);
 
 /// The `html` rule's values (the starting point even for fragments without
 /// `<html>`), over the defaults.
-fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Assets<Image>) -> Style {
+pub(crate) fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Assets<Image>) -> Style {
     let defaults = Style {
         color: DEFAULT_COLOR,
         family: None,

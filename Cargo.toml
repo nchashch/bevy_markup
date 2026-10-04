@@ -7,6 +7,10 @@ edition = "2024"
 # Parley falls back to installed system fonts per script (e.g. CJK, which the
 # bundled fonts lack). An app decision, so opt-in.
 system_fonts = ["bevy/system_font_discovery"]
+# Exposes `p23::fuzz` (`#[doc(hidden)]`, not covered by semver): internal
+# glue callable without a full Bevy app, for `fuzz/` targets.
+fuzzing = ["dep:wgpu-types", "dep:unic-langid"]
+unic-langid = ["dep:unic-langid"]
 
 [dependencies]
 # Only what the library's code uses; the app picks rendering, windowing,
@@ -30,6 +34,10 @@ bevy_fluent = "0.15"
 fluent = "0.16.0"
 # CSS. `into_owned`: parsed StyleSheet<'i> → StyleSheet<'static> for storing as an asset.
 lightningcss = { version = "1.0.0-alpha.72", features = ["into_owned"] }
+# Only for the `fuzzing` harness: `Image::new_fill` needs wgpu texture types,
+# which bevy_image does not re-export.
+wgpu-types = { version = "29.0.3", optional = true }
+unic-langid = { version = "0.9", optional = true }
 
 [dev-dependencies]
 arbtest = "0.3.2"

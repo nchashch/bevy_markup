@@ -87,6 +87,11 @@ use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_fluent::FluentPlugin;
 
+#[cfg(feature = "fuzzing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "fuzzing")))]
+#[doc(hidden)]
+pub mod fuzz;
+
 mod build;
 mod cascade;
 pub mod fonts;

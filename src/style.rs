@@ -63,11 +63,11 @@ use lightningcss::traits::IntoOwned;
 /// dependencies).
 #[derive(Asset, TypePath)]
 pub struct Stylesheet {
-    sheet: StyleSheet<'static>,
+    pub(crate) sheet: StyleSheet<'static>,
     /// URLs as written, parallel to `images`.
-    image_urls: Vec<String>,
+    pub(crate) image_urls: Vec<String>,
     #[dependency]
-    images: Vec<Handle<Image>>,
+    pub(crate) images: Vec<Handle<Image>>,
 }
 
 impl Stylesheet {
