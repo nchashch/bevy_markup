@@ -3,6 +3,13 @@ name = "bevy_markup"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+description = "HTML templates (Tera), CSS and Fluent localization as native Bevy UI"
+repository = "https://github.com/nchashch/p23"
+readme = "README.md"
+keywords = ["bevy", "ui", "html", "css", "localization"]
+categories = ["game-development", "gui", "internationalization"]
+# Developer-only material; not needed to use the crate.
+exclude = [".github/", "docs/agents/", "scripts/", "tests/golden/", "AGENTS.md"]
 
 [features]
 # Parley falls back to installed system fonts per script (e.g. CJK, which the
