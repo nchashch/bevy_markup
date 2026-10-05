@@ -130,6 +130,43 @@ fn grid_contexts() -> Vec<Value> {
         .to_vec()
 }
 
+/// `examples/menu.rs` `show_settings()`: every volume step's ends and every
+/// difficulty (the Fluent selector's branches).
+fn menu_contexts() -> Vec<Value> {
+    [(0, "easy"), (50, "normal"), (100, "hard")]
+        .map(|(volume, difficulty)| json!({ "volume": volume, "difficulty": difficulty }))
+        .to_vec()
+}
+
+/// `examples/menu.rs`: the dialog takes no variables.
+fn dialog_contexts() -> Vec<Value> {
+    vec![json!({})]
+}
+
+/// `examples/menu.rs` `handle_signals()`: one tooltip per button's `tip` key.
+fn menu_tooltip_contexts() -> Vec<Value> {
+    ["menu-volume-tip", "menu-difficulty-tip", "menu-reset-tip"]
+        .map(|key| json!({ "key": key }))
+        .to_vec()
+}
+
+/// `examples/live.rs` `show_party()`: a mixed party (a low, fading member)
+/// and the empty one.
+fn party_contexts() -> Vec<Value> {
+    vec![
+        json!({ "units": [
+            { "name": "Ada", "hp": 87.0, "low": false, "opacity": 1.0 },
+            { "name": "Bo", "hp": 12.0, "low": true, "opacity": 0.45 },
+        ] }),
+        json!({ "units": [] }),
+    ]
+}
+
+/// `examples/live.rs` `show_stats()`.
+fn stats_contexts() -> Vec<Value> {
+    vec![json!({ "updates": 12, "spawned": 5, "frames": 600 })]
+}
+
 /// Every template under `assets/` (`every_template_is_listed` keeps this
 /// complete).
 const PAGES: &[Page] = &[
@@ -173,6 +210,41 @@ const PAGES: &[Page] = &[
         contexts: grid_contexts,
         stylesheets: &["grid/style.css"],
         locales: "grid/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "menu/menu.html",
+        contexts: menu_contexts,
+        stylesheets: &["menu/style.css"],
+        locales: "menu/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "menu/dialog.html",
+        contexts: dialog_contexts,
+        stylesheets: &["menu/style.css"],
+        locales: "menu/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "menu/tooltip.html",
+        contexts: menu_tooltip_contexts,
+        stylesheets: &["menu/style.css"],
+        locales: "menu/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "live/party.html",
+        contexts: party_contexts,
+        stylesheets: &["live/style.css"],
+        locales: "live/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "live/stats.html",
+        contexts: stats_contexts,
+        stylesheets: &["live/style.css"],
+        locales: "live/locales",
         unlocalized: None,
     },
 ];

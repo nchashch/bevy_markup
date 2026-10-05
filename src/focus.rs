@@ -19,13 +19,15 @@
 //!   focused yet, the focused element was despawned, a modal opened), focus
 //!   moves to the element with the `autofocus` attribute, else the first
 //!   focusable element in scope.
-//! - **Rebuilds keep focus**: a rebuild replaces every element entity; focus
+//! - **Updates keep focus**: content updates keep matching elements (and
+//!   focus on them) in place; when the focused element is replaced, focus
 //!   returns to the element with the same `id` in the same `HtmlUi` (give
 //!   focusable elements an `id`).
 //! - **Scope**: every visible `HtmlUi` takes part, except roots marked
 //!   [`HtmlNoFocus`] (e.g. UI rendered onto a 3D quad and driven by a laser).
 //!   A visible [`HtmlModal`] root confines focus and navigation to itself
-//!   (like a modal `<dialog>`); with several, the highest `GlobalZIndex` wins.
+//!   (like a modal `<dialog>`); with several, the topmost wins (highest
+//!   `GlobalZIndex`, then `ZIndex` — e.g. the root rule's `z-index`).
 //!   An element's scope is its nearest `HtmlUi` ancestor.
 //! - **Input is the app's**: bevy_markup reads no keys or buttons. Bind your
 //!   own input and call [`HtmlFocus::navigate`] / [`HtmlFocus::activate`].
@@ -59,7 +61,7 @@ pub struct Focusable {
 }
 
 /// On an `HtmlUi` root: while it's visible, focus and navigation stay inside
-/// it. The highest `GlobalZIndex` wins among several.
+/// it. The topmost (`GlobalZIndex`, then `ZIndex`) wins among several.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect)]
 #[reflect(Component, Default)]
 pub struct HtmlModal;
@@ -246,7 +248,12 @@ fn update_focus_states(
 }
 
 /// An `HtmlUi` root that takes part in focus: entity, modal, stacking.
-type ScopeRoot = (Entity, Has<HtmlModal>, Option<&'static GlobalZIndex>);
+type ScopeRoot = (
+    Entity,
+    Has<HtmlModal>,
+    Option<&'static GlobalZIndex>,
+    Option<&'static ZIndex>,
+);
 
 /// Gives exactly the focusable elements in scope `AutoDirectionalNavigation`.
 fn sync_navigation(
@@ -260,8 +267,10 @@ fn sync_navigation(
     let visible = |entity| visible_in_hierarchy(entity, &visibility, &parents);
     let modal = roots_in_scope
         .iter()
-        .filter(|&(entity, modal, _)| modal && visible(entity))
-        .max_by_key(|(_, _, z)| z.map_or(0, |z| z.0))
+        .filter(|&(entity, modal, ..)| modal && visible(entity))
+        // Bevy's order of UI roots: `GlobalZIndex`, then `ZIndex` (CSS
+        // `z-index` on the root rule).
+        .max_by_key(|(_, _, global, local)| (global.map_or(0, |z| z.0), local.map_or(0, |z| z.0)))
         .map(|(entity, ..)| entity);
     for (entity, navigable) in &elements {
         let wanted = html_root(entity, &parents, &roots).is_some_and(|root| match modal {
@@ -283,20 +292,22 @@ fn sync_navigation(
 
 /// Puts focus back on a focusable element in scope when it isn't on one:
 /// the remembered element (same root and `id`), else the `autofocus`
-/// element, else the first one. Focus on a non-markup entity is left alone;
-/// with nothing focusable in scope, focus on a markup element is cleared.
+/// element, else the first one. Focus on another UI node (the app's own UI)
+/// is left alone; focus on something that isn't UI — Bevy's input dispatch
+/// focuses the primary window at startup — counts as none (bug_0022). With
+/// nothing focusable in scope, focus on a markup element is cleared.
 fn repair_focus(
     mut focus: ResMut<InputFocus>,
     memory: Res<FocusMemory>,
     navigable: Query<(Entity, &HtmlElement, &Focusable), With<AutoDirectionalNavigation>>,
     markup: Query<(), With<Focusable>>,
-    entities: Query<()>,
+    ui_nodes: Query<(), With<Node>>,
     parents: Query<&ChildOf>,
     roots: Query<(), With<HtmlUi>>,
 ) {
     let current = focus.get();
     if current.is_some_and(|entity| {
-        navigable.contains(entity) || (entities.contains(entity) && !markup.contains(entity))
+        navigable.contains(entity) || (ui_nodes.contains(entity) && !markup.contains(entity))
     }) {
         return;
     }

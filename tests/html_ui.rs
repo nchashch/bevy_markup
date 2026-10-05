@@ -1583,6 +1583,43 @@ fn style_attribute_and_opacity() {
     assert_eq!(world.get::<Node>(boxed).unwrap().width, Val::Percent(75.0));
 }
 
+/// Focus on something that isn't UI — Bevy's input dispatch focuses the
+/// primary window at startup — counts as nothing focused: the `autofocus`
+/// element takes it (bug_0022). Focus on another UI node the app owns is
+/// left alone.
+#[test]
+fn focus_on_the_window_yields_to_autofocus() {
+    let page = r#"<div id="a" data-on-click="a"><p>A</p></div>
+<div id="b" autofocus data-on-click="b"><p>B</p></div>"#;
+    let mut ui = TestUi::new("focus-window", &[("page.html", page)]).spawn(
+        "page.html",
+        TemplateContext::new(),
+        Node::default(),
+    );
+    ui.settle();
+    let root = ui.root();
+    let world = ui.world_mut();
+    let b = element_by_id(world, root, "b");
+    let window = world.spawn(Window::default()).id();
+    world
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(window, bevy::input_focus::FocusCause::Navigated);
+    ui.update(3);
+    assert_eq!(focused(ui.world_mut()), Some(b), "window focus → autofocus");
+
+    let world = ui.world_mut();
+    let app_button = world.spawn(Node::default()).id();
+    world
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(app_button, bevy::input_focus::FocusCause::Navigated);
+    ui.update(3);
+    assert_eq!(
+        focused(ui.world_mut()),
+        Some(app_button),
+        "app UI focus kept"
+    );
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]

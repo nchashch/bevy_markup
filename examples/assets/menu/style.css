@@ -1,0 +1,119 @@
+/* The menu example: every root is placed, stacked and (un)picked by its
+ * `<html class>` rule; the app only spawns the `HtmlUi`s. */
+
+html {
+  color: #e8e6e3;
+  font-family: serif;
+  font-size: 20px;
+}
+
+/* A full-window layout wrapper: it centers the menu and lets the pointer
+ * through; the menu takes it back (`pointer-events` is inherited). */
+.screen {
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.menu {
+  pointer-events: auto;
+  width: 440px;
+  padding: 20px;
+  gap: 12px;
+  background-color: #1c1e26;
+  border-width: 2px;
+  border-color: #3a3f4b;
+  border-radius: 8px;
+}
+
+h1 {
+  color: #f2c46d;
+  font-size: 32px;
+}
+
+.button {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background-color: #2b2f3a;
+  border-radius: 4px;
+}
+
+.button:hover {
+  background-color: #3a4050;
+}
+
+.button:active {
+  background-color: #1f2330;
+}
+
+/* Shown for keyboard/gamepad focus, hidden after a pointer press. */
+.button:focus-visible {
+  outline: 2px solid #f9c74f;
+  outline-offset: 2px;
+}
+
+/* `is="icon"` elements: the app inserts the image (`data-src`). */
+.icon {
+  width: 24px;
+  height: 24px;
+}
+
+.meter {
+  height: 8px;
+  background-color: #2b2f3a;
+}
+
+/* Width from the template: `style="width: {{ volume }}%"`. */
+.meter-fill {
+  height: 100%;
+  background-color: #6cc56c;
+}
+
+.hint {
+  color: #8a8d99;
+  font-size: 14px;
+}
+
+/* The confirm dialog's root: a dimming layer above the menu. With `HtmlModal`
+ * on the entity, focus and navigation stay inside it. */
+.backdrop {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.6);
+  z-index: 10;
+}
+
+.dialog {
+  padding: 20px;
+  gap: 16px;
+  background-color: #1c1e26;
+  border-width: 2px;
+  border-color: #f9c74f;
+  border-radius: 8px;
+}
+
+.dialog-buttons {
+  flex-direction: row;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* Tooltip roots, placed beside their element by `HtmlAnchor`; on top of
+ * everything and never in the pointer's way. */
+.tooltip {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  padding: 6px 10px;
+  max-width: 300px;
+  background-color: rgba(10, 12, 16, 0.95);
+  border-radius: 4px;
+  font-size: 16px;
+}
