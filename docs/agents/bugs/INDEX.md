@@ -33,6 +33,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0013](bug_0013.md) | CSS padding on a boxed `pre` added to the default 8px | `src/build.rs` | low | fixed (uncommitted, on `e1b910c`) | code reading while adding layout support; confirmed by the layout oracle |
 | [bug_0014](bug_0014.md) | Text in a boxed block never wraps: it overflows the box | `src/build.rs` | medium | fixed (uncommitted) | mutation-testing triage (layout oracle case) |
 | [bug_0015](bug_0015.md) | Deeply nested FTL expressions overflow the stack | upstream `fluent-syntax` 0.11.1 | medium | fixed in the fluent-syntax fork (git patch; first fix missed nested calls); **upstream unfixed**, PR pending | fuzz-corpus coverage replay |
+| [bug_0016](bug_0016.md) | Rebuilding an `HtmlUi` under a rebuilding ancestor `HtmlUi` panics (commands on despawned entities) | `src/build.rs` | high | fixed (uncommitted, on the demo rewrite) | user report (demo locale click), minimized to a vector |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -102,3 +103,15 @@ settle (rebuild observed) and the resulting dump to match a reference model.
 - **Session start HEAD:** `e1b910c` — "Add browser based layout oracle".
 - **Harnesses:** proptest-stateful ops for `HtmlStylesheet`/`FontFamilies`, a structure-aware arbtest document model (PropertyTests subagent), and the layout oracle extended to flex/sizes/margins.
 - **Discovery agent:** `anthropic/claude-opus-5-5:high` with subagents.
+
+## Discovery session metadata: bug_0016
+
+- **Date:** 2026-10-05, ~01:50 +04:00; same machine (`anne`) and toolchain.
+- **Session start HEAD:** `955e6ea` — "Use system fonts for examples, add
+  ./examples/assets", plus the uncommitted HTML-only demo rewrite (a
+  full-screen shell `HtmlUi` with content documents nested into its slots).
+- **Harness:** the user ran `cargo run --example demo` and clicked a language
+  button; the agent minimized it to a headless vector
+  (`nested_ui_under_a_rebuilding_ancestor_is_skipped_not_panics`) that
+  panicked identically.
+- **Discovery agent:** model `zai/glm-5.3-flash:high`.

@@ -28,6 +28,12 @@ item-count =
        *[other] { item-name } × { $count }
     }
 field-notes-title = 探索メモ
+# One line each, like the field notes: a wrapped line would collapse to a
+# stray space between Japanese characters.
+demo-title = bevy_markup デモ
+demo-about = 画面はすべてHTMLとCSSです。パネルもボタンも9スライスの枠も。下でテーマと言語を切り替えられます。枠付きパネルはマウスホイールでスクロールします。
+demo-language = 言語
+demo-theme = テーマ
 # One line each: a wrapped line would collapse to a stray space between
 # Japanese characters.
 field-notes-torches = 下層回廊の湿った空気の中で松明がはぜる。{ $name }は残りを数え、地図がそうは言っていなくても、下降には<i>三本</i>で足りるはずだと決める。

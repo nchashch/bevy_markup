@@ -1,0 +1,44 @@
+{# The demo app itself: one document holding every panel. The panels sit in
+   columns, left to right — the rendered inventory, the about/language/theme
+   column, then one column per DOM outline — so everything fits the window
+   height and scrolls inside its panel. The content documents are separate
+   documents the app spawns into the `viewport` slots; the app wires
+   behaviour onto these elements after each build (clicks, scrolling, content
+   slots); the layout and the looks are all CSS. Tera fills the button rows
+   and the active options; Fluent localizes the fixed strings. #}
+<section class="columns">
+  <section class="column">
+    <section class="panel fill">
+      <div id="slot-inventory" class="viewport"></div>
+    </section>
+  </section>
+  <section class="column">
+    <section class="panel">
+      <h2 data-l10n-id="demo-title">bevy_markup demo</h2>
+      <p data-l10n-id="demo-about">Everything on screen is HTML + CSS: the panels, the buttons and their 9-slice frames. Switch the theme and language below; scroll the framed panels with the mouse wheel.</p>
+    </section>
+    <section class="panel">
+      <h2 data-l10n-id="demo-language">Language</h2>
+      <div class="row" id="lang-row">
+        {% for lang in langs %}
+        <div class="opt{% if loop.index0 == lang_active %} active{% endif %}">{{ lang }}</div>
+        {% endfor %}
+      </div>
+    </section>
+    <section class="panel">
+      <h2 data-l10n-id="demo-theme">Theme</h2>
+      <div class="row" id="theme-row">
+        {% for theme in themes %}
+        <div class="opt{% if loop.index0 == theme_active %} active{% endif %}">{{ theme }}</div>
+        {% endfor %}
+      </div>
+    </section>
+  </section>
+  {% for slot in outline_slots %}
+  <section class="column">
+    <section class="panel fill">
+      <div class="viewport" id="{{ slot }}"></div>
+    </section>
+  </section>
+  {% endfor %}
+</section>

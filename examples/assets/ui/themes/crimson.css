@@ -62,3 +62,60 @@ i,
 em {
   font-style: italic;
 }
+
+/* Demo chrome (ui/content/shell.html): the whole demo app is one HTML
+   document — this block is its layout. The rules are the same in every
+   theme; only the accents below differ. */
+
+.columns {
+  flex-direction: row;
+  gap: 16px;
+  padding: 16px;
+  flex-grow: 1;
+  min-height: 0;
+}
+
+.column {
+  flex-direction: column;
+  gap: 16px;
+  /* Equal columns regardless of content: containers don't shrink by
+     default, and a content-sized basis would push the empty ones away. */
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panel {
+  border-image: url("../frame.png") 16 fill / 16px stretch;
+  border-width: 16px;
+  padding: 4px 12px;
+  row-gap: 10px;
+}
+
+.fill {
+  flex-grow: 1;
+}
+
+.viewport {
+  flex-grow: 1;
+  min-height: 0;
+}
+
+.row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.opt {
+  padding: 6px 12px;
+  font-size: 18px;
+  background-color: #28282e;
+}
+
+.opt.active {
+  background-color: #dc3232;
+  color: #ffffff;
+}

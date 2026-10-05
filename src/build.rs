@@ -279,6 +279,7 @@ pub(crate) fn build_html_ui(
         With<HtmlUi>,
     >,
     mut roots: Query<(&mut Node, Option<&CssRootBox>), With<HtmlUi>>,
+    parents: Query<&ChildOf>,
     tree: Tree,
     mut removed_outlines: RemovedComponents<HtmlDebugOutline>,
     mut removed_sheets: RemovedComponents<HtmlStylesheet>,
@@ -317,6 +318,9 @@ pub(crate) fn build_html_ui(
     let default_changed =
         default_sheet.is_changed() || default_sheet.0.as_ref().is_some_and(refreshed);
 
+    // First pass: the decision per UI. Nested UIs need the whole set before
+    // anything acts (see the suppression below).
+    let mut decisions: Vec<(Entity, Decision)> = Vec::new();
     for (entity, rendered, localized, own_sheet, outline, mut rebuild) in &mut views {
         let frame = Frame {
             own: own_sheet.as_ref().map(|own| phase(&own.0)),
@@ -331,10 +335,39 @@ pub(crate) fn build_html_ui(
                 || removed_outlines.contains(&entity)
                 || outline.as_ref().is_some_and(|outline| outline.is_changed()),
         };
-        let (source, restyle) = match rebuild.decide(frame) {
+        decisions.push((entity, rebuild.decide(frame)));
+    }
+    // Every UI rebuilding this frame: its `despawn_related` replaces the
+    // whole subtree, nested `HtmlUi`s included.
+    let rebuilding: HashSet<Entity> = decisions
+        .iter()
+        .filter(|(_, decision)| matches!(decision, Decision::Build(_)))
+        .map(|(entity, _)| *entity)
+        .collect();
+
+    for (entity, decision) in decisions {
+        let (source, restyle) = match decision {
             Decision::Wait | Decision::Skip => continue,
             Decision::Build(source) => (source, false),
             Decision::Restyle(source) => (source, true),
+        };
+        // An ancestor rebuilding this frame despawns this UI with its
+        // subtree (children are replaced wholesale), so acting here — build
+        // or restyle — would queue commands on despawned entities. Whatever
+        // this UI decided is moot; an app that nests UIs is expected to
+        // re-nest them on `HtmlUiBuilt`.
+        let mut ancestor = Some(entity);
+        let suppressed = std::iter::from_fn(|| {
+            ancestor = parents.get(ancestor?).ok().map(|parent| parent.0);
+            ancestor
+        })
+        .any(|parent| rebuilding.contains(&parent));
+        if suppressed {
+            debug!("html ui: {entity} is nested under a rebuilding UI; skipped");
+            continue;
+        }
+        let Ok((_, rendered, localized, own_sheet, outline, _rebuild)) = views.get(entity) else {
+            continue;
         };
         let css = match source {
             Source::Own => own_sheet.as_ref().and_then(|own| sheets.get(&own.0)),

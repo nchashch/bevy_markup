@@ -21,6 +21,13 @@ item-count =
        *[other] { $count } × { $item }
     }
 field-notes-title = Field notes
+demo-title = bevy_markup demo
+demo-about =
+    Everything on screen is HTML + CSS: the panels, the buttons and their 9-slice
+    frames. Switch the theme and language below; scroll the framed panels with the
+    mouse wheel.
+demo-language = Language
+demo-theme = Theme
 field-notes-torches =
     The torches sputter in the damp air of the lower galleries. { $name } counts what
     is left and decides that <i>three</i> will have to be enough for the descent,

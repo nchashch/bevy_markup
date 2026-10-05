@@ -1,14 +1,13 @@
-//! Every feature at once: HTML + Tera + Fluent + CSS panels, DOM outlines,
-//! runtime language and theme switching, 9-slice frames, scrolling.
+//! Every feature at once: the whole demo app — panels, buttons, frames and
+//! their layout — is one HTML document styled with CSS. The Rust side only
+//! wires behaviour onto the HTML: clicks, scrolling, language and theme
+//! selection, and the content documents spawned into the shell's slots.
 //!
 //! `cargo run --example demo`
 
 mod consts;
-mod locale_panel;
-mod panels;
-mod scroll;
-mod selector;
-mod theme_panel;
+mod controls;
+mod shell;
 
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
@@ -17,32 +16,33 @@ fn main() {
     App::new()
         .add_plugins((
             // The example assets live beside the examples, not in ./assets.
-            DefaultPlugins.set(AssetPlugin {
-                file_path: "examples/assets".into(),
-                ..default()
-            }),
+            DefaultPlugins
+                .set(AssetPlugin {
+                    file_path: "examples/assets".into(),
+                    ..default()
+                })
+                // Wide enough for the shell's 420px panels (3 across the
+                // bottom, two columns on top).
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        resolution: bevy::window::WindowResolution::new(1600, 900),
+                        ..default()
+                    }),
+                    ..default()
+                }),
             BevyMarkupPlugin,
         ))
         .insert_resource(ClearColor(Color::srgb_u8(20, 24, 32)))
-        .add_systems(
-            Startup,
-            (
-                setup,
-                panels::spawn,
-                locale_panel::spawn,
-                theme_panel::spawn,
-            ),
-        )
+        .add_systems(Startup, (setup, controls::spawn, shell::spawn))
+        .add_observer(shell::wire_shell_build)
+        .add_observer(controls::wire_buttons)
         .add_systems(
             Update,
             (
-                scroll::toggle_scrollbars,
-                selector::style_selector_buttons,
-                locale_panel::apply_locale_selection,
-                theme_panel::apply_theme_selection,
+                controls::apply_locale_selection,
+                controls::apply_theme_selection,
             ),
         )
-
         .run();
 }
 

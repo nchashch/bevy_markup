@@ -59,8 +59,9 @@ src/
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
   quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, click wiring, Space = language
-  demo/            main.rs (setup: fonts), panels.rs (plain / rendered / outline panels),
-                   scroll.rs, selector.rs, locale_panel.rs, theme_panel.rs, consts.rs
+  demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
+                   content slots, scroll wiring, contexts), controls.rs (language/theme
+                   selection), consts.rs (fonts)
 tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
   properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips,
@@ -128,9 +129,12 @@ test-fuzz/
 examples/assets/   the examples' content (AssetPlugin file_path; no fonts: system fonts)
   src/             artwork sources (frame.kra) for the UI images
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
-  ui/frame.png     256x256 frame; ui/frame.slice.ron slices it (16px borders); frame_transparent.png (clear center)
-  ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print
-  ui/content/      test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent), test.css
+  ui/frame.png     256x256 frame; frame_transparent.png (clear center; the
+                   parchment/terminal panels frame themselves with it)
+  ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;
+                   each carries the identical `Demo chrome` block styling the shell's panels/buttons/viewports
+  ui/content/      test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent),
+                   shell.html (the demo app itself: panels, buttons, slots), test.css
   locales/<id>/    demo bundles (main.ftl.ron + ui.ftl) for en-US, ru, de, ja
 ```
 
@@ -186,8 +190,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   dev-dependency feature) — headers `sans-serif` (red), body `serif`
   (off-white), code/debug `monospace`. CSS themes use the generic keywords;
   the examples map them to `FontSource::{SansSerif, Serif, Monospace}`
-  families (`FontFaces::new(FontSource::Serif)` etc.); plain Bevy UI panels
-  use the same sources (`examples/demo/consts.rs`).
+  families (`FontFaces::new(FontSource::Serif)` etc.,
+  `examples/demo/consts.rs`).
 
 ## Pipeline
 
@@ -265,23 +269,28 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `CssRootBox` and restored if a later stylesheet drops them.
 - Demo locales: every locale needs the same message ids; item names arrive as
   English data (`$item`) and non-English bundles map them with an `item-name`
-  message. Every visible string in `l10n.html` has a key.
+  message. Every visible string in `l10n.html` and the demo shell has a key.
 
 ## Gotchas (verified)
 
 - Bevy `ImageNode` defaults to `VisualBox::ContentBox` (draws inside padding);
   frames need `BorderBox` (`NineSliceFrame` sets it).
-- Scrollable panels (demo `scroll.rs`): framed row node with `max_height` and
-  `column_gap: SCROLLBAR_GAP` → `[viewport, scrollbar]`. Viewport: `ScrollArea`
-  + `viewport_node()` (`overflow: scroll_y`, `flex_grow: 1`, `min_height: 0` —
-  else its content sizes it and nothing scrolls). Viewport children need
-  `flex_shrink: 0.0` (`HtmlUi` blocks set it). The `Scrollbar` must be a
-  *sibling* of the viewport; it starts `Display::None` and `toggle_scrollbars`
-  shows it only while content overflows. A framed node that scrolls itself
-  needs `overflow_clip_margin: OverflowClipMargin::content_box()`.
+- Scrollable panels (demo `shell.rs`): a `.viewport` element gets `ScrollArea` +
+  `overflow: scroll_y` wired on each build (bevy_markup's CSS subset has no
+  `overflow`, so scrollability is app behaviour, like clicks); its CSS gives it
+  `flex-grow: 1` and `min-height: 0` — else its content sizes it and nothing
+  scrolls. Viewport children need `flex_shrink: 0.0` (`HtmlUi` blocks set it).
+  For hand-built scrollbars, the `Scrollbar` must be a *sibling* of the
+  viewport. A framed node that scrolls itself needs `overflow_clip_margin:
+  OverflowClipMargin::content_box()`.
 - Every UI `Node` is pickable and blocks pointer input below it. Invisible
   layout-only wrappers must carry `Pickable::IGNORE` (a full-window wrapper
   once broke all scrolling and clicking).
+- Nested `HtmlUi`s: an ancestor's rebuild replaces its whole subtree and
+  despawns nested UIs with it — spawn them into slots on `HtmlUiBuilt`
+  (the demo's `wire_shell_build`). The build system skips a nested UI whose
+  ancestor rebuilds the same frame (bug_0016): its own queued commands would
+  otherwise hit the despawned entity and panic.
 - Bevy 0.19: `BorderRadius` is a `Node` field, not a component.
 - `tl::VDom` borrows its input; `HtmlDocument` uses `tl::parse_owned` (unsafe
   fn, sound per its docs) → `VDomGuard`, which only hands out shared borrows,
@@ -786,7 +795,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
 - **Rebuilds:** content changes (template, context, locale) rebuild the
   whole `HtmlUi` subtree (no diffing); style changes restyle in place unless
   the node structure changes. A run merge (e.g. `b` restyled to its parent's
-  style) changes the span count and falls back to a rebuild.
+  style) changes the span count and falls back to a rebuild. Nested `HtmlUi`
+  entities inside a rebuilding ancestor are despawned with it and skipped
+  (bug_0016); re-nest them on `HtmlUiBuilt`.
 - **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
   CJK (wrapped CJK source lines become spaces); `decode_entities` handles only
   the five escapes Tera emits (no numeric references). Mixed inline content

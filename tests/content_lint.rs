@@ -68,7 +68,7 @@ const DEMO_THEMES: &[&str] = &[
     "ui/themes/large_print.css",
 ];
 
-/// `examples/demo/panels.rs` `demo_context()`.
+/// `examples/demo/shell.rs` `demo_context()`.
 fn demo_contexts() -> Vec<Value> {
     vec![json!({
         "player": "ada <the brave>",
@@ -80,6 +80,27 @@ fn demo_contexts() -> Vec<Value> {
             { "name": "key", "count": 0 },
         ],
     })]
+}
+
+/// `examples/demo/shell.rs` `shell_context()`: the selector rows' labels and
+/// active options, in both variants so every `active` branch renders. The
+/// labels are data (native names, not translations).
+fn shell_contexts() -> Vec<Value> {
+    let base = json!({
+        "langs": ["English", "Русский", "Deutsch", "日本語"],
+        "lang_active": 0,
+        "themes": ["Crimson", "Parchment", "Terminal", "Large print"],
+        "theme_active": 0,
+        "outline_slots": [
+            "slot-outline-plain",
+            "slot-outline-template",
+            "slot-outline-l10n",
+        ],
+    });
+    let mut other = base.clone();
+    other["lang_active"] = json!(2);
+    other["theme_active"] = json!(1);
+    vec![base, other]
 }
 
 /// `examples/quickstart.rs`: starts at 0 coins, each click adds one (so the
@@ -110,6 +131,13 @@ const PAGES: &[Page] = &[
     Page {
         template: "ui/content/l10n.html",
         contexts: demo_contexts,
+        stylesheets: DEMO_THEMES,
+        locales: "locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "ui/content/shell.html",
+        contexts: shell_contexts,
         stylesheets: DEMO_THEMES,
         locales: "locales",
         unlocalized: None,

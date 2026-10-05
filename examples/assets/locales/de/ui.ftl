@@ -28,6 +28,13 @@ item-count =
        *[other] { item-name } × { $count }
     }
 field-notes-title = Feldnotizen
+demo-title = bevy_markup-Demo
+demo-about =
+    Alles auf dem Bildschirm ist HTML und CSS: die Paneele, die Schaltflächen und
+    ihre 9-Slice-Rahmen. Unten lassen sich Thema und Sprache wechseln; die
+    gerahmten Paneele scrollen mit dem Mausrad.
+demo-language = Sprache
+demo-theme = Thema
 field-notes-torches =
     Die Fackeln knistern in der feuchten Luft der unteren Galerien. { $name } zählt,
     was übrig ist, und beschließt, dass <i>drei</i> für den Abstieg reichen müssen,

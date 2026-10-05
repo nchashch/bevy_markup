@@ -1272,3 +1272,90 @@ fn collect_elements(world: &World, entity: Entity, out: &mut Vec<Entity>) {
         }
     }
 }
+
+/// An `HtmlUi` nested inside another one's subtree. A locale swap makes both
+/// rebuild in the same frame; the ancestor's rebuild replaces its whole
+/// subtree and despawns the nested UI with it, so the build system must skip
+/// the nested UI instead of queueing commands on a despawned entity
+/// (bug_0016). Apps re-nest nested UIs on `HtmlUiBuilt`.
+#[test]
+fn nested_ui_under_a_rebuilding_ancestor_is_skipped_not_panics() {
+    let mut ui = TestUi::new(
+        "nested-rebuild",
+        &[
+            (
+                "outer.html",
+                r#"<div id="slot"><p data-l10n-id="outer">Outer</p></div>"#,
+            ),
+            ("inner.html", r#"<p data-l10n-id="inner">Inner</p>"#),
+            (
+                "style.css",
+                "html { color: #ffffff; font-family: Spectral; font-size: 20px }",
+            ),
+            (
+                "locales/en-US/main.ftl.ron",
+                r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+            ),
+            ("locales/en-US/ui.ftl", "outer = Outer EN\ninner = Inner EN"),
+            ("locales/de/main.ftl.ron", r#"(locale: "de", resources: ["ui.ftl"])"#),
+            ("locales/de/ui.ftl", "outer = Outer DE\ninner = Inner DE"),
+        ],
+    )
+    .stylesheet("style.css")
+    .locale("locales/en-US/main.ftl.ron")
+    .spawn("outer.html", TemplateContext::new(), Node::default());
+    ui.settle();
+
+    // Nest a second UI into the outer's slot.
+    let slot = {
+        let world = ui.world_mut();
+        let mut query = world.query::<(Entity, &HtmlElement)>();
+        query
+            .iter(world)
+            .find(|(_, element)| element.id.as_deref() == Some("slot"))
+            .map(|(entity, _)| entity)
+            .expect("slot")
+    };
+    let template = ui.world_mut().resource::<AssetServer>().load("inner.html");
+    let nested = ui
+        .world_mut()
+        .spawn((
+            HtmlUi::new(template),
+            TemplateContext::new(),
+            Node::default(),
+            ChildOf(slot),
+        ))
+        .id();
+    ui.settle()
+        .assert_dump(
+            r#"
+html-ui
+  div#slot
+    p
+      "Outer EN" serif 20px #ffffff
+    -
+      p
+        "Inner EN" serif 20px #ffffff
+"#,
+        );
+
+    // Both UIs re-localize in the same frame: the outer rebuild must win.
+    let german = ui
+        .world_mut()
+        .resource::<AssetServer>()
+        .load("locales/de/main.ftl.ron");
+    ui.world_mut().insert_resource(ActiveLocale::new(german));
+    ui.settle()
+        .assert_dump(
+            r#"
+html-ui
+  div#slot
+    p
+      "Outer DE" serif 20px #ffffff
+"#,
+        );
+    assert!(
+        ui.world_mut().get_entity(nested).is_err(),
+        "the nested UI is despawned with the ancestor's replaced subtree"
+    );
+}
