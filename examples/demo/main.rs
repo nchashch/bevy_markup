@@ -15,7 +15,7 @@ use bevy_markup::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, HtmlUiPlugin))
+        .add_plugins((DefaultPlugins, BevyMarkupPlugin))
         .insert_resource(ClearColor(Color::srgb_u8(20, 24, 32)))
         .add_systems(
             Startup,

@@ -157,7 +157,7 @@ fn render_app(root: &Path) -> App {
             .disable::<bevy::audio::AudioPlugin>()
             .disable::<bevy::gilrs::GilrsPlugin>(),
     )
-    .add_plugins(HtmlUiPlugin)
+    .add_plugins(BevyMarkupPlugin)
     .init_resource::<Captures>()
     .init_resource::<Builds>()
     .add_observer(|_: On<HtmlUiBuilt>, mut builds: ResMut<Builds>| builds.0 += 1);

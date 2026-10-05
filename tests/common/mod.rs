@@ -114,7 +114,7 @@ impl TestUi {
                 ..default()
             },
             ImagePlugin::default(),
-            HtmlUiPlugin,
+            BevyMarkupPlugin,
         ))
         // bevy_render normally registers the image loader.
         .register_asset_loader(ImageLoader::new(CompressedImageFormats::empty()))

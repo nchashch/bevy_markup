@@ -18,7 +18,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 
 | Item | Kind | Role |
 |---|---|---|
-| `HtmlUiPlugin` | Plugin | loaders, resources, systems; adds bevy_fluent's `FluentPlugin` if absent |
+| `BevyMarkupPlugin` | Plugin | loaders, resources, systems; adds bevy_fluent's `FluentPlugin` if absent |
 | `HtmlUiSystems::{Render, Localize, Build}` | SystemSet | chained in `PostUpdate`, before `UiSystems::Prepare` |
 | `HtmlUi(Handle<HtmlTemplate>)` | Component | the UI; requires `Node`, `TemplateContext`, `RenderedHtml`, `LocalizedText` |
 | `TemplateContext(tera::Context)` | Component | Tera variables; `.with(k, &v)` builder; Deref to `tera::Context`; mutate → re-render |
@@ -46,7 +46,7 @@ README.md        human-facing overview: what bevy_markup is, how it works, testi
                  compatibility table (add a row on every release or Bevy/bevy_fluent bump; keep in sync)
 LICENSE-MIT, LICENSE-APACHE  dual license (MIT OR Apache-2.0, Cargo.toml `license`)
 src/
-  lib.rs           crate docs (guide), HtmlUiPlugin, HtmlUiSystems, prelude, re-exports
+  lib.rs           crate docs (guide), BevyMarkupPlugin, HtmlUiSystems, prelude, re-exports
   html.rs          HtmlUi, TemplateContext, RenderedHtml, HtmlDebugOutline, HtmlElement,
                    HtmlUiBuilt, HtmlElements; render system (Tera + tl)
   template.rs      HtmlTemplate asset + loader, HtmlDocument (+ outline), decode_entities
@@ -355,7 +355,7 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   files (HTML/Tera template, CSS, Fluent bundles) → the Bevy world they
   produce. `TestUi::new(name, files)` writes the files plus `frame.png` into a
   fresh temp asset root and builds `MinimalPlugins + AssetPlugin + ImagePlugin
-  + HtmlUiPlugin` (no window/renderer; fonts are fake `Handle::Uuid`s labelled
+  + BevyMarkupPlugin` (no window/renderer; fonts are fake `Handle::Uuid`s labelled
   `serif`, `serif-bold`, …, `mono`). `.stylesheet()`, `.locale()`,
   `.spawn(template, context, node)`, then `settle()` updates until all tracked
   assets are loaded and a new build has been stable for 5 frames.

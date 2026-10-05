@@ -10,7 +10,7 @@ use bevy_markup::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, HtmlUiPlugin))
+        .add_plugins((DefaultPlugins, BevyMarkupPlugin))
         .add_systems(Startup, setup)
         .add_systems(Update, switch_language)
         .add_observer(wire_coin_button)

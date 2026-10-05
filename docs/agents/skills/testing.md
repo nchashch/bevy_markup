@@ -84,7 +84,7 @@ New features should get a vector *and* a property or oracle case.
 ## The harness: `TestUi` (`tests/common/mod.rs`)
 
 Every pipeline-level test uses `TestUi`. It builds a headless Bevy app
-(`MinimalPlugins` + assets + images + `HtmlUiPlugin`) with a temporary asset
+(`MinimalPlugins` + assets + images + `BevyMarkupPlugin`) with a temporary asset
 root, no window and no renderer.
 
 ```rust

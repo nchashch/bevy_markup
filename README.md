@@ -49,7 +49,7 @@ use bevy_markup::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, HtmlUiPlugin))
+        .add_plugins((DefaultPlugins, BevyMarkupPlugin))
         .add_systems(Startup, setup)
         .run();
 }
@@ -130,6 +130,7 @@ The crate documentation (`cargo doc --open`) is the full guide.
 
 | bevy_markup | Bevy | bevy_fluent |
 |---|---|---|
+| 0.2 | 0.19 | 0.15 |
 | 0.1 | 0.19 | 0.15 |
 
 ### Recommended: patched fluent-syntax

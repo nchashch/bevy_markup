@@ -2,7 +2,7 @@
 //! produce, checked headlessly (no window, no renderer).
 //!
 //! Each test writes its input files into a fresh asset root, runs a minimal
-//! app (`MinimalPlugins` + assets + images + `HtmlUiPlugin`) until every asset
+//! app (`MinimalPlugins` + assets + images + `BevyMarkupPlugin`) until every asset
 //! is loaded and the UI is built, then compares a text dump of the `HtmlUi`
 //! entity's subtree against the expected mapping:
 //!

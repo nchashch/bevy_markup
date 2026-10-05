@@ -16,7 +16,7 @@
 //!
 //! fn main() {
 //!     App::new()
-//!         .add_plugins((DefaultPlugins, HtmlUiPlugin))
+//!         .add_plugins((DefaultPlugins, BevyMarkupPlugin))
 //!         .add_systems(Startup, setup)
 //!         .run();
 //! }
@@ -120,7 +120,7 @@ pub mod prelude {
     pub use crate::nine_slice::{NineSlice, NineSliceFrame};
     pub use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
     pub use crate::template::HtmlTemplate;
-    pub use crate::{HtmlUiPlugin, HtmlUiSystems};
+    pub use crate::{BevyMarkupPlugin, HtmlUiSystems};
     pub use bevy_fluent::BundleAsset;
 }
 
@@ -132,7 +132,7 @@ pub mod prelude {
 ///
 /// Adds bevy_fluent's `FluentPlugin` unless the app already did.
 #[derive(Default)]
-pub struct HtmlUiPlugin;
+pub struct BevyMarkupPlugin;
 
 /// Pipeline stages, in `PostUpdate` before Bevy UI layout (chained in this
 /// order). Order your systems against these to see a stage's output the same
@@ -149,7 +149,7 @@ pub enum HtmlUiSystems {
     Build,
 }
 
-impl Plugin for HtmlUiPlugin {
+impl Plugin for BevyMarkupPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<FluentPlugin>() {
             app.add_plugins(FluentPlugin);
