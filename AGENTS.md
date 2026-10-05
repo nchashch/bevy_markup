@@ -9,8 +9,9 @@ Bevy 0.19 library: HTML templates (Tera) + Fluent + CSS → Bevy UI, with
 - `cargo doc --open` — the user-facing documentation (crate docs = guide).
 
 The library depends on `bevy` with `default-features = false` and only the
-features its code uses (`ui_api`, `default_font`, `bevy_log`; see
-`Cargo.toml`). Rendering, windowing, picking, widgets and image formats are the
+features its code uses (`ui_api`, `default_font`, `bevy_log`, `bevy_picking`
+for interaction signals and `:hover`/`:active`; see `Cargo.toml`). Rendering,
+windowing, picking backends, widgets and image formats are the
 app's choice. Examples get full Bevy via `[dev-dependencies]`, whose features
 never reach library users. A missing feature shows up in `cargo check --lib`.
 
@@ -27,6 +28,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `RenderedHtml` | Component | `Pending` / `Ready(HtmlDocument)` / `Failed(msg)` (read-only) |
 | `HtmlElement { tag, id, classes }` | Component | on each spawned block and container node |
 | `HtmlUiBuilt { entity }` | EntityEvent | after each (re)build; children are replaced every time, so wire behaviour here |
+| `HtmlUiRestyled { entity }` | EntityEvent | after a style-only change applied in place (entities and attached components kept) |
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
 | `ActiveLocale(Option<Handle<BundleAsset>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
@@ -35,6 +37,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
 | `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger` | Message, Component | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click/press/release/enter/leave); deepest bound element wins |
+| `PseudoState { hovered, active }` | Component | `:hover`/`:active` state per element, maintained from picking; a change restyles in place; apps may set it |
 
 Re-exported crates (their types appear in the API): `tera`, `tl`,
 `bevy_fluent`, `lightningcss`. Cargo feature `system_fonts` enables Bevy's

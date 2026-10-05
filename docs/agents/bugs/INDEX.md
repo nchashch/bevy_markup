@@ -12,7 +12,7 @@ Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below
 (bug_0001–0005: property testing, stateful testing and fuzzing — the fuzzers
-immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay).
+immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s).
 
 ## Bugs
 
@@ -23,18 +23,18 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0003](bug_0003.md) | Removing `HtmlDebugOutline` never triggers a rebuild | `build.rs` (pipeline) | medium | fixed (`06b86ae`) | `proptest-stateful` (tests/stateful.rs) |
 | [bug_0004](bug_0004.md) | Global failed-stylesheet latch swallows a later re-select of the same broken sheet | `build.rs` (`FailedSheets`) | medium | fixed (`06b86ae`) | `proptest-stateful` (tests/stateful.rs) |
 | [bug_0005](bug_0005.md) | fluent-syntax panics on an invalid unicode escape before a multi-byte character | upstream `fluent-syntax` 0.11.1 | high | fixed in the fluent-syntax fork (git patch); **upstream unfixed**, PR pending | honggfuzz `ftl` target |
-| [bug_0006](bug_0006.md) | `data-l10n-id` on containers and inline elements is silently ignored | `build.rs` (translation walk) | medium | fixed (uncommitted, on `1169ca4`) | Fluent oracle (`fluent_oracle`) |
-| [bug_0007](bug_0007.md) | `data-l10n-name` overlays unsupported: source attributes lost | `build.rs` (translation walk) | medium | fixed (uncommitted, on `1169ca4`) | Fluent oracle (`fluent_oracle`) |
-| [bug_0008](bug_0008.md) | Removing a per-entity `HtmlStylesheet` never rebuilds | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | targeted probe while designing proptest-stateful ops |
-| [bug_0009](bug_0009.md) | Entity with a failed `HtmlStylesheet` ignores `DefaultStylesheet` swaps | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | probe, then proptest-stateful |
-| [bug_0010](bug_0010.md) | Re-requesting a failed stylesheet eats the change signal | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | proptest-stateful, minimal `[SetLocale(En), SetOwnSheet(Broken), SetTheme(Broken)]`, ~1 in 3 runs |
-| [bug_0011](bug_0011.md) | NBSP and other Unicode spaces were collapsed and trimmed | `src/build.rs` | medium | fixed (uncommitted, on `e1b910c`) | arbtest structure-aware document model |
-| [bug_0012](bug_0012.md) | `HtmlElements` lookups were breadth-first, not document order | `src/html.rs` | medium | fixed (uncommitted, on `e1b910c`) | unit test + arbtest model |
-| [bug_0013](bug_0013.md) | CSS padding on a boxed `pre` added to the default 8px | `src/build.rs` | low | fixed (uncommitted, on `e1b910c`) | code reading while adding layout support; confirmed by the layout oracle |
-| [bug_0014](bug_0014.md) | Text in a boxed block never wraps: it overflows the box | `src/build.rs` | medium | fixed (uncommitted) | mutation-testing triage (layout oracle case) |
+| [bug_0006](bug_0006.md) | `data-l10n-id` on containers and inline elements is silently ignored | `build.rs` (translation walk) | medium | fixed (`94a4fb9`) | Fluent oracle (`fluent_oracle`) |
+| [bug_0007](bug_0007.md) | `data-l10n-name` overlays unsupported: source attributes lost | `build.rs` (translation walk) | medium | fixed (`94a4fb9`) | Fluent oracle (`fluent_oracle`) |
+| [bug_0008](bug_0008.md) | Removing a per-entity `HtmlStylesheet` never rebuilds | `src/build.rs` | medium | fixed (`0d9d6cb`) | targeted probe while designing proptest-stateful ops |
+| [bug_0009](bug_0009.md) | Entity with a failed `HtmlStylesheet` ignores `DefaultStylesheet` swaps | `src/build.rs` | medium | fixed (`0d9d6cb`) | probe, then proptest-stateful |
+| [bug_0010](bug_0010.md) | Re-requesting a failed stylesheet eats the change signal | `src/build.rs` | medium | fixed (`0d9d6cb`) | proptest-stateful, minimal `[SetLocale(En), SetOwnSheet(Broken), SetTheme(Broken)]`, ~1 in 3 runs |
+| [bug_0011](bug_0011.md) | NBSP and other Unicode spaces were collapsed and trimmed | `src/build.rs` | medium | fixed (`0d9d6cb`) | arbtest structure-aware document model |
+| [bug_0012](bug_0012.md) | `HtmlElements` lookups were breadth-first, not document order | `src/html.rs` | medium | fixed (`0d9d6cb`) | unit test + arbtest model |
+| [bug_0013](bug_0013.md) | CSS padding on a boxed `pre` added to the default 8px | `src/build.rs` | low | fixed (`0d9d6cb`) | code reading while adding layout support; confirmed by the layout oracle |
+| [bug_0014](bug_0014.md) | Text in a boxed block never wraps: it overflows the box | `src/build.rs` | medium | fixed (`311c808`) | mutation-testing triage (layout oracle case) |
 | [bug_0015](bug_0015.md) | Deeply nested FTL expressions overflow the stack | upstream `fluent-syntax` 0.11.1 | medium | fixed in the fluent-syntax fork (git patch; first fix missed nested calls); **upstream unfixed**, PR pending | fuzz-corpus coverage replay |
-| [bug_0016](bug_0016.md) | Rebuilding an `HtmlUi` under a rebuilding ancestor `HtmlUi` panics (commands on despawned entities) | `src/build.rs` | high | fixed (uncommitted, on the demo rewrite) | user report (demo locale click), minimized to a vector |
-| [bug_0017](bug_0017.md) | Restyle fallback rebuild despawned app-nested `HtmlUi`s (same_shape counted them as shape mismatches) | `src/build.rs` (`same_shape`) | high | fixed (uncommitted, with the `:hover` work) | startup crash of the demo, traced via `bevy/debug` |
+| [bug_0016](bug_0016.md) | Rebuilding an `HtmlUi` under a rebuilding ancestor `HtmlUi` panics (commands on despawned entities) | `src/build.rs` | high | fixed (`9d21b17`) | user report (demo locale click), minimized to a vector |
+| [bug_0017](bug_0017.md) | Restyle fallback rebuild despawned app-nested `HtmlUi`s (same_shape counted them as shape mismatches) | `src/build.rs` (`same_shape`) | high | fixed (`d079b08`) | startup crash of the demo, traced via `bevy/debug` |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -87,7 +87,7 @@ settle (rebuild observed) and the resulting dump to match a reference model.
 - **Date:** 2026-10-04, ~12:00 +04:00; same machine (`anne`) and Rust
   toolchain/dependency versions as above.
 - **Session start HEAD:** `1169ca4` — "Add scripts for running fuzzers";
-  found and fixed in the uncommitted working tree on top of it.
+  found and fixed in the working tree on top of it, committed as `94a4fb9`.
 - **Harness:** the Fluent oracle — `scripts/fluent_oracle.sh` runs
   `@fluent/dom` 0.10.2 + `@fluent/bundle` 0.19.1 in jsdom 30.1.1 (Node
   v26.10.0) over `tests/vectors/fluent_*`, writing `fluent.html`; the
@@ -115,4 +115,14 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   button; the agent minimized it to a headless vector
   (`nested_ui_under_a_rebuilding_ancestor_is_skipped_not_panics`) that
   panicked identically.
+- **Discovery agent:** model `zai/glm-5.3-flash:high`.
+
+## Discovery session metadata: bug_0017
+
+- **Date:** 2026-10-05, morning +04:00; same machine (`anne`) and toolchain.
+- **Session start HEAD:** `8952749` — "Add ElementSignal bindings in HTML",
+  plus the uncommitted `:hover`/`:active` work; fixed with it in `d079b08`.
+- **Harness:** the demo crashed at startup (no input); traced with
+  `--features bevy/debug` and `bevy_markup=debug` rebuild-decision logs, then
+  pinned by the vector `restyle_with_nested_uis_keeps_them`.
 - **Discovery agent:** model `zai/glm-5.3-flash:high`.
