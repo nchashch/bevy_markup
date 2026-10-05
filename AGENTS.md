@@ -34,6 +34,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlTemplate`, `Stylesheet`, `NineSlice` | Assets | `.html`/`.htm`, `.css`, `*.slice.ron` |
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
+| `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger` | Message, Component | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click/press/release/enter/leave); deepest bound element wins |
 
 Re-exported crates (their types appear in the API): `tera`, `tl`,
 `bevy_fluent`, `lightningcss`. Cargo feature `system_fonts` enables Bevy's
@@ -56,6 +57,7 @@ src/
   fonts.rs         FontFamilies, FontFaces, GenericFamily
   build.rs         (internal) DOM + styles → Bevy UI children; HtmlUiBuilt trigger
   rebuild.rs       (internal) pure rebuild decision: Frame (load phases + change signals) → Build/Skip/Wait
+  signals.rs       `data-on-*`/`data-with` → ElementSignal messages (picking observers, hover tracking)
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
   quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, click wiring, Space = language
@@ -788,10 +790,12 @@ Known limits (each skipped/ignored value is logged at `debug`):
 - **Inline:** no inline boxes — `background`, borders, frames and padding on
   inline elements are ignored (Bevy `TextSpan` has no box); inline elements
   have no entity, so `HtmlElements` can't find them (only blocks/containers).
-- **Interactivity:** none built in; apps wire behaviour on `HtmlUiBuilt`
-  (children are rebuilt on content changes, so state on them persists only
-  across restyles). No forms/inputs, no links, no `:hover` yet — restyles
-  are the groundwork for it.
+- **Interactivity:** declarative only: `data-on-<trigger>`/`data-with` emit
+  [`ElementSignal`] messages (`signals.rs`; click/press/release via picking
+  observers, enter/leave via hover tracking that survives rebuilds — the
+  deepest bound element wins, so buttons can nest). What signals *mean* is
+  app code reading the queue (the demo's `controls::read_signals`). No
+  built-in reactions, no forms/inputs, no `:hover` styling yet.
 - **Rebuilds:** content changes (template, context, locale) rebuild the
   whole `HtmlUi` subtree (no diffing); style changes restyle in place unless
   the node structure changes. A run merge (e.g. `b` restyled to its parent's

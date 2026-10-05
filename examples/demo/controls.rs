@@ -1,6 +1,8 @@
-//! Language and theme selection: two HTML button rows in the shell document
-//! (`.opt` options inside `#lang-row` / `#theme-row`). Clicking an option
-//! updates [`Selection`] and re-renders the shell (the `active` class moves,
+//! Language and theme selection. The shell's buttons are plain HTML: each
+//! one declares `data-on-click="select-language"` / `"select-theme"` with
+//! its option index as `data-with`, and the library turns clicks into
+//! [`ElementSignal`]s. `read_signals` drains the message queue, updates
+//! [`Selection`], and re-renders the shell (the `active` class moves,
 //! because the rows are Tera-rendered from the shell's context); the apply
 //! systems translate the selection into the `ActiveLocale` and
 //! `DefaultStylesheet` resources, which re-localize and restyle every
@@ -26,7 +28,7 @@ pub const THEMES: &[(&str, &str)] = &[
     ("Large print", "ui/themes/large_print.css"),
 ];
 
-/// Which options are active. Clicks update it; the apply systems follow.
+/// Which options are active. Signals update it; the apply systems follow.
 #[derive(Resource)]
 pub struct Selection {
     pub lang: usize,
@@ -40,13 +42,6 @@ pub struct Locales(Vec<Handle<BundleAsset>>);
 /// Every theme's stylesheet, preloaded so switching is immediate.
 #[derive(Resource)]
 pub struct Themes(Vec<Handle<Stylesheet>>);
-
-/// Which row a clicked `.opt` belongs to.
-#[derive(Clone, Copy)]
-enum Row {
-    Lang,
-    Theme,
-}
 
 pub fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
     let bundles: Vec<Handle<BundleAsset>> = LOCALES
@@ -64,53 +59,30 @@ pub fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(Selection { lang: 0, theme: 0 });
 }
 
-/// Wire the shell's `.opt` buttons on every shell build (children are
-/// replaced each time, so behaviour is attached per build): each button gets
-/// a click observer that updates `Selection` and re-renders the shell.
-pub fn wire_buttons(
-    built: On<HtmlUiBuilt>,
-    shell: Query<(), With<crate::shell::Shell>>,
-    elements: HtmlElements,
-    rows: Query<&Children>,
-    elements_only: Query<(), With<HtmlElement>>,
-    mut commands: Commands,
+/// Drains the UI's signals and re-renders the shell when the selection
+/// changed, so the `active` class moves to the clicked option.
+pub fn read_signals(
+    mut signals: MessageReader<ElementSignal>,
+    mut selection: ResMut<Selection>,
+    mut contexts: Query<&mut TemplateContext>,
+    shells: Query<Entity, With<crate::shell::Shell>>,
 ) {
-    if shell.get(built.entity).is_err() {
-        return;
+    for signal in signals.read() {
+        let Some(index) = signal.payload.get("index").and_then(|index| index.as_u64()) else {
+            continue;
+        };
+        let index = index as usize;
+        match signal.name.as_ref() {
+            "select-language" => selection.lang = index,
+            "select-theme" => selection.theme = index,
+            _ => {}
+        }
     }
-    for (row_id, kind) in [("lang-row", Row::Lang), ("theme-row", Row::Theme)] {
-        let Some(row) = elements.by_id(built.entity, row_id) else {
-            continue;
-        };
-        let Ok(children) = rows.get(row) else {
-            continue;
-        };
-        // The row's element children are the options, in document order —
-        // the same order the template rendered them.
-        let options = children
-            .iter()
-            .filter(|child| elements_only.contains(*child))
-            .collect::<Vec<_>>();
-        for (index, option) in options.into_iter().enumerate() {
-            commands.entity(option).observe(
-                move |_: On<Pointer<Click>>,
-                      mut selection: ResMut<Selection>,
-                      mut contexts: Query<&mut TemplateContext>,
-                      shells: Query<Entity, With<crate::shell::Shell>>| {
-                    match kind {
-                        Row::Lang => selection.lang = index,
-                        Row::Theme => selection.theme = index,
-                    }
-                    // Touching the shell's context re-renders it, so the
-                    // `active` class moves to the clicked option.
-                    for shell in &shells {
-                        if let Ok(mut context) = contexts.get_mut(shell) {
-                            *context =
-                                crate::shell::shell_context(selection.lang, selection.theme);
-                        }
-                    }
-                },
-            );
+    if selection.is_changed() {
+        for shell in &shells {
+            if let Ok(mut context) = contexts.get_mut(shell) {
+                *context = crate::shell::shell_context(selection.lang, selection.theme);
+            }
         }
     }
 }

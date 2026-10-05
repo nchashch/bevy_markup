@@ -1359,3 +1359,34 @@ html-ui
         "the nested UI is despawned with the ancestor's replaced subtree"
     );
 }
+
+/// `data-on-*` hooks parse into `ElementSignals` on the element entity (the
+/// click/press/release observers ride along; hover is tracked by
+/// `hover_signals`).
+#[test]
+fn data_on_hooks_attach_to_elements() {
+    let mut ui = TestUi::new(
+        "signal-hooks",
+        &[
+            (
+                "page.html",
+                r#"<div id="box" data-on-click="buy" data-with='{"n": 3}'><p>Hello</p></div>"#,
+            ),
+            ("style.css", "html { color: #ffffff; font-size: 20px }"),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+
+    let world = ui.world_mut();
+    let mut query = world.query::<(Entity, &HtmlElement, &ElementSignals)>();
+    let found = query
+        .iter(world)
+        .find(|(_, element, _)| element.id.as_deref() == Some("box"))
+        .map(|(_, _, signals)| signals)
+        .expect("box element with signals");
+    assert_eq!(found.0.len(), 1);
+    assert_eq!(found.0[0].name, "buy");
+    assert_eq!(found.0[0].payload["n"], 3);
+}

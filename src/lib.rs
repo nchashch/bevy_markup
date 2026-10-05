@@ -78,6 +78,26 @@
 //!   may contain inline markup.
 //! - **Tera** ([`template`](mod@template)): full Tera 2 syntax in `.html` files, rendered with
 //!   the entity's [`TemplateContext`](html::TemplateContext).
+//! - **Interaction signals** ([`signals`]): elements declare hooks with
+//!   `data-on-click`/`-press`/`-release`/`-enter`/`-leave` naming an
+//!   app-side signal, and `data-with` carries JSON data rendered with the
+//!   template's context. Interactions arrive as one buffered
+//!   [`ElementSignal`](signals::ElementSignal) message; drain it with
+//!   `MessageReader`:
+//!
+//!   ```no_run
+//!   # use bevy::prelude::*;
+//!   # use bevy_markup::prelude::*;
+//!   fn buy(mut signals: MessageReader<ElementSignal>) {
+//!       for signal in signals.read() {
+//!           if signal.name == "buy" {
+//!               info!("buying {:?}", signal.payload["item"]);
+//!           }
+//!       }
+//!   }
+//!   ```
+//!
+//!   Nested hooks: the deepest bound element under the pointer wins.
 //! - **9-slice frames**: in CSS via `border-image` (see [`style`]), or for
 //!   nodes outside HTML via `*.slice.ron` assets and
 //!   [`NineSliceFrame`](nine_slice::NineSliceFrame) ([`nine_slice`]).
@@ -103,6 +123,7 @@ pub mod html;
 pub mod l10n;
 pub mod nine_slice;
 mod rebuild;
+pub mod signals;
 pub mod style;
 pub mod template;
 
@@ -118,6 +139,7 @@ pub mod prelude {
     };
     pub use crate::l10n::ActiveLocale;
     pub use crate::nine_slice::{NineSlice, NineSliceFrame};
+    pub use crate::signals::{ElementSignal, ElementSignals, SignalBinding, SignalTrigger};
     pub use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
     pub use crate::template::HtmlTemplate;
     pub use crate::{BevyMarkupPlugin, HtmlUiSystems};
@@ -163,6 +185,8 @@ impl Plugin for BevyMarkupPlugin {
             .init_resource::<style::DefaultStylesheet>()
             .init_resource::<l10n::ActiveLocale>()
             .init_resource::<fonts::FontFamilies>()
+            .add_message::<signals::ElementSignal>()
+            .add_systems(Update, signals::hover_signals)
             .configure_sets(
                 PostUpdate,
                 (

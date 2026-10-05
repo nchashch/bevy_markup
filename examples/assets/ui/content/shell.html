@@ -21,7 +21,8 @@
       <h2 data-l10n-id="demo-language">Language</h2>
       <div class="row" id="lang-row">
         {% for lang in langs %}
-        <div class="opt{% if loop.index0 == lang_active %} active{% endif %}">{{ lang }}</div>
+        <div class="opt{% if loop.index0 == lang_active %} active{% endif %}"
+             data-on-click="select-language" data-with='{"index": {{ loop.index0 }}}'>{{ lang }}</div>
         {% endfor %}
       </div>
     </section>
@@ -29,7 +30,8 @@
       <h2 data-l10n-id="demo-theme">Theme</h2>
       <div class="row" id="theme-row">
         {% for theme in themes %}
-        <div class="opt{% if loop.index0 == theme_active %} active{% endif %}">{{ theme }}</div>
+        <div class="opt{% if loop.index0 == theme_active %} active{% endif %}"
+             data-on-click="select-theme" data-with='{"index": {{ loop.index0 }}}'>{{ theme }}</div>
         {% endfor %}
       </div>
     </section>

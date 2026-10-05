@@ -35,10 +35,10 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb_u8(20, 24, 32)))
         .add_systems(Startup, (setup, controls::spawn, shell::spawn))
         .add_observer(shell::wire_shell_build)
-        .add_observer(controls::wire_buttons)
         .add_systems(
             Update,
             (
+                controls::read_signals,
                 controls::apply_locale_selection,
                 controls::apply_theme_selection,
             ),

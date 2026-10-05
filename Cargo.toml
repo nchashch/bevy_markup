@@ -29,6 +29,8 @@ bevy = { version = "0.19.1", default-features = false, features = [
 	# Fallback when the CSS names no registered font family.
 	"default_font",
 	"bevy_log",
+	# `data-on-*` interaction signals (bevy_picking events and hover map).
+	"bevy_picking",
 ] }
 # 9-slice style manifests (*.slice.ron).
 ron = "0.12.1"

@@ -13,6 +13,7 @@ use crate::html::{
 };
 use crate::l10n::LocalizedText;
 use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
+use crate::signals::{self, ElementSignals, SignalBinding};
 use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
 use crate::template::decode_entities;
 
@@ -49,6 +50,8 @@ struct Block {
     kind: BlockKind,
     /// `None` for anonymous loose text.
     element: Option<HtmlElement>,
+    /// The element's `data-on-*` hooks.
+    signals: Vec<SignalBinding>,
     /// The block element's own computed style (bullet; root `Text` font).
     style: Style,
     runs: Vec<Run>,
@@ -77,6 +80,7 @@ enum Item {
     Block(Block),
     Container {
         element: HtmlElement,
+        signals: Vec<SignalBinding>,
         children: Vec<Item>,
     },
 }
@@ -406,6 +410,7 @@ pub(crate) fn build_html_ui(
             vec![Item::Block(Block {
                 kind: BlockKind::Paragraph,
                 element: None,
+                signals: Vec::new(),
                 style,
                 runs: vec![Run { text, style }],
             })]
@@ -418,6 +423,7 @@ pub(crate) fn build_html_ui(
                 RenderedHtml::Failed(message) => vec![Item::Block(Block {
                     kind: BlockKind::Paragraph,
                     element: None,
+                signals: Vec::new(),
                     style: root,
                     runs: vec![Run {
                         text: format!("failed to render: {message}"),
@@ -469,6 +475,8 @@ pub(crate) fn build_html_ui(
 struct NodeSpec {
     node: Node,
     element: Option<HtmlElement>,
+    /// The element's `data-on-*` hooks.
+    signals: Vec<SignalBinding>,
     background: Option<Color>,
     image: Option<ImageNode>,
     /// `Text` nodes hold spans, never child nodes.
@@ -490,6 +498,7 @@ impl NodeSpec {
         Self {
             node,
             element: None,
+            signals: Vec::new(),
             background: None,
             image: None,
             text: None,
@@ -512,9 +521,13 @@ type Tree<'w, 's> = Query<
 >;
 
 fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
-    let (element, children) = match item {
+    let (element, signals, children) = match item {
         Item::Block(block) => return block_spec(styler, block),
-        Item::Container { element, children } => (element, children),
+        Item::Container {
+            element,
+            signals,
+            children,
+        } => (element, signals, children),
     };
     let boxed = styler.box_of(&element);
     let mut node = Node {
@@ -530,6 +543,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
     boxed.layout.apply_to(&mut node);
     NodeSpec {
         element: Some(element),
+        signals,
         background: boxed.background,
         image: boxed.sliced_image(),
         children: children
@@ -593,6 +607,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         boxed.layout.apply_to(&mut node);
         return NodeSpec {
             element: block.element,
+            signals: block.signals,
             text: Some(text),
             ..NodeSpec::new(node)
         };
@@ -614,6 +629,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
     boxed.layout.apply_to(&mut node);
     NodeSpec {
         element: block.element,
+        signals: block.signals,
         background: boxed.background,
         image: boxed.sliced_image(),
         children: vec![NodeSpec {
@@ -628,6 +644,11 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
     let mut entity = parent.spawn(spec.node);
     if let Some(element) = spec.element {
         entity.insert(element);
+    }
+    if !spec.signals.is_empty() {
+        let signals = ElementSignals(spec.signals);
+        signals::attach_pointer_signals(&mut entity, &signals);
+        entity.insert(signals);
     }
     if let Some(background) = spec.background {
         entity.insert(BackgroundColor(background));
@@ -890,6 +911,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                 items.push(Item::Block(Block {
                     kind: BlockKind::Paragraph,
                     element: None,
+                    signals: Vec::new(),
                     style: inherited,
                     runs,
                 }));
@@ -899,6 +921,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         tl::Node::Comment(_) => return,
     };
 
+    let signals = signals::signal_bindings(tag);
     let Some(element) = ctx.element(tag) else {
         // Unmatched `data-l10n-name` in a translation: content only.
         for child in tag.children().top().iter() {
@@ -918,6 +941,12 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         // Either way a translation replaces the children.
         name => {
             let container = CONTAINERS.contains(&name);
+            if !container && !signals.is_empty() {
+                debug!(
+                    "html signals: <{name}> has data-on-* hooks, but only blocks and \
+                     containers become nodes; skipped"
+                );
+            }
             let mut children = Vec::new();
             let target = if container { &mut children } else { &mut *items };
             let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
@@ -931,7 +960,11 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                 }
             }
             if container {
-                items.push(Item::Container { element, children });
+                items.push(Item::Container {
+                    element,
+                    signals,
+                    children,
+                });
             }
             return;
         }
@@ -943,6 +976,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
     items.push(Item::Block(Block {
         kind,
         element: Some(element),
+        signals,
         style,
         runs: finish_runs(runs, preformatted),
     }));
