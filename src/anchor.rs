@@ -18,7 +18,10 @@
 //! - The overlay's insets are set from the element's laid-out rect (the
 //!   previous frame's layout): `Right`/`Below` set `left`/`top`, `Above`
 //!   sets `left`/`bottom`, `Left` sets `right`/`top`; the other insets are
-//!   `auto`. Its `position_type` is the stylesheet's or the app's.
+//!   `auto`. `Above`/`Left` anchor by `bottom`/`right`, which needs the
+//!   viewport height/width; without a camera they anchor by `top`/`left`
+//!   using the overlay's measured size instead. Its `position_type` is the
+//!   stylesheet's or the app's.
 //! - Once the overlay has a size it's kept inside the element's viewport.
 //! - It renders on the element's UI camera (`UiTargetCamera`), so it works
 //!   for UIs on render-to-texture cameras too.

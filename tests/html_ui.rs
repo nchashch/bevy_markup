@@ -1431,6 +1431,76 @@ fn anchored_overlay_follows_clamps_and_despawns() {
     );
 }
 
+/// An anchored overlay whose element has no camera (no viewport to clamp
+/// against) falls back to the overlay's measured size: `Above` sets
+/// `bottom` from the element's top minus gap minus the overlay's height,
+/// `Left` sets `right` from the element's left minus gap minus its width.
+#[test]
+fn anchored_overlay_without_a_viewport_uses_the_measured_size() {
+    let mut ui = TestUi::with_layout(
+        "anchor-no-viewport",
+        &[("page.html", "<p>x</p>")],
+        UVec2::new(320, 240),
+    )
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    // A bare "element": laid-out components but no `ComputedUiTargetCamera`.
+    let element = ui
+        .world_mut()
+        .spawn((
+            ComputedNode {
+                size: Vec2::new(40.0, 30.0),
+                ..ComputedNode::DEFAULT
+            },
+            bevy::ui::UiGlobalTransform::from_translation(Vec2::new(120.0, 115.0)),
+        ))
+        .id();
+    let overlay = ui
+        .world_mut()
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(60.0),
+                height: Val::Px(20.0),
+                ..default()
+            },
+            HtmlAnchor::new(element, AnchorPlacement::Above).with_gap(4.0),
+        ))
+        .id();
+    let insets = |ui: &mut TestUi| {
+        ui.update(2);
+        let world = ui.world_mut();
+        let node = world.get::<Node>(overlay).unwrap();
+        (node.left, node.top, node.right, node.bottom)
+    };
+
+    // Above the element, top-anchored by the measured height.
+    assert_eq!(
+        insets(&mut ui),
+        (
+            Val::Px(100.0),
+            Val::Px(76.0), // min.y - gap - height
+            Val::Auto,
+            Val::Auto
+        )
+    );
+
+    ui.world_mut()
+        .get_mut::<HtmlAnchor>(overlay)
+        .unwrap()
+        .placement = AnchorPlacement::Left;
+    // Left of the element, left-anchored by the measured width.
+    assert_eq!(
+        insets(&mut ui),
+        (
+            Val::Px(36.0), // min.x - gap - width
+            Val::Px(100.0),
+            Val::Auto,
+            Val::Auto
+        )
+    );
+}
+
 /// A content update reconciles instead of rebuilding: elements matched by
 /// `id` (anywhere among their siblings) or by position (id-less ones) keep
 /// their entities and what the app attached, with new text; an inserted
