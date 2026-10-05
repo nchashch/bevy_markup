@@ -372,6 +372,12 @@ impl TestUi {
         );
     }
 
+    /// The app, for registering app-side definitions (`define_html_element`).
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn app_mut(&mut self) -> &mut App {
+        &mut self.app
+    }
+
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn world_mut(&mut self) -> &mut World {
         self.app.world_mut()

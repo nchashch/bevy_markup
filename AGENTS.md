@@ -37,6 +37,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlTemplate`, `Stylesheet`, `NineSlice` | Assets | `.html`/`.htm`, `.css`, `*.slice.ron` |
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
+| `HtmlCustomElementsExt::define_html_element(name, system)`, `ElementConnected { entity, root, name, dataset }` | App ext, system input | `is="<name>"` customized built-ins: the system (`In<ElementConnected>`, `data-*` attributes as `dataset`) runs on every spawn of the element, in document order, before `HtmlUiBuilt`; not on restyles |
 | `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger` | Message, Component | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click/press/release/enter/leave); deepest bound element wins |
 | `PseudoState { hovered, active, focused, focus_visible }` | Component | `:hover`/`:active` (from picking) and `:focus`/`:focus-visible` (from `InputFocus`/`InputFocusVisible`) per element; a change restyles in place; apps may set it |
 | `Focusable { autofocus }` | Component | on focusable elements (`data-on-click` or `tabindex >= 0`, not `tabindex="-1"`) |
@@ -67,6 +68,8 @@ src/
   build.rs         (internal) DOM + styles → Bevy UI children; HtmlUiBuilt trigger
   rebuild.rs       (internal) pure rebuild decision: Frame (load phases + change signals) → Build/Skip/Wait
   signals.rs       `data-on-*`/`data-with` → ElementSignal messages (picking observers, hover tracking)
+  custom_elements.rs  `is="…"` + `data-*` dataset → app-defined systems run on spawn
+                   (define_html_element, ElementConnected; CustomElements registry)
   focus.rs         Focusable/HtmlFocus/HtmlModal/HtmlNoFocus: focus scope sync, repair (id restore,
                    autofocus), focus pseudo-state, press-to-focus, activation (InputFocus-based)
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
@@ -187,7 +190,12 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   existing children in place (`apply_spec`, `HtmlUiRestyled`) when they have
   the same shape (`same_shape`: text/element/frame presence, span and child
   counts) — otherwise it rebuilds. Restyles keep entities and app-attached
-  components. Shape compares only what the spec owns: a frame is the
+  components. Custom elements (`is`): `spawn_spec` collects an
+  `ElementConnected` per spawned `is` element; the build queues
+  `custom_elements::connect` for each (document order) after the spawn
+  commands and before the `HtmlUiBuilt` trigger, so `HtmlUiBuilt` observers
+  see what definitions attached; `apply_spec` (restyle) never runs them.
+  An undefined name warns once per name. Shape compares only what the spec owns: a frame is the
   `CssFrame` marker spawned with its `ImageNode` (an app `ImageNode` is app
   state, bug_0018), nested `HtmlUi` children are skipped (bug_0017).
   `restyle_matches_a_fresh_build` (properties) guards that both
@@ -927,9 +935,14 @@ Known limits (each skipped/ignored value is logged at `debug`):
   built-in reactions, no forms/inputs. `:hover`/`:active` styling works
   (see the Selectors limit); focus and directional navigation are
   library-side (`focus.rs`), input bindings are the app's. No
-  `:focus-within`, no Tab order (directional navigation only).
-- **Rebuilds:** content changes (template, context, locale) rebuild the
-  whole `HtmlUi` subtree (no diffing); style changes restyle in place unless
+  `:focus-within`, no Tab order (directional navigation only). App
+  components on elements: `is="<name>"` + `data-*` runs the app's
+  `define_html_element` system on every spawn (`custom_elements.rs`); no
+  disconnected/attribute-changed callbacks, no autonomous custom tags
+  (`<my-tag>` is walked through like any unknown tag).
+- **Rebuilds:** content changes (template, context, locale) that alter the
+  rendered HTML or translations rebuild the whole `HtmlUi` subtree (no
+  diffing; an identical render is skipped); style changes restyle in place unless
   the node structure changes. A run merge (e.g. `b` restyled to its parent's
   style) changes the span count and falls back to a rebuild. Nested `HtmlUi`
   entities inside a rebuilding ancestor are despawned with it and skipped

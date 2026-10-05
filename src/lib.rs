@@ -58,7 +58,8 @@
 //! [`DefaultStylesheet`](style::DefaultStylesheet) restyles — all at runtime.
 //! After every (re)build an [`HtmlUiBuilt`](html::HtmlUiBuilt) event fires on
 //! the `HtmlUi` entity; use [`HtmlElements`](html::HtmlElements) to find
-//! elements by `id`/`class` and attach behaviour. Style-only changes
+//! elements by `id`/`class` and attach behaviour, or declare it per element
+//! with [custom elements](custom_elements). Style-only changes
 //! (stylesheets, fonts) restyle the existing children in place and fire
 //! [`HtmlUiRestyled`](html::HtmlUiRestyled) instead, keeping what you attached.
 //!
@@ -104,6 +105,11 @@
 //!   ```
 //!
 //!   Nested hooks: the deepest bound element under the pointer wins.
+//! - **Custom elements** ([`custom_elements`]): `is="<name>"` on a block or
+//!   container runs the system the app defined with
+//!   [`define_html_element`](custom_elements::HtmlCustomElementsExt::define_html_element)
+//!   each time the element is spawned, with its `data-*` attributes — app
+//!   components (materials, images, markers) declared in the template.
 //! - **Focus and navigation** ([`focus`]): `data-on-click` and
 //!   `tabindex="0"` elements are focusable (`tabindex="-1"` opts out),
 //!   `autofocus` takes the initial focus, focus survives rebuilds by `id`,
@@ -133,6 +139,7 @@ pub mod fuzz;
 
 mod build;
 mod cascade;
+pub mod custom_elements;
 pub mod focus;
 pub mod fonts;
 pub mod html;
@@ -148,6 +155,7 @@ pub use {bevy_fluent, lightningcss, tera, tl};
 
 /// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {
+    pub use crate::custom_elements::{ElementConnected, HtmlCustomElementsExt};
     pub use crate::focus::{
         ActivateElement, FocusEdge, Focusable, HtmlFocus, HtmlModal, HtmlNoFocus,
     };
@@ -206,6 +214,7 @@ impl Plugin for BevyMarkupPlugin {
             .init_resource::<style::DefaultStylesheet>()
             .init_resource::<l10n::ActiveLocale>()
             .init_resource::<fonts::FontFamilies>()
+            .init_resource::<custom_elements::CustomElements>()
             .add_message::<signals::ElementSignal>()
             .add_systems(
                 Update,

@@ -1077,6 +1077,132 @@ html-ui
     assert_eq!(ui.builds(), builds + 1, "a changed render rebuilds once");
 }
 
+/// `is="…"` runs the app's definition on every spawned element, in document
+/// order, with the element's `data-*` dataset and its UI root, before
+/// `HtmlUiBuilt` observers run. A rebuild runs it again on the new entities;
+/// a restyle keeps the entities and what the definition attached, without
+/// running it. An undefined name, and `is` on an element that doesn't become
+/// a node (an inline `span`), are ignored.
+#[test]
+fn custom_elements_run_on_every_spawn() {
+    #[derive(Component)]
+    struct Icon(String);
+    #[derive(Resource, Default)]
+    struct Connected(Vec<(Entity, Option<String>, String, Option<String>)>);
+    #[derive(Resource, Default)]
+    struct IconsAtBuilt(Vec<usize>);
+
+    let mut ui = TestUi::new(
+        "custom-elements",
+        &[
+            (
+                "page.html",
+                r#"<div id="a" is="icon" data-icon="{{ icon }}" data-size="2">
+                     <p id="b" is=" icon " data-icon="inner">x <span is="icon" data-icon="inline">y</span></p>
+                   </div>
+                   <p id="c" is="undefined">z</p>"#,
+            ),
+            ("white.css", "p { color: #ffffff }"),
+            ("red.css", "p { color: #ff0000 }"),
+        ],
+    )
+    .stylesheet("white.css");
+    let app = ui.app_mut();
+    app.init_resource::<Connected>()
+        .init_resource::<IconsAtBuilt>()
+        .define_html_element(
+            "icon",
+            |connected: In<ElementConnected>,
+             elements: Query<&HtmlElement>,
+             mut log: ResMut<Connected>,
+             mut commands: Commands| {
+                let icon = connected.data("icon").unwrap_or_default().to_owned();
+                log.0.push((
+                    connected.root,
+                    elements
+                        .get(connected.entity)
+                        .ok()
+                        .and_then(|e| e.id.clone()),
+                    icon.clone(),
+                    connected.data("size").map(str::to_owned),
+                ));
+                commands.entity(connected.entity).insert(Icon(icon));
+            },
+        )
+        .add_observer(
+            |_: On<HtmlUiBuilt>, icons: Query<&Icon>, mut seen: ResMut<IconsAtBuilt>| {
+                seen.0.push(icons.iter().count());
+            },
+        );
+    let mut ui = ui.spawn(
+        "page.html",
+        TemplateContext::new().with("icon", &"key_e"),
+        Node::default(),
+    );
+    ui.settle();
+    let root = ui.root();
+    let log = |ui: &mut TestUi| ui.world_mut().resource::<Connected>().0.clone();
+    let id = |id: &str| Some(id.to_owned());
+    assert_eq!(
+        log(&mut ui),
+        [
+            (root, id("a"), "key_e".to_owned(), Some("2".to_owned())),
+            (root, id("b"), "inner".to_owned(), None),
+        ],
+        "document order, dataset, root; span and undefined name skipped"
+    );
+    assert_eq!(
+        ui.world_mut().resource::<IconsAtBuilt>().0,
+        [2],
+        "attached before HtmlUiBuilt"
+    );
+    let icons = |ui: &mut TestUi| {
+        let world = ui.world_mut();
+        let mut query = world.query::<(Entity, &Icon)>();
+        let mut icons: Vec<_> = query
+            .iter(world)
+            .map(|(e, icon)| (e, icon.0.clone()))
+            .collect();
+        icons.sort();
+        icons
+    };
+    let built = icons(&mut ui);
+
+    // Restyle: same entities, components kept, definition not re-run.
+    let red = ui.load::<Stylesheet>("red.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(red);
+    ui.settle();
+    assert!(ui.dump().contains("#ff0000"), "restyled:\n{}", ui.dump());
+    assert_eq!(
+        icons(&mut ui),
+        built,
+        "restyle keeps the attached components"
+    );
+    assert_eq!(log(&mut ui).len(), 2, "restyle doesn't re-run definitions");
+
+    // Rebuild: new entities, definitions re-run with the new data.
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("icon", &"key_r");
+    ui.settle();
+    let rebuilt = icons(&mut ui);
+    assert_eq!(rebuilt.len(), 2);
+    assert!(
+        rebuilt
+            .iter()
+            .all(|(entity, _)| built.iter().all(|(old, _)| old != entity))
+    );
+    assert_eq!(
+        log(&mut ui)[2..]
+            .iter()
+            .map(|row| row.2.as_str())
+            .collect::<Vec<_>>(),
+        ["key_r", "inner"]
+    );
+    assert_eq!(ui.world_mut().resource::<IconsAtBuilt>().0, [2, 2]);
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]

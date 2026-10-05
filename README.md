@@ -102,7 +102,9 @@ flowchart LR
    `section`, `ul`, …) become flex nodes. Each carries an `HtmlElement`
    component (tag, id, classes), so your code can find them with the
    `HtmlElements` system parameter and attach behaviour after every build
-   (the `HtmlUiBuilt` event).
+   (the `HtmlUiBuilt` event) — or declare it in the template: an element
+   with `is="health-bar"` runs the system you registered under that name
+   each time it's spawned, like a browser's customized built-in elements.
 
 When only the styling changes (a new theme, a reloaded stylesheet), bevy_markup
 restyles the existing entities in place instead of rebuilding them.
@@ -125,6 +127,10 @@ bevy_markup implements a useful subset of the web, not all of it:
   and `tabindex` elements are focusable, `autofocus`, `:focus` /
   `:focus-visible` with `outline`, modal roots, and focus kept across
   rebuilds. You bind the input; bevy_markup moves focus and activates.
+- **Custom elements:** `<div is="gcd-ring" data-slot="2">` runs your
+  `define_html_element("gcd-ring", system)` with the element and its `data-*`
+  attributes whenever it's built — attach materials, images or markers
+  without looking elements up by id.
 - **Fluent:** messages, arguments, plurals and selectors, inline markup.
 - **Fonts:** you register font files under CSS family names
   (`FontFamilies`), including bold and italic faces and the generic

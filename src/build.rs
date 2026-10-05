@@ -7,6 +7,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 use crate::cascade::{HtmlStyles, LayoutDecl, OutlineDecl, Pseudo, SliceValue};
+use crate::custom_elements::{self, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
 use crate::fonts::FontFamilies;
 use crate::html::{
@@ -57,6 +58,8 @@ struct Block {
     signals: Vec<SignalBinding>,
     /// Focusability from `tabindex` / `data-on-click` / `autofocus`.
     focus: Option<Focusable>,
+    /// The `is` definition to run on the spawned element.
+    custom: Option<CustomElement>,
     /// The DOM node, for `:hover`/`:active` restyles.
     handle: Option<tl::NodeHandle>,
     /// The block element's own computed style (bullet; root `Text` font).
@@ -93,6 +96,8 @@ enum Item {
         signals: Vec<SignalBinding>,
         /// Focusability from `tabindex` / `data-on-click` / `autofocus`.
         focus: Option<Focusable>,
+        /// The `is` definition to run on the spawned element.
+        custom: Option<CustomElement>,
         /// Box properties, computed with the element's interaction state.
         boxed: BoxStyle,
         /// The element's computed `pointer-events` (inherited).
@@ -527,6 +532,7 @@ pub(crate) fn build_html_ui(
                 handle: None,
                 signals: Vec::new(),
                 focus: None,
+                custom: None,
                 style,
                 boxed: BoxStyle::default(),
                 runs: vec![Run { text, style }],
@@ -543,6 +549,7 @@ pub(crate) fn build_html_ui(
                     handle: None,
                     signals: Vec::new(),
                     focus: None,
+                    custom: None,
                     style: root,
                     boxed: BoxStyle::default(),
                     runs: vec![Run {
@@ -581,14 +588,22 @@ pub(crate) fn build_html_ui(
             }
             commands.trigger(HtmlUiRestyled { entity });
         } else {
+            let mut connected = Vec::new();
             commands
                 .entity(entity)
                 .despawn_related::<Children>()
                 .with_children(|parent| {
                     for spec in specs {
-                        spawn_spec(parent, spec);
+                        spawn_spec(parent, spec, entity, &mut connected);
                     }
-                })
+                });
+            // After the spawns, before `HtmlUiBuilt`: its observers see what
+            // the definitions attached.
+            for element in connected {
+                commands.queue(move |world: &mut World| custom_elements::connect(world, element));
+            }
+            commands
+                .entity(entity)
                 .trigger(|entity| HtmlUiBuilt { entity });
         }
     }
@@ -604,6 +619,8 @@ struct NodeSpec {
     signals: Vec<SignalBinding>,
     /// Focusability from `tabindex` / `data-on-click` / `autofocus`.
     focus: Option<Focusable>,
+    /// The `is` definition to run once spawned (not on restyles).
+    custom: Option<CustomElement>,
     /// The DOM node, for `:hover`/`:active` restyles.
     handle: Option<tl::NodeHandle>,
     background: Option<Color>,
@@ -634,6 +651,7 @@ impl NodeSpec {
             element: None,
             signals: Vec::new(),
             focus: None,
+            custom: None,
             handle: None,
             background: None,
             image: None,
@@ -740,13 +758,14 @@ type Tree<'w, 's> = Query<
 >;
 
 fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
-    let (element, handle, signals, focus, boxed, pointer_events, children) = match item {
+    let (element, handle, signals, focus, custom, boxed, pointer_events, children) = match item {
         Item::Block(block) => return block_spec(styler, block),
         Item::Container {
             element,
             handle,
             signals,
             focus,
+            custom,
             boxed,
             pointer_events,
             children,
@@ -755,6 +774,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
             handle,
             signals,
             focus,
+            custom,
             boxed,
             pointer_events,
             children,
@@ -775,6 +795,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
         element: Some(element),
         signals,
         focus,
+        custom,
         handle,
         background: boxed.background,
         image: boxed.sliced_image(),
@@ -841,6 +862,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             element: block.element,
             signals: block.signals,
             focus: block.focus,
+            custom: block.custom,
             handle: block.handle,
             border_color: boxed.border_color(),
             outline: boxed.drawn_outline,
@@ -869,6 +891,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         element: block.element,
         signals: block.signals,
         focus: block.focus,
+        custom: block.custom,
         handle: block.handle,
         background: boxed.background,
         image: boxed.sliced_image(),
@@ -890,8 +913,23 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
 #[derive(Component, Clone, Copy, Debug, Deref)]
 pub(crate) struct DomNode(pub tl::NodeHandle);
 
-fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
+/// Spawns `spec` under `parent`, collecting its custom elements (in
+/// document order) for [`custom_elements::connect`].
+fn spawn_spec(
+    parent: &mut ChildSpawnerCommands,
+    spec: NodeSpec,
+    root: Entity,
+    connected: &mut Vec<ElementConnected>,
+) {
     let mut entity = parent.spawn(spec.node);
+    if let Some(custom) = spec.custom {
+        connected.push(ElementConnected {
+            entity: entity.id(),
+            root,
+            name: custom.name,
+            dataset: custom.dataset,
+        });
+    }
     if let Some(element) = spec.element {
         entity.insert(element);
     }
@@ -940,7 +978,7 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
         None => {
             entity.with_children(|children| {
                 for child in spec.children {
-                    spawn_spec(children, child);
+                    spawn_spec(children, child, root, connected);
                 }
             });
         }
@@ -1220,6 +1258,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                     handle: None,
                     signals: Vec::new(),
                     focus: None,
+                    custom: None,
                     style: inherited,
                     boxed: BoxStyle::default(),
                     runs,
@@ -1232,6 +1271,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
 
     let signals = signals::signal_bindings(tag);
     let focus = focus::focusable(tag, &signals);
+    let custom = custom_elements::custom_element(tag);
     let state = ctx
         .states
         .and_then(|states| states.get(&handle))
@@ -1264,6 +1304,12 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                      containers become nodes; skipped"
                 );
             }
+            if !container && custom.is_some() {
+                debug!(
+                    "html custom elements: <{name}> has an is attribute, but only blocks \
+                     and containers become nodes; skipped"
+                );
+            }
             let mut children = Vec::new();
             let target = if container {
                 &mut children
@@ -1286,6 +1332,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                     handle: Some(handle),
                     signals,
                     focus,
+                    custom,
                     boxed,
                     pointer_events: style.pointer_events,
                     children,
@@ -1304,6 +1351,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         handle: Some(handle),
         signals,
         focus,
+        custom,
         style,
         boxed,
         runs: finish_runs(runs, preformatted),
