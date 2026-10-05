@@ -130,12 +130,26 @@ fn grid_contexts() -> Vec<Value> {
         .to_vec()
 }
 
-/// `examples/menu.rs` `show_settings()`: every volume step's ends and every
-/// difficulty (the Fluent selector's branches).
+/// `examples/menu.rs` `show_settings()`: every volume step's ends, every
+/// difficulty and every `input_name()` (the Fluent selectors' branches).
 fn menu_contexts() -> Vec<Value> {
-    [(0, "easy"), (50, "normal"), (100, "hard")]
-        .map(|(volume, difficulty)| json!({ "volume": volume, "difficulty": difficulty }))
-        .to_vec()
+    let inputs = [
+        "none",
+        "mouse-primary",
+        "mouse-secondary",
+        "mouse-middle",
+        "touch",
+        "key",
+        "gamepad",
+        "synthetic",
+    ];
+    inputs
+        .iter()
+        .zip([(0, "easy"), (50, "normal"), (100, "hard")].iter().cycle())
+        .map(|(input, (volume, difficulty))| {
+            json!({ "volume": volume, "difficulty": difficulty, "last_input": input })
+        })
+        .collect()
 }
 
 /// `examples/menu.rs`: the dialog takes no variables.

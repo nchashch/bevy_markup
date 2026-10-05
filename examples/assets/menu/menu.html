@@ -2,7 +2,7 @@
 <div class="menu">
   <h1 data-l10n-id="menu-title">Settings</h1>
 
-  <div class="button" id="volume" autofocus data-on-click="volume"
+  <div class="button" id="volume" autofocus data-on-click="volume" data-on-auxclick="volume-down"
        data-on-enter="tip" data-on-leave="tip" data-with='{"tip": "menu-volume-tip"}'>
     <div class="icon" is="icon" data-src="ui/frame.png"></div>
     <p data-l10n-id="menu-volume" data-l10n-args='{"volume": {{ volume }}}'>Volume: {{ volume }}%</p>
@@ -20,6 +20,7 @@
     <p data-l10n-id="menu-reset">Reset to defaults</p>
   </div>
 
+  <p class="hint" data-l10n-id="menu-last-input" data-l10n-args='{"input": "{{ last_input }}"}'>Last click: {{ last_input }}</p>
   <p class="hint" data-l10n-id="menu-hint">Arrows or D-pad: move · Enter or A: choose · Esc: cancel · L: language</p>
 </div>
 </html>

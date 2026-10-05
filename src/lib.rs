@@ -93,9 +93,13 @@
 //! - **Tera** ([`template`](mod@template)): full Tera 2 syntax in `.html` files, rendered with
 //!   the entity's [`TemplateContext`](html::TemplateContext).
 //! - **Interaction signals** ([`signals`]): elements declare hooks with
-//!   `data-on-click`/`-press`/`-release`/`-enter`/`-leave` naming an
-//!   app-side signal, and `data-with` carries JSON data rendered with the
-//!   template's context. Interactions arrive as one buffered
+//!   `data-on-click`/`-auxclick`/`-press`/`-release`/`-enter`/`-leave`
+//!   naming an app-side signal (`click` is the primary button, `auxclick`
+//!   the others, as in browsers), and `data-with` carries JSON data rendered
+//!   with the template's context. Each signal carries its
+//!   [`SignalSource`](signals::SignalSource): pointer and button (mouse,
+//!   touch, custom pointers such as VR lasers) with its position, the
+//!   hovering pointer, or the input that activated the focused element. Interactions arrive as one buffered
 //!   [`ElementSignal`](signals::ElementSignal) message; drain it with
 //!   `MessageReader`:
 //!
@@ -128,8 +132,9 @@
 //!   [`HtmlModal`](focus::HtmlModal) root confines it. Focus is Bevy's
 //!   `InputFocus`; bind your own gamepad/keyboard input and call
 //!   [`HtmlFocus::navigate`](focus::HtmlFocus::navigate) /
-//!   [`activate`](focus::HtmlFocus::activate) (activation emits the same
-//!   `ElementSignal` as a click).
+//!   [`activate`](focus::HtmlFocus::activate) with the input you saw
+//!   (activation emits the same `ElementSignal` as a click, its source that
+//!   input — a key, a gamepad button, or `Synthetic` for harnesses).
 //! - **9-slice frames**: in CSS via `border-image` (see [`style`]), or for
 //!   nodes outside HTML via `*.slice.ron` assets and
 //!   [`NineSliceFrame`](nine_slice::NineSliceFrame) ([`nine_slice`]).
@@ -180,7 +185,8 @@ pub mod prelude {
     pub use crate::l10n::ActiveLocale;
     pub use crate::nine_slice::{NineSlice, NineSliceFrame};
     pub use crate::signals::{
-        ElementSignal, ElementSignals, PseudoState, SignalBinding, SignalTrigger,
+        ActivationInput, ElementSignal, ElementSignals, PseudoState, SignalBinding, SignalSource,
+        SignalTrigger,
     };
     pub use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
     pub use crate::template::HtmlTemplate;

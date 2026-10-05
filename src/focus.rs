@@ -32,8 +32,9 @@
 //! - **Input is the app's**: bevy_markup reads no keys or buttons. Bind your
 //!   own input and call [`HtmlFocus::navigate`] / [`HtmlFocus::activate`].
 //!   Activation emits the element's `data-on-click` signals as
-//!   [`ElementSignal`] messages, exactly like a pointer click (with
-//!   `position: None`). Navigating off the edge in a direction with no
+//!   [`ElementSignal`] messages, like a pointer click, with the input the
+//!   app reports as the source ([`SignalSource::Activation`]: a key, a
+//!   gamepad button, or [`ActivationInput::Synthetic`] for harnesses). Navigating off the edge in a direction with no
 //!   neighbour triggers [`FocusEdge`] on the focused element (e.g. to page a
 //!   list).
 
@@ -50,7 +51,10 @@ use bevy::ui::auto_directional_navigation::{AutoDirectionalNavigation, AutoDirec
 
 use crate::HtmlUiSystems;
 use crate::html::{HtmlElement, HtmlUi};
-use crate::signals::{ElementSignal, ElementSignals, PseudoState, SignalBinding, SignalTrigger};
+use crate::signals::{
+    ActivationInput, ElementSignal, ElementSignals, PseudoState, SignalBinding, SignalSource,
+    SignalTrigger,
+};
 
 /// A focusable element (see the [module docs](self)). `autofocus` is the
 /// HTML attribute.
@@ -81,11 +85,14 @@ pub struct FocusEdge {
 }
 
 /// Trigger on an element to activate it: emits its `data-on-click` signals
-/// as [`ElementSignal`]s (`position: None`), like a pointer click.
-/// [`HtmlFocus::activate`] triggers it on the focused element.
+/// as [`ElementSignal`]s, like a pointer click, with
+/// [`SignalSource::Activation`]`(input)`. [`HtmlFocus::activate`] triggers
+/// it on the focused element.
 #[derive(EntityEvent, Clone, Copy, Debug)]
 pub struct ActivateElement {
     pub entity: Entity,
+    /// What activated it.
+    pub input: ActivationInput,
 }
 
 /// Drive focus from the app's own input bindings.
@@ -113,10 +120,11 @@ impl HtmlFocus<'_, '_> {
         }
     }
 
-    /// Activates the focused element (see [`ActivateElement`]).
-    pub fn activate(&mut self) {
+    /// Activates the focused element (see [`ActivateElement`]); `input` is
+    /// what the app saw (the signals' [`SignalSource::Activation`]).
+    pub fn activate(&mut self, input: ActivationInput) {
         if let Some(entity) = self.navigator.input_focus() {
-            self.commands.trigger(ActivateElement { entity });
+            self.commands.trigger(ActivateElement { entity, input });
         }
     }
 
@@ -373,7 +381,7 @@ fn activate_element(
             target: activate.entity,
             element: element.cloned().unwrap_or_default(),
             payload: binding.payload.clone(),
-            position: None,
+            source: SignalSource::Activation(activate.input),
         });
     }
 }

@@ -39,10 +39,10 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
 | `HtmlCustomElementsExt::define_html_element(name, system)`, `ElementConnected { entity, root, name, dataset }` | App ext, system input | `is="<name>"` customized built-ins: the system (`In<ElementConnected>`, `data-*` attributes as `dataset`) runs on every spawn of the element, in document order, before `HtmlUiBuilt`; not on restyles |
 | `HtmlAnchor { element, placement, gap }`, `AnchorPlacement::{Right, Left, Above, Below}` | Component | keeps an (absolute) overlay node beside `element` each frame: insets from its rect, clamped to the viewport by the overlay's size, `UiTargetCamera` copied, despawned with the element |
-| `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger` | Message, Component | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click/press/release/enter/leave); deepest bound element wins |
+| `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger`, `SignalSource`, `ActivationInput` | Message, Component, enums | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click = primary button or activation, auxclick = other buttons, press/release = any button, enter/leave); `source`: `Pointer { pointer, button, position, count }` / `Hover { pointer }` / `Activation(input)`; deepest bound element wins |
 | `PseudoState { hovered, active, focused, focus_visible }` | Component | `:hover`/`:active` (from picking) and `:focus`/`:focus-visible` (from `InputFocus`/`InputFocusVisible`) per element; a change restyles in place; apps may set it |
 | `Focusable { autofocus }` | Component | on focusable elements (`data-on-click` or `tabindex >= 0`, not `tabindex="-1"`) |
-| `HtmlFocus` | SystemParam | `navigate(CompassOctant)` (shows focus; `FocusEdge` at an edge), `activate()`, `focused()` — the app binds its own input |
+| `HtmlFocus` | SystemParam | `navigate(CompassOctant)` (shows focus; `FocusEdge` at an edge), `activate(ActivationInput)` (the input the app saw: `Key`, `GamepadButton`, `Synthetic` for harnesses, `Other`), `focused()` — the app binds its own input |
 | `HtmlModal`, `HtmlNoFocus` | Component | on an `HtmlUi` root: confine focus to it while visible / never take focus |
 | `FocusEdge { entity, direction }`, `ActivateElement { entity }` | EntityEvent | no neighbour in that direction / emit the element's click signals |
 
@@ -976,8 +976,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
   inline elements are ignored (Bevy `TextSpan` has no box); inline elements
   have no entity, so `HtmlElements` can't find them (only blocks/containers).
 - **Interactivity:** declarative only: `data-on-<trigger>`/`data-with` emit
-  [`ElementSignal`] messages (`signals.rs`; click/press/release via picking
-  observers, enter/leave via hover tracking that survives rebuilds — the
+  [`ElementSignal`] messages (`signals.rs`; click/auxclick/press/release via
+  picking observers — one per event type per element, mapping the pointer
+  button to the trigger and reporting it in `SignalSource::Pointer` — enter/leave via hover tracking that survives rebuilds — the
   deepest bound element wins, so buttons can nest). What signals *mean* is
   app code reading the queue (the demo's `controls::read_signals`). No
   built-in reactions, no forms/inputs. `:hover`/`:active` styling works

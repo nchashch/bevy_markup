@@ -901,8 +901,12 @@ fn focus_navigation_scope_and_styles() {
         Some("#00ff00".to_owned())
     );
 
-    // Activation emits the element's click signal with its payload.
-    world.trigger(ActivateElement { entity: b });
+    // Activation emits the element's click signal with its payload and the
+    // input the app reported.
+    world.trigger(ActivateElement {
+        entity: b,
+        input: ActivationInput::Key(KeyCode::Enter),
+    });
     let signals: Vec<ElementSignal> = world
         .resource::<Messages<ElementSignal>>()
         .iter_current_update_messages()
@@ -913,9 +917,13 @@ fn focus_navigation_scope_and_styles() {
         (
             signals[0].name.as_ref(),
             signals[0].payload["n"].as_i64(),
-            signals[0].position
+            signals[0].source
         ),
-        ("pick-b", Some(1), None)
+        (
+            "pick-b",
+            Some(1),
+            SignalSource::Activation(ActivationInput::Key(KeyCode::Enter))
+        )
     );
 
     // `a` becomes another element (a `section`): the update replaces it, and
@@ -948,7 +956,10 @@ fn focus_navigation_scope_and_styles() {
     let world = ui.world_mut();
     assert_eq!(element_by_id(world, root, "a"), new_a, "kept in place");
     assert_eq!(focused(world), Some(new_a));
-    world.trigger(ActivateElement { entity: b });
+    world.trigger(ActivateElement {
+        entity: b,
+        input: ActivationInput::Synthetic,
+    });
     let payloads: Vec<Option<i64>> = world
         .resource::<Messages<ElementSignal>>()
         .iter_current_update_messages()
@@ -1040,7 +1051,7 @@ fn html_focus_navigates_by_layout_and_reports_edges() {
     assert_eq!(focused(world), Some(bottom));
 
     world
-        .run_system_once(|mut focus: HtmlFocus| focus.activate())
+        .run_system_once(|mut focus: HtmlFocus| focus.activate(ActivationInput::Synthetic))
         .unwrap();
     world.flush();
     let names: Vec<String> = world

@@ -436,13 +436,19 @@ impl TestUi {
     /// Writes a left-button press window event and runs one frame.
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn press_pointer(&mut self) -> &mut Self {
+        self.mouse_button(MouseButton::Left, ButtonState::Pressed)
+    }
+
+    /// Writes a mouse button window event and runs one frame.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn mouse_button(&mut self, button: MouseButton, state: ButtonState) -> &mut Self {
         let window = self.window();
         self.app
             .world_mut()
             .resource_mut::<Messages<WindowEvent>>()
             .write(WindowEvent::MouseButtonInput(MouseButtonInput {
-                button: MouseButton::Left,
-                state: ButtonState::Pressed,
+                button,
+                state,
                 window,
             }));
         self.update(1)
@@ -451,16 +457,7 @@ impl TestUi {
     /// Writes a left-button release window event and runs one frame.
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn release_pointer(&mut self) -> &mut Self {
-        let window = self.window();
-        self.app
-            .world_mut()
-            .resource_mut::<Messages<WindowEvent>>()
-            .write(WindowEvent::MouseButtonInput(MouseButtonInput {
-                button: MouseButton::Left,
-                state: ButtonState::Released,
-                window,
-            }));
-        self.update(1)
+        self.mouse_button(MouseButton::Left, ButtonState::Released)
     }
 
     /// Moves the pointer to `position`, then presses and releases — each in

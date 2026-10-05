@@ -9,6 +9,8 @@
 
 mod common;
 
+use bevy::input::ButtonState;
+use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 use common::{TestUi, node_rect};
@@ -99,7 +101,16 @@ fn click_fires_press_release_and_click_with_payload_position_and_element() {
     assert_eq!(signal.element.tag, "div");
     assert_eq!(signal.element.id.as_deref(), Some("btn"));
     assert_eq!(signal.payload["n"].as_i64(), Some(3), "data-with rendered");
-    assert_eq!(signal.position, Some(at), "pointer position in viewport px");
+    assert_eq!(
+        signal.source,
+        SignalSource::Pointer {
+            pointer: PointerId::Mouse,
+            button: PointerButton::Primary,
+            position: at,
+            count: 1,
+        },
+        "mouse, primary button, viewport px"
+    );
 
     // Releasing fires click (first) and release, at the same position.
     ui.release_pointer();
@@ -114,7 +125,52 @@ fn click_fires_press_release_and_click_with_payload_position_and_element() {
         (signals[1].name.as_ref(), signals[1].trigger),
         ("up", SignalTrigger::Release)
     );
-    assert_eq!(signals[1].position, Some(at));
+    assert!(matches!(
+        signals[1].source,
+        SignalSource::Pointer { position, button: PointerButton::Primary, .. } if position == at
+    ));
+}
+
+/// As in browsers: `click` is the primary button only; middle and right
+/// clicks fire `auxclick`, with the button in the source. `press`/`release`
+/// fire for every button.
+#[test]
+fn other_buttons_auxclick_instead_of_click() {
+    let page = r#"<div id="btn" data-on-click="click" data-on-auxclick="aux"
+                         data-on-press="down"><p>Button</p></div>"#;
+    let mut ui = page_ui("signals-aux", page, "", TemplateContext::new());
+    ui.settle();
+    ui.update(1);
+    let root = ui.root();
+    let (_, at) = center(ui.world_mut(), root, "btn");
+    ui.move_pointer(at);
+    ui.take_signals();
+    for (mouse, button) in [
+        (MouseButton::Right, PointerButton::Secondary),
+        (MouseButton::Middle, PointerButton::Middle),
+    ] {
+        ui.mouse_button(mouse, ButtonState::Pressed);
+        ui.mouse_button(mouse, ButtonState::Released);
+        let signals: Vec<(String, SignalTrigger, Option<PointerButton>)> = ui
+            .take_signals()
+            .into_iter()
+            .map(|signal| {
+                let button = match signal.source {
+                    SignalSource::Pointer { button, .. } => Some(button),
+                    _ => None,
+                };
+                (signal.name.to_string(), signal.trigger, button)
+            })
+            .collect();
+        assert_eq!(
+            signals,
+            [
+                ("down".to_owned(), SignalTrigger::Press, Some(button)),
+                ("aux".to_owned(), SignalTrigger::AuxClick, Some(button)),
+            ],
+            "{mouse:?}: press and auxclick, no click"
+        );
+    }
 }
 
 /// Nested hooks: the deepest bound element under the pointer wins — but only
@@ -181,8 +237,11 @@ fn enter_and_leave_track_the_hovered_subtree() {
     names.sort_unstable();
     assert_eq!(names, ["enter-child", "enter-parent"]);
     assert!(
-        signals.iter().all(|s| s.position.is_none()),
-        "enter has no position"
+        signals.iter().all(|s| s.source
+            == SignalSource::Hover {
+                pointer: PointerId::Mouse
+            }),
+        "enter names the pointer"
     );
     let entered_child = signals
         .iter()
@@ -207,7 +266,10 @@ fn enter_and_leave_track_the_hovered_subtree() {
     let mut names: Vec<_> = signals.iter().map(|s| s.name.as_ref()).collect();
     names.sort_unstable();
     assert_eq!(names, ["leave-child", "leave-parent"]);
-    assert!(signals.iter().all(|s| s.position.is_none()));
+    assert!(signals.iter().all(|s| s.source
+        == SignalSource::Hover {
+            pointer: PointerId::Mouse
+        }));
 }
 
 /// Under a stationary cursor, a content update that keeps the hovered

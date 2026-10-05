@@ -134,6 +134,11 @@ bevy_markup implements a useful subset of the web, not all of it:
   and `tabindex` elements are focusable, `autofocus`, `:focus` /
   `:focus-visible` with `outline`, modal roots, and focus kept across
   rebuilds. You bind the input; bevy_markup moves focus and activates.
+- **Interaction signals:** `data-on-click` (primary button, or activation by
+  keyboard/gamepad), `data-on-auxclick` (middle/right), `-press`,
+  `-release`, `-enter`, `-leave`. Each message says what produced it: the
+  pointer (mouse, touch, a VR laser…) and button with the position, or the
+  key or gamepad button that activated the element.
 - **Custom elements:** `<div is="gcd-ring" data-slot="2">` runs your
   `define_html_element("gcd-ring", system)` with the element and its `data-*`
   attributes whenever it's built — attach materials, images or markers

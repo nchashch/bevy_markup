@@ -524,6 +524,8 @@ impl ModelState for UiModel {
             .map(|signal| {
                 let trigger = match signal.trigger {
                     SignalTrigger::Click => CLICK,
+                    // The model only presses the primary button.
+                    SignalTrigger::AuxClick => unreachable!("no other buttons"),
                     SignalTrigger::Press => PRESS,
                     SignalTrigger::Release => RELEASE,
                     SignalTrigger::Enter => ENTER,

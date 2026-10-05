@@ -15,12 +15,17 @@
 //! - `<div is="icon" data-src="…">` runs [`icon`], which inserts the image;
 //!   the volume meter is `style="width: {{ volume }}%"`. Changing a setting
 //!   updates the menu in place: focus and hover stay where they are.
+//! - Every signal says what produced it (`ElementSignal::source`): a pointer
+//!   and button, or the key / gamepad button the app passed to `activate`.
+//!   Right- or middle-clicking Volume (`data-on-auxclick`) lowers it; the
+//!   menu shows what produced the last click.
 //!
 //! `cargo run --example menu` — L switches the language (English/German),
 //! Esc closes the dialog.
 
 use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::math::CompassOctant;
+use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 
@@ -65,6 +70,8 @@ const DIFFICULTIES: [&str; 3] = ["easy", "normal", "hard"];
 struct Settings {
     volume: u32,
     difficulty: usize,
+    /// What produced the last click (a `menu-last-input` variant).
+    last_input: &'static str,
 }
 
 impl Default for Settings {
@@ -72,6 +79,7 @@ impl Default for Settings {
         Self {
             volume: 50,
             difficulty: 1,
+            last_input: "none",
         }
     }
 }
@@ -125,13 +133,22 @@ fn show_settings(settings: Res<Settings>, mut menus: Query<&mut TemplateContext,
     for mut context in &mut menus {
         context.insert("volume", &settings.volume);
         context.insert("difficulty", DIFFICULTIES[settings.difficulty]);
+        context.insert("last_input", settings.last_input);
     }
 }
 
 /// Keyboard and gamepad drive bevy_markup's focus; the mouse needs nothing.
-fn navigate(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut focus: HtmlFocus) {
-    let pressed = |key: KeyCode, button: GamepadButton| {
-        keys.just_pressed(key) || gamepads.iter().any(|pad| pad.just_pressed(button))
+/// Activation reports which input did it.
+fn navigate(
+    keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    mut focus: HtmlFocus,
+) {
+    let pad = |button: GamepadButton| {
+        gamepads
+            .iter()
+            .find(|(_, pad)| pad.just_pressed(button))
+            .map(|(gamepad, _)| ActivationInput::GamepadButton { gamepad, button })
     };
     for (key, button, direction) in [
         (
@@ -155,12 +172,36 @@ fn navigate(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut focu
             CompassOctant::East,
         ),
     ] {
-        if pressed(key, button) {
+        if keys.just_pressed(key) || pad(button).is_some() {
             focus.navigate(direction);
         }
     }
-    if pressed(KeyCode::Enter, GamepadButton::South) {
-        focus.activate();
+    let activation = if keys.just_pressed(KeyCode::Enter) {
+        Some(ActivationInput::Key(KeyCode::Enter))
+    } else {
+        pad(GamepadButton::South)
+    };
+    if let Some(input) = activation {
+        focus.activate(input);
+    }
+}
+
+/// The `menu-last-input` variant for a click's source.
+fn input_name(source: &SignalSource) -> &'static str {
+    match source {
+        SignalSource::Pointer {
+            pointer: PointerId::Touch(_),
+            ..
+        } => "touch",
+        SignalSource::Pointer { button, .. } => match button {
+            PointerButton::Primary => "mouse-primary",
+            PointerButton::Secondary => "mouse-secondary",
+            PointerButton::Middle => "mouse-middle",
+        },
+        SignalSource::Activation(ActivationInput::Key(_)) => "key",
+        SignalSource::Activation(ActivationInput::GamepadButton { .. }) => "gamepad",
+        SignalSource::Activation(ActivationInput::Synthetic) => "synthetic",
+        SignalSource::Activation(ActivationInput::Other) | SignalSource::Hover { .. } => "none",
     }
 }
 
@@ -178,6 +219,12 @@ fn handle_signals(
     mut commands: Commands,
 ) {
     for signal in signals.read() {
+        if matches!(
+            signal.trigger,
+            SignalTrigger::Click | SignalTrigger::AuxClick
+        ) {
+            settings.last_input = input_name(&signal.source);
+        }
         match (signal.name.as_ref(), signal.trigger) {
             ("tip", SignalTrigger::Enter) => {
                 let Some(key) = signal.payload["tip"].as_str() else {
@@ -200,6 +247,9 @@ fn handle_signals(
             ("volume", SignalTrigger::Click) => {
                 settings.volume = (settings.volume + 25) % 125;
             }
+            ("volume-down", SignalTrigger::AuxClick) => {
+                settings.volume = (settings.volume + 100) % 125;
+            }
             ("difficulty", SignalTrigger::Click) => {
                 settings.difficulty = (settings.difficulty + 1) % DIFFICULTIES.len();
             }
@@ -212,7 +262,10 @@ fn handle_signals(
             }
             (answer @ ("dialog-yes" | "dialog-no"), SignalTrigger::Click) => {
                 if answer == "dialog-yes" {
-                    *settings = Settings::default();
+                    *settings = Settings {
+                        last_input: settings.last_input,
+                        ..default()
+                    };
                 }
                 for dialog in &dialogs {
                     commands.entity(dialog).despawn();
