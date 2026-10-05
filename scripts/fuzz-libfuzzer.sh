@@ -1,6 +1,6 @@
 #!/bin/sh
 # cargo-fuzz (libFuzzer + AddressSanitizer) over bevy_markup::fuzz harnesses.
-# Usage: scripts/fuzz-libfuzzer.sh <html|css|ftl> [seconds]
+# Usage: scripts/fuzz-libfuzzer.sh <html|css|ftl> [seconds] [libFuzzer flags...]
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -9,6 +9,7 @@ case "${1:-}" in
     *) echo "usage: $0 <html|css|ftl> [seconds=60]" >&2; exit 2 ;;
 esac
 duration=${2:-60}
+shift $(( $# < 2 ? $# : 2 ))
 # CI pins a dated nightly (BEVY_MARKUP_NIGHTLY, see nightly.yml) so its build caches
 # survive across days; locally, the current nightly.
 toolchain=${BEVY_MARKUP_NIGHTLY:-nightly}
@@ -23,4 +24,4 @@ host=$(rustc "+$toolchain" -vV | sed -n 's/^host: //p')
 mkdir -p "fuzz/corpus/$target"
 exec cargo "+$toolchain" fuzz run --target "$host" "$target" \
     "fuzz/corpus/$target" "fuzz/seeds/$target" -- \
-    -max_total_time="$duration" -max_len=65536
+    -max_total_time="$duration" -max_len=65536 "$@"

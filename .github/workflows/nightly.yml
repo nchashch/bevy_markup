@@ -126,9 +126,9 @@ jobs:
           path: target/coverage/
 
   fuzz:
-    name: Fuzz ${{ matrix.target }} (cargo-fuzz, 5 min)
+    name: Fuzz ${{ matrix.target }} (cargo-fuzz, 15 min)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     # The corpus persists across nights as a GitHub cache: each run restores
     # the newest `fuzz-corpus-<target>-*` entry, fuzzes on from there and
     # saves a new entry (also after a crash). Old entries age out after 7
@@ -171,9 +171,13 @@ jobs:
           host=$(rustc -vV | sed -n 's/^host: //p')
           (cd fuzz && cargo "+$BEVY_MARKUP_NIGHTLY" fuzz cmin --target "$host" ${{ matrix.target }})
           echo "corpus minimized: $before → $(count) inputs"
+      # 15 min per target (minutes are free for public repos). libFuzzer's
+      # default 2 GB RSS limit would be hit by memory that only grows with
+      # the run (corpus, ASan quarantine): css reached 1 GB after 5 min.
+      # 4 GB of the runner's 16 GB; a real leak still fails, just later.
       - name: Fuzz
         run: |
-          scripts/fuzz-libfuzzer.sh ${{ matrix.target }} 300
+          scripts/fuzz-libfuzzer.sh ${{ matrix.target }} 900 -rss_limit_mb=4096
           echo "corpus: $(find fuzz/corpus/${{ matrix.target }} -type f | wc -l) inputs"
       - name: Save the corpus for the next run
         if: always()

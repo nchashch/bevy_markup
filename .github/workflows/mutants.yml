@@ -1,4 +1,4 @@
-# Weekly mutation testing (AGENTS.md Testing TODO 6), sharded so each job
+# Twice-weekly mutation testing (AGENTS.md Testing TODO 6), sharded so each job
 # fits the runner's time limit. Informational: it never fails on surviving
 # mutants (some are documented equivalents); survivors are listed in each
 # shard's job summary and uploaded, to be triaged into tests or notes.
@@ -11,7 +11,7 @@ name: Mutants
 
 on:
   schedule:
-    - cron: "41 2 * * 0"
+    - cron: "41 2 * * 0,3" # Sundays and Wednesdays
   workflow_dispatch:
 
 env:

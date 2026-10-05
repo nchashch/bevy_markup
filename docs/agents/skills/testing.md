@@ -347,7 +347,7 @@ cargo-mutants makes small changes to the library code and reports any that no
 test catches.
 
 - `scripts/mutants.sh` runs unit + `html_ui` + `stateful` (the same set as
-  the weekly CI run); `--full` adds the property suites; `--file src/x.rs`
+  the CI run); `--full` adds the property suites; `--file src/x.rs`
   narrows it. Results land in `target/mutants.out/`
   (`caught/missed/timeout/unviable.txt`); reruns skip caught mutants.
 - It's fast because of three measured settings (see `[profile.mutants]` in
@@ -370,7 +370,7 @@ Triage every survivor: write a test that catches it, or document in
 `AGENTS.md` (Testing TODO 6) why the mutant changes no behaviour (typically:
 it only changes whether a `debug!` line is logged). Copy survivors into
 `AGENTS.md`: `target/mutants.out/` is overwritten by every run. For the
-weekly CI run: `gh run download <run-id>` and read each shard's
+twice-weekly CI run: `gh run download <run-id>` and read each shard's
 `missed.txt`.
 
 ## Coverage (`scripts/coverage.py`)
@@ -456,11 +456,11 @@ reporting upstream or removing a vendored patch.
   warning-free checks, `cargo test`, the `fuzzing`-feature tests, and that
   `fluent.html` matches what the script generates.
 - `nightly.yml`: golden images on Ubuntu's lavapipe, the browser oracle
-  against the runner's Chrome, 5 min of cargo-fuzz per target, and builds of
+  against the runner's Chrome, 15 min of cargo-fuzz per target (RSS limit raised to 4 GB), and builds of
   the other fuzz drivers. Failures are reports to triage, not blockers. The
   fuzz corpora carry over between nights (GitHub cache
   `fuzz-corpus-<target>-*`, minimized with `cargo fuzz cmin` on Sundays).
-- `mutants.yml` (weekly, 4 shards): informational. Survivors are in each
+- `mutants.yml` (Sundays and Wednesdays, 4 shards): informational. Survivors are in each
   shard's job summary and the `mutants-shard-N` artifacts.
 - `cache.yml` (every push to main, and daily before the schedules): builds
   dependency caches once so jobs don't each build Bevy from scratch.

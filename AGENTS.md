@@ -87,9 +87,9 @@ tests/
 .github/workflows/
   ci.yml           per push to main / PR: -D warnings check/build/doc, cargo test, fuzzing-feature
                    tests, Fluent oracle references current
-  nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 5 min
+  nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 15 min
                    cargo-fuzz per target, other fuzz drivers build (fuzz on pinned BEVY_MARKUP_NIGHTLY)
-  mutants.yml      weekly mutation testing, 4 shards, --in-place, fast settings, informational
+  mutants.yml      twice-weekly mutation testing, 4 shards, --in-place, fast settings, informational
   cache.yml        builds the shared `mutants` and `fuzz` dependency caches once (push to main,
                    daily); scheduled jobs only restore them (see Testing, CI)
 scripts/
@@ -623,7 +623,7 @@ known gaps:
   without debug info (4.6 s vs 4.2 s rebuild of all targets, 68 s vs 65 s
   cold). The main CI job is ~3–4 min with a warm cache (build 37 s, tests
   ~38 s).
-  - [ ] Complete a `--full` run locally, or read the weekly CI results
+  - [ ] Complete a `--full` run locally, or read the CI results (twice weekly)
     (`mutants.yml`: unit + html_ui + stateful, 4 shards; survivors in each
     shard's job summary and the `mutants-shard-N` artifacts). Line numbers
     below are from `e1b910c`.
@@ -707,7 +707,7 @@ known gaps:
     struct-field-deletion mutants (they always run); harmless, but a
     targeted rerun takes ~10 min instead of ~2.
   - [ ] After the full run: triage any new survivors the same way.
-  - [x] Scheduled in CI: `.github/workflows/mutants.yml`, weekly (Sundays),
+  - [x] Scheduled in CI: `.github/workflows/mutants.yml`, twice weekly (Sundays and Wednesdays; weekly until the repo went public),
     informational — it never fails on survivors, since the documented
     equivalents always survive.
   - Proptest regression seeds written while planting bugs by hand
@@ -821,7 +821,7 @@ Next steps (roughly in order of value):
   if Ubuntu's Mesa renders differently beyond the tolerance, the job uploads
   `golden-diffs`), checks `browser.json` against the runner's Chrome
   (ignoring the generator line; a failure means Chrome changed or a vector
-  is stale), fuzzes each cargo-fuzz target for 5 min and builds the other
+  is stale), fuzzes each cargo-fuzz target for 15 min (`-rss_limit_mb=4096`) and builds the other
   fuzz drivers. Nightly failures are reports to triage, not merge blockers.
   Fuzz corpora persist across nights as GitHub caches
   (`fuzz-corpus-<target>-<run>`; restored from the newest, saved after

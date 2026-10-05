@@ -256,9 +256,9 @@ bug is filed.
   in every configuration, all tests must pass, the docs must build, and the
   committed Fluent references must be current.
 - **Nightly:** golden images, the Chrome oracle against the current
-  browser, 5 minutes of fuzzing per target (continuing from the previous
+  browser, 15 minutes of fuzzing per target (continuing from the previous
   night), and a coverage report you can download as a browsable HTML page.
-- **Weekly:** a full mutation-testing run, split over four parallel jobs.
+- **Twice a week:** a full mutation-testing run, split over four parallel jobs.
 
 Dependency builds are cached and shared between jobs, so most jobs spend
 their time testing rather than compiling Bevy.
