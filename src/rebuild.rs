@@ -8,9 +8,10 @@
 //!   falls back to the `DefaultStylesheet`; a failed (or no) default means
 //!   unstyled. A sheet still loading that would be used defers the update:
 //!   the UI never flashes unstyled. So does a document still rendering.
-//! - Structure changes (template output, translations, outline) rebuild the
-//!   children; style changes (stylesheets, their images, fonts) restyle the
-//!   existing children in place. An entity never built yet builds; when both
+//! - Structure changes (template output, translations, outline) update the
+//!   children for the new document; style changes (stylesheets, their
+//!   images, fonts) restyle them. Both reconcile in place (`build.rs`); the
+//!   decision picks the event and the stylesheet. An entity never built yet builds; when both
 //!   kinds are pending, the rebuild wins.
 //! - Any change updates, at once or — if it arrives while a needed sheet is
 //!   loading — the frame that sheet resolves (ready *or* failed). Asset
@@ -63,7 +64,7 @@ pub(crate) enum Source {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Decision {
-    /// Despawn and respawn the children, styled from this source.
+    /// Update the children for new content, styled from this source.
     Build(Source),
     /// Restyle the existing children from this source.
     Restyle(Source),

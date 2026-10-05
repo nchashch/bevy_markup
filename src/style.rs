@@ -32,6 +32,11 @@
 //!   `%` of the node's smaller side as Bevy does), `z-index` (an integer →
 //!   `ZIndex` among siblings; `auto` = 0). An app's own `BorderColor` /
 //!   `ZIndex` / `Pickable` is left alone unless a rule sets it.
+//! - `opacity` (a number or `%`): CSS group opacity, approximated by
+//!   multiplying the alpha of every color in the element's subtree (text,
+//!   backgrounds, borders, outlines, `border-image` tint) by the product of
+//!   the element's and its ancestors' opacities. App-attached images aren't
+//!   faded.
 //! - layout on blocks, containers and the root rule: `display` (`none`, `block`, `flex`,
 //!   `grid`), `flex-direction`, `flex-wrap`, `flex-flow`, `justify-content`,
 //!   `align-items`, `align-content`, `align-self`, `justify-items`,
@@ -59,6 +64,11 @@
 //!   doesn't parse (lightningcss); write `row dense`.
 //! - cascade: `!important` beats normal declarations, then higher specificity
 //!   (ids, classes, type) wins, then the later rule
+//! - the `style` attribute (any element, the `<html>` root included): its
+//!   declarations beat every normal rule and lose to `!important` rules
+//!   unless `!important` themselves, as in CSS. Rendered by Tera like any
+//!   attribute, so templated values (`style="width: {{ hp }}%"`) update the
+//!   element in place.
 //! - the root rule styles the `HtmlUi` node itself: the `html` rule, plus
 //!   the document's own top-level `<html id="…" class="…">` if it has one
 //!   (so each template can style its root: `<html class="hud">` with

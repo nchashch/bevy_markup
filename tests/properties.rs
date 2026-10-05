@@ -88,6 +88,69 @@ fn restyle_matches_a_fresh_build(
     prop_assert_eq!(swapped.settle().dump(), fresh.settle().dump());
 }
 
+/// Fragments for [`content_update_matches_a_fresh_build`]: keyed and
+/// unkeyed elements, an `id` reused with another tag, nested containers,
+/// rich text, signals and inline styles.
+const FRAGMENTS: &[&str] = &[
+    r#"<p id="a">A</p>"#,
+    r#"<p id="a">A changed</p>"#,
+    r#"<section id="a"><p>A as a section</p></section>"#,
+    "<p>loose</p>",
+    "<p>Plain <b>bold</b> tail</p>",
+    r#"<div id="d"><p>one</p><p>two</p></div>"#,
+    r#"<div id="d"><p>two</p></div>"#,
+    r#"<div class="box"><p>boxed</p></div>"#,
+    "<ul><li>i</li><li>j</li></ul>",
+    r#"<div id="btn" data-on-click="go" data-with='{"n": 1}'><p>Go</p></div>"#,
+    r#"<p style="color: #ff0000; opacity: 0.5">styled</p>"#,
+];
+
+/// Updating the content in place never disagrees with building: rendering
+/// document A and then B gives exactly the world a fresh build of B gives,
+/// whatever was kept, replaced, inserted or removed on the way.
+#[proptest(cases = 48)]
+fn content_update_matches_a_fresh_build(
+    #[strategy(proptest::collection::vec(0..FRAGMENTS.len(), 0..6))] a: Vec<usize>,
+    #[strategy(proptest::collection::vec(0..FRAGMENTS.len(), 0..6))] b: Vec<usize>,
+) {
+    let doc = |picks: &[usize]| picks.iter().map(|&i| FRAGMENTS[i]).collect::<String>();
+    let page = "{{ doc | safe }}";
+    let css = "html { color: #ffffff } .box { padding: 4px; background-color: #102030 } \
+               b { color: #00ff00 } #a { color: #0000ff }";
+    let mut updated = TestUi::new("prop-update", &[("page.html", page), ("style.css", css)])
+        .stylesheet("style.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("doc", &doc(&a)),
+            Node::default(),
+        );
+    updated.settle();
+    let root = updated.root();
+    updated
+        .world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("doc", &doc(&b));
+    let mut fresh = TestUi::new(
+        "prop-update-fresh",
+        &[("page.html", page), ("style.css", css)],
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("doc", &doc(&b)),
+        Node::default(),
+    );
+    let expected = fresh.settle().dump();
+    // An identical render builds nothing, so only settle on a change.
+    let actual = if doc(&a) == doc(&b) {
+        updated.settle_quiet().dump()
+    } else {
+        updated.settle().dump()
+    };
+    prop_assert_eq!(actual, expected);
+}
+
 /// `padding: T R` builds the same world as the four longhands.
 #[proptest(cases = 24)]
 fn padding_shorthand_equals_longhands(#[strategy(0u8..40)] t: u8, #[strategy(0u8..40)] r: u8) {

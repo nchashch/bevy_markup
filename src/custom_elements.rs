@@ -62,11 +62,17 @@ impl ElementConnected {
 }
 
 /// An element's `is` name and dataset, parsed while collecting the DOM.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CustomElement {
     pub(crate) name: String,
     pub(crate) dataset: HashMap<String, String>,
 }
+
+/// What a spawned custom element was connected as: an in-place update
+/// keeps the entity (and what its definition attached) only while this is
+/// unchanged; a different `is` or dataset spawns a new element.
+#[derive(Component)]
+pub(crate) struct ConnectedAs(pub(crate) CustomElement);
 
 /// `tag`'s `is` attribute and dataset, if it names a definition.
 pub(crate) fn custom_element(tag: &tl::HTMLTag) -> Option<CustomElement> {

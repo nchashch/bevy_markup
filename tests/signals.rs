@@ -210,18 +210,18 @@ fn enter_and_leave_track_the_hovered_subtree() {
     assert!(signals.iter().all(|s| s.position.is_none()));
 }
 
-/// A rebuild under a stationary cursor despawns the hovered element; the
-/// `leave` still fires, from the snapshot taken at enter — and the rebuilt
-/// element under the same pointer enters afresh.
+/// Under a stationary cursor, a content update that keeps the hovered
+/// element (new text) emits nothing. One that replaces it (another tag)
+/// despawns it: its `leave` still fires, from the snapshot taken at enter —
+/// and the new element under the same pointer enters afresh.
 #[test]
-fn a_rebuild_under_the_cursor_emits_the_snapshot_leave() {
-    let page =
-        r#"<div id="btn" data-on-enter="enter" data-on-leave="leave"><p>Hi {{ n }}</p></div>"#;
+fn a_replacement_under_the_cursor_emits_the_snapshot_leave() {
+    let page = r#"<{{ tag }} id="btn" data-on-enter="enter" data-on-leave="leave"><p>Hi {{ n }}</p></{{ tag }}>"#;
     let mut ui = page_ui(
         "signals-rebuild",
         page,
         "",
-        TemplateContext::new().with("n", &1),
+        TemplateContext::new().with("n", &1).with("tag", "div"),
     );
     ui.settle();
     let root = ui.root();
@@ -237,11 +237,20 @@ fn a_rebuild_under_the_cursor_emits_the_snapshot_leave() {
         (SignalTrigger::Enter, btn)
     );
 
-    // A content change rebuilds; the old entities are replaced.
+    // New text: updated in place, still hovered, no signals.
     ui.world_mut()
         .get_mut::<TemplateContext>(root)
         .unwrap()
         .insert("n", &2);
+    let signals = ui.update_collecting_signals(3);
+    assert!(signals.is_empty(), "kept in place: {signals:?}");
+    assert_eq!(center(ui.world_mut(), root, "btn").0, btn);
+
+    // Another tag: the element is replaced.
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("tag", "section");
     let signals = ui.update_collecting_signals(3);
 
     let leaves: Vec<&ElementSignal> = signals

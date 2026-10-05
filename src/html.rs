@@ -3,9 +3,11 @@
 //! Spawn [`HtmlUi`] with a template handle; its required components
 //! ([`Node`], [`TemplateContext`], [`RenderedHtml`], …) are added for you, so
 //! override any of them in the same bundle. The entity's children are owned by
-//! the pipeline: they're despawned and rebuilt whenever the template, context
-//! or locale change ([`HtmlUiBuilt`]), and restyled in place when the
-//! stylesheet or fonts change ([`HtmlUiRestyled`]).
+//! the pipeline. When the template, context or locale change, the new
+//! document is reconciled with them ([`HtmlUiBuilt`]): an element still there
+//! — matched by `id`, else by position — is updated in place, keeping its
+//! entity and what the app attached; the rest are despawned and spawned.
+//! Stylesheet and font changes restyle them in place ([`HtmlUiRestyled`]).
 //!
 //! Tags decide structure:
 //! - blocks: `h1`–`h6`, `p`, `li` (bulleted), `pre` (whitespace and line breaks
@@ -134,11 +136,13 @@ impl HtmlElement {
     }
 }
 
-/// Fired on an [`HtmlUi`] entity after its children were (re)built. Children
-/// are replaced on every rebuild — template, context, locale or outline
-/// changes — so attach behaviour (observers, components) here rather than
-/// once at spawn. Style-only changes restyle the existing children instead
-/// and fire [`HtmlUiRestyled`].
+/// Fired on an [`HtmlUi`] entity after its children were built or updated
+/// for new content (template, context, locale or outline), or after a
+/// restyle that had to spawn elements. Elements still in the document keep
+/// their entities, but new ones may have appeared, so attach behaviour
+/// (observers, components) here rather than once at spawn — or declare it
+/// with [custom elements](crate::custom_elements), which run only for new
+/// elements.
 ///
 /// ```no_run
 /// # use bevy::prelude::*;
@@ -159,11 +163,10 @@ pub struct HtmlUiBuilt {
 
 /// Fired on an [`HtmlUi`] entity after a style-only change (stylesheet swap
 /// or reload, a frame image loading, `FontFamilies`) restyled its existing
-/// children in place. The entities — and whatever the app attached to them
-/// on [`HtmlUiBuilt`] — are kept, so there's nothing to re-wire. When the
-/// new styles need a different node structure (e.g. box properties appearing
-/// on a block, which then needs a wrapper node), the children are rebuilt
-/// and [`HtmlUiBuilt`] fires instead.
+/// children in place. Every entity — and whatever the app attached to it —
+/// was kept, so there's nothing to re-wire. When the new styles need new
+/// nodes (e.g. box properties appearing on a block, which then needs a
+/// wrapper node), [`HtmlUiBuilt`] fires instead.
 #[derive(EntityEvent, Clone, Copy, Debug)]
 pub struct HtmlUiRestyled {
     pub entity: Entity,

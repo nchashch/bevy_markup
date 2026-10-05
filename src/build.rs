@@ -6,8 +6,8 @@ use bevy::asset::{AssetEvent, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
-use crate::cascade::{HtmlStyles, LayoutDecl, OutlineDecl, Pseudo, SliceValue};
-use crate::custom_elements::{self, CustomElement, ElementConnected};
+use crate::cascade::{self, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue};
+use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
 use crate::fonts::FontFamilies;
 use crate::html::{
@@ -35,6 +35,18 @@ pub(crate) struct Style {
     pub(crate) italic: bool,
     /// `pointer-events: auto` (`false` = `none`); inherited, as in CSS.
     pub(crate) pointer_events: bool,
+    /// The product of the element's and its ancestors' `opacity`: CSS group
+    /// opacity, applied by fading every color of the subtree ([`faded`]).
+    pub(crate) opacity: f32,
+}
+
+/// `color` with its alpha scaled by `opacity`.
+pub(crate) fn faded(color: Color, opacity: f32) -> Color {
+    if opacity >= 1.0 {
+        color
+    } else {
+        color.with_alpha(color.alpha() * opacity)
+    }
 }
 
 /// A stretch of text in one style.
@@ -127,9 +139,29 @@ pub(crate) struct BoxStyle {
     pub(crate) drawn_outline: Option<Outline>,
     /// Not part of `is_empty`: a `Text` node takes these itself.
     pub(crate) layout: LayoutDecl,
+    /// The `border-image` frame's tint alpha (`opacity`); `None` = opaque.
+    pub(crate) image_alpha: Option<f32>,
 }
 
 impl BoxStyle {
+    /// Applies the element's effective `opacity` to its box colors (the
+    /// resolved outline included, so call after [`BoxStyle::outline`]).
+    pub(crate) fn fade(&mut self, opacity: f32) {
+        if opacity >= 1.0 {
+            return;
+        }
+        if let Some(background) = &mut self.background {
+            *background = faded(*background, opacity);
+        }
+        for color in self.border_color.iter_mut().flatten() {
+            *color = faded(*color, opacity);
+        }
+        if let Some(outline) = &mut self.drawn_outline {
+            outline.color = faded(outline.color, opacity);
+        }
+        self.image_alpha = Some(opacity);
+    }
+
     fn is_empty(&self) -> bool {
         self.border.iter().all(Option::is_none)
             && self.padding.iter().all(Option::is_none)
@@ -141,6 +173,7 @@ impl BoxStyle {
         let (image, slicer) = self.image.as_ref()?;
         Some(ImageNode {
             visual_box: VisualBox::BorderBox,
+            color: Color::WHITE.with_alpha(self.image_alpha.unwrap_or(1.0)),
             ..ImageNode::new(image.clone()).with_mode(NodeImageMode::Sliced(slicer.clone()))
         })
     }
@@ -225,15 +258,17 @@ pub(crate) struct Styler<'a> {
 }
 
 impl Styler<'_> {
-    /// `element`'s computed style: its declared values over `inherited`.
-    /// `pseudo` is the element's interaction state (`:hover`/`:active`).
+    /// `element`'s computed style: its declared values (with its `style`
+    /// attribute, `inline`) over `inherited`. `pseudo` is the element's
+    /// interaction state (`:hover`/`:active`).
     pub(crate) fn style_of(
         &self,
         element: &HtmlElement,
         inherited: Style,
         pseudo: Pseudo,
+        inline: Option<&InlineStyle>,
     ) -> Style {
-        let declared = self.styles.get(element, pseudo);
+        let declared = self.styles.get_with(element, pseudo, inline);
         Style {
             color: declared.color.unwrap_or(inherited.color),
             // A declared list with no registered family falls back to the
@@ -248,6 +283,7 @@ impl Styler<'_> {
             bold: declared.bold.unwrap_or(inherited.bold),
             italic: declared.italic.unwrap_or(inherited.italic),
             pointer_events: declared.pointer_events.unwrap_or(inherited.pointer_events),
+            opacity: inherited.opacity * declared.opacity.unwrap_or(1.0),
         }
     }
 
@@ -274,8 +310,13 @@ impl Styler<'_> {
 
     /// `element`'s box properties. A `border-image` whose `%` slices need the
     /// image size is skipped until the image has loaded (its load rebuilds).
-    pub(crate) fn box_of(&self, element: &HtmlElement, pseudo: Pseudo) -> BoxStyle {
-        let declared = self.styles.get(element, pseudo);
+    pub(crate) fn box_of(
+        &self,
+        element: &HtmlElement,
+        pseudo: Pseudo,
+        inline: Option<&InlineStyle>,
+    ) -> BoxStyle {
+        let declared = self.styles.get_with(element, pseudo, inline);
         let image = declared.border_image.as_ref().and_then(|decl| {
             let url = decl.source.as_ref()?.as_ref()?;
             let handle = self.sheet?.image(url)?;
@@ -326,6 +367,7 @@ impl Styler<'_> {
             outline: declared.outline,
             drawn_outline: None,
             layout: declared.layout.clone(),
+            image_alpha: None,
         }
     }
 }
@@ -337,6 +379,7 @@ pub(crate) fn root_style(
     fonts: &FontFamilies,
     images: &Assets<Image>,
     root: &HtmlElement,
+    inline: Option<&InlineStyle>,
 ) -> Style {
     let defaults = Style {
         color: DEFAULT_COLOR,
@@ -345,6 +388,7 @@ pub(crate) fn root_style(
         bold: false,
         italic: false,
         pointer_events: true,
+        opacity: 1.0,
     };
     Styler {
         styles,
@@ -353,18 +397,21 @@ pub(crate) fn root_style(
         sheet: None,
         images,
     }
-    .style_of(root, defaults, Pseudo::default())
+    .style_of(root, defaults, Pseudo::default(), inline)
 }
 
-/// The element the `HtmlUi` node itself is styled as: the document's
-/// top-level `<html>` (with its `id`/`class`), or a bare `html` for
-/// fragments.
-pub(crate) fn root_element(dom: &tl::VDom) -> HtmlElement {
+/// The element the `HtmlUi` node itself is styled as, with its `style`
+/// attribute: the document's top-level `<html>` (with its `id`/`class`), or
+/// a bare `html` for fragments.
+pub(crate) fn root_element(dom: &tl::VDom) -> (HtmlElement, Option<InlineStyle>) {
     dom.children()
         .iter()
         .filter_map(|handle| handle.get(dom.parser())?.as_tag())
         .find(|tag| tag.name().as_utf8_str().eq_ignore_ascii_case("html"))
-        .map_or_else(|| element_tag("html"), element_of)
+        .map_or_else(
+            || (element_tag("html"), None),
+            |tag| (element_of(tag), cascade::inline_style(tag)),
+        )
 }
 
 pub(crate) fn build_html_ui(
@@ -465,13 +512,11 @@ pub(crate) fn build_html_ui(
         };
         decisions.push((entity, rebuild.decide(frame)));
     }
-    // Every UI rebuilding this frame: its `despawn_related` replaces the
-    // whole subtree, nested `HtmlUi`s included.
-    let rebuilding: HashSet<Entity> = decisions
-        .iter()
-        .filter(|(_, decision)| matches!(decision, Decision::Build(_)))
-        .map(|(entity, _)| *entity)
-        .collect();
+    // Deepest UIs first: a nested `HtmlUi`'s commands are queued before an
+    // ancestor's, so an ancestor update that despawns the element holding it
+    // comes after them (and one that keeps it keeps the nested UI updated).
+    let depth = |entity: Entity| parents.iter_ancestors(entity).count();
+    decisions.sort_by_key(|(entity, _)| std::cmp::Reverse(depth(*entity)));
 
     for (entity, decision) in decisions {
         let (source, restyle) = match decision {
@@ -479,21 +524,6 @@ pub(crate) fn build_html_ui(
             Decision::Build(source) => (source, false),
             Decision::Restyle(source) => (source, true),
         };
-        // An ancestor rebuilding this frame despawns this UI with its
-        // subtree (children are replaced wholesale), so acting here — build
-        // or restyle — would queue commands on despawned entities. Whatever
-        // this UI decided is moot; an app that nests UIs is expected to
-        // re-nest them on `HtmlUiBuilt`.
-        let mut ancestor = Some(entity);
-        let suppressed = std::iter::from_fn(|| {
-            ancestor = parents.get(ancestor?).ok().map(|parent| parent.0);
-            ancestor
-        })
-        .any(|parent| rebuilding.contains(&parent));
-        if suppressed {
-            debug!("html ui: {entity} is nested under a rebuilding UI; skipped");
-            continue;
-        }
         let Ok((_, rendered, localized, own_sheet, outline, _rebuild)) = views.get(entity) else {
             continue;
         };
@@ -506,11 +536,17 @@ pub(crate) fn build_html_ui(
         let styles = css
             .map(|css| HtmlStyles::from_sheet(css.sheet()))
             .unwrap_or_default();
-        let root_element = match (&*rendered, &outline) {
+        let (root_element, root_inline) = match (&*rendered, &outline) {
             (RenderedHtml::Ready(document), None) => root_element(document.dom()),
-            _ => element_tag("html"),
+            _ => (element_tag("html"), None),
         };
-        let root = root_style(&styles, &fonts, &images, &root_element);
+        let root = root_style(
+            &styles,
+            &fonts,
+            &images,
+            &root_element,
+            root_inline.as_ref(),
+        );
         let styler = Styler {
             styles: &styles,
             fonts: &fonts,
@@ -519,7 +555,8 @@ pub(crate) fn build_html_ui(
             images: &images,
         };
 
-        let root_box = styler.box_of(&root_element, Pseudo::default());
+        let mut root_box = styler.box_of(&root_element, Pseudo::default(), root_inline.as_ref());
+        root_box.fade(root.opacity);
         // Nested containers space their children like the root does.
         let default_gap = match root_box.row_gap {
             Some(gap) => Val::Px(gap),
@@ -572,7 +609,7 @@ pub(crate) fn build_html_ui(
                 }
                 RenderedHtml::Failed(message) => format!("failed to render: {message}"),
             };
-            let style = styler.style_of(&element_tag("pre"), root, Pseudo::default());
+            let style = styler.style_of(&element_tag("pre"), root, Pseudo::default(), None);
             vec![Item::Block(Block {
                 kind: BlockKind::Paragraph,
                 element: None,
@@ -611,50 +648,29 @@ pub(crate) fn build_html_ui(
             .into_iter()
             .map(|item| item_spec(&styler, item, default_gap))
             .collect();
-        let children: Vec<Entity> = tree
-            .get(entity)
-            .ok()
-            .and_then(|(children, ..)| children)
-            .map_or_else(Vec::new, |children| children.to_vec());
-        // Restyle in place when the existing children have the spec's shape;
-        // otherwise (e.g. CSS added box properties, which need a wrapper)
-        // rebuild.
-        if restyle
-            && children.len() == specs.len()
-            && children
-                .iter()
-                .zip(&specs)
-                .all(|(child, spec)| same_shape(spec, *child, &tree))
-        {
-            for (child, spec) in children.into_iter().zip(specs) {
-                apply_spec(&mut commands, child, spec, &tree);
-            }
+        // Content changes and restyles alike update the existing children in
+        // place where they still match, spawning and despawning only what
+        // differs.
+        let mut connected = Vec::new();
+        let spawned = update_children(&mut commands, entity, specs, &tree, entity, &mut connected);
+        // After the spawns, before `HtmlUiBuilt`: its observers see what the
+        // definitions attached.
+        for element in connected {
+            commands.queue(move |world: &mut World| custom_elements::connect(world, element));
+        }
+        // `HtmlUiRestyled` promises every element (and what the app attached)
+        // was kept; anything else is a build.
+        if restyle && !spawned {
             commands.trigger(HtmlUiRestyled { entity });
         } else {
-            let mut connected = Vec::new();
-            commands
-                .entity(entity)
-                .despawn_related::<Children>()
-                .with_children(|parent| {
-                    for spec in specs {
-                        spawn_spec(parent, spec, entity, &mut connected);
-                    }
-                });
-            // After the spawns, before `HtmlUiBuilt`: its observers see what
-            // the definitions attached.
-            for element in connected {
-                commands.queue(move |world: &mut World| custom_elements::connect(world, element));
-            }
-            commands
-                .entity(entity)
-                .trigger(|entity| HtmlUiBuilt { entity });
+            commands.trigger(HtmlUiBuilt { entity });
         }
     }
 }
 
 /// What one UI node should be, computed from the item tree, then spawned
-/// ([`spawn_spec`]) or applied onto an existing entity of the same shape
-/// ([`apply_spec`]): one description for both builds and restyles.
+/// ([`spawn_spec`]) or applied onto a matching existing entity
+/// ([`update_spec`]): one description for builds, updates and restyles.
 struct NodeSpec {
     node: Node,
     element: Option<HtmlElement>,
@@ -779,14 +795,14 @@ fn apply_css_owned(
 }
 
 /// Marks an element whose `ImageNode` is its CSS `border-image` frame, i.e.
-/// owned by the pipeline. [`same_shape`] compares this marker, not
-/// `ImageNode` itself, so an `ImageNode` the app inserted on a built element
-/// (an icon, say) is app state like any other component: restyles keep it
-/// instead of rebuilding.
+/// owned by the pipeline. [`update_spec`] removes a frame only when it
+/// carries this marker, so an `ImageNode` the app inserted on a built
+/// element (an icon, say) is app state like any other component: updates
+/// keep it.
 #[derive(Component)]
 pub(crate) struct CssFrame;
 
-/// The existing children's structure, for [`same_shape`] and [`apply_spec`].
+/// The existing children's structure and identity, for [`update_children`].
 type Tree<'w, 's> = Query<
     'w,
     's,
@@ -794,7 +810,8 @@ type Tree<'w, 's> = Query<
         Option<&'static Children>,
         Has<Text>,
         Has<TextSpan>,
-        Has<HtmlElement>,
+        Option<&'static HtmlElement>,
+        Option<&'static ConnectedAs>,
         Has<CssFrame>,
         Has<HtmlUi>,
     ),
@@ -885,12 +902,15 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             _ => "",
         },
         font: styler.text_font(block.style),
-        color: block.style.color,
+        color: faded(block.style.color, block.style.opacity),
         no_wrap: matches!(block.kind, BlockKind::Preformatted),
         spans: block
             .runs
             .into_iter()
-            .map(|run| (run.text, styler.text_font(run.style), run.style.color))
+            .map(|run| {
+                let color = faded(run.style.color, run.style.opacity);
+                (run.text, styler.text_font(run.style), color)
+            })
             .collect(),
     };
 
@@ -963,15 +983,17 @@ fn spawn_spec(
     spec: NodeSpec,
     root: Entity,
     connected: &mut Vec<ElementConnected>,
-) {
+) -> Entity {
     let mut entity = parent.spawn(spec.node);
+    let id = entity.id();
     if let Some(custom) = spec.custom {
         connected.push(ElementConnected {
-            entity: entity.id(),
+            entity: id,
             root,
-            name: custom.name,
-            dataset: custom.dataset,
+            name: custom.name.clone(),
+            dataset: custom.dataset.clone(),
         });
+        entity.insert(ConnectedAs(custom));
     }
     if let Some(element) = spec.element {
         entity.insert(element);
@@ -983,9 +1005,8 @@ fn spawn_spec(
         entity.insert(focusable);
     }
     if !spec.signals.is_empty() {
-        let signals = ElementSignals(spec.signals);
-        signals::attach_pointer_signals(&mut entity, &signals);
-        entity.insert(signals);
+        signals::observe_pointer_signals(&mut entity);
+        entity.insert(ElementSignals(spec.signals));
     }
     if let Some(background) = spec.background {
         entity.insert(BackgroundColor(background));
@@ -1026,65 +1047,167 @@ fn spawn_spec(
             });
         }
     }
+    id
 }
 
-/// Whether `entity` (an existing child) has the structure `spec` would
-/// spawn: the same text/element/frame presence, span count and children.
-/// Children the app attached — nested `HtmlUi` roots — aren't the spec's:
-/// restyles keep them (and their subtrees), rebuilds replace them
-/// wholesale.
-fn same_shape(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
-    let Ok((children, has_text, _, has_element, has_frame, _is_ui)) = tree.get(entity) else {
+/// Whether the existing child `entity` can become `spec` in place: the same
+/// node kind (text block or not) and the same element (tag, `id`, and `is`
+/// with its dataset). Spans and app-nested `HtmlUi` roots never match.
+fn same_identity(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
+    let Ok((_, has_text, has_span, element, connected, _, nested_ui)) = tree.get(entity) else {
         return false;
     };
-    let owned: Vec<Entity> = children
-        .map_or(&[][..], |children| children)
-        .iter()
-        .copied()
-        .filter(|child| !tree.get(*child).is_ok_and(|(.., nested_ui)| nested_ui))
-        .collect();
-    if has_text != spec.text.is_some()
-        || has_element != spec.element.is_some()
-        || has_frame != spec.image.is_some()
-    {
+    if nested_ui || has_span || has_text != spec.text.is_some() {
         return false;
     }
-    match &spec.text {
-        Some(text) => {
-            owned.len() == text.spans.len()
-                && owned
-                    .iter()
-                    .all(|child| tree.get(*child).is_ok_and(|(_, _, has_span, ..)| has_span))
-        }
-        None => {
-            owned.len() == spec.children.len()
-                && owned
-                    .iter()
-                    .zip(&spec.children)
-                    .all(|(child, spec)| same_shape(spec, *child, tree))
-        }
-    }
+    let same_element = match (element, &spec.element) {
+        (None, None) => true,
+        (Some(old), Some(new)) => old.tag == new.tag && old.id == new.id,
+        _ => false,
+    };
+    same_element && connected.map(|connected| &connected.0) == spec.custom.as_ref()
 }
 
-/// Restyles `entity` (checked by [`same_shape`]) to `spec` in place: the
-/// entity and its children — and anything the app attached — stay.
-fn apply_spec(commands: &mut Commands, entity: Entity, spec: NodeSpec, tree: &Tree) {
-    let children: Vec<Entity> = tree
-        .get(entity)
+/// Updates `parent`'s pipeline-owned children to `specs`. An element with
+/// an `id` unique among its old and its new siblings is matched by it, the
+/// rest by position among themselves (like keyed list diffing; a duplicated
+/// `id` can't key anything). A match with the same
+/// identity ([`same_identity`]) is updated in place ([`update_spec`]) —
+/// keeping its entity, its interaction state and whatever the app attached;
+/// the rest are despawned and spawned, then everything is put in document
+/// order. Children the app nested (`HtmlUi` roots) are kept, after the
+/// pipeline's own. Returns whether anything below `parent` was spawned.
+fn update_children(
+    commands: &mut Commands,
+    parent: Entity,
+    specs: Vec<NodeSpec>,
+    tree: &Tree,
+    root: Entity,
+    connected: &mut Vec<ElementConnected>,
+) -> bool {
+    let current: Vec<Entity> = tree
+        .get(parent)
         .ok()
         .and_then(|(children, ..)| children)
         .map_or_else(Vec::new, |children| children.to_vec());
+    let (owned, nested): (Vec<Entity>, Vec<Entity>) = current
+        .iter()
+        .partition(|child| !tree.get(**child).is_ok_and(|(.., nested_ui)| nested_ui));
+    let id_of = |entity: Entity| {
+        tree.get(entity)
+            .ok()
+            .and_then(|(_, _, _, element, ..)| element?.id.clone())
+    };
+    let spec_id = |spec: &NodeSpec| spec.element.as_ref().and_then(|element| element.id.clone());
+    let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
+    for id in owned.iter().filter_map(|&child| id_of(child)) {
+        counts.entry(id).or_default().0 += 1;
+    }
+    for id in specs.iter().filter_map(spec_id) {
+        counts.entry(id).or_default().1 += 1;
+    }
+    let key = |id: Option<String>| id.filter(|id| counts.get(id) == Some(&(1, 1)));
+    let mut keyed: HashMap<String, Entity> = HashMap::new();
+    let mut unkeyed = Vec::new();
+    for &child in &owned {
+        match key(id_of(child)) {
+            Some(id) => {
+                keyed.insert(id, child);
+            }
+            None => unkeyed.push(child),
+        }
+    }
+    let mut unkeyed = unkeyed.into_iter();
+    let mut kept = HashSet::new();
+    let mut desired = Vec::with_capacity(specs.len() + nested.len());
+    let mut spawned = false;
+    for spec in specs {
+        let candidate = match key(spec_id(&spec)) {
+            Some(id) => keyed.remove(&id),
+            None => unkeyed.next(),
+        };
+        match candidate {
+            Some(child) if same_identity(&spec, child, tree) => {
+                spawned |= update_spec(commands, child, spec, tree, root, connected);
+                kept.insert(child);
+                desired.push(child);
+            }
+            _ => {
+                let mut id = None;
+                commands.entity(parent).with_children(|children| {
+                    id = Some(spawn_spec(children, spec, root, connected));
+                });
+                desired.extend(id);
+                spawned = true;
+            }
+        }
+    }
+    for &stale in owned.iter().filter(|child| !kept.contains(*child)) {
+        commands.entity(stale).despawn();
+    }
+    desired.extend(nested);
+    let remaining: Vec<Entity> = current
+        .iter()
+        .copied()
+        .filter(|child| kept.contains(child) || !owned.contains(child))
+        .collect();
+    if desired != remaining {
+        commands.entity(parent).replace_children(&desired);
+    }
+    spawned
+}
+
+/// Updates `entity` (matched by [`same_identity`]) to `spec` in place: the
+/// entity and anything the app attached stay; components the spec no longer
+/// has are removed. Returns whether elements were spawned below it.
+fn update_spec(
+    commands: &mut Commands,
+    entity: Entity,
+    spec: NodeSpec,
+    tree: &Tree,
+    root: Entity,
+    connected: &mut Vec<ElementConnected>,
+) -> bool {
+    let (children, has_frame) = tree
+        .get(entity)
+        .map(|(children, _, _, _, _, has_frame, _)| {
+            (
+                children.map_or_else(Vec::new, |children| children.to_vec()),
+                has_frame,
+            )
+        })
+        .unwrap_or_default();
     let mut target = commands.entity(entity);
     target.insert(spec.node);
     if let Some(element) = spec.element {
         target.insert(element);
     }
+    match spec.handle {
+        Some(handle) => target.insert(DomNode(handle)),
+        None => target.remove::<DomNode>(),
+    };
+    match spec.focus {
+        Some(focusable) => target.insert(focusable),
+        None => target.remove::<Focusable>(),
+    };
+    if spec.signals.is_empty() {
+        target.remove::<ElementSignals>();
+    } else {
+        signals::observe_pointer_signals(&mut target);
+        target.insert(ElementSignals(spec.signals));
+    }
     match spec.background {
         Some(background) => target.insert(BackgroundColor(background)),
         None => target.remove::<BackgroundColor>(),
     };
-    if let Some(image) = spec.image {
-        target.insert((image, CssFrame));
+    match spec.image {
+        Some(image) => {
+            target.insert((image, CssFrame));
+        }
+        None if has_frame => {
+            target.remove::<(ImageNode, CssFrame)>();
+        }
+        None => {}
     }
     apply_css_owned(
         &mut target,
@@ -1108,22 +1231,34 @@ fn apply_spec(commands: &mut Commands, entity: Entity, spec: NodeSpec, tree: &Tr
                 layout,
             ));
             // Spans carry the block's `pointer-events: none` (see
-            // `spawn_spec`); a restyle without it takes it back.
-            for (span, (content, font, color)) in children.into_iter().zip(text.spans) {
-                let mut span = commands.entity(span);
-                span.insert((TextSpan::new(content), font, TextColor(color)));
-                if !spec.pickable {
-                    span.insert(Pickable::IGNORE);
-                } else {
-                    span.remove::<Pickable>();
+            // `spawn_spec`); an update without it takes it back.
+            if children.len() == text.spans.len() {
+                for (span, (content, font, color)) in children.into_iter().zip(text.spans) {
+                    let mut span = commands.entity(span);
+                    span.insert((TextSpan::new(content), font, TextColor(color)));
+                    if !spec.pickable {
+                        span.insert(Pickable::IGNORE);
+                    } else {
+                        span.remove::<Pickable>();
+                    }
                 }
+            } else {
+                for span in children {
+                    commands.entity(span).despawn();
+                }
+                commands.entity(entity).with_children(|spans| {
+                    for (content, font, color) in text.spans {
+                        let mut span =
+                            spans.spawn((TextSpan::new(content), font, TextColor(color)));
+                        if !spec.pickable {
+                            span.insert(Pickable::IGNORE);
+                        }
+                    }
+                });
             }
+            false
         }
-        None => {
-            for (child, spec) in children.into_iter().zip(spec.children) {
-                apply_spec(commands, child, spec, tree);
-            }
-        }
+        None => update_children(commands, entity, spec.children, tree, root, connected),
     }
 }
 
@@ -1382,9 +1517,18 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         }
         return;
     };
-    let style = ctx.styler.style_of(&element, inherited, state);
-    let mut boxed = ctx.styler.box_of(&element, state);
+    let inline = cascade::inline_style(tag);
+    // The `<html>` element is what the root style was computed from:
+    // re-applying it would square its `opacity`.
+    let style = if element.tag == "html" {
+        inherited
+    } else {
+        ctx.styler
+            .style_of(&element, inherited, state, inline.as_ref())
+    };
+    let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref());
     boxed.drawn_outline = boxed.outline(style.color);
+    boxed.fade(style.opacity);
     let kind = match element.tag.as_str() {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
         "p" => BlockKind::Paragraph,
@@ -1539,7 +1683,9 @@ fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run
         Some(tl::Node::Tag(tag)) => {
             // An unmatched `data-l10n-name` element is plain text.
             let style = ctx.element(tag).map_or(style, |element| {
-                ctx.styler.style_of(&element, style, Pseudo::default())
+                let inline = cascade::inline_style(tag);
+                ctx.styler
+                    .style_of(&element, style, Pseudo::default(), inline.as_ref())
             });
             push_content_runs(ctx, handle, tag, style, runs);
         }

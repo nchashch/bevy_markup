@@ -269,13 +269,13 @@ impl ModelState for UiModel {
             Op::MoveOutside => self.pointer = Some(vec2(4000.0, 4000.0)),
             Op::Press | Op::Release => {}
         }
-        // What the op must emit. Content changes (context, locale, outline)
-        // rebuild the whole subtree: every element under the pointer is
-        // replaced, so a hovered button leaves (from the enter snapshot) and
-        // its replacement enters afresh, and any held press now points at a
-        // despawned entity. Style changes restyle in place — entities and
-        // presses survive — but the root box moves the button, so a
-        // stationary pointer can drop out of it (or into it). Releases emit
+        // What the op must emit. Content updates that keep the button (new
+        // `n`, another locale) update it in place: hover and presses survive,
+        // nothing is emitted. The outline toggle replaces the content, so a
+        // hovered button leaves (from the enter snapshot), the one coming
+        // back enters afresh, and a held press now points at a despawned
+        // entity. Style changes keep the button too, but the root box moves
+        // it, so a stationary pointer can drop out of it (or into it). Releases emit
         // their hooks over the hovered chain, click only while it is the
         // pressed node, and consume the press.
         self.pending = match *op {
@@ -317,7 +317,8 @@ impl ModelState for UiModel {
                 self.pressed = Pressed::None;
                 out
             }
-            Op::SetN(_) | Op::SetLocale(_) | Op::ToggleOutline => {
+            Op::SetN(_) | Op::SetLocale(_) => vec![],
+            Op::ToggleOutline => {
                 let mut out = vec![];
                 if self.entered {
                     self.entered = false;

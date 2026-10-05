@@ -843,7 +843,7 @@ fn navigable(world: &World, entity: Entity) -> bool {
 /// not eat the next attribute's first character (bug_0019).
 #[test]
 fn focus_navigation_scope_and_styles() {
-    let page = r#"<div id="a" data-on-click="pick-a"><p>A {{ n }}</p></div>
+    let page = r#"{% if n > 1 %}<section{% else %}<div{% endif %} id="a" data-on-click="pick-a"><p>A {{ n }}</p>{% if n > 1 %}</section>{% else %}</div>{% endif %}
         <div id="b" autofocus data-on-click="pick-b" data-with='{"n": {{ n }}}'><p>B</p></div>
         <div id="c" tabindex="0"><p>C</p></div>
         <div id="d" data-on-click="pick-d" tabindex="-1"><p>D</p></div>"#;
@@ -918,7 +918,8 @@ fn focus_navigation_scope_and_styles() {
         ("pick-b", Some(1), None)
     );
 
-    // A rebuild replaces every element; focus follows the `id`.
+    // `a` becomes another element (a `section`): the update replaces it, and
+    // focus follows the `id`.
     world
         .resource_mut::<bevy::input_focus::InputFocus>()
         .set(a, bevy::input_focus::FocusCause::Navigated);
@@ -932,8 +933,29 @@ fn focus_navigation_scope_and_styles() {
     ui.update(3);
     let world = ui.world_mut();
     let new_a = element_by_id(world, root, "a");
-    assert_ne!(new_a, a, "rebuilt");
+    assert_ne!(new_a, a, "replaced");
     assert_eq!(focused(world), Some(new_a), "focus restored by id");
+
+    // A content update that keeps the structure updates in place: same
+    // entities, focus untouched, and `b`'s new `data-with` is what fires.
+    let b = element_by_id(world, root, "b");
+    world
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &3);
+    ui.settle();
+    ui.update(3);
+    let world = ui.world_mut();
+    assert_eq!(element_by_id(world, root, "a"), new_a, "kept in place");
+    assert_eq!(focused(world), Some(new_a));
+    world.trigger(ActivateElement { entity: b });
+    let payloads: Vec<Option<i64>> = world
+        .resource::<Messages<ElementSignal>>()
+        .iter_current_update_messages()
+        .filter(|signal| signal.name == "pick-b")
+        .map(|signal| signal.payload["n"].as_i64())
+        .collect();
+    assert_eq!(payloads, [Some(3)], "the updated binding, once");
 
     // A modal root takes focus and confines navigation.
     let dialog = world
@@ -1216,7 +1238,7 @@ fn root_rule_styles_the_html_ui_entity() {
         &[
             (
                 "page.html",
-                r#"<html class="hud {{ extra }}"><p>x</p></html>"#,
+                r#"<html class="hud {{ extra }}" style="height: 30px; opacity: 0.5"><p>x</p></html>"#,
             ),
             (
                 "styled.css",
@@ -1265,10 +1287,21 @@ fn root_rule_styles_the_html_ui_entity() {
     assert_eq!(node.border_radius.top_left, Val::Px(4.0));
     assert_eq!(
         world.get::<BackgroundColor>(root).unwrap().0,
-        Color::srgb(1.0, 0.0, 0.0)
+        Color::srgba(1.0, 0.0, 0.0, 0.5),
+        "faded by the root's own opacity"
     );
     assert_eq!(world.get::<ZIndex>(root), Some(&ZIndex(5)));
     assert_eq!(world.get::<Pickable>(root), Some(&Pickable::IGNORE));
+    assert_eq!(node.height, Val::Px(30.0), "the root's own `style`");
+    let text = |world: &mut World| {
+        let mut query = world.query_filtered::<&TextColor, With<Text>>();
+        query.single(world).unwrap().0
+    };
+    assert_eq!(
+        text(world).alpha(),
+        0.5,
+        "the root's opacity fades its subtree"
+    );
 
     // The app moves its UI; a rebuild (new class) keeps that and restyles.
     world.get_mut::<Node>(root).unwrap().left = Val::Px(20.0);
@@ -1295,6 +1328,8 @@ fn root_rule_styles_the_html_ui_entity() {
     assert_eq!(world.get::<BackgroundColor>(root).unwrap().0, blue);
     assert_eq!(world.get::<ZIndex>(root), Some(&ZIndex(0)));
     assert_eq!(world.get::<Pickable>(root), None);
+    assert_eq!(node.height, Val::Px(30.0), "the template's own style stays");
+    assert_eq!(text(world).alpha(), 0.5);
 }
 
 /// `HtmlAnchor` keeps an overlay beside its element on the requested side,
@@ -1383,6 +1418,169 @@ fn anchored_overlay_follows_clamps_and_despawns() {
         ui.world_mut().get_entity(overlay).is_err(),
         "despawned with its element"
     );
+}
+
+/// A content update reconciles instead of rebuilding: elements matched by
+/// `id` (anywhere among their siblings) or by position (id-less ones) keep
+/// their entities and what the app attached, with new text; an inserted
+/// element is spawned in document order; a removed one is despawned; a block
+/// whose run count changes keeps its entity with new spans.
+#[test]
+fn content_updates_reconcile_in_place() {
+    #[derive(Component)]
+    struct Wired;
+
+    let page = r#"<p id="title">Hello {{ name }}</p>
+{% if extra %}<p id="extra">Extra</p>{% endif %}
+<div id="list">{% for item in items %}<p>{{ item }}</p>{% endfor %}</div>
+<p id="rich">{% if bold %}<b>bold</b> {% endif %}tail</p>"#;
+    let mut ui = TestUi::new(
+        "reconcile",
+        &[
+            ("page.html", page),
+            (
+                "style.css",
+                "html { color: #ffffff } b { font-weight: bold }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new()
+            .with("name", "A")
+            .with("extra", &false)
+            .with("items", &[1, 2])
+            .with("bold", &false),
+        Node::default(),
+    );
+    ui.settle();
+    let root = ui.root();
+    let world = ui.world_mut();
+    let [title, list, rich] = ["title", "list", "rich"].map(|id| element_by_id(world, root, id));
+    let first_item = world.get::<Children>(list).unwrap()[0];
+    for entity in [title, list, rich, first_item] {
+        world.entity_mut(entity).insert(Wired);
+    }
+    let builds = ui.builds();
+
+    let context = &mut *ui.world_mut().get_mut::<TemplateContext>(root).unwrap();
+    context.insert("name", "B");
+    context.insert("extra", &true);
+    context.insert("items", &[1, 2, 3]);
+    context.insert("bold", &true);
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p#title
+    "Hello B" default 16px #ffffff
+  p#extra
+    "Extra" default 16px #ffffff
+  div#list
+    p
+      "1" default 16px #ffffff
+    p
+      "2" default 16px #ffffff
+    p
+      "3" default 16px #ffffff
+  p#rich
+    "bold" default 16px #ffffff
+    " tail" default 16px #ffffff
+"#,
+    );
+    assert_eq!(ui.builds(), builds + 1, "one update");
+    let world = ui.world_mut();
+    for (entity, what) in [
+        (title, "title"),
+        (list, "list"),
+        (rich, "rich (new runs)"),
+        (first_item, "first list item"),
+    ] {
+        assert!(world.entity(entity).contains::<Wired>(), "{what} kept");
+    }
+    assert_eq!(element_by_id(world, root, "rich"), rich);
+
+    // Removing them again despawns the extra element and the third item.
+    let extra = element_by_id(world, root, "extra");
+    let third = world.get::<Children>(list).unwrap()[2];
+    let context = &mut *world.get_mut::<TemplateContext>(root).unwrap();
+    context.insert("extra", &false);
+    context.insert("items", &[1, 2]);
+    ui.settle();
+    let world = ui.world_mut();
+    assert!(world.get_entity(extra).is_err() && world.get_entity(third).is_err());
+    assert_eq!(world.get::<Children>(list).unwrap().len(), 2);
+    assert!(world.entity(title).contains::<Wired>() && world.entity(list).contains::<Wired>());
+}
+
+/// The `style` attribute cascades as in CSS (over normal rules, under
+/// `!important` ones unless itself `!important`), and `opacity` fades the
+/// element's subtree — backgrounds and text, nested opacities multiplying.
+/// A templated inline value updates the same entity in place.
+#[test]
+fn style_attribute_and_opacity() {
+    let page = r#"<div id="box" style="width: {{ w }}%; background-color: #ff0000"><p>x</p></div>
+<div id="half" class="half"><p id="green" style="color: #00ff00">y</p><div id="quarter" style="opacity: 0.5"><p id="inner">z</p></div></div>
+<p id="rule" class="imp" style="color: #0000ff">a</p>
+<p id="inline" class="imp" style="color: #0000ff !important">b</p>"#;
+    let css = "p { color: #ffffff } #box { width: 10% } \
+               .half { opacity: 0.5; background-color: #ffffff } \
+               .imp { color: #ff00ff !important }";
+    let mut ui = TestUi::new("inline", &[("page.html", page), ("style.css", css)])
+        .stylesheet("style.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("w", &40),
+            Node::default(),
+        );
+    ui.settle();
+    let root = ui.root();
+    let world = ui.world_mut();
+    let get = |world: &mut World, id: &str| element_by_id(world, root, id);
+    let text_color = |world: &mut World, id: &str| {
+        let block = get(world, id);
+        world.get::<TextColor>(block).unwrap().0
+    };
+    let boxed = get(world, "box");
+    assert_eq!(
+        world.get::<Node>(boxed).unwrap().width,
+        Val::Percent(40.0),
+        "inline over #id"
+    );
+    assert_eq!(
+        world.get::<BackgroundColor>(boxed).unwrap().0,
+        Color::srgb(1.0, 0.0, 0.0)
+    );
+    let half = get(world, "half");
+    assert_eq!(
+        world.get::<BackgroundColor>(half).unwrap().0,
+        Color::srgba(1.0, 1.0, 1.0, 0.5)
+    );
+    assert_eq!(text_color(world, "green"), Color::srgba(0.0, 1.0, 0.0, 0.5));
+    assert_eq!(
+        text_color(world, "inner"),
+        Color::srgba(1.0, 1.0, 1.0, 0.25),
+        "0.5 × 0.5"
+    );
+    assert_eq!(
+        text_color(world, "rule"),
+        Color::srgb(1.0, 0.0, 1.0),
+        "!important rule wins"
+    );
+    assert_eq!(
+        text_color(world, "inline"),
+        Color::srgb(0.0, 0.0, 1.0),
+        "inline !important wins"
+    );
+
+    world
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("w", &75);
+    ui.settle();
+    let world = ui.world_mut();
+    assert_eq!(get(world, "box"), boxed, "updated in place");
+    assert_eq!(world.get::<Node>(boxed).unwrap().width, Val::Percent(75.0));
 }
 
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
@@ -2171,19 +2369,20 @@ fn collect_elements(world: &World, entity: Entity, out: &mut Vec<Entity>) {
     }
 }
 
-/// An `HtmlUi` nested inside another one's subtree. A locale swap makes both
-/// rebuild in the same frame; the ancestor's rebuild replaces its whole
-/// subtree and despawns the nested UI with it, so the build system must skip
-/// the nested UI instead of queueing commands on a despawned entity
-/// (bug_0016). Apps re-nest nested UIs on `HtmlUiBuilt`.
+/// An `HtmlUi` nested inside another one's subtree, both updating in the
+/// same frame. While the element holding it is kept, the nested UI survives
+/// the ancestor's update and gets its own; when the ancestor's update
+/// replaces that element, the nested UI is despawned with it — after its own
+/// commands (deepest UIs go first), so nothing hits a despawned entity
+/// (bug_0016).
 #[test]
-fn nested_ui_under_a_rebuilding_ancestor_is_skipped_not_panics() {
+fn nested_ui_survives_or_goes_with_its_slot_without_panics() {
     let mut ui = TestUi::new(
         "nested-rebuild",
         &[
             (
                 "outer.html",
-                r#"<div id="slot"><p data-l10n-id="outer">Outer</p></div>"#,
+                r#"<div id="{{ slot }}"><p data-l10n-id="outer">Outer</p></div>"#,
             ),
             ("inner.html", r#"<p data-l10n-id="inner">Inner</p>"#),
             (
@@ -2204,7 +2403,11 @@ fn nested_ui_under_a_rebuilding_ancestor_is_skipped_not_panics() {
     )
     .stylesheet("style.css")
     .locale("locales/en-US/main.ftl.ron")
-    .spawn("outer.html", TemplateContext::new(), Node::default());
+    .spawn(
+        "outer.html",
+        TemplateContext::new().with("slot", "slot"),
+        Node::default(),
+    );
     ui.settle();
 
     // Nest a second UI into the outer's slot.
@@ -2239,7 +2442,8 @@ html-ui
 "#,
     );
 
-    // Both UIs re-localize in the same frame: the outer rebuild must win.
+    // Both UIs re-localize in the same frame; the slot is kept, and the
+    // nested UI with it.
     let german = ui
         .world_mut()
         .resource::<AssetServer>()
@@ -2251,11 +2455,35 @@ html-ui
   div#slot
     p
       "Outer DE" serif 20px #ffffff
+    -
+      p
+        "Inner DE" serif 20px #ffffff
+"#,
+    );
+
+    // Both update again in one frame, and the outer's update replaces the
+    // slot (a new `id`): the nested UI goes with it.
+    let english = ui
+        .world_mut()
+        .resource::<AssetServer>()
+        .load("locales/en-US/main.ftl.ron");
+    ui.world_mut().insert_resource(ActiveLocale::new(english));
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("slot", "other");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div#other
+    p
+      "Outer EN" serif 20px #ffffff
 "#,
     );
     assert!(
         ui.world_mut().get_entity(nested).is_err(),
-        "the nested UI is despawned with the ancestor's replaced subtree"
+        "the nested UI is despawned with its replaced slot"
     );
 }
 

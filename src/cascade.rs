@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::ui::{GridTrackRepetition, MaxTrackSizingFunction, MinTrackSizingFunction};
+use lightningcss::declaration::DeclarationBlock;
 use lightningcss::properties::Property;
 use lightningcss::properties::align::{
     self as css_align, BaselinePosition, ContentDistribution, ContentPosition, GapValue,
@@ -28,7 +29,8 @@ use lightningcss::properties::grid::{
 use lightningcss::properties::position as css_position;
 use lightningcss::properties::size::{self as css_size, MaxSize, Size};
 use lightningcss::rules::CssRule;
-use lightningcss::stylesheet::{PrinterOptions, StyleSheet};
+use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleAttribute, StyleSheet};
+use lightningcss::traits::IntoOwned;
 use lightningcss::traits::ToCss;
 use lightningcss::values::color::{CssColor, RGBA};
 use lightningcss::values::image::Image;
@@ -373,6 +375,9 @@ pub(crate) struct ElementStyle {
     pub z_index: Option<Option<i32>>,
     /// `pointer-events` (inherited): `true` for `auto`, `false` for `none`.
     pub pointer_events: Option<bool>,
+    /// `opacity`, clamped to `0..=1` (group opacity: multiplies down the
+    /// subtree).
+    pub opacity: Option<f32>,
     /// `outline` (shorthand and longhands, `outline-offset`).
     pub outline: OutlineDecl,
     /// Flex, size and margin properties (containers and blocks).
@@ -538,6 +543,29 @@ impl Compound {
     }
 }
 
+/// An element's `style` attribute, parsed: declarations that apply to that
+/// element only, after every normal rule and — for `!important` ones — after
+/// every rule.
+#[derive(Debug)]
+pub(crate) struct InlineStyle(DeclarationBlock<'static>);
+
+/// `tag`'s `style` attribute, if it has declarations.
+pub(crate) fn inline_style(tag: &tl::HTMLTag) -> Option<InlineStyle> {
+    let text =
+        crate::template::decode_entities(&tag.attributes().get("style").flatten()?.as_utf8_str());
+    match StyleAttribute::parse(&text, ParserOptions::default()) {
+        Ok(attribute) => {
+            let block = attribute.declarations.into_owned();
+            (!block.declarations.is_empty() || !block.important_declarations.is_empty())
+                .then_some(InlineStyle(block))
+        }
+        Err(error) => {
+            debug!("html css: invalid style attribute ({error}): {text:?}");
+            None
+        }
+    }
+}
+
 /// One selector of a style rule with one importance level's declarations.
 struct Rule<'a> {
     selector: Compound,
@@ -618,10 +646,52 @@ impl<'a> HtmlStyles<'a> {
         self.cache.borrow_mut().insert(key, style.clone());
         style
     }
+
+    /// [`get`](Self::get) with the element's `style` attribute: normal rules,
+    /// then its normal declarations, then `!important` rules, then its
+    /// `!important` declarations (CSS's order). Not cached: the attribute
+    /// belongs to one element.
+    pub fn get_with(
+        &self,
+        element: &HtmlElement,
+        pseudo: Pseudo,
+        inline: Option<&InlineStyle>,
+    ) -> ElementStyle {
+        let Some(InlineStyle(block)) = inline else {
+            return self.get(element, pseudo);
+        };
+        let mut style = ElementStyle::default();
+        let matching: Vec<&Rule> = self
+            .rules
+            .iter()
+            .filter(|rule| rule.selector.matches(element, pseudo))
+            .collect();
+        // `rules` is sorted by rank, whose first key is importance.
+        let (important, normal): (Vec<&Rule>, Vec<&Rule>) =
+            matching.into_iter().partition(|rule| rule.rank.0);
+        let rules = |rules: Vec<&Rule<'a>>| {
+            rules
+                .into_iter()
+                .flat_map(|rule| rule.declarations.iter())
+                .collect::<Vec<_>>()
+        };
+        for declaration in rules(normal)
+            .into_iter()
+            .chain(&block.declarations)
+            .chain(rules(important))
+            .chain(&block.important_declarations)
+        {
+            apply(&mut style, declaration);
+        }
+        style
+    }
 }
 
 fn apply(style: &mut ElementStyle, declaration: &Property) {
     match declaration {
+        Property::Opacity(alpha) => {
+            style.opacity = Some(alpha.0.clamp(0.0, 1.0));
+        }
         Property::Color(color) => {
             if let Some(color) = to_color(color) {
                 style.color = Some(color);

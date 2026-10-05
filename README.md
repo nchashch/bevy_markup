@@ -106,8 +106,11 @@ flowchart LR
    with `is="health-bar"` runs the system you registered under that name
    each time it's spawned, like a browser's customized built-in elements.
 
-When only the styling changes (a new theme, a reloaded stylesheet), bevy_markup
-restyles the existing entities in place instead of rebuilding them.
+Updates are in place: when the context or locale changes, the new document is
+reconciled with the existing entities (matched by `id`, else by position), so
+elements keep their entities, hover and focus state, and whatever your code
+attached; only what appeared or disappeared is spawned or despawned. Styling
+changes (a new theme, a reloaded stylesheet) restyle the same entities.
 
 ### What's supported
 
@@ -121,7 +124,8 @@ bevy_markup implements a useful subset of the web, not all of it:
   `grid-template-columns`, `grid-column`, …); sizes, margins, padding,
   `box-sizing`; `position` with `top`/`left`/…, `z-index`; borders with
   colors and rounded corners, background colors; 9-slice frames through
-  `border-image`; `outline`; `pointer-events: none`. A template styles its
+  `border-image`; `outline`; `pointer-events: none`; `opacity`; inline
+  `style="…"` attributes (templated values update in place). A template styles its
   own root with `<html class="…">` (placement, stacking, pickability);
   whatever CSS doesn't declare stays as your code set it. Combinators (`.panel p`) and
   `calc()` aren't supported yet; unsupported CSS is skipped, never guessed.

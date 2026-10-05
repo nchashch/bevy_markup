@@ -123,54 +123,70 @@ pub(crate) fn signal_bindings(tag: &tl::HTMLTag) -> Vec<SignalBinding> {
     bindings
 }
 
-/// Attaches the pointer hooks of `spec.signals` to `entity` (`enter`/`leave`
-/// are handled by [`hover_signals`] instead: pointer `Over`/`Out` events
-/// don't reach ancestors — the hover map holds only the deepest picked
-/// node, since nodes block picking by default).
-pub(crate) fn attach_pointer_signals(entity: &mut EntityCommands, signals: &ElementSignals) {
-    macro_rules! on_pointer {
-        ($event:ty, $trigger:expr, $binding:expr) => {{
-            let binding = $binding.clone();
-            entity.observe(
-                move |trigger: On<Pointer<$event>>,
-                      writer: MessageWriter<ElementSignal>,
-                      signals: Query<&ElementSignals>,
-                      parents: Query<&ChildOf>,
-                      elements: Query<&HtmlElement>| {
-                    pointer_signal::<$event>(
-                        &binding,
-                        trigger.original_event_target(),
-                        trigger.entity,
-                        trigger.pointer_location.position,
-                        $trigger,
-                        writer,
-                        &signals,
-                        &parents,
-                        &elements,
-                    );
-                },
-            );
-        }};
-    }
-    for binding in &signals.0 {
-        let binding = std::sync::Arc::new(binding.clone());
-        match binding.trigger {
-            SignalTrigger::Click => on_pointer!(Click, binding.trigger, binding),
-            SignalTrigger::Press => on_pointer!(Press, binding.trigger, binding),
-            SignalTrigger::Release => on_pointer!(Release, binding.trigger, binding),
-            // Handled by `hover_signals`: pointer `Over`/`Out` events don't
-            // reach ancestors — the hover map holds only the deepest picked
-            // node, since nodes block picking by default.
-            SignalTrigger::Enter | SignalTrigger::Leave => {}
+/// Marks an element whose pointer observers ([`observe_pointer_signals`])
+/// are attached.
+#[derive(Component)]
+pub(crate) struct PointerSignalObservers;
+
+/// Attaches the click/press/release observers to `entity` once. They read
+/// the element's [`ElementSignals`] when the event arrives, so an in-place
+/// update that changes the bindings (or their `data-with`) needs no new
+/// observers. `enter`/`leave` are handled by [`hover_signals`] instead:
+/// pointer `Over`/`Out` events don't reach ancestors — the hover map holds
+/// only the deepest picked node, since nodes block picking by default.
+pub(crate) fn observe_pointer_signals(entity: &mut EntityCommands) {
+    entity.queue(|mut entity: EntityWorldMut| {
+        if entity.contains::<PointerSignalObservers>() {
+            return;
         }
-    }
+        entity.insert(PointerSignalObservers);
+        entity.observe(on_pointer::<Click>);
+        entity.observe(on_pointer::<Press>);
+        entity.observe(on_pointer::<Release>);
+    });
 }
 
-/// Emits `binding` for a pointer trigger, unless a deeper bound element owns
-/// the interaction (nested hooks: the deepest wins).
+/// The pointer events with a `data-on-*` trigger.
+trait PointerTrigger: std::fmt::Debug + Clone + Reflect {
+    const TRIGGER: SignalTrigger;
+}
+
+impl PointerTrigger for Click {
+    const TRIGGER: SignalTrigger = SignalTrigger::Click;
+}
+
+impl PointerTrigger for Press {
+    const TRIGGER: SignalTrigger = SignalTrigger::Press;
+}
+
+impl PointerTrigger for Release {
+    const TRIGGER: SignalTrigger = SignalTrigger::Release;
+}
+
+/// Emits the observed element's bindings for `E`'s trigger.
+fn on_pointer<E: PointerTrigger>(
+    event: On<Pointer<E>>,
+    writer: MessageWriter<ElementSignal>,
+    signals: Query<&ElementSignals>,
+    parents: Query<&ChildOf>,
+    elements: Query<&HtmlElement>,
+) where
+    Pointer<E>: Message,
+{
+    pointer_signal::<E>(
+        event.original_event_target(),
+        event.entity,
+        event.pointer_location.position,
+        E::TRIGGER,
+        writer,
+        &signals,
+        &parents,
+        &elements,
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn pointer_signal<E>(
-    binding: &SignalBinding,
     hit: Entity,
     target: Entity,
     position: Vec2,
@@ -183,17 +199,22 @@ fn pointer_signal<E>(
     Pointer<E>: Message,
     E: std::fmt::Debug + Clone + Reflect,
 {
+    let Ok(bound) = signals.get(target) else {
+        return;
+    };
     if covered_by_deeper(hit, target, trigger, signals, parents) {
         return;
     }
-    writer.write(ElementSignal {
-        name: Cow::Owned(binding.name.clone()),
-        trigger,
-        target,
-        element: elements.get(target).cloned().unwrap_or_default(),
-        payload: binding.payload.clone(),
-        position: Some(position),
-    });
+    for binding in bound.0.iter().filter(|binding| binding.trigger == trigger) {
+        writer.write(ElementSignal {
+            name: Cow::Owned(binding.name.clone()),
+            trigger,
+            target,
+            element: elements.get(target).cloned().unwrap_or_default(),
+            payload: binding.payload.clone(),
+            position: Some(position),
+        });
+    }
 }
 
 /// Whether the interaction hit a bound element between `hit` and `target`

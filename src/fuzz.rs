@@ -73,7 +73,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
 
     let styles = HtmlStyles::from_sheet(&stylesheet.sheet);
     let fonts = FontFamilies::default();
-    let root = root_style(&styles, &fonts, &assets, &element_tag("html"));
+    let root = root_style(&styles, &fonts, &assets, &element_tag("html"), None);
     let styler = Styler {
         styles: &styles,
         fonts: &fonts,
@@ -118,8 +118,8 @@ pub fn cascade(css: &str) -> Result<String, String> {
     // One hit per element, then a repeat: exercises the cascade's match cache.
     for round in 0..2 {
         for element in &elements {
-            let style = styler.style_of(element, root, Pseudo::default());
-            let boxed: BoxStyle = styler.box_of(element, Pseudo::default());
+            let style = styler.style_of(element, root, Pseudo::default(), None);
+            let boxed: BoxStyle = styler.box_of(element, Pseudo::default(), None);
             std::fmt::write(
                 &mut out,
                 format_args!(

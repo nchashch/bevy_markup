@@ -52,8 +52,10 @@
 //! ```
 //!
 //! Mutating [`TemplateContext`](html::TemplateContext) re-renders — and
-//! rebuilds only if the rendered HTML changed, so writing it every frame is
-//! cheap while the output stays the same; swapping
+//! updates the UI only if the rendered HTML changed, in place: elements still
+//! in the document (matched by `id`, else by position) keep their entities,
+//! interaction state and app components, so templated per-frame values
+//! (`style="width: {{ hp }}%"`) are fine; swapping
 //! [`ActiveLocale`](l10n::ActiveLocale) re-localizes; swapping
 //! [`DefaultStylesheet`](style::DefaultStylesheet) restyles — all at runtime.
 //! After every (re)build an [`HtmlUiBuilt`](html::HtmlUiBuilt) event fires on
@@ -77,7 +79,8 @@
 //!   `font-weight`, `font-style`, `pointer-events` (inherited); `border-image` (9-slice),
 //!   `border-width`, `padding`, `background-color`, `gap`, flex and grid
 //!   layout, sizes, margins, `box-sizing`, `position` with insets,
-//!   `z-index`, `border-radius` and `border-color` on blocks, containers and
+//!   `z-index`, `border-radius`, `border-color` and `opacity` (fades the
+//!   subtree) on blocks, containers and
 //!   the `HtmlUi` node itself (the `html` rule, or the template's own
 //!   `<html class="…">`; what it stops declaring goes back to the app's
 //!   values).

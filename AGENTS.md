@@ -28,7 +28,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlDebugOutline` | Component | show the DOM outline (styled like `pre`) instead of the UI |
 | `RenderedHtml` | Component | `Pending` / `Ready(HtmlDocument)` / `Failed(msg)` (read-only) |
 | `HtmlElement { tag, id, classes }` | Component | on each spawned block and container node |
-| `HtmlUiBuilt { entity }` | EntityEvent | after each (re)build; children are replaced every time, so wire behaviour here |
+| `HtmlUiBuilt { entity }` | EntityEvent | after a content update (or a restyle that spawned nodes); kept elements keep their entities, new ones may need wiring |
 | `HtmlUiRestyled { entity }` | EntityEvent | after a style-only change applied in place (entities and attached components kept) |
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
@@ -187,22 +187,42 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `HtmlStylesheet` falls back to `DefaultStylesheet` without a separate
   latch. Re-requesting a failed asset can flip its state to `Loading` for a
   frame, so never read change signals only after resolving load states.
-- Build vs restyle (`build.rs`): items become a `NodeSpec` tree (plain data:
-  `Node`, element, background, frame, text spans), which is either spawned
-  (`spawn_spec`, `HtmlUiBuilt`) or, for style-only changes, applied onto the
-  existing children in place (`apply_spec`, `HtmlUiRestyled`) when they have
-  the same shape (`same_shape`: text/element/frame presence, span and child
-  counts) — otherwise it rebuilds. Restyles keep entities and app-attached
-  components. Custom elements (`is`): `spawn_spec` collects an
+- Updates (`build.rs`): items become a `NodeSpec` tree (plain data: `Node`,
+  element, background, frame, text spans), reconciled with the existing
+  children by `update_children` for content updates and restyles alike. Per
+  sibling list, an element whose `id` is unique among the old *and* new
+  siblings is matched by it, the rest by position among themselves (a
+  duplicated `id` keys nothing — keying it looped: the second copy was
+  respawned on every restyle its `PseudoState` triggered). A match with the
+  same identity (`same_identity`: text block or not, tag, `id`, `is` +
+  dataset via `ConnectedAs`) is updated in place by `update_spec` (every
+  component re-inserted or removed: `Node`, element, `DomNode`, `Focusable`,
+  `ElementSignals`, background, frame, CSS-owned; spans updated, or respawned
+  when their count changes); others are despawned/spawned and the list is put
+  in document order (`replace_children`) with app-nested `HtmlUi` roots kept
+  last. `HtmlUiRestyled` fires only for a restyle that spawned nothing,
+  otherwise `HtmlUiBuilt`. Pointer signal observers are attached once per
+  element (`PointerSignalObservers`) and read the element's current
+  `ElementSignals` at event time, so updated bindings need no new observers.
+  UIs are processed deepest first, so a nested UI's queued commands come
+  before an ancestor's despawn of its slot (bug_0016).
+  `content_update_matches_a_fresh_build` and `restyle_matches_a_fresh_build`
+  (properties) guard that the update paths agree with a fresh spawn.
+  Custom elements (`is`): `spawn_spec` collects an
   `ElementConnected` per spawned `is` element; the build queues
   `custom_elements::connect` for each (document order) after the spawn
   commands and before the `HtmlUiBuilt` trigger, so `HtmlUiBuilt` observers
-  see what definitions attached; `apply_spec` (restyle) never runs them.
+  see what definitions attached; kept elements never re-run them.
   An undefined name warns once per name. Shape compares only what the spec owns: a frame is the
   `CssFrame` marker spawned with its `ImageNode` (an app `ImageNode` is app
   state, bug_0018), nested `HtmlUi` children are skipped (bug_0017).
-  `restyle_matches_a_fresh_build` (properties) guards that both
-  paths agree; keyed reconciliation can later extend `NodeSpec` with keys.
+- Inline styles and opacity (`cascade.rs` `InlineStyle`/`HtmlStyles::get_with`,
+  `build.rs` `Style::opacity`/`BoxStyle::fade`/`faded`): the `style`
+  attribute is parsed per element (lightningcss `StyleAttribute`) and applied
+  after normal rules / after `!important` rules for its `!important` part
+  (uncached). `opacity` multiplies down the tree in the computed `Style`
+  (the `<html>` element reuses the root style, or its opacity would square)
+  and fades text/span colors at spec time and box colors in `collect_node`.
 - fluent-syntax comes from a fork, `nchashch/fluent-rs` branch
   `fix/fuzzing-bugs-0.11` (upstream's 0.11.1 tag plus fixes; Cargo.lock pins
   the commit), wired via `[patch.crates-io]` in the root and all four fuzz
@@ -362,13 +382,12 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   layout-only wrappers must not catch the pointer: `pointer-events: none` in
   CSS (or `Pickable::IGNORE` on app nodes) — a full-window wrapper once broke
   all scrolling and clicking.
-- Nested `HtmlUi`s: an ancestor's rebuild replaces its whole subtree and
-  despawns nested UIs with it — spawn them into slots on `HtmlUiBuilt`
-  (the demo's `wire_shell_build`). The build system skips a nested UI whose
-  ancestor rebuilds the same frame (bug_0016): its own queued commands would
-  otherwise hit the despawned entity and panic. Restyles don't despawn:
-  `same_shape` ignores nested-UI children (bug_0017), so a restyle keeps
-  them and their app-attached state.
+- Nested `HtmlUi`s: they survive an ancestor's updates while the element
+  holding them is kept (`update_children` leaves app-nested roots alone,
+  bug_0017) and go with it when it's replaced — spawn them into slots on
+  `HtmlUiBuilt` (the demo's `wire_shell_build`). UIs update deepest first, so
+  a nested UI's own commands are queued before an ancestor despawns its slot
+  (bug_0016).
 - Bevy 0.19: `BorderRadius` is a `Node` field, not a component.
 - `tl::VDom` borrows its input; `HtmlDocument` uses `tl::parse_owned` (unsafe
   fn, sound per its docs) → `VDomGuard`, which only hands out shared borrows,
@@ -815,7 +834,8 @@ known gaps:
       `generic_family_keywords_map_one_to_one`,
       `border_image_sources_none_and_longhands`).
     - `same_shape` (nested shape change, frame removed, merged runs):
-      `restyles_that_change_shape_match_a_fresh_build`.
+      `restyles_that_change_shape_match_a_fresh_build`. (`same_shape` was
+      later replaced by `update_children`/`same_identity`; the test stays.)
     - `apply_root_box` `had_image` guard: `root_box_keeps_the_apps_own_image`.
     - loader `extensions()` (css/html/htm/slice.ron):
       `loaders_are_found_by_extension` (untyped loads).
@@ -836,6 +856,7 @@ known gaps:
     - `build.rs` `same_shape` top check `||` → `&&`: every shape change bevy_markup
       produces also changes the child/span structure checked next, so a
       wrong top-level answer is rejected one level down (redundant check).
+      Gone with `same_shape`; rerun mutants against `update_children`.
     Gotcha: under `-j 6` with the full suite, two mutants hit the 60 s test
     timeout from load alone; rerun timeouts alone with
     `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT=300` (the script already passes the
@@ -956,13 +977,13 @@ Known limits (each skipped/ignored value is logged at `debug`):
   `define_html_element` system on every spawn (`custom_elements.rs`); no
   disconnected/attribute-changed callbacks, no autonomous custom tags
   (`<my-tag>` is walked through like any unknown tag).
-- **Rebuilds:** content changes (template, context, locale) that alter the
-  rendered HTML or translations rebuild the whole `HtmlUi` subtree (no
-  diffing; an identical render is skipped); style changes restyle in place unless
-  the node structure changes. A run merge (e.g. `b` restyled to its parent's
-  style) changes the span count and falls back to a rebuild. Nested `HtmlUi`
-  entities inside a rebuilding ancestor are despawned with it and skipped
-  (bug_0016); re-nest them on `HtmlUiBuilt`.
+- **Updates:** reconciliation matches by unique `id`, else by position — no
+  moves of id-less elements (inserting one before others replaces those after
+  it, like keyless React lists); an identical render is skipped. A changed
+  span count (e.g. a run merge) respawns the block's spans, not the block.
+  Every update re-inserts each kept element's components (change detection
+  fires for all of them). Nested `HtmlUi`s go with a replaced slot; re-nest
+  them on `HtmlUiBuilt`.
 - **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
   CJK (wrapped CJK source lines become spaces); `decode_entities` handles only
   the five escapes Tera emits (no numeric references). Mixed inline content
