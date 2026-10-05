@@ -47,7 +47,11 @@ fn close(a: f32, b: f32) -> bool {
 
 /// Items `.i0`…, each a fixed-width block, in a container `.c`.
 fn items(widths: &[u16]) -> (String, String) {
-    let page: String = widths.iter().enumerate().map(|(i, _)| format!(r#"<p class="i{i}">x</p>"#)).collect();
+    let page: String = widths
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!(r#"<p class="i{i}">x</p>"#))
+        .collect();
     let css: String = widths
         .iter()
         .enumerate()
@@ -61,17 +65,26 @@ fn items(widths: &[u16]) -> (String, String) {
 #[proptest(cases = 12)]
 fn row_reverse_mirrors_row(#[strategy(vec(10u16..100, 1..5))] widths: Vec<u16>) {
     let (page, css) = items(&widths);
-    let row = layout("prop-row", &page, &format!("html {{ font-size: 20px }} .c {{ flex-direction: row; width: 600px }}\n{css}"));
+    let row = layout(
+        "prop-row",
+        &page,
+        &format!("html {{ font-size: 20px }} .c {{ flex-direction: row; width: 600px }}\n{css}"),
+    );
     let reverse = layout(
         "prop-row-reverse",
         &page,
-        &format!("html {{ font-size: 20px }} .c {{ flex-direction: row-reverse; width: 600px }}\n{css}"),
+        &format!(
+            "html {{ font-size: 20px }} .c {{ flex-direction: row-reverse; width: 600px }}\n{css}"
+        ),
     );
     let container = row["c"];
     for i in 0..widths.len() {
         let (a, b) = (row[&format!("i{i}")], reverse[&format!("i{i}")]);
         let mirrored = container.min.x + container.max.x - a.max.x;
-        prop_assert!(close(b.min.x, mirrored), "item {i}: row {a:?}, reverse {b:?}, expected x {mirrored}");
+        prop_assert!(
+            close(b.min.x, mirrored),
+            "item {i}: row {a:?}, reverse {b:?}, expected x {mirrored}"
+        );
         prop_assert!(close(a.width(), b.width()));
     }
 }
@@ -87,7 +100,10 @@ fn auto_margins_center(#[strategy(40u16..600)] width: u16) {
     );
     let (c, b) = (rects["c"], rects["b"]);
     prop_assert!(close(b.width(), f32::from(width)));
-    prop_assert!(close(b.min.x - c.min.x, c.max.x - b.max.x), "container {c:?}, block {b:?}");
+    prop_assert!(
+        close(b.min.x - c.min.x, c.max.x - b.max.x),
+        "container {c:?}, block {b:?}"
+    );
 }
 
 /// With zero bases, `flex-grow` splits the container's width in proportion
@@ -108,7 +124,10 @@ fn flex_grow_shares_free_space(
     );
     let (a, b) = (rects["a"], rects["b"]);
     let expected = f32::from(width) * f32::from(g1) / f32::from(g1 + g2);
-    prop_assert!(close(a.width(), expected), "a {a:?}, expected width {expected}");
+    prop_assert!(
+        close(a.width(), expected),
+        "a {a:?}, expected width {expected}"
+    );
     prop_assert!(close(a.width() + b.width(), f32::from(width)));
     prop_assert!(close(b.min.x, a.max.x));
 }
@@ -131,8 +150,12 @@ fn space_between_spreads_items(#[strategy(vec(10u16..100, 2..5))] widths: Vec<u1
     let last = widths.len() - 1;
     prop_assert!(close(item(0).min.x, container.min.x));
     prop_assert!(close(item(last).max.x, container.max.x));
-    let gaps: Vec<f32> = (0..last).map(|i| item(i + 1).min.x - item(i).max.x).collect();
-    let (min, max) = gaps.iter().fold((f32::MAX, f32::MIN), |(lo, hi), gap| (lo.min(*gap), hi.max(*gap)));
+    let gaps: Vec<f32> = (0..last)
+        .map(|i| item(i + 1).min.x - item(i).max.x)
+        .collect();
+    let (min, max) = gaps.iter().fold((f32::MAX, f32::MIN), |(lo, hi), gap| {
+        (lo.min(*gap), hi.max(*gap))
+    });
     prop_assert!(max - min <= TOLERANCE, "unequal gaps {gaps:?}");
 }
 
@@ -153,10 +176,15 @@ fn wrapped_items_stay_inside_without_overlap(#[strategy(vec(20u16..200, 2..8))] 
     let item = |i: usize| rects[&format!("i{i}")];
     for i in 0..widths.len() {
         let a = item(i);
-        prop_assert!(a.min.x >= container.min.x - TOLERANCE && a.max.x <= container.max.x + TOLERANCE);
+        prop_assert!(
+            a.min.x >= container.min.x - TOLERANCE && a.max.x <= container.max.x + TOLERANCE
+        );
         for j in i + 1..widths.len() {
             let overlap = a.intersect(item(j));
-            prop_assert!(overlap.width() <= TOLERANCE || overlap.height() <= TOLERANCE, "{i} and {j} overlap");
+            prop_assert!(
+                overlap.width() <= TOLERANCE || overlap.height() <= TOLERANCE,
+                "{i} and {j} overlap"
+            );
         }
     }
 }

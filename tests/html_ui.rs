@@ -100,7 +100,9 @@ fn system_font_families_request_weight_and_style() {
     ui.world_mut()
         .resource_mut::<FontFamilies>()
         .insert("Body", FontFaces::new(FontSource::Serif));
-    let mut ui = ui.stylesheet("style.css").spawn("page.html", TemplateContext::new(), Node::default());
+    let mut ui =
+        ui.stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -153,17 +155,22 @@ fn turning_localization_off_restores_own_content() {
         &[
             ("page.html", r#"<p data-l10n-id="title">Own title</p>"#),
             ("style.css", "html { color: #ffffff; font-size: 20px }"),
-            ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
+            (
+                "locales/en-US/main.ftl.ron",
+                r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+            ),
             ("locales/en-US/ui.ftl", "title = Translated title"),
         ],
     )
     .stylesheet("style.css")
     .locale("locales/en-US/main.ftl.ron")
     .spawn("page.html", TemplateContext::new(), Node::default());
-    ui.settle().assert_dump("\nhtml-ui\n  p\n    \"Translated title\" default 20px #ffffff\n");
+    ui.settle()
+        .assert_dump("\nhtml-ui\n  p\n    \"Translated title\" default 20px #ffffff\n");
 
     ui.world_mut().resource_mut::<ActiveLocale>().0 = None;
-    ui.settle().assert_dump("\nhtml-ui\n  p\n    \"Own title\" default 20px #ffffff\n");
+    ui.settle()
+        .assert_dump("\nhtml-ui\n  p\n    \"Own title\" default 20px #ffffff\n");
 }
 
 /// Fluent: `data-l10n-id` replaces content; args (numbers for plurals,
@@ -211,7 +218,9 @@ coins =
     .locale("locales/en-US/main.ftl.ron")
     .spawn(
         "page.html",
-        TemplateContext::new().with("name", "Ada <The Brave>").with("n", &1),
+        TemplateContext::new()
+            .with("name", "Ada <The Brave>")
+            .with("n", &1),
         Node::default(),
     );
     ui.settle().assert_dump(
@@ -337,18 +346,26 @@ fn template_render_failure_shows_the_error_and_recovers() {
         Some(RenderedHtml::Failed(message)) => message.clone(),
         _ => panic!("expected a render failure"),
     };
-    assert!(failed.contains("player"), "error names the variable: {failed}");
+    assert!(
+        failed.contains("player"),
+        "error names the variable: {failed}"
+    );
     let dump = ui.dump();
     let mut lines = dump.lines();
     assert_eq!(lines.next(), Some("html-ui"));
     assert_eq!(lines.next(), Some("  -"), "{dump}");
     let run = lines.next().unwrap_or_default();
     assert!(
-        run.starts_with("    \"failed to render: ") && run.contains("player") && run.ends_with("default 20px #ff0000"),
+        run.starts_with("    \"failed to render: ")
+            && run.contains("player")
+            && run.ends_with("default 20px #ff0000"),
         "{dump}"
     );
 
-    ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("player", "Ada");
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("player", "Ada");
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -508,10 +525,19 @@ fn style_changes_restyle_in_place_unless_the_shape_changes() {
     let mut ui = TestUi::new(
         "restyle",
         &[
-            ("page.html", r#"<p id="a">One</p><div class="box"><p>Two</p></div>"#),
+            (
+                "page.html",
+                r#"<p id="a">One</p><div class="box"><p>Two</p></div>"#,
+            ),
             ("red.css", "html { color: #ff0000; font-size: 20px }"),
-            ("blue.css", "html { color: #0000ff; font-size: 20px } .box { padding: 4px }"),
-            ("boxed.css", "html { color: #0000ff; font-size: 20px } p { background-color: #102030 }"),
+            (
+                "blue.css",
+                "html { color: #0000ff; font-size: 20px } .box { padding: 4px }",
+            ),
+            (
+                "boxed.css",
+                "html { color: #0000ff; font-size: 20px } p { background-color: #102030 }",
+            ),
         ],
     )
     .stylesheet("red.css");
@@ -559,7 +585,10 @@ html-ui
     let mut after = Vec::new();
     descendants(world, root, &mut after);
     assert_eq!(after, before, "restyle kept every child entity");
-    assert!(world.entity(wired).contains::<Wired>(), "app component survived");
+    assert!(
+        world.entity(wired).contains::<Wired>(),
+        "app component survived"
+    );
     let events = world.resource::<Events>();
     assert_eq!((events.built, events.restyled), (1, 1));
 
@@ -577,7 +606,11 @@ html-ui
 "#,
     );
     let events = ui.world_mut().resource::<Events>();
-    assert_eq!((events.built, events.restyled), (2, 1), "new wrappers: rebuilt");
+    assert_eq!(
+        (events.built, events.restyled),
+        (2, 1),
+        "new wrappers: rebuilt"
+    );
 }
 
 /// Swapping stylesheet `a` → `b` must end exactly where a fresh build with
@@ -588,18 +621,27 @@ fn restyles_that_change_shape_match_a_fresh_build() {
     let page = r#"<p id="a">One</p><div class="box"><p class="inner">Plain <b>bold</b></p></div>"#;
     let cases = [
         // Only the nested block gains a box (needs a wrapper).
-        ("html { color: #ffffff }", "html { color: #ffffff } .inner { background-color: #102030 }"),
+        (
+            "html { color: #ffffff }",
+            "html { color: #ffffff } .inner { background-color: #102030 }",
+        ),
         // The container loses its frame.
         (
             r#"html { color: #ffffff } .box { border-image: url("frame.png") 4 fill stretch; border-width: 4px }"#,
             "html { color: #ffffff }",
         ),
         // `b` stops differing from its block: two runs become one.
-        ("html { color: #ffffff } b { color: #ff0000 }", "html { color: #ffffff }"),
+        (
+            "html { color: #ffffff } b { color: #ff0000 }",
+            "html { color: #ffffff }",
+        ),
     ];
     for (a, b) in cases {
-        let mut swapped = TestUi::new("restyle-shape", &[("page.html", page), ("a.css", a), ("b.css", b)])
-            .stylesheet("a.css");
+        let mut swapped = TestUi::new(
+            "restyle-shape",
+            &[("page.html", page), ("a.css", a), ("b.css", b)],
+        )
+        .stylesheet("a.css");
         let b_sheet = swapped.load::<Stylesheet>("b.css");
         let mut swapped = swapped.spawn("page.html", TemplateContext::new(), Node::default());
         swapped.settle();
@@ -617,7 +659,10 @@ fn restyles_that_change_shape_match_a_fresh_build() {
 fn root_box_keeps_the_apps_own_image() {
     let mut ui = TestUi::new(
         "root-image",
-        &[("page.html", "<p>Text</p>"), ("style.css", "html { padding: 5px }")],
+        &[
+            ("page.html", "<p>Text</p>"),
+            ("style.css", "html { padding: 5px }"),
+        ],
     )
     .stylesheet("style.css");
     let template = ui.load::<HtmlTemplate>("page.html");
@@ -630,8 +675,13 @@ fn root_box_keeps_the_apps_own_image() {
     ui.settle_quiet();
     ui.update(10);
     let world = ui.world_mut();
-    assert_eq!(world.get::<Node>(root).unwrap().padding, UiRect::all(Val::Px(5.0)));
-    let image = world.get::<ImageNode>(root).expect("the app's ImageNode survived");
+    assert_eq!(
+        world.get::<Node>(root).unwrap().padding,
+        UiRect::all(Val::Px(5.0))
+    );
+    let image = world
+        .get::<ImageNode>(root)
+        .expect("the app's ImageNode survived");
     assert_eq!(image.image, backdrop);
 }
 
@@ -669,17 +719,33 @@ fn restyle_keeps_an_apps_image_on_an_element() {
         .find(|(_, element)| element.id.as_deref() == Some("icon"))
         .map(|(entity, _)| entity)
         .unwrap();
-    world.entity_mut(icon).insert(ImageNode::new(icon_image.clone()));
+    world
+        .entity_mut(icon)
+        .insert(ImageNode::new(icon_image.clone()));
     let builds = world.resource::<Builds>().0;
 
     ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(blue);
     ui.settle_quiet();
     ui.update(10);
     let world = ui.world_mut();
-    assert_eq!(world.resource::<Builds>().0, builds, "restyled, not rebuilt");
+    assert_eq!(
+        world.resource::<Builds>().0,
+        builds,
+        "restyled, not rebuilt"
+    );
     let entity = world.entity(icon);
-    assert_eq!(entity.get::<Node>().unwrap().width, Val::Px(16.0), "restyle applied");
-    assert_eq!(entity.get::<ImageNode>().expect("the app's image survived").image, icon_image);
+    assert_eq!(
+        entity.get::<Node>().unwrap().width,
+        Val::Px(16.0),
+        "restyle applied"
+    );
+    assert_eq!(
+        entity
+            .get::<ImageNode>()
+            .expect("the app's image survived")
+            .image,
+        icon_image
+    );
 }
 
 /// `position`/insets, `border-radius`, `border-color`, `z-index` and
@@ -690,11 +756,19 @@ fn restyle_keeps_an_apps_image_on_an_element() {
 #[test]
 fn positioning_radius_border_color_z_index_and_pointer_events() {
     let page = r#"<div class="overlay"><p id="tip">Tip</p></div><div id="static"></div><div id="app"></div>"#;
-    let css = ".overlay { position: absolute; top: 4px; left: 8px; z-index: 5; pointer-events: none; \
+    let css =
+        ".overlay { position: absolute; top: 4px; left: 8px; z-index: 5; pointer-events: none; \
                border-radius: 3px; border-width: 1px; border-color: #ff0000 }
                #static { position: static; top: 9px }";
-    let mut ui = TestUi::new("positioning", &[("page.html", page), ("a.css", css), ("b.css", "p { color: #ffffff }")])
-        .stylesheet("a.css");
+    let mut ui = TestUi::new(
+        "positioning",
+        &[
+            ("page.html", page),
+            ("a.css", css),
+            ("b.css", "p { color: #ffffff }"),
+        ],
+    )
+    .stylesheet("a.css");
     let plain = ui.load::<Stylesheet>("b.css");
     let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
     ui.settle().assert_dump(
@@ -742,8 +816,10 @@ fn element_by_id(world: &mut World, root: Entity, id: &str) -> Entity {
     candidates
         .into_iter()
         .find(|&entity| {
-            std::iter::successors(Some(entity), |&current| world.get::<ChildOf>(current).map(ChildOf::parent))
-                .any(|ancestor| ancestor == root)
+            std::iter::successors(Some(entity), |&current| {
+                world.get::<ChildOf>(current).map(ChildOf::parent)
+            })
+            .any(|ancestor| ancestor == root)
         })
         .unwrap_or_else(|| panic!("no #{id} below {root}"))
 }
@@ -774,25 +850,44 @@ fn focus_navigation_scope_and_styles() {
     let css = "div:focus-visible { outline: 2px solid #ff0000; outline-offset: 3px } \
                #c:focus { background-color: #00ff00 }";
     let modal = r#"<div id="ok" data-on-click="ok"><p>OK</p></div>"#;
-    let mut ui = TestUi::new("focus", &[("page.html", page), ("style.css", css), ("modal.html", modal)])
-        .stylesheet("style.css");
+    let mut ui = TestUi::new(
+        "focus",
+        &[
+            ("page.html", page),
+            ("style.css", css),
+            ("modal.html", modal),
+        ],
+    )
+    .stylesheet("style.css");
     let modal_template = ui.load::<HtmlTemplate>("modal.html");
-    let mut ui = ui.spawn("page.html", TemplateContext::new().with("n", &1), Node::default());
+    let mut ui = ui.spawn(
+        "page.html",
+        TemplateContext::new().with("n", &1),
+        Node::default(),
+    );
     ui.settle();
     ui.update(3);
     let root = ui.root();
     let world = ui.world_mut();
     let [a, b, c, d] = ["a", "b", "c", "d"].map(|id| element_by_id(world, root, id));
     assert_eq!(focused(world), Some(b), "autofocus");
-    assert_eq!([a, b, c, d].map(|entity| navigable(world, entity)), [true, true, true, false]);
+    assert_eq!(
+        [a, b, c, d].map(|entity| navigable(world, entity)),
+        [true, true, true, false]
+    );
     assert!(world.get::<Outline>(b).is_none(), "focus not shown yet");
 
     // Shown focus: `:focus-visible` restyles in place.
-    world.resource_mut::<bevy::input_focus::InputFocusVisible>().0 = true;
+    world
+        .resource_mut::<bevy::input_focus::InputFocusVisible>()
+        .0 = true;
     ui.update(3);
     let world = ui.world_mut();
     let outline = world.get::<Outline>(b).expect(":focus-visible outline");
-    assert_eq!((outline.width, outline.offset), (Val::Px(2.0), Val::Px(3.0)));
+    assert_eq!(
+        (outline.width, outline.offset),
+        (Val::Px(2.0), Val::Px(3.0))
+    );
 
     // Moving focus moves the styles (`:focus` alone styles `#c`).
     world
@@ -801,14 +896,27 @@ fn focus_navigation_scope_and_styles() {
     ui.update(3);
     let world = ui.world_mut();
     assert!(world.get::<Outline>(b).is_none(), "outline left b");
-    assert_eq!(world.get::<BackgroundColor>(c).map(|bg| hex(bg.0)), Some("#00ff00".to_owned()));
+    assert_eq!(
+        world.get::<BackgroundColor>(c).map(|bg| hex(bg.0)),
+        Some("#00ff00".to_owned())
+    );
 
     // Activation emits the element's click signal with its payload.
     world.trigger(ActivateElement { entity: b });
-    let signals: Vec<ElementSignal> =
-        world.resource::<Messages<ElementSignal>>().iter_current_update_messages().cloned().collect();
+    let signals: Vec<ElementSignal> = world
+        .resource::<Messages<ElementSignal>>()
+        .iter_current_update_messages()
+        .cloned()
+        .collect();
     assert_eq!(signals.len(), 1);
-    assert_eq!((signals[0].name.as_ref(), signals[0].payload["n"].as_i64(), signals[0].position), ("pick-b", Some(1), None));
+    assert_eq!(
+        (
+            signals[0].name.as_ref(),
+            signals[0].payload["n"].as_i64(),
+            signals[0].position
+        ),
+        ("pick-b", Some(1), None)
+    );
 
     // A rebuild replaces every element; focus follows the `id`.
     world
@@ -816,7 +924,10 @@ fn focus_navigation_scope_and_styles() {
         .set(a, bevy::input_focus::FocusCause::Navigated);
     ui.update(2);
     let world = ui.world_mut();
-    world.get_mut::<TemplateContext>(root).unwrap().insert("n", &2);
+    world
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &2);
     ui.settle();
     ui.update(3);
     let world = ui.world_mut();
@@ -825,7 +936,9 @@ fn focus_navigation_scope_and_styles() {
     assert_eq!(focused(world), Some(new_a), "focus restored by id");
 
     // A modal root takes focus and confines navigation.
-    let dialog = world.spawn((HtmlUi::new(modal_template.clone()), HtmlModal)).id();
+    let dialog = world
+        .spawn((HtmlUi::new(modal_template.clone()), HtmlModal))
+        .id();
     ui.settle_quiet();
     ui.update(5);
     let world = ui.world_mut();
@@ -866,21 +979,23 @@ fn html_focus_navigates_by_layout_and_reports_edges() {
 
     let page = r#"<div id="top" data-on-click="top" autofocus><p>Top</p></div>
         <div id="bottom" data-on-click="bottom"><p>Bottom</p></div>"#;
-    let mut ui = TestUi::with_layout("navigate", &[("page.html", page)], UVec2::new(320, 240)).spawn(
-        "page.html",
-        TemplateContext::new(),
-        Node {
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            ..default()
-        },
-    );
+    let mut ui = TestUi::with_layout("navigate", &[("page.html", page)], UVec2::new(320, 240))
+        .spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        );
     ui.settle();
     ui.update(3);
     let root = ui.root();
     let world = ui.world_mut();
     world.init_resource::<Edges>();
-    world.add_observer(|edge: On<FocusEdge>, mut edges: ResMut<Edges>| edges.0.push(edge.direction));
+    world
+        .add_observer(|edge: On<FocusEdge>, mut edges: ResMut<Edges>| edges.0.push(edge.direction));
     let [top, bottom] = ["top", "bottom"].map(|id| element_by_id(world, root, id));
     assert_eq!(focused(world), Some(top));
 
@@ -889,7 +1004,10 @@ fn html_focus_navigates_by_layout_and_reports_edges() {
         .unwrap();
     assert_eq!(moved, Some(bottom));
     assert_eq!(focused(world), Some(bottom));
-    assert!(world.resource::<bevy::input_focus::InputFocusVisible>().0, "navigation shows focus");
+    assert!(
+        world.resource::<bevy::input_focus::InputFocusVisible>().0,
+        "navigation shows focus"
+    );
 
     let moved = world
         .run_system_once(|mut focus: HtmlFocus| focus.navigate(CompassOctant::South))
@@ -899,7 +1017,9 @@ fn html_focus_navigates_by_layout_and_reports_edges() {
     assert_eq!(world.resource::<Edges>().0, [CompassOctant::South]);
     assert_eq!(focused(world), Some(bottom));
 
-    world.run_system_once(|mut focus: HtmlFocus| focus.activate()).unwrap();
+    world
+        .run_system_once(|mut focus: HtmlFocus| focus.activate())
+        .unwrap();
     world.flush();
     let names: Vec<String> = world
         .resource::<Messages<ElementSignal>>()
@@ -930,14 +1050,23 @@ fn identical_render_skips_the_rebuild() {
     let builds = ui.builds();
 
     for (key, value) in [("n", 1), ("unused", 7)] {
-        ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert(key, &value);
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert(key, &value);
         ui.update(5);
         assert_eq!(ui.builds(), builds, "{key} = {value}: nothing to rebuild");
     }
     let world = ui.world_mut();
-    assert!(world.entity(paragraph).contains::<Wired>(), "entity and its components kept");
+    assert!(
+        world.entity(paragraph).contains::<Wired>(),
+        "entity and its components kept"
+    );
 
-    world.get_mut::<TemplateContext>(root).unwrap().insert("n", &2);
+    world
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &2);
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -970,22 +1099,36 @@ fn loaders_are_found_by_extension() {
         ("a.css", TypeId::of::<Stylesheet>()),
         ("b.html", TypeId::of::<HtmlTemplate>()),
         ("c.htm", TypeId::of::<HtmlTemplate>()),
-        ("d.slice.ron", TypeId::of::<bevy_markup::nine_slice::NineSlice>()),
+        (
+            "d.slice.ron",
+            TypeId::of::<bevy_markup::nine_slice::NineSlice>(),
+        ),
     ];
     let handles: Vec<_> = expected
         .iter()
-        .map(|(path, _)| ui.world_mut().resource::<AssetServer>().load_builder().load_untyped(*path))
+        .map(|(path, _)| {
+            ui.world_mut()
+                .resource::<AssetServer>()
+                .load_builder()
+                .load_untyped(*path)
+        })
         .collect();
     for _ in 0..3000 {
         ui.update(1);
-        let loaded = ui.world_mut().resource::<Assets<bevy::asset::LoadedUntypedAsset>>();
+        let loaded = ui
+            .world_mut()
+            .resource::<Assets<bevy::asset::LoadedUntypedAsset>>();
         if handles.iter().all(|handle| loaded.contains(handle)) {
             break;
         }
     }
-    let loaded = ui.world_mut().resource::<Assets<bevy::asset::LoadedUntypedAsset>>();
+    let loaded = ui
+        .world_mut()
+        .resource::<Assets<bevy::asset::LoadedUntypedAsset>>();
     for ((path, type_id), handle) in expected.iter().zip(&handles) {
-        let asset = loaded.get(handle).unwrap_or_else(|| panic!("{path} didn't load untyped"));
+        let asset = loaded
+            .get(handle)
+            .unwrap_or_else(|| panic!("{path} didn't load untyped"));
         assert_eq!(asset.handle.type_id(), *type_id, "{path}");
     }
 }
@@ -998,12 +1141,19 @@ fn template_is_named_after_its_asset_path() {
     let handle = ui.load::<HtmlTemplate>("ui/page.html");
     for _ in 0..3000 {
         ui.update(1);
-        if ui.world_mut().resource::<Assets<HtmlTemplate>>().contains(&handle) {
+        if ui
+            .world_mut()
+            .resource::<Assets<HtmlTemplate>>()
+            .contains(&handle)
+        {
             break;
         }
     }
     let templates = ui.world_mut().resource::<Assets<HtmlTemplate>>();
-    assert_eq!(templates.get(&handle).expect("loaded").name(), "ui/page.html");
+    assert_eq!(
+        templates.get(&handle).expect("loaded").name(),
+        "ui/page.html"
+    );
 }
 
 /// Counts updates (`HtmlUiBuilt` or `HtmlUiRestyled`) per entity.
@@ -1033,18 +1183,28 @@ fn stylesheet_reload_rebuilds_only_its_users() {
     world.add_observer(|built: On<HtmlUiBuilt>, mut per: ResMut<UpdatesPer>| {
         *per.0.entry(built.entity).or_default() += 1;
     });
-    world.add_observer(|restyled: On<HtmlUiRestyled>, mut per: ResMut<UpdatesPer>| {
-        *per.0.entry(restyled.entity).or_default() += 1;
-    });
+    world.add_observer(
+        |restyled: On<HtmlUiRestyled>, mut per: ResMut<UpdatesPer>| {
+            *per.0.entry(restyled.entity).or_default() += 1;
+        },
+    );
     world.entity_mut(user).insert(HtmlStylesheet(good.clone()));
-    let failed = world.spawn((HtmlUi::new(template), HtmlStylesheet(broken))).id();
+    let failed = world
+        .spawn((HtmlUi::new(template), HtmlStylesheet(broken)))
+        .id();
     ui.settle();
     let counts = |ui: &mut TestUi| {
         let per = &ui.world_mut().resource::<UpdatesPer>().0;
-        (per.get(&user).copied().unwrap_or(0), per.get(&failed).copied().unwrap_or(0))
+        (
+            per.get(&user).copied().unwrap_or(0),
+            per.get(&failed).copied().unwrap_or(0),
+        )
     };
     let (user_before, failed_before) = counts(&mut ui);
-    assert!(user_before >= 1 && failed_before >= 1, "both built: {user_before}, {failed_before}");
+    assert!(
+        user_before >= 1 && failed_before >= 1,
+        "both built: {user_before}, {failed_before}"
+    );
 
     // In-place edit: `AssetMut` emits `Modified` once dereferenced mutably.
     {
@@ -1086,13 +1246,20 @@ fn image_change_reslices_percent_frames() {
     ui.settle().assert_dump(&expected("6,8,6,8"));
 
     let bigger = Image::new_fill(
-        Extent3d { width: 64, height: 48, depth_or_array_layers: 1 },
+        Extent3d {
+            width: 64,
+            height: 48,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         &[255; 4],
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
     );
-    ui.world_mut().resource_mut::<Assets<Image>>().insert(&frame, bigger).unwrap();
+    ui.world_mut()
+        .resource_mut::<Assets<Image>>()
+        .insert(&frame, bigger)
+        .unwrap();
     ui.settle().assert_dump(&expected("12,16,12,16"));
 }
 
@@ -1102,18 +1269,28 @@ fn image_change_reslices_percent_frames() {
 fn loading_stylesheet_defers_the_build() {
     let mut ui = TestUi::new(
         "sheet-loading",
-        &[("page.html", "<p>Text</p>"), ("style.css", "html { color: #ff0000 }")],
+        &[
+            ("page.html", "<p>Text</p>"),
+            ("style.css", "html { color: #ff0000 }"),
+        ],
     );
     // A handle nothing will ever load: the stylesheet stays "loading".
-    let pending = ui.world_mut().resource::<Assets<Stylesheet>>().reserve_handle();
-    ui.world_mut().insert_resource(DefaultStylesheet::new(pending.clone()));
+    let pending = ui
+        .world_mut()
+        .resource::<Assets<Stylesheet>>()
+        .reserve_handle();
+    ui.world_mut()
+        .insert_resource(DefaultStylesheet::new(pending.clone()));
     let real = ui.load::<Stylesheet>("style.css");
     let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
     let root = ui.root();
     for _ in 0..3000 {
         ui.update(1);
         let world = ui.world_mut();
-        let rendered = matches!(world.get::<RenderedHtml>(root), Some(RenderedHtml::Ready(_)));
+        let rendered = matches!(
+            world.get::<RenderedHtml>(root),
+            Some(RenderedHtml::Ready(_))
+        );
         if rendered && world.resource::<Assets<Stylesheet>>().contains(&real) {
             break;
         }
@@ -1212,7 +1389,10 @@ fn layout_oracle() {
         let json = std::fs::read_to_string(vectors_dir().join(name).join("browser.json")).unwrap();
         let oracle: serde_json::Value = serde_json::from_str(&json).unwrap();
         let viewport = &oracle["generator"]["viewport"];
-        let viewport = UVec2::new(viewport[0].as_u64().unwrap() as u32, viewport[1].as_u64().unwrap() as u32);
+        let viewport = UVec2::new(
+            viewport[0].as_u64().unwrap() as u32,
+            viewport[1].as_u64().unwrap() as u32,
+        );
         let mut ui = TestUi::from_layout_vector(name, viewport);
         ui.settle();
         let root = ui.root();
@@ -1233,8 +1413,14 @@ fn layout_oracle() {
                 .iter()
                 .map(|value| value.as_f64().unwrap() as f32)
                 .collect();
-            if ours.iter().zip(&theirs).any(|(a, b)| (a - b).abs() > LAYOUT_TOLERANCE) {
-                failures.push(format!("{name}: {label} [x, y, w, h]: bevy_markup {ours:?} vs browser {theirs:?}"));
+            if ours
+                .iter()
+                .zip(&theirs)
+                .any(|(a, b)| (a - b).abs() > LAYOUT_TOLERANCE)
+            {
+                failures.push(format!(
+                    "{name}: {label} [x, y, w, h]: bevy_markup {ours:?} vs browser {theirs:?}"
+                ));
             }
         }
     }
@@ -1267,7 +1453,10 @@ fn fluent_oracle() {
         let mut reference = TestUi::vector_page(name, "fluent.html", false);
         let theirs = reference.settle().dump();
         if ours != theirs {
-            failures.push(format!("{name} (- @fluent/dom, + bevy_markup):\n{}", line_diff(&theirs, &ours)));
+            failures.push(format!(
+                "{name} (- @fluent/dom, + bevy_markup):\n{}",
+                line_diff(&theirs, &ours)
+            ));
         }
     }
     assert!(
@@ -1320,8 +1509,19 @@ fn line_diff(old: &str, new: &str) -> String {
 const FIXTURE_SIZE: (f32, f32) = (32.0, 24.0);
 const BLOCKS: &[&str] = &["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "pre"];
 const CONTAINERS: &[&str] = &[
-    "div", "section", "article", "header", "footer", "main", "nav", "aside", "ul", "ol",
-    "blockquote", "figure", "form",
+    "div",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "main",
+    "nav",
+    "aside",
+    "ul",
+    "ol",
+    "blockquote",
+    "figure",
+    "form",
 ];
 
 /// The face CSS font matching picks for this computed style, with the test
@@ -1332,7 +1532,12 @@ fn browser_face(record: &serde_json::Value) -> String {
     let bold = record["fontWeight"].as_f64().unwrap_or(400.0) > 500.0;
     let italic = record["fontStyle"].as_str().unwrap_or("normal") != "normal";
     for name in family.split(',') {
-        match name.trim().trim_matches(['"', '\'']).to_ascii_lowercase().as_str() {
+        match name
+            .trim()
+            .trim_matches(['"', '\''])
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "spectral" => {
                 return match (bold, italic) {
                     (false, false) => "serif",
@@ -1350,14 +1555,23 @@ fn browser_face(record: &serde_json::Value) -> String {
 }
 
 fn browser_color(css: &str) -> Option<String> {
-    let inner = css.strip_prefix("rgba(").or_else(|| css.strip_prefix("rgb("))?;
+    let inner = css
+        .strip_prefix("rgba(")
+        .or_else(|| css.strip_prefix("rgb("))?;
     let parts: Vec<f32> = inner
         .trim_end_matches(')')
         .split(',')
         .map(|part| part.trim().parse().unwrap())
         .collect();
     let alpha = parts.get(3).copied().unwrap_or(1.0);
-    (alpha > 0.0).then(|| hex(Color::srgba_u8(parts[0] as u8, parts[1] as u8, parts[2] as u8, (alpha * 255.0).round() as u8)))
+    (alpha > 0.0).then(|| {
+        hex(Color::srgba_u8(
+            parts[0] as u8,
+            parts[1] as u8,
+            parts[2] as u8,
+            (alpha * 255.0).round() as u8,
+        ))
+    })
 }
 
 fn round(value: f64) -> f64 {
@@ -1391,11 +1605,19 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
                 .collect::<Vec<_>>()
         })
         .collect();
-    let text = |chars: &[(char, String, f64, String)]| chars.iter().map(|c| c.0).collect::<String>();
+    let text =
+        |chars: &[(char, String, f64, String)]| chars.iter().map(|c| c.0).collect::<String>();
     if text(&ours) != text(&theirs) {
-        problems.push(format!("text differs: bevy_markup {:?} vs browser {:?}", text(&ours), text(&theirs)));
+        problems.push(format!(
+            "text differs: bevy_markup {:?} vs browser {:?}",
+            text(&ours),
+            text(&theirs)
+        ));
     } else if let Some(index) = (0..ours.len()).find(|&i| ours[i] != theirs[i]) {
-        let context: String = ours[index.saturating_sub(8)..=index].iter().map(|c| c.0).collect();
+        let context: String = ours[index.saturating_sub(8)..=index]
+            .iter()
+            .map(|c| c.0)
+            .collect();
         let (_, face, size, color) = &ours[index];
         let (_, b_face, b_size, b_color) = &theirs[index];
         problems.push(format!(
@@ -1422,31 +1644,59 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
             })
         };
         let floats = |key: &str| -> [f64; 4] {
-            let values: Vec<f64> = theirs[key].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+            let values: Vec<f64> = theirs[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect();
             [values[0], values[1], values[2], values[3]]
         };
         let mut check = |what: &str, ours: String, browser: String| {
             if ours != browser {
-                problems.push(format!("{label}: {what} bevy_markup {ours} vs browser {browser}"));
+                problems.push(format!(
+                    "{label}: {what} bevy_markup {ours} vs browser {browser}"
+                ));
             }
         };
 
-        check("padding", format!("{:?}", sides(node.padding)), format!("{:?}", floats("padding")));
-        check("border", format!("{:?}", sides(node.border)), format!("{:?}", floats("border")));
+        check(
+            "padding",
+            format!("{:?}", sides(node.padding)),
+            format!("{:?}", floats("padding")),
+        );
+        check(
+            "border",
+            format!("{:?}", sides(node.border)),
+            format!("{:?}", floats("border")),
+        );
 
-        let our_slice = entity_ref.get::<ImageNode>().and_then(|image| match &image.image_mode {
-            NodeImageMode::Sliced(slicer) => {
-                let file = image.image.path().map(|p| p.path().display().to_string()).unwrap_or_default();
-                let (min, max) = (slicer.border.min_inset, slicer.border.max_inset);
-                let mode = match slicer.sides_scale_mode {
-                    SliceScaleMode::Stretch => "stretch",
-                    SliceScaleMode::Tile { .. } => "tile",
-                };
-                Some(format!("{file} {},{},{},{} {mode}", min.y, max.x, max.y, min.x))
-            }
-            _ => None,
-        });
-        check("border-image", format!("{our_slice:?}"), format!("{:?}", browser_slice(theirs)));
+        let our_slice = entity_ref
+            .get::<ImageNode>()
+            .and_then(|image| match &image.image_mode {
+                NodeImageMode::Sliced(slicer) => {
+                    let file = image
+                        .image
+                        .path()
+                        .map(|p| p.path().display().to_string())
+                        .unwrap_or_default();
+                    let (min, max) = (slicer.border.min_inset, slicer.border.max_inset);
+                    let mode = match slicer.sides_scale_mode {
+                        SliceScaleMode::Stretch => "stretch",
+                        SliceScaleMode::Tile { .. } => "tile",
+                    };
+                    Some(format!(
+                        "{file} {},{},{},{} {mode}",
+                        min.y, max.x, max.y, min.x
+                    ))
+                }
+                _ => None,
+            });
+        check(
+            "border-image",
+            format!("{our_slice:?}"),
+            format!("{:?}", browser_slice(theirs)),
+        );
 
         // Root background: allowed difference (belongs to the app).
         if tag != "html" {
@@ -1463,7 +1713,12 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
                 _ => 0.0,
             };
             // `normal` = no CSS gap → bevy_markup uses the root's gap (0 here).
-            let their_gap = theirs["rowGap"].as_str().unwrap().trim_end_matches("px").parse().unwrap_or(0.0);
+            let their_gap = theirs["rowGap"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches("px")
+                .parse()
+                .unwrap_or(0.0);
             check("gap", format!("{our_gap}"), format!("{their_gap}"));
         }
     }
@@ -1474,7 +1729,12 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
 /// `%` slices resolved against the 32×24 fixture.
 fn browser_slice(record: &serde_json::Value) -> Option<String> {
     let source = record["borderImageSource"].as_str().unwrap();
-    let file = source.strip_prefix("url(\"")?.trim_end_matches("\")").rsplit('/').next()?.to_owned();
+    let file = source
+        .strip_prefix("url(\"")?
+        .trim_end_matches("\")")
+        .rsplit('/')
+        .next()?
+        .to_owned();
     let values: Vec<&str> = record["borderImageSlice"]
         .as_str()
         .unwrap()
@@ -1491,11 +1751,17 @@ fn browser_slice(record: &serde_json::Value) -> Option<String> {
     let side = |i: usize| -> f32 {
         let value = at(i);
         match value.strip_suffix('%') {
-            Some(percent) => percent.parse::<f32>().unwrap() / 100.0 * if i % 2 == 0 { height } else { width },
+            Some(percent) => {
+                percent.parse::<f32>().unwrap() / 100.0 * if i % 2 == 0 { height } else { width }
+            }
             None => value.parse().unwrap(),
         }
     };
-    let tile = record["borderImageRepeat"].as_str().unwrap().split_whitespace().any(|r| r != "stretch");
+    let tile = record["borderImageRepeat"]
+        .as_str()
+        .unwrap()
+        .split_whitespace()
+        .any(|r| r != "stretch");
     Some(format!(
         "{file} {},{},{},{} {}",
         side(0),
@@ -1552,7 +1818,11 @@ fn pair_elements<'o>(
         })
         .collect();
     if ours.len() != theirs.len() {
-        return Err(format!("element count: bevy_markup {} vs browser {}", ours.len(), theirs.len()));
+        return Err(format!(
+            "element count: bevy_markup {} vs browser {}",
+            ours.len(),
+            theirs.len()
+        ));
     }
     let mut pairs = Vec::new();
     for (entity, record) in ours.into_iter().zip(theirs) {
@@ -1561,13 +1831,20 @@ fn pair_elements<'o>(
             [] => tag.to_owned(),
             classes => format!(
                 "{tag}.{}",
-                classes.iter().map(|c| c.as_str().unwrap()).collect::<Vec<_>>().join(".")
+                classes
+                    .iter()
+                    .map(|c| c.as_str().unwrap())
+                    .collect::<Vec<_>>()
+                    .join(".")
             ),
         };
         if let Some(element) = world.entity(entity).get::<HtmlElement>()
             && element.tag != tag
         {
-            return Err(format!("{label}: element order differs (bevy_markup has {})", element.tag));
+            return Err(format!(
+                "{label}: element order differs (bevy_markup has {})",
+                element.tag
+            ));
         }
         pairs.push((entity, record, label));
     }
@@ -1610,7 +1887,10 @@ fn nested_ui_under_a_rebuilding_ancestor_is_skipped_not_panics() {
                 r#"(locale: "en-US", resources: ["ui.ftl"])"#,
             ),
             ("locales/en-US/ui.ftl", "outer = Outer EN\ninner = Inner EN"),
-            ("locales/de/main.ftl.ron", r#"(locale: "de", resources: ["ui.ftl"])"#),
+            (
+                "locales/de/main.ftl.ron",
+                r#"(locale: "de", resources: ["ui.ftl"])"#,
+            ),
             ("locales/de/ui.ftl", "outer = Outer DE\ninner = Inner DE"),
         ],
     )
@@ -1639,9 +1919,8 @@ fn nested_ui_under_a_rebuilding_ancestor_is_skipped_not_panics() {
             ChildOf(slot),
         ))
         .id();
-    ui.settle()
-        .assert_dump(
-            r#"
+    ui.settle().assert_dump(
+        r#"
 html-ui
   div#slot
     p
@@ -1650,7 +1929,7 @@ html-ui
       p
         "Inner EN" serif 20px #ffffff
 "#,
-        );
+    );
 
     // Both UIs re-localize in the same frame: the outer rebuild must win.
     let german = ui
@@ -1658,15 +1937,14 @@ html-ui
         .resource::<AssetServer>()
         .load("locales/de/main.ftl.ron");
     ui.world_mut().insert_resource(ActiveLocale::new(german));
-    ui.settle()
-        .assert_dump(
-            r#"
+    ui.settle().assert_dump(
+        r#"
 html-ui
   div#slot
     p
       "Outer DE" serif 20px #ffffff
 "#,
-        );
+    );
     assert!(
         ui.world_mut().get_entity(nested).is_err(),
         "the nested UI is despawned with the ancestor's replaced subtree"
@@ -1741,9 +2019,10 @@ html { color: #ffffff; font-size: 20px }
     };
 
     // Hover: the state change restyles the card in place.
-    ui.world_mut()
-        .entity_mut(box_entity)
-        .insert(PseudoState { hovered: true, ..default() });
+    ui.world_mut().entity_mut(box_entity).insert(PseudoState {
+        hovered: true,
+        ..default()
+    });
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -1808,7 +2087,12 @@ html { color: #ffffff; font-size: 20px }
     };
     let inner = ui
         .world_mut()
-        .spawn((HtmlUi::new(inner_template), TemplateContext::new(), Node::default(), ChildOf(slot)))
+        .spawn((
+            HtmlUi::new(inner_template),
+            TemplateContext::new(),
+            Node::default(),
+            ChildOf(slot),
+        ))
         .id();
     ui.settle();
 
@@ -1824,9 +2108,10 @@ html { color: #ffffff; font-size: 20px }
         .collect();
     assert_eq!(cards.len(), 2);
     for entity in cards {
-        ui.world_mut()
-            .entity_mut(entity)
-            .insert(PseudoState { hovered: true, ..default() });
+        ui.world_mut().entity_mut(entity).insert(PseudoState {
+            hovered: true,
+            ..default()
+        });
     }
     ui.settle().assert_dump(
         r#"

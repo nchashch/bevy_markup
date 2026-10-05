@@ -182,11 +182,17 @@ mod tests {
         world.init_resource::<Messages<AssetEvent<NineSlice>>>();
         let image = Handle::<Image>::default();
         let slicer = TextureSlicer {
-            border: BorderRect { min_inset: Vec2::new(4.0, 3.0), max_inset: Vec2::new(2.0, 1.0) },
+            border: BorderRect {
+                min_inset: Vec2::new(4.0, 3.0),
+                max_inset: Vec2::new(2.0, 1.0),
+            },
             ..default()
         };
         let mut slices = Assets::<NineSlice>::default();
-        let style = slices.add(NineSlice { image: image.clone(), slicer: slicer.clone() });
+        let style = slices.add(NineSlice {
+            image: image.clone(),
+            slicer: slicer.clone(),
+        });
         world.insert_resource(slices);
         let fresh = world.spawn(NineSliceFrame(style.clone())).id();
         let existing = world
@@ -196,8 +202,14 @@ mod tests {
         world.run_system_once(apply_nine_slices).unwrap();
 
         for entity in [fresh, existing] {
-            let node = world.get::<ImageNode>(entity).expect("frame got an ImageNode");
-            assert!(matches!(node.visual_box, VisualBox::BorderBox), "{entity}: {:?}", node.visual_box);
+            let node = world
+                .get::<ImageNode>(entity)
+                .expect("frame got an ImageNode");
+            assert!(
+                matches!(node.visual_box, VisualBox::BorderBox),
+                "{entity}: {:?}",
+                node.visual_box
+            );
             assert_eq!(node.image, image);
             let NodeImageMode::Sliced(applied) = &node.image_mode else {
                 panic!("{entity}: not sliced: {:?}", node.image_mode);
@@ -220,8 +232,14 @@ mod tests {
             ..default()
         };
         let mut slices = Assets::<NineSlice>::default();
-        let reloaded = slices.add(NineSlice { image: Handle::default(), slicer: slicer(4.0) });
-        let untouched = slices.add(NineSlice { image: Handle::default(), slicer: slicer(4.0) });
+        let reloaded = slices.add(NineSlice {
+            image: Handle::default(),
+            slicer: slicer(4.0),
+        });
+        let untouched = slices.add(NineSlice {
+            image: Handle::default(),
+            slicer: slicer(4.0),
+        });
         world.insert_resource(slices);
         let frame = world.spawn(NineSliceFrame(reloaded.clone())).id();
         let other = world.spawn(NineSliceFrame(untouched.clone())).id();
@@ -260,8 +278,13 @@ mod tests {
         assert_eq!(desc.image, "frame.png");
         let b = desc.border;
         assert_eq!([b.left, b.right, b.top, b.bottom], [1.0, 2.0, 3.0, 4.0]);
-        assert!(matches!(SliceScaleMode::from(desc.sides), SliceScaleMode::Tile { stretch_value } if stretch_value == 1.5));
-        assert!(matches!(SliceScaleMode::from(desc.center), SliceScaleMode::Stretch));
+        assert!(
+            matches!(SliceScaleMode::from(desc.sides), SliceScaleMode::Tile { stretch_value } if stretch_value == 1.5)
+        );
+        assert!(matches!(
+            SliceScaleMode::from(desc.center),
+            SliceScaleMode::Stretch
+        ));
         assert_eq!(desc.max_corner_scale, 2.0);
     }
 
@@ -270,9 +293,16 @@ mod tests {
     /// collapse to nothing) or a `Tile` default.
     #[test]
     fn optional_fields_default() {
-        let desc = parse(r#"(image: "f.png", border: (left: 16, right: 16, top: 16, bottom: 16))"#).unwrap();
-        assert!(matches!(SliceScaleMode::from(desc.sides), SliceScaleMode::Stretch));
-        assert!(matches!(SliceScaleMode::from(desc.center), SliceScaleMode::Stretch));
+        let desc = parse(r#"(image: "f.png", border: (left: 16, right: 16, top: 16, bottom: 16))"#)
+            .unwrap();
+        assert!(matches!(
+            SliceScaleMode::from(desc.sides),
+            SliceScaleMode::Stretch
+        ));
+        assert!(matches!(
+            SliceScaleMode::from(desc.center),
+            SliceScaleMode::Stretch
+        ));
         assert_eq!(desc.max_corner_scale, 1.0);
     }
 

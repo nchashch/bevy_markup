@@ -25,10 +25,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use bevy::prelude::*;
-use fluent_syntax::ast;
 use bevy_markup::l10n::LocalizedText;
 use bevy_markup::prelude::*;
 use bevy_markup::tl;
+use fluent_syntax::ast;
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
@@ -985,7 +985,10 @@ fn css_url_scanner_finds_only_url_tokens() {
 
 #[test]
 fn stylesheet_check_reports_parse_errors_and_dangling_urls() {
-    let root = std::env::temp_dir().join(format!("bevy_markup-content-lint-css-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "bevy_markup-content-lint-css-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("ui/themes")).unwrap();
     std::fs::write(root.join("ui/frame.png"), common::FRAME_PNG).unwrap();

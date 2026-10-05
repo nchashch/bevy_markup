@@ -7,13 +7,13 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 use crate::cascade::{HtmlStyles, LayoutDecl, OutlineDecl, Pseudo, SliceValue};
+use crate::focus::{self, Focusable};
 use crate::fonts::FontFamilies;
 use crate::html::{
     HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, HtmlUiRestyled, RenderedHtml,
 };
 use crate::l10n::LocalizedText;
 use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
-use crate::focus::{self, Focusable};
 use crate::signals::{self, ElementSignals, PseudoState, SignalBinding};
 use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
 use crate::template::decode_entities;
@@ -219,9 +219,9 @@ impl Styler<'_> {
                 Some(list) => self.fonts.resolve(list),
                 None => inherited.family,
             },
-            size: declared
-                .font_size
-                .map_or(inherited.size, |size| size.resolve(inherited.size, self.root_size)),
+            size: declared.font_size.map_or(inherited.size, |size| {
+                size.resolve(inherited.size, self.root_size)
+            }),
             bold: declared.bold.unwrap_or(inherited.bold),
             italic: declared.italic.unwrap_or(inherited.italic),
             pointer_events: declared.pointer_events.unwrap_or(inherited.pointer_events),
@@ -309,7 +309,11 @@ impl Styler<'_> {
 
 /// The `html` rule's values (the starting point even for fragments without
 /// `<html>`), over the defaults.
-pub(crate) fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Assets<Image>) -> Style {
+pub(crate) fn root_style(
+    styles: &HtmlStyles,
+    fonts: &FontFamilies,
+    images: &Assets<Image>,
+) -> Style {
     let defaults = Style {
         color: DEFAULT_COLOR,
         family: None,
@@ -413,7 +417,9 @@ pub(crate) fn build_html_ui(
             default: default_sheet.0.as_ref().map(phase),
             document_ready: !matches!(*rendered, RenderedHtml::Pending),
             own_changed: removed_sheets.contains(&entity)
-                || own_sheet.as_ref().is_some_and(|own| own.is_changed() || refreshed(&own.0)),
+                || own_sheet
+                    .as_ref()
+                    .is_some_and(|own| own.is_changed() || refreshed(&own.0)),
             default_changed,
             fonts_changed: fonts.is_changed(),
             state_changed: state_restyle.contains(&entity),
@@ -497,11 +503,9 @@ pub(crate) fn build_html_ui(
                     }),
                 );
             }
-            let nested_root = current != entity
-                && tree.get(current).is_ok_and(|(.., nested_ui)| nested_ui);
-            if !nested_root
-                && let Ok((children, ..)) = tree.get(current)
-            {
+            let nested_root =
+                current != entity && tree.get(current).is_ok_and(|(.., nested_ui)| nested_ui);
+            if !nested_root && let Ok((children, ..)) = tree.get(current) {
                 stack.extend(children.iter().flat_map(|children| children.iter()));
             }
         }
@@ -531,13 +535,7 @@ pub(crate) fn build_html_ui(
             match &*rendered {
                 RenderedHtml::Pending => continue,
                 RenderedHtml::Ready(document) => {
-                    collect_items(
-                        document.dom(),
-                        &localized.0,
-                        Some(&states),
-                        &styler,
-                        root,
-                    )
+                    collect_items(document.dom(), &localized.0, Some(&states), &styler, root)
                 }
                 RenderedHtml::Failed(message) => vec![Item::Block(Block {
                     kind: BlockKind::Paragraph,
@@ -556,7 +554,9 @@ pub(crate) fn build_html_ui(
         };
 
         // Nested containers space their children like the root does.
-        let default_gap = roots.get(entity).map_or(Val::Auto, |(node, _)| node.row_gap);
+        let default_gap = roots
+            .get(entity)
+            .map_or(Val::Auto, |(node, _)| node.row_gap);
         let specs: Vec<NodeSpec> = items
             .into_iter()
             .map(|item| item_spec(&styler, item, default_gap))
@@ -571,7 +571,10 @@ pub(crate) fn build_html_ui(
         // rebuild.
         if restyle
             && children.len() == specs.len()
-            && children.iter().zip(&specs).all(|(child, spec)| same_shape(spec, *child, &tree))
+            && children
+                .iter()
+                .zip(&specs)
+                .all(|(child, spec)| same_shape(spec, *child, &tree))
         {
             for (child, spec) in children.into_iter().zip(specs) {
                 apply_spec(&mut commands, child, spec, &tree);
@@ -747,7 +750,15 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
             boxed,
             pointer_events,
             children,
-        } => (element, handle, signals, focus, boxed, pointer_events, children),
+        } => (
+            element,
+            handle,
+            signals,
+            focus,
+            boxed,
+            pointer_events,
+            children,
+        ),
     };
     let mut node = Node {
         flex_direction: FlexDirection::Column,
@@ -901,16 +912,28 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
     if let Some(image) = spec.image {
         entity.insert((image, CssFrame));
     }
-    apply_css_owned(&mut entity, spec.border_color, spec.z_index, spec.outline, spec.pickable);
+    apply_css_owned(
+        &mut entity,
+        spec.border_color,
+        spec.z_index,
+        spec.outline,
+        spec.pickable,
+    );
     match spec.text {
         Some(text) => {
             entity.insert((Text::new(text.prefix), text.font, TextColor(text.color)));
             if text.no_wrap {
                 entity.insert(TextLayout::no_wrap());
             }
+            // bevy_picking resolves text-section hits against the span
+            // entity, so the block's `pointer-events: none` must be on the
+            // spans too (or the ignored block stays clickable).
             entity.with_children(|spans| {
                 for (span, font, color) in text.spans {
-                    spans.spawn((TextSpan::new(span), font, TextColor(color)));
+                    let mut span = spans.spawn((TextSpan::new(span), font, TextColor(color)));
+                    if !spec.pickable {
+                        span.insert(Pickable::IGNORE);
+                    }
                 }
             });
         }
@@ -982,16 +1005,37 @@ fn apply_spec(commands: &mut Commands, entity: Entity, spec: NodeSpec, tree: &Tr
     if let Some(image) = spec.image {
         target.insert((image, CssFrame));
     }
-    apply_css_owned(&mut target, spec.border_color, spec.z_index, spec.outline, spec.pickable);
+    apply_css_owned(
+        &mut target,
+        spec.border_color,
+        spec.z_index,
+        spec.outline,
+        spec.pickable,
+    );
     match spec.text {
         Some(text) => {
             // `TextLayout` is required by `Text`: replace, never remove.
-            let layout = if text.no_wrap { TextLayout::no_wrap() } else { TextLayout::default() };
-            target.insert((Text::new(text.prefix), text.font, TextColor(text.color), layout));
+            let layout = if text.no_wrap {
+                TextLayout::no_wrap()
+            } else {
+                TextLayout::default()
+            };
+            target.insert((
+                Text::new(text.prefix),
+                text.font,
+                TextColor(text.color),
+                layout,
+            ));
+            // Spans carry the block's `pointer-events: none` (see
+            // `spawn_spec`); a restyle without it takes it back.
             for (span, (content, font, color)) in children.into_iter().zip(text.spans) {
-                commands
-                    .entity(span)
-                    .insert((TextSpan::new(content), font, TextColor(color)));
+                let mut span = commands.entity(span);
+                span.insert((TextSpan::new(content), font, TextColor(color)));
+                if !spec.pickable {
+                    span.insert(Pickable::IGNORE);
+                } else {
+                    span.remove::<Pickable>();
+                }
             }
         }
         None => {
@@ -1083,7 +1127,8 @@ impl Ctx<'_, '_, '_> {
     /// then plain text, as in fluent-dom.
     fn element(&self, tag: &tl::HTMLTag) -> Option<HtmlElement> {
         let element = element_of(tag);
-        let (Some(named), Some(name)) = (self.named, tag.attributes().get("data-l10n-name").flatten())
+        let (Some(named), Some(name)) =
+            (self.named, tag.attributes().get("data-l10n-name").flatten())
         else {
             return Some(element);
         };
@@ -1187,7 +1232,11 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
 
     let signals = signals::signal_bindings(tag);
     let focus = focus::focusable(tag, &signals);
-    let state = ctx.states.and_then(|states| states.get(&handle)).copied().unwrap_or_default();
+    let state = ctx
+        .states
+        .and_then(|states| states.get(&handle))
+        .copied()
+        .unwrap_or_default();
     let Some(element) = ctx.element(tag) else {
         // Unmatched `data-l10n-name` in a translation: content only.
         for child in tag.children().top().iter() {
@@ -1216,7 +1265,11 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                 );
             }
             let mut children = Vec::new();
-            let target = if container { &mut children } else { &mut *items };
+            let target = if container {
+                &mut children
+            } else {
+                &mut *items
+            };
             let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
                 for node in nodes {
                     collect_node(fragment, *node, style, target);
@@ -1339,11 +1392,9 @@ fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run
         }
         Some(tl::Node::Tag(tag)) => {
             // An unmatched `data-l10n-name` element is plain text.
-            let style = ctx
-                .element(tag)
-                .map_or(style, |element| {
-                    ctx.styler.style_of(&element, style, Pseudo::default())
-                });
+            let style = ctx.element(tag).map_or(style, |element| {
+                ctx.styler.style_of(&element, style, Pseudo::default())
+            });
             push_content_runs(ctx, handle, tag, style, runs);
         }
         Some(tl::Node::Comment(_)) | None => {}

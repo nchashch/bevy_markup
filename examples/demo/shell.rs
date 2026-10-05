@@ -70,9 +70,18 @@ fn demo_context() -> TemplateContext {
         .with(
             "items",
             &[
-                Item { name: "torch", count: 3 },
-                Item { name: "rope", count: 1 },
-                Item { name: "key", count: 0 },
+                Item {
+                    name: "torch",
+                    count: 3,
+                },
+                Item {
+                    name: "rope",
+                    count: 1,
+                },
+                Item {
+                    name: "key",
+                    count: 0,
+                },
             ],
         )
 }
@@ -84,12 +93,18 @@ pub fn shell_context(lang_active: usize, theme_active: usize) -> TemplateContext
     TemplateContext::new()
         .with(
             "langs",
-            &crate::controls::LOCALES.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
+            &crate::controls::LOCALES
+                .iter()
+                .map(|(_, name)| *name)
+                .collect::<Vec<_>>(),
         )
         .with("lang_active", &lang_active)
         .with(
             "themes",
-            &crate::controls::THEMES.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+            &crate::controls::THEMES
+                .iter()
+                .map(|(label, _)| *label)
+                .collect::<Vec<_>>(),
         )
         .with("theme_active", &theme_active)
         .with(

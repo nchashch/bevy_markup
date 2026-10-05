@@ -11,23 +11,22 @@ use lightningcss::properties::align::{
     self as css_align, BaselinePosition, ContentDistribution, ContentPosition, GapValue,
     SelfPosition,
 };
-use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
-use lightningcss::properties::flex as css_flex;
-use lightningcss::properties::grid::{
-    self as css_grid, RepeatCount, TrackBreadth, TrackListItem, TrackSize, TrackSizing,
-};
-use lightningcss::properties::custom::CustomPropertyName;
-use lightningcss::properties::position as css_position;
-use lightningcss::properties::size::{self as css_size, MaxSize, Size};
-use lightningcss::values::size::Size2D;
 use lightningcss::properties::border::BorderSideWidth;
 use lightningcss::properties::border_image::{
     BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
 };
+use lightningcss::properties::custom::CustomPropertyName;
+use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
+use lightningcss::properties::flex as css_flex;
 use lightningcss::properties::font::{
     AbsoluteFontSize, AbsoluteFontWeight, FontFamily, FontSize, FontStyle, FontWeight,
     GenericFontFamily, RelativeFontSize,
 };
+use lightningcss::properties::grid::{
+    self as css_grid, RepeatCount, TrackBreadth, TrackListItem, TrackSize, TrackSizing,
+};
+use lightningcss::properties::position as css_position;
+use lightningcss::properties::size::{self as css_size, MaxSize, Size};
 use lightningcss::rules::CssRule;
 use lightningcss::stylesheet::{PrinterOptions, StyleSheet};
 use lightningcss::traits::ToCss;
@@ -35,6 +34,7 @@ use lightningcss::values::color::{CssColor, RGBA};
 use lightningcss::values::image::Image;
 use lightningcss::values::length::{LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use lightningcss::values::percentage::NumberOrPercentage;
+use lightningcss::values::size::Size2D;
 
 use crate::fonts::{FamilyRef, GenericFamily};
 use crate::html::HtmlElement;
@@ -549,16 +549,16 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             debug!("html css: border-image-width/-outset unsupported (corners draw at image size)");
         }
         Property::BorderWidth(width) => {
-            style.border_width = [&width.top, &width.right, &width.bottom, &width.left]
-                .map(side_width);
+            style.border_width =
+                [&width.top, &width.right, &width.bottom, &width.left].map(side_width);
         }
         Property::BorderTopWidth(width) => style.border_width[0] = side_width(width),
         Property::BorderRightWidth(width) => style.border_width[1] = side_width(width),
         Property::BorderBottomWidth(width) => style.border_width[2] = side_width(width),
         Property::BorderLeftWidth(width) => style.border_width[3] = side_width(width),
         Property::Padding(padding) => {
-            style.padding = [&padding.top, &padding.right, &padding.bottom, &padding.left]
-                .map(length_px);
+            style.padding =
+                [&padding.top, &padding.right, &padding.bottom, &padding.left].map(length_px);
         }
         Property::PaddingTop(value) => style.padding[0] = length_px(value),
         Property::PaddingRight(value) => style.padding[1] = length_px(value),
@@ -650,8 +650,7 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         Property::GridArea(area) => {
             style.layout.grid_row = [grid_line(&area.row_start), grid_line(&area.row_end)];
-            style.layout.grid_column =
-                [grid_line(&area.column_start), grid_line(&area.column_end)];
+            style.layout.grid_column = [grid_line(&area.column_start), grid_line(&area.column_end)];
         }
         Property::Position(position) => {
             style.layout.position = match position {
@@ -720,8 +719,7 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::OutlineWidth(width) => style.outline.width = side_width(width),
         Property::OutlineColor(color) => style.outline.color = Some(to_color(color)),
         // lightningcss has no typed `outline-offset` either.
-        Property::Custom(custom)
-            if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "outline-offset") =>
+        Property::Custom(custom) if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "outline-offset") =>
         {
             let value = declaration
                 .value_to_css_string(PrinterOptions::default())
@@ -734,8 +732,7 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         // lightningcss has no typed `pointer-events` (it's SVG/UI-only): it
         // arrives as an unknown property with its raw value.
-        Property::Custom(custom)
-            if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "pointer-events") =>
+        Property::Custom(custom) if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "pointer-events") =>
         {
             let value = declaration
                 .value_to_css_string(PrinterOptions::default())
@@ -768,7 +765,12 @@ fn slice(value: &BorderImageSlice) -> ([SliceValue; 4], bool) {
         NumberOrPercentage::Percentage(percent) => SliceValue::Fraction(percent.0),
     };
     (
-        [side(&offsets.0), side(&offsets.1), side(&offsets.2), side(&offsets.3)],
+        [
+            side(&offsets.0),
+            side(&offsets.1),
+            side(&offsets.2),
+            side(&offsets.3),
+        ],
         value.fill,
     )
 }
@@ -1004,9 +1006,10 @@ fn grid_track(size: &TrackSize) -> Option<GridTrack> {
     match size {
         // A bare `fr` track is `minmax(auto, <fr>)`.
         TrackSize::TrackBreadth(TrackBreadth::Flex(fr)) => Some(GridTrack::fr(*fr)),
-        TrackSize::TrackBreadth(breadth) => {
-            Some(GridTrack::minmax(min_breadth(breadth)?, max_breadth(breadth)?))
-        }
+        TrackSize::TrackBreadth(breadth) => Some(GridTrack::minmax(
+            min_breadth(breadth)?,
+            max_breadth(breadth)?,
+        )),
         TrackSize::MinMax { min, max } => {
             Some(GridTrack::minmax(min_breadth(min)?, max_breadth(max)?))
         }
@@ -1121,7 +1124,10 @@ fn length_percentage_val(value: &LengthPercentage) -> Option<Val> {
             LengthValue::Vh(vh) => Some(Val::Vh(*vh)),
             LengthValue::Vmin(v) => Some(Val::VMin(*v)),
             LengthValue::Vmax(v) => Some(Val::VMax(*v)),
-            length => length.to_px().map(Val::Px).or_else(|| unsupported("relative length")),
+            length => length
+                .to_px()
+                .map(Val::Px)
+                .or_else(|| unsupported("relative length")),
         },
         LengthPercentage::Percentage(percentage) => Some(Val::Percent(percentage.0 * 100.0)),
         LengthPercentage::Calc(_) => unsupported("calc()"),
@@ -1138,7 +1144,10 @@ fn unsupported<T>(what: &str) -> Option<T> {
 fn outline_visible(style: &lightningcss::properties::outline::OutlineStyle) -> bool {
     use lightningcss::properties::border::LineStyle;
     use lightningcss::properties::outline::OutlineStyle;
-    !matches!(style, OutlineStyle::LineStyle(LineStyle::None | LineStyle::Hidden))
+    !matches!(
+        style,
+        OutlineStyle::LineStyle(LineStyle::None | LineStyle::Hidden)
+    )
 }
 
 /// One `border-*-radius` corner: Bevy has one radius per corner, so an
@@ -1259,10 +1268,19 @@ mod tests {
     #[test]
     fn more_specific_selector_wins_regardless_of_order() {
         let note = element("p", None, &["note"]);
-        assert_eq!(color(".note { color: green } p { color: red }", &note), Some(GREEN));
-        assert_eq!(color(".note { color: red } p.note { color: green }", &note), Some(GREEN));
+        assert_eq!(
+            color(".note { color: green } p { color: red }", &note),
+            Some(GREEN)
+        );
+        assert_eq!(
+            color(".note { color: red } p.note { color: green }", &note),
+            Some(GREEN)
+        );
         let titled = element("p", Some("title"), &["note", "big"]);
-        assert_eq!(color("#title { color: green } p.note.big { color: red }", &titled), Some(GREEN));
+        assert_eq!(
+            color("#title { color: green } p.note.big { color: red }", &titled),
+            Some(GREEN)
+        );
     }
 
     /// `:hover`/`:active` match only in that state; they add class-level
@@ -1270,18 +1288,39 @@ mod tests {
     #[test]
     fn interaction_pseudo_classes() {
         let p = element("p", None, &[]);
-        let hovered = color_with("p:hover { color: green } p { color: red }", &p, Pseudo { hover: true, ..Pseudo::default() });
+        let hovered = color_with(
+            "p:hover { color: green } p { color: red }",
+            &p,
+            Pseudo {
+                hover: true,
+                ..Pseudo::default()
+            },
+        );
         assert_eq!(hovered, Some(GREEN));
-        assert_eq!(color("p:hover { color: green } p { color: red }", &p), Some(RED));
+        assert_eq!(
+            color("p:hover { color: green } p { color: red }", &p),
+            Some(RED)
+        );
 
-        let active = color_with("p:active { color: green } p { color: red }", &p, Pseudo { active: true, ..Pseudo::default() });
+        let active = color_with(
+            "p:active { color: green } p { color: red }",
+            &p,
+            Pseudo {
+                active: true,
+                ..Pseudo::default()
+            },
+        );
         assert_eq!(active, Some(GREEN));
 
         // `:hover` and `:active` combine; equal specificity → source order.
         let both = color_with(
             "p:hover { color: red } p:active { color: blue } p { color: green }",
             &p,
-            Pseudo { hover: true, active: true, ..Pseudo::default() },
+            Pseudo {
+                hover: true,
+                active: true,
+                ..Pseudo::default()
+            },
         );
         assert_eq!(both, Some(BLUE));
     }
@@ -1291,13 +1330,24 @@ mod tests {
     #[test]
     fn pseudo_class_adds_specificity() {
         let button = element("div", None, &["opt"]);
-        let hovered = Pseudo { hover: true, ..Pseudo::default() };
+        let hovered = Pseudo {
+            hover: true,
+            ..Pseudo::default()
+        };
         assert_eq!(
-            color_with(".opt { color: red } div:hover { color: blue }", &button, hovered),
+            color_with(
+                ".opt { color: red } div:hover { color: blue }",
+                &button,
+                hovered
+            ),
             Some(BLUE)
         );
         assert_eq!(
-            color_with(".opt { color: red } div:hover { color: blue }", &button, Pseudo::default()),
+            color_with(
+                ".opt { color: red } div:hover { color: blue }",
+                &button,
+                Pseudo::default()
+            ),
             Some(RED)
         );
     }
@@ -1306,10 +1356,25 @@ mod tests {
     #[test]
     fn unsupported_pseudo_classes_are_skipped() {
         let p = element("p", None, &[]);
-        let every = Pseudo { hover: true, active: true, focus: true, focus_visible: true };
+        let every = Pseudo {
+            hover: true,
+            active: true,
+            focus: true,
+            focus_visible: true,
+        };
         for state in [Pseudo::default(), every] {
-            assert_eq!(color("p:visited { color: green } p { color: red }", &p), Some(RED));
-            assert_eq!(color_with("p:focus-within { color: green } p { color: red }", &p, state), Some(RED));
+            assert_eq!(
+                color("p:visited { color: green } p { color: red }", &p),
+                Some(RED)
+            );
+            assert_eq!(
+                color_with(
+                    "p:focus-within { color: green } p { color: red }",
+                    &p,
+                    state
+                ),
+                Some(RED)
+            );
         }
     }
 
@@ -1318,14 +1383,27 @@ mod tests {
     #[test]
     fn focus_pseudo_classes_match_and_add_specificity() {
         let p = element("p", None, &["note"]);
-        let focused = Pseudo { focus: true, ..Pseudo::default() };
-        let shown = Pseudo { focus: true, focus_visible: true, ..Pseudo::default() };
+        let focused = Pseudo {
+            focus: true,
+            ..Pseudo::default()
+        };
+        let shown = Pseudo {
+            focus: true,
+            focus_visible: true,
+            ..Pseudo::default()
+        };
         let css = "p:focus { color: red } p:focus-visible { color: green } p { color: blue }";
-        assert_eq!(color_with(css, &p, Pseudo::default()), Some(Color::srgb_u8(0, 0, 255)));
+        assert_eq!(
+            color_with(css, &p, Pseudo::default()),
+            Some(Color::srgb_u8(0, 0, 255))
+        );
         assert_eq!(color_with(css, &p, focused), Some(RED));
         assert_eq!(color_with(css, &p, shown), Some(GREEN));
         // `p:focus` (0,1,1) beats `.note` (0,1,0) regardless of order.
-        assert_eq!(color_with("p:focus { color: red } .note { color: green }", &p, focused), Some(RED));
+        assert_eq!(
+            color_with("p:focus { color: red } .note { color: green }", &p, focused),
+            Some(RED)
+        );
     }
 
     /// `outline` shorthand and longhands; `none` and an absent style draw
@@ -1335,26 +1413,47 @@ mod tests {
         let outline = |css: &str| declared(css).outline;
         assert_eq!(
             outline("outline: 2px solid #ff0000; outline-offset: 3px"),
-            OutlineDecl { visible: Some(true), width: Some(2.0), color: Some(Some(RED)), offset: Some(3.0) }
+            OutlineDecl {
+                visible: Some(true),
+                width: Some(2.0),
+                color: Some(Some(RED)),
+                offset: Some(3.0)
+            }
         );
         assert_eq!(outline("outline: none").visible, Some(false));
         assert_eq!(outline("outline-width: 4px").visible, None);
-        let longhands = outline("outline-style: dashed; outline-color: currentColor; outline-width: thin");
-        assert_eq!((longhands.visible, longhands.width, longhands.color), (Some(true), Some(1.0), Some(None)));
+        let longhands =
+            outline("outline-style: dashed; outline-color: currentColor; outline-width: thin");
+        assert_eq!(
+            (longhands.visible, longhands.width, longhands.color),
+            (Some(true), Some(1.0), Some(None))
+        );
         assert_eq!(outline("outline-offset: 1em").offset, None);
     }
 
     #[test]
     fn equal_specificity_later_rule_wins() {
         let both = element("p", None, &["a", "b"]);
-        assert_eq!(color(".a { color: red } .b { color: green }", &both), Some(GREEN));
-        assert_eq!(color(".b { color: green } .a { color: red }", &both), Some(RED));
+        assert_eq!(
+            color(".a { color: red } .b { color: green }", &both),
+            Some(GREEN)
+        );
+        assert_eq!(
+            color(".b { color: green } .a { color: red }", &both),
+            Some(RED)
+        );
     }
 
     #[test]
     fn important_beats_specificity() {
         let titled = element("p", Some("title"), &[]);
-        assert_eq!(color("p { color: green !important } #title { color: red }", &titled), Some(GREEN));
+        assert_eq!(
+            color(
+                "p { color: green !important } #title { color: red }",
+                &titled
+            ),
+            Some(GREEN)
+        );
     }
 
     #[test]
@@ -1362,7 +1461,10 @@ mod tests {
         let css = "p.note.big { color: red } h1#x { color: blue }";
         assert_eq!(color(css, &element("p", None, &["note"])), None);
         assert_eq!(color(css, &element("div", None, &["note", "big"])), None);
-        assert_eq!(color(css, &element("p", None, &["big", "note", "extra"])), Some(RED));
+        assert_eq!(
+            color(css, &element("p", None, &["big", "note", "extra"])),
+            Some(RED)
+        );
         assert_eq!(color(css, &element("h1", Some("y"), &[])), None);
         assert_eq!(color(css, &element("h1", Some("x"), &[])), Some(BLUE));
     }
@@ -1378,7 +1480,8 @@ mod tests {
 
     #[test]
     fn universal_loses_to_everything_and_unsupported_selectors_are_skipped() {
-        let css = "* { color: red } p { color: green } div p { color: blue } p:hover { color: blue }";
+        let css =
+            "* { color: red } p { color: green } div p { color: blue } p:hover { color: blue }";
         assert_eq!(color(css, &element("p", None, &[])), Some(GREEN));
         assert_eq!(color(css, &element("span", None, &[])), Some(RED));
     }
@@ -1395,7 +1498,9 @@ mod tests {
     /// `css` parsed and owned (no borrowed input), like the asset loader does.
     fn owned_sheet(css: &str) -> StyleSheet<'static> {
         use lightningcss::traits::IntoOwned;
-        StyleSheet::parse(css, ParserOptions::default()).expect("valid css").into_owned()
+        StyleSheet::parse(css, ParserOptions::default())
+            .expect("valid css")
+            .into_owned()
     }
 
     /// `p`'s declared style under one `p { declarations }` rule.
@@ -1419,7 +1524,10 @@ mod tests {
         let flow = layout("flex-flow: column-reverse wrap");
         assert_eq!(flow.flex_direction, Some(FlexDirection::ColumnReverse));
         assert_eq!(flow.flex_wrap, Some(FlexWrap::Wrap));
-        assert_eq!(layout("flex-wrap: wrap-reverse").flex_wrap, Some(FlexWrap::WrapReverse));
+        assert_eq!(
+            layout("flex-wrap: wrap-reverse").flex_wrap,
+            Some(FlexWrap::WrapReverse)
+        );
 
         let flex = layout("flex: 2 3 40px");
         assert_eq!(
@@ -1429,8 +1537,14 @@ mod tests {
         assert_eq!(layout("flex-shrink: 0.5").flex_shrink, Some(0.5));
         assert_eq!(layout("flex-basis: auto").flex_basis, Some(Val::Auto));
 
-        assert_eq!(layout("justify-content: normal").justify_content, Some(JustifyContent::Default));
-        assert_eq!(layout("justify-content: end").justify_content, Some(JustifyContent::End));
+        assert_eq!(
+            layout("justify-content: normal").justify_content,
+            Some(JustifyContent::Default)
+        );
+        assert_eq!(
+            layout("justify-content: end").justify_content,
+            Some(JustifyContent::End)
+        );
         assert_eq!(layout("justify-content: left").justify_content, None);
         for (value, expected) in [
             ("normal", AlignContent::Default),
@@ -1447,8 +1561,14 @@ mod tests {
             let css = format!("align-content: {value}");
             assert_eq!(layout(&css).align_content, Some(expected), "{css}");
         }
-        assert_eq!(layout("align-items: baseline").align_items, Some(AlignItems::Baseline));
-        assert_eq!(layout("align-self: normal").align_self, Some(AlignSelf::Stretch));
+        assert_eq!(
+            layout("align-items: baseline").align_items,
+            Some(AlignItems::Baseline)
+        );
+        assert_eq!(
+            layout("align-self: normal").align_self,
+            Some(AlignSelf::Stretch)
+        );
 
         assert_eq!(layout("width: auto").width, Some(Val::Auto));
         assert_eq!(layout("height: 50%").height, Some(Val::Percent(50.0)));
@@ -1458,12 +1578,27 @@ mod tests {
         assert_eq!(layout("width: min-content").width, None);
         assert_eq!(layout("width: 2em").width, None);
 
-        assert_eq!(layout("margin-top: 1px").margin, [Some(Val::Px(1.0)), None, None, None]);
-        assert_eq!(layout("margin-right: 2px").margin, [None, Some(Val::Px(2.0)), None, None]);
-        assert_eq!(layout("margin-bottom: auto").margin, [None, None, Some(Val::Auto), None]);
-        assert_eq!(layout("margin-left: 10%").margin, [None, None, None, Some(Val::Percent(10.0))]);
+        assert_eq!(
+            layout("margin-top: 1px").margin,
+            [Some(Val::Px(1.0)), None, None, None]
+        );
+        assert_eq!(
+            layout("margin-right: 2px").margin,
+            [None, Some(Val::Px(2.0)), None, None]
+        );
+        assert_eq!(
+            layout("margin-bottom: auto").margin,
+            [None, None, Some(Val::Auto), None]
+        );
+        assert_eq!(
+            layout("margin-left: 10%").margin,
+            [None, None, None, Some(Val::Percent(10.0))]
+        );
         assert_eq!(layout("column-gap: 6px").column_gap, Some(6.0));
-        assert_eq!(layout("box-sizing: border-box").box_sizing, Some(BoxSizing::BorderBox));
+        assert_eq!(
+            layout("box-sizing: border-box").box_sizing,
+            Some(BoxSizing::BorderBox)
+        );
     }
 
     /// Grid containers: `display`, explicit and implicit tracks (every track
@@ -1478,7 +1613,8 @@ mod tests {
         assert_eq!(layout("display: grid").display, Some(Display::Grid));
         assert_eq!(layout("display: inline-grid").display, Some(Display::Grid));
 
-        let columns = |css: &str| layout(&format!("grid-template-columns: {css}")).grid_template_columns;
+        let columns =
+            |css: &str| layout(&format!("grid-template-columns: {css}")).grid_template_columns;
         assert_eq!(
             columns("100px 1fr 20% 10vw"),
             Some(vec![
@@ -1522,20 +1658,40 @@ mod tests {
         );
         assert_eq!(
             columns("repeat(auto-fit, 40px)"),
-            Some(vec![RepeatedGridTrack::px(GridTrackRepetition::AutoFit, 40.0)])
+            Some(vec![RepeatedGridTrack::px(
+                GridTrackRepetition::AutoFit,
+                40.0
+            )])
         );
-        assert_eq!(columns("[a] 1fr [b]"), Some(vec![GridTrack::fr(1.0)]), "names ignored");
-        assert_eq!(columns("1fr 2em"), None, "one unsupported track drops the list");
-        assert_eq!(layout("grid-template-rows: none").grid_template_rows, Some(Vec::new()));
+        assert_eq!(
+            columns("[a] 1fr [b]"),
+            Some(vec![GridTrack::fr(1.0)]),
+            "names ignored"
+        );
+        assert_eq!(
+            columns("1fr 2em"),
+            None,
+            "one unsupported track drops the list"
+        );
+        assert_eq!(
+            layout("grid-template-rows: none").grid_template_rows,
+            Some(Vec::new())
+        );
         assert_eq!(
             layout("grid-template-rows: 30px auto").grid_template_rows,
             Some(vec![GridTrack::px(30.0), GridTrack::auto()])
         );
 
-        assert_eq!(layout("grid-auto-rows: 30px").grid_auto_rows, Some(vec![GridTrack::px(30.0)]));
+        assert_eq!(
+            layout("grid-auto-rows: 30px").grid_auto_rows,
+            Some(vec![GridTrack::px(30.0)])
+        );
         assert_eq!(
             layout("grid-auto-columns: minmax(10px, auto) 1fr").grid_auto_columns,
-            Some(vec![GridTrack::minmax(Min::Px(10.0), Max::Auto), GridTrack::fr(1.0)])
+            Some(vec![
+                GridTrack::minmax(Min::Px(10.0), Max::Auto),
+                GridTrack::fr(1.0)
+            ])
         );
         for (value, expected) in [
             ("row", GridAutoFlow::Row),
@@ -1550,7 +1706,10 @@ mod tests {
         }
 
         let template = layout("grid-template: 30px auto / 1fr 2fr");
-        assert_eq!(template.grid_template_rows, Some(vec![GridTrack::px(30.0), GridTrack::auto()]));
+        assert_eq!(
+            template.grid_template_rows,
+            Some(vec![GridTrack::px(30.0), GridTrack::auto()])
+        );
         assert_eq!(
             template.grid_template_columns,
             Some(vec![GridTrack::fr(1.0), GridTrack::fr(2.0)])
@@ -1558,7 +1717,10 @@ mod tests {
         let grid = layout("grid: auto-flow dense 40px / repeat(2, 1fr)");
         assert_eq!(grid.grid_auto_flow, Some(GridAutoFlow::RowDense));
         assert_eq!(grid.grid_auto_rows, Some(vec![GridTrack::px(40.0)]));
-        assert_eq!(grid.grid_template_columns, Some(vec![RepeatedGridTrack::fr(2, 1.0)]));
+        assert_eq!(
+            grid.grid_template_columns,
+            Some(vec![RepeatedGridTrack::fr(2, 1.0)])
+        );
         assert_eq!(grid.grid_template_rows, Some(Vec::new()));
         let areas = layout("grid-template-areas: \"a b\"");
         assert_eq!(areas.grid_template_rows, None);
@@ -1609,18 +1771,36 @@ mod tests {
         assert_eq!(column("grid-column: 2"), GridPlacement::start(2));
         assert_eq!(column("grid-column: span 2"), GridPlacement::span(2));
         assert_eq!(column("grid-column: auto"), GridPlacement::auto());
-        assert_eq!(column("grid-column: 2 / span 3"), GridPlacement::start_span(2, 3));
-        assert_eq!(column("grid-column: span 2 / 4"), GridPlacement::end_span(4, 2));
+        assert_eq!(
+            column("grid-column: 2 / span 3"),
+            GridPlacement::start_span(2, 3)
+        );
+        assert_eq!(
+            column("grid-column: span 2 / 4"),
+            GridPlacement::end_span(4, 2)
+        );
         assert_eq!(column("grid-column: auto / -1"), GridPlacement::end(-1));
-        assert_eq!(column("grid-column: span 2 / span 3"), GridPlacement::span(2), "end span dropped");
+        assert_eq!(
+            column("grid-column: span 2 / span 3"),
+            GridPlacement::span(2),
+            "end span dropped"
+        );
         assert_eq!(column("grid-column-start: 2"), GridPlacement::start(2));
         assert_eq!(column("grid-column-end: 3"), GridPlacement::end(3));
         assert_eq!(
             column("grid-column: 1 / 3; grid-column-end: span 2"),
             GridPlacement::start_span(1, 2)
         );
-        assert_eq!(column("grid-column: a / 3"), GridPlacement::end(3), "named line skipped");
-        assert_eq!(column("color: red"), GridPlacement::default(), "undeclared keeps the node's");
+        assert_eq!(
+            column("grid-column: a / 3"),
+            GridPlacement::end(3),
+            "named line skipped"
+        );
+        assert_eq!(
+            column("color: red"),
+            GridPlacement::default(),
+            "undeclared keeps the node's"
+        );
 
         let row = |css: &str| node(css).grid_row;
         assert_eq!(row("grid-row: 2 / span 3"), GridPlacement::start_span(2, 3));
@@ -1640,11 +1820,24 @@ mod tests {
     #[test]
     fn border_sides_and_ignored_border_image_parts() {
         let sides = |css: &str| declared(css).border_width;
-        assert_eq!(sides("border-top-width: 1px"), [Some(1.0), None, None, None]);
-        assert_eq!(sides("border-right-width: 2px"), [None, Some(2.0), None, None]);
-        assert_eq!(sides("border-bottom-width: 3px"), [None, None, Some(3.0), None]);
-        assert_eq!(sides("border-left-width: 4px"), [None, None, None, Some(4.0)]);
-        let style = declared("border-image-width: 9px; border-image-outset: 3px; border-width: 2px");
+        assert_eq!(
+            sides("border-top-width: 1px"),
+            [Some(1.0), None, None, None]
+        );
+        assert_eq!(
+            sides("border-right-width: 2px"),
+            [None, Some(2.0), None, None]
+        );
+        assert_eq!(
+            sides("border-bottom-width: 3px"),
+            [None, None, Some(3.0), None]
+        );
+        assert_eq!(
+            sides("border-left-width: 4px"),
+            [None, None, None, Some(4.0)]
+        );
+        let style =
+            declared("border-image-width: 9px; border-image-outset: 3px; border-width: 2px");
         assert_eq!(style.border_width, [Some(2.0); 4]);
         assert!(style.border_image.is_none(), "{:?}", style.border_image);
     }
@@ -1665,9 +1858,16 @@ mod tests {
             ("flex-start", JustifyContent::FlexStart),
             ("flex-end", JustifyContent::FlexEnd),
         ] {
-            assert_eq!(layout(format!("justify-content: {value}")).justify_content, Some(expected), "{value}");
+            assert_eq!(
+                layout(format!("justify-content: {value}")).justify_content,
+                Some(expected),
+                "{value}"
+            );
         }
-        assert_eq!(layout("justify-content: right".into()).justify_content, None);
+        assert_eq!(
+            layout("justify-content: right".into()).justify_content,
+            None
+        );
         for (value, expected) in [
             ("normal", AlignItems::Default),
             ("stretch", AlignItems::Stretch),
@@ -1679,9 +1879,16 @@ mod tests {
             ("flex-start", AlignItems::FlexStart),
             ("flex-end", AlignItems::FlexEnd),
         ] {
-            assert_eq!(layout(format!("align-items: {value}")).align_items, Some(expected), "{value}");
+            assert_eq!(
+                layout(format!("align-items: {value}")).align_items,
+                Some(expected),
+                "{value}"
+            );
         }
-        assert_eq!(layout("align-items: last baseline".into()).align_items, None);
+        assert_eq!(
+            layout("align-items: last baseline".into()).align_items,
+            None
+        );
         for (value, expected) in [
             ("auto", AlignSelf::Auto),
             ("stretch", AlignSelf::Stretch),
@@ -1694,16 +1901,36 @@ mod tests {
             ("flex-start", AlignSelf::FlexStart),
             ("flex-end", AlignSelf::FlexEnd),
         ] {
-            assert_eq!(layout(format!("align-self: {value}")).align_self, Some(expected), "{value}");
+            assert_eq!(
+                layout(format!("align-self: {value}")).align_self,
+                Some(expected),
+                "{value}"
+            );
         }
         assert_eq!(layout("align-self: last baseline".into()).align_self, None);
         assert_eq!(layout("align-content: baseline".into()).align_content, None);
 
-        assert_eq!(layout("flex-direction: column".into()).flex_direction, Some(FlexDirection::Column));
-        assert_eq!(layout("flex-direction: row".into()).flex_direction, Some(FlexDirection::Row));
-        assert_eq!(layout("flex-wrap: nowrap".into()).flex_wrap, Some(FlexWrap::NoWrap));
-        assert_eq!(layout("display: contents".into()).display, None, "unsupported keyword");
-        assert_eq!(layout("box-sizing: content-box".into()).box_sizing, Some(BoxSizing::ContentBox));
+        assert_eq!(
+            layout("flex-direction: column".into()).flex_direction,
+            Some(FlexDirection::Column)
+        );
+        assert_eq!(
+            layout("flex-direction: row".into()).flex_direction,
+            Some(FlexDirection::Row)
+        );
+        assert_eq!(
+            layout("flex-wrap: nowrap".into()).flex_wrap,
+            Some(FlexWrap::NoWrap)
+        );
+        assert_eq!(
+            layout("display: contents".into()).display,
+            None,
+            "unsupported keyword"
+        );
+        assert_eq!(
+            layout("box-sizing: content-box".into()).box_sizing,
+            Some(BoxSizing::ContentBox)
+        );
     }
 
     /// Lengths, keywords and fallbacks: viewport units, the border-width
@@ -1719,9 +1946,18 @@ mod tests {
         assert_eq!(layout("width: calc(10px + 5%)").width, None);
         assert_eq!(layout("max-height: min-content").max_height, None);
 
-        assert_eq!(declared("border-top-width: thin").border_width[0], Some(1.0));
-        assert_eq!(declared("border-top-width: medium").border_width[0], Some(3.0));
-        assert_eq!(declared("border-top-width: thick").border_width[0], Some(5.0));
+        assert_eq!(
+            declared("border-top-width: thin").border_width[0],
+            Some(1.0)
+        );
+        assert_eq!(
+            declared("border-top-width: medium").border_width[0],
+            Some(3.0)
+        );
+        assert_eq!(
+            declared("border-top-width: thick").border_width[0],
+            Some(5.0)
+        );
         assert_eq!(declared("padding-top: 10%").padding[0], None);
         assert_eq!(declared("row-gap: normal").row_gap, None);
         assert_eq!(declared("row-gap: 5%").row_gap, None);
@@ -1737,7 +1973,11 @@ mod tests {
             ("xx-large", 32.0),
             ("xxx-large", 48.0),
         ] {
-            assert_eq!(size(&format!("font-size: {keyword}")), Some(px), "{keyword}");
+            assert_eq!(
+                size(&format!("font-size: {keyword}")),
+                Some(px),
+                "{keyword}"
+            );
         }
         assert_eq!(size("font-size: calc(1em + 2px)"), None);
         assert_eq!(declared("font-weight: normal").bold, Some(false));
@@ -1746,7 +1986,10 @@ mod tests {
         let source = declared("border-image-source: linear-gradient(red, blue)")
             .border_image
             .and_then(|decl| decl.source);
-        assert!(matches!(source, Some(None)), "gradient source treated as no image: {source:?}");
+        assert!(
+            matches!(source, Some(None)),
+            "gradient source treated as no image: {source:?}"
+        );
     }
 
     /// `font-weight` 500 stays regular, anything above picks bold (the CSS
@@ -1768,7 +2011,10 @@ mod tests {
             ("fantasy", GenericFamily::Fantasy),
             ("system-ui", GenericFamily::SystemUi),
         ] {
-            match declared(&format!("font-family: {keyword}")).font_family.as_deref() {
+            match declared(&format!("font-family: {keyword}"))
+                .font_family
+                .as_deref()
+            {
                 Some([FamilyRef::Generic(found)]) => assert_eq!(*found, generic, "{keyword}"),
                 other => panic!("{keyword}: {other:?}"),
             }
@@ -1781,8 +2027,13 @@ mod tests {
     #[test]
     fn border_image_sources_none_and_longhands() {
         let style = declared(r#"border-image: url("a.png") 4; border-image-source: none"#);
-        assert!(matches!(style.border_image.and_then(|decl| decl.source), Some(None)));
-        let sheet = owned_sheet(r#"p { border-image-source: url("b.png") } div { border-image: url("c.png") 4 }"#);
+        assert!(matches!(
+            style.border_image.and_then(|decl| decl.source),
+            Some(None)
+        ));
+        let sheet = owned_sheet(
+            r#"p { border-image-source: url("b.png") } div { border-image: url("c.png") 4 }"#,
+        );
         assert_eq!(image_urls(&sheet), ["b.png", "c.png"]);
     }
 
@@ -1791,27 +2042,53 @@ mod tests {
     #[test]
     fn position_and_insets() {
         let layout = |css: &str| declared(css).layout;
-        assert_eq!(layout("position: absolute").position, Some(CssPosition::Absolute));
-        assert_eq!(layout("position: relative").position, Some(CssPosition::Relative));
-        assert_eq!(layout("position: static").position, Some(CssPosition::Static));
+        assert_eq!(
+            layout("position: absolute").position,
+            Some(CssPosition::Absolute)
+        );
+        assert_eq!(
+            layout("position: relative").position,
+            Some(CssPosition::Relative)
+        );
+        assert_eq!(
+            layout("position: static").position,
+            Some(CssPosition::Static)
+        );
         assert_eq!(layout("position: fixed").position, None);
         assert_eq!(
             layout("inset: 1px 2% auto 4px").inset,
-            [Some(Val::Px(1.0)), Some(Val::Percent(2.0)), Some(Val::Auto), Some(Val::Px(4.0))]
+            [
+                Some(Val::Px(1.0)),
+                Some(Val::Percent(2.0)),
+                Some(Val::Auto),
+                Some(Val::Px(4.0))
+            ]
         );
         assert_eq!(
             layout("top: 1px; right: 2px; bottom: 3px; left: 4vw").inset,
-            [Some(Val::Px(1.0)), Some(Val::Px(2.0)), Some(Val::Px(3.0)), Some(Val::Vw(4.0))]
+            [
+                Some(Val::Px(1.0)),
+                Some(Val::Px(2.0)),
+                Some(Val::Px(3.0)),
+                Some(Val::Vw(4.0))
+            ]
         );
 
         let mut node = Node::default();
         layout("position: absolute; top: 5px; left: 6px").apply_to(&mut node);
-        assert_eq!((node.position_type, node.top, node.left), (PositionType::Absolute, Val::Px(5.0), Val::Px(6.0)));
+        assert_eq!(
+            (node.position_type, node.top, node.left),
+            (PositionType::Absolute, Val::Px(5.0), Val::Px(6.0))
+        );
         // `static` (and no `position`): insets don't apply, as in CSS.
         for css in ["position: static; top: 5px", "top: 5px"] {
             let mut node = Node::default();
             layout(css).apply_to(&mut node);
-            assert_eq!((node.position_type, node.top), (PositionType::Relative, Val::Auto), "{css}");
+            assert_eq!(
+                (node.position_type, node.top),
+                (PositionType::Relative, Val::Auto),
+                "{css}"
+            );
         }
     }
 
@@ -1820,18 +2097,46 @@ mod tests {
     #[test]
     fn radius_border_color_z_index_and_pointer_events() {
         assert_eq!(
-            declared("border-radius: 1px 2px 3px 50%").layout.border_radius,
-            [Some(Val::Px(1.0)), Some(Val::Px(2.0)), Some(Val::Px(3.0)), Some(Val::Percent(50.0))]
+            declared("border-radius: 1px 2px 3px 50%")
+                .layout
+                .border_radius,
+            [
+                Some(Val::Px(1.0)),
+                Some(Val::Px(2.0)),
+                Some(Val::Px(3.0)),
+                Some(Val::Percent(50.0))
+            ]
         );
-        assert_eq!(declared("border-top-right-radius: 7px").layout.border_radius[1], Some(Val::Px(7.0)));
-        assert_eq!(declared("border-radius: 4px / 8px").layout.border_radius[0], None, "elliptical");
+        assert_eq!(
+            declared("border-top-right-radius: 7px")
+                .layout
+                .border_radius[1],
+            Some(Val::Px(7.0))
+        );
+        assert_eq!(
+            declared("border-radius: 4px / 8px").layout.border_radius[0],
+            None,
+            "elliptical"
+        );
         let mut node = Node::default();
         declared("border-radius: 9px").layout.apply_to(&mut node);
         assert_eq!(node.border_radius, BorderRadius::all(Val::Px(9.0)));
 
-        let colors = declared("border-color: #ff0000 green; border-left-color: #0000ff").border_color;
-        assert_eq!(colors, [Some(RED), Some(GREEN), Some(RED), Some(Color::srgb_u8(0, 0, 255))]);
-        assert_eq!(declared("border-color: currentColor").border_color, [None; 4]);
+        let colors =
+            declared("border-color: #ff0000 green; border-left-color: #0000ff").border_color;
+        assert_eq!(
+            colors,
+            [
+                Some(RED),
+                Some(GREEN),
+                Some(RED),
+                Some(Color::srgb_u8(0, 0, 255))
+            ]
+        );
+        assert_eq!(
+            declared("border-color: currentColor").border_color,
+            [None; 4]
+        );
 
         assert_eq!(declared("z-index: 7").z_index, Some(Some(7)));
         assert_eq!(declared("z-index: -2").z_index, Some(Some(-2)));
@@ -1839,7 +2144,10 @@ mod tests {
 
         assert_eq!(declared("pointer-events: none").pointer_events, Some(false));
         assert_eq!(declared("pointer-events: AUTO").pointer_events, Some(true));
-        assert_eq!(declared("pointer-events: visiblePainted").pointer_events, None);
+        assert_eq!(
+            declared("pointer-events: visiblePainted").pointer_events,
+            None
+        );
         assert_eq!(declared("color: red").pointer_events, None);
     }
 }

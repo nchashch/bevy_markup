@@ -20,12 +20,16 @@ use test_strategy::proptest;
 
 /// Regex strategy for CSS color hex digits.
 fn hex6() -> proptest::strategy::BoxedStrategy<String> {
-    proptest::string::string_regex("[0-9a-f]{6}").unwrap().boxed()
+    proptest::string::string_regex("[0-9a-f]{6}")
+        .unwrap()
+        .boxed()
 }
 
 /// Regex strategy for an unmatched class/id name.
 fn name() -> proptest::strategy::BoxedStrategy<String> {
-    proptest::string::string_regex("[a-z][a-z0-9]{0,7}").unwrap().boxed()
+    proptest::string::string_regex("[a-z][a-z0-9]{0,7}")
+        .unwrap()
+        .boxed()
 }
 
 /// A generated stylesheet over a fixed set of selectors and declarations,
@@ -50,7 +54,10 @@ fn generated_sheet() -> proptest::strategy::BoxedStrategy<String> {
             rules
                 .into_iter()
                 .map(|(selector, declaration)| {
-                    format!("{} {{ {} }}\n", SELECTORS[selector], DECLARATIONS[declaration])
+                    format!(
+                        "{} {{ {} }}\n",
+                        SELECTORS[selector], DECLARATIONS[declaration]
+                    )
                 })
                 .collect()
         })
@@ -66,8 +73,11 @@ fn restyle_matches_a_fresh_build(
     #[strategy(generated_sheet())] b: String,
 ) {
     let page = r#"<p>Plain <b>bold</b></p><div class="box"><p>Inside</p></div><ul><li>Item</li></ul><pre>pre</pre>"#;
-    let mut swapped = TestUi::new("prop-restyle", &[("page.html", page), ("a.css", &a), ("b.css", &b)])
-        .stylesheet("a.css");
+    let mut swapped = TestUi::new(
+        "prop-restyle",
+        &[("page.html", page), ("a.css", &a), ("b.css", &b)],
+    )
+    .stylesheet("a.css");
     let b_sheet = swapped.load::<Stylesheet>("b.css");
     let mut swapped = swapped.spawn("page.html", TemplateContext::new(), Node::default());
     swapped.settle();
@@ -80,10 +90,7 @@ fn restyle_matches_a_fresh_build(
 
 /// `padding: T R` builds the same world as the four longhands.
 #[proptest(cases = 24)]
-fn padding_shorthand_equals_longhands(
-    #[strategy(0u8..40)] t: u8,
-    #[strategy(0u8..40)] r: u8,
-) {
+fn padding_shorthand_equals_longhands(#[strategy(0u8..40)] t: u8, #[strategy(0u8..40)] r: u8) {
     let page = "<p>Text</p>";
     let base = "html { color: #ffffff; font-size: 20px } p { ";
     let shorthand = format!("{base}padding: {t}px {r}px }}");
@@ -91,22 +98,25 @@ fn padding_shorthand_equals_longhands(
         "{base}padding-top: {t}px; padding-right: {r}px; \
          padding-bottom: {t}px; padding-left: {r}px }}"
     );
-    let mut a = TestUi::new("prop-pad-shorthand", &[("page.html", page), ("style.css", &shorthand)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
-    let mut b = TestUi::new("prop-pad-longhands", &[("page.html", page), ("style.css", &longhands)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut a = TestUi::new(
+        "prop-pad-shorthand",
+        &[("page.html", page), ("style.css", &shorthand)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut b = TestUi::new(
+        "prop-pad-longhands",
+        &[("page.html", page), ("style.css", &longhands)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
     prop_assert_eq!(a.settle().dump(), b.settle().dump());
 }
 
 /// `border-image: …` (shorthand) draws the same frame as its
 /// `-source`/`-slice`/`-repeat` longhands.
 #[proptest(cases = 24)]
-fn border_image_shorthand_equals_longhands(
-    #[strategy(1u8..12)] slice: u8,
-    #[any] tile: bool,
-) {
+fn border_image_shorthand_equals_longhands(#[strategy(1u8..12)] slice: u8, #[any] tile: bool) {
     let page = "<p>Text</p>";
     let repeat = if tile { "repeat" } else { "stretch" };
     let shorthand = format!(
@@ -119,12 +129,18 @@ fn border_image_shorthand_equals_longhands(
             border-image-repeat: {repeat};
         }}"#
     );
-    let mut a = TestUi::new("prop-bi-shorthand", &[("page.html", page), ("style.css", &shorthand)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
-    let mut b = TestUi::new("prop-bi-longhands", &[("page.html", page), ("style.css", &longhands)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut a = TestUi::new(
+        "prop-bi-shorthand",
+        &[("page.html", page), ("style.css", &shorthand)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut b = TestUi::new(
+        "prop-bi-longhands",
+        &[("page.html", page), ("style.css", &longhands)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
     prop_assert_eq!(a.settle().dump(), b.settle().dump());
 }
 
@@ -146,12 +162,18 @@ fn unmatched_rules_change_nothing(
         ));
     }
     let (with_junk, without) = (format!("{base}{junk}"), base.to_owned());
-    let mut a = TestUi::new("prop-unmatched-junk", &[("page.html", page), ("style.css", &with_junk)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
-    let mut b = TestUi::new("prop-unmatched-base", &[("page.html", page), ("style.css", &without)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut a = TestUi::new(
+        "prop-unmatched-junk",
+        &[("page.html", page), ("style.css", &with_junk)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut b = TestUi::new(
+        "prop-unmatched-base",
+        &[("page.html", page), ("style.css", &without)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
     prop_assert_eq!(a.settle().dump(), b.settle().dump());
 }
 
@@ -172,14 +194,23 @@ fn class_beats_type_selector_regardless_of_order(
         format!("{head}{type_rule}{class_rule}"),
         format!("{head}{class_rule}{type_rule}"),
     );
-    let mut a = TestUi::new("prop-spec-type-first", &[("page.html", page), ("style.css", &type_first)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
-    let mut b = TestUi::new("prop-spec-class-first", &[("page.html", page), ("style.css", &class_first)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut a = TestUi::new(
+        "prop-spec-type-first",
+        &[("page.html", page), ("style.css", &type_first)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut b = TestUi::new(
+        "prop-spec-class-first",
+        &[("page.html", page), ("style.css", &class_first)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
     let dump = a.settle().dump();
-    prop_assert!(dump.contains(&format!("#{class_color}")), "class rule must win:\n{dump}");
+    prop_assert!(
+        dump.contains(&format!("#{class_color}")),
+        "class rule must win:\n{dump}"
+    );
     prop_assert_eq!(dump, b.settle().dump());
 }
 
@@ -195,7 +226,11 @@ fn rebuild_with_same_context_is_idempotent(#[strategy(0i64..1000)] n: i64) {
         ],
     )
     .stylesheet("style.css")
-    .spawn("page.html", TemplateContext::new().with("n", &n), Node::default());
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("n", &n),
+        Node::default(),
+    );
     let before = ui.settle().dump();
 
     let root = ui.root();
@@ -233,10 +268,12 @@ fn theme_round_trip(#[strategy(0u8..20)] padding: u8) {
 
     let server = ui.world_mut().resource::<AssetServer>().clone();
     let plain: Handle<Stylesheet> = server.load("plain.css");
-    ui.world_mut().insert_resource(DefaultStylesheet::new(plain));
+    ui.world_mut()
+        .insert_resource(DefaultStylesheet::new(plain));
     ui.settle();
     let framed: Handle<Stylesheet> = server.load("framed.css");
-    ui.world_mut().insert_resource(DefaultStylesheet::new(framed));
+    ui.world_mut()
+        .insert_resource(DefaultStylesheet::new(framed));
     prop_assert_eq!(start, ui.settle().dump());
 }
 
@@ -252,38 +289,58 @@ fn locale_and_context_round_trip(
     let mut ui = TestUi::new(
         "prop-locale-round-trip",
         &[
-            ("page.html", r#"<p data-l10n-id="count" data-l10n-args='{"n": {{ n }}}'>{{ n }}</p>"#),
+            (
+                "page.html",
+                r#"<p data-l10n-id="count" data-l10n-args='{"n": {{ n }}}'>{{ n }}</p>"#,
+            ),
             ("style.css", "html { color: #ffffff; font-size: 20px }"),
-            ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
+            (
+                "locales/en-US/main.ftl.ron",
+                r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+            ),
             ("locales/en-US/ui.ftl", "count = { $n } items"),
-            ("locales/de/main.ftl.ron", r#"(locale: "de", resources: ["ui.ftl"])"#),
+            (
+                "locales/de/main.ftl.ron",
+                r#"(locale: "de", resources: ["ui.ftl"])"#,
+            ),
             ("locales/de/ui.ftl", "count = { $n } Dinge"),
         ],
     )
     .stylesheet("style.css")
     .locale("locales/en-US/main.ftl.ron")
-    .spawn("page.html", TemplateContext::new().with("n", &v), Node::default());
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("n", &v),
+        Node::default(),
+    );
     let start = ui.settle().dump();
 
     let server = ui.world_mut().resource::<AssetServer>().clone();
     let de: Handle<BundleAsset> = server.load("locales/de/main.ftl.ron");
     ui.world_mut().insert_resource(ActiveLocale::new(de));
     let root = ui.root();
-    ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("n", &w);
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &w);
     ui.settle();
 
     let en: Handle<BundleAsset> = server.load("locales/en-US/main.ftl.ron");
     ui.world_mut().insert_resource(ActiveLocale::new(en));
-    ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("n", &v);
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &v);
     prop_assert_eq!(start, ui.settle().dump());
 }
 
 /// Selectors for the generated stylesheets below: each matches some
 /// element of [`LIST_PAGE`] or nothing (`#ghost`), and `div p` is a valid
 /// but unsupported (combinator) selector.
-const SELECTORS: &[&str] = &["p", ".a", "#x", "p.a", "*", "div", ".b", "p#x.a", "#ghost", "div p"];
-const LIST_PAGE: &str =
-    r#"<p id="x" class="a">One</p><p class="b">Two <b class="a">bold</b></p><div class="a"><p>Three</p></div>"#;
+const SELECTORS: &[&str] = &[
+    "p", ".a", "#x", "p.a", "*", "div", ".b", "p#x.a", "#ghost", "div p",
+];
+const LIST_PAGE: &str = r#"<p id="x" class="a">One</p><p class="b">Two <b class="a">bold</b></p><div class="a"><p>Three</p></div>"#;
 
 /// A rule: selector list, color, `!important`.
 type ListRule = (Vec<&'static str>, String, bool);
@@ -294,7 +351,10 @@ fn list_rules() -> impl Strategy<Value = Vec<ListRule>> {
 }
 
 fn declaration(color: &str, important: bool) -> String {
-    format!("color: #{color}{}", if important { " !important" } else { "" })
+    format!(
+        "color: #{color}{}",
+        if important { " !important" } else { "" }
+    )
 }
 
 /// Metamorphic CSS identities over generated stylesheets, all of which
@@ -328,14 +388,30 @@ fn selector_lists_formatting_and_duplicates_change_nothing(
     }
     let noisy = format!("/* top */ {base}{noisy}{noisy}");
     let mut dumps = Vec::new();
-    for (name, css) in [("prop-lists", &lists), ("prop-expanded", &expanded), ("prop-noisy", &noisy)] {
+    for (name, css) in [
+        ("prop-lists", &lists),
+        ("prop-expanded", &expanded),
+        ("prop-noisy", &noisy),
+    ] {
         let mut ui = TestUi::new(name, &[("page.html", LIST_PAGE), ("style.css", css)])
             .stylesheet("style.css")
             .spawn("page.html", TemplateContext::new(), Node::default());
         dumps.push(ui.settle().dump());
     }
-    prop_assert_eq!(&dumps[0], &dumps[1], "selector list vs expanded:\n{}\n---\n{}", lists, expanded);
-    prop_assert_eq!(&dumps[0], &dumps[2], "compact vs noisy+duplicated:\n{}\n---\n{}", lists, noisy);
+    prop_assert_eq!(
+        &dumps[0],
+        &dumps[1],
+        "selector list vs expanded:\n{}\n---\n{}",
+        lists,
+        expanded
+    );
+    prop_assert_eq!(
+        &dumps[0],
+        &dumps[2],
+        "compact vs noisy+duplicated:\n{}\n---\n{}",
+        lists,
+        noisy
+    );
 }
 
 /// Every sRGB notation of one color lands on the same color: `#rrggbb`,
@@ -376,10 +452,16 @@ fn color_notations_agree(
     let expected = format!("#{r:02x}{g:02x}{b:02x}");
     for (i, notation) in notations.iter().enumerate() {
         let run = format!("\"c{i}\" default 20px {expected}");
-        prop_assert!(dump.contains(&run), "{notation} should be {expected}:\n{dump}");
+        prop_assert!(
+            dump.contains(&run),
+            "{notation} should be {expected}:\n{dump}"
+        );
     }
     let run = format!("\"c{}\" default 20px {short_expected}", notations.len());
-    prop_assert!(dump.contains(&run), "{short_hex} should be {short_expected}:\n{dump}");
+    prop_assert!(
+        dump.contains(&run),
+        "{short_hex} should be {short_expected}:\n{dump}"
+    );
 }
 
 /// CSS named colors are the sRGB values the spec lists (checked against a
@@ -399,7 +481,11 @@ fn named_colors_match_the_spec(#[any] upper: bool) {
     let mut page = String::new();
     let mut css = "html { color: #010203; font-size: 20px }\n".to_owned();
     for (i, (name, _)) in NAMED.iter().enumerate() {
-        let name = if upper { name.to_ascii_uppercase() } else { (*name).to_owned() };
+        let name = if upper {
+            name.to_ascii_uppercase()
+        } else {
+            (*name).to_owned()
+        };
         page.push_str(&format!("<p class=\"c{i}\">c{i}</p>"));
         css.push_str(&format!(".c{i} {{ color: {name} }}\n"));
     }
@@ -408,7 +494,10 @@ fn named_colors_match_the_spec(#[any] upper: bool) {
         .spawn("page.html", TemplateContext::new(), Node::default());
     let dump = ui.settle().dump();
     for (i, (name, hex)) in NAMED.iter().enumerate() {
-        prop_assert!(dump.contains(&format!("\"c{i}\" default 20px {hex}")), "{name} → {hex}:\n{dump}");
+        prop_assert!(
+            dump.contains(&format!("\"c{i}\" default 20px {hex}")),
+            "{name} → {hex}:\n{dump}"
+        );
     }
 }
 
@@ -435,9 +524,12 @@ fn relative_font_sizes_resolve_against_their_base(
          .half {{ font-size: 0.5em }}\n"
     );
     let page = r#"<div><p class="em">em <b class="half">half</b></p><p class="pct">pct</p><p class="rem">rem</p><p>inherit</p></div>"#;
-    let mut ui = TestUi::new("prop-font-size", &[("page.html", page), ("style.css", &css)])
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut ui = TestUi::new(
+        "prop-font-size",
+        &[("page.html", page), ("style.css", &css)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
     let dump = ui.settle().dump();
     let (root, parent) = (f32::from(root), f32::from(parent));
     for (text, size) in [
@@ -479,10 +571,16 @@ fn nine_slice_manifest_maps_each_side(
     let frame = ui.world_mut().spawn(NineSliceFrame(slice)).id();
     ui.settle();
 
-    let image = ui.world_mut().get::<ImageNode>(frame).expect("frame got an ImageNode");
+    let image = ui
+        .world_mut()
+        .get::<ImageNode>(frame)
+        .expect("frame got an ImageNode");
     prop_assert_eq!(image.visual_box, VisualBox::BorderBox);
     prop_assert_eq!(
-        image.image.path().map(|path| path.path().display().to_string()),
+        image
+            .image
+            .path()
+            .map(|path| path.path().display().to_string()),
         Some("frame.png".to_owned())
     );
     let NodeImageMode::Sliced(slicer) = &image.image_mode else {
@@ -490,7 +588,12 @@ fn nine_slice_manifest_maps_each_side(
     };
     let border = slicer.border;
     prop_assert_eq!(
-        [border.min_inset.x, border.max_inset.x, border.min_inset.y, border.max_inset.y],
+        [
+            border.min_inset.x,
+            border.max_inset.x,
+            border.min_inset.y,
+            border.max_inset.y
+        ],
         sides.map(f32::from)
     );
     let tiles = |mode: &SliceScaleMode| matches!(mode, SliceScaleMode::Tile { stretch_value } if *stretch_value == 2.0);

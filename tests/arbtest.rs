@@ -11,8 +11,8 @@
 mod common;
 use common::TestUi;
 
-use arbtest::{arbtest, arbitrary};
 use arbitrary::Unstructured;
+use arbtest::{arbitrary, arbtest};
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
@@ -41,9 +41,12 @@ fn settled_with_output(ui: &mut TestUi) {
 fn arbitrary_html_never_panics() {
     arbtest(|u| {
         let html = text(u)?;
-        let mut ui = TestUi::new("fuzz-html", &[("page.html", &html), ("style.css", BASE_CSS)])
-            .stylesheet("style.css")
-            .spawn("page.html", TemplateContext::new(), Node::default());
+        let mut ui = TestUi::new(
+            "fuzz-html",
+            &[("page.html", &html), ("style.css", BASE_CSS)],
+        )
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
         settled_with_output(&mut ui);
         Ok(())
     })
@@ -87,7 +90,10 @@ fn arbitrary_fluent_never_panics() {
             &[
                 ("page.html", page.as_str()),
                 ("style.css", BASE_CSS),
-                ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
+                (
+                    "locales/en-US/main.ftl.ron",
+                    r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+                ),
                 ("locales/en-US/ui.ftl", &ftl),
             ],
         )
@@ -112,8 +118,8 @@ const INLINE_TAGS: &[&str] = &["b", "i", "span"];
 /// spaces HTML does *not* collapse (NBSP, ideographic space), and ASCII
 /// whitespace that it does. No `{` (Tera syntax).
 const TOKENS: &[&str] = &[
-    "a", "bc", "Déf", "x1", "日本", "&", "<", ">", "\"", "'", "\u{a0}", "\u{3000}", " ", "  ", "\n", "\t",
-    " \r\n ", "\u{c}",
+    "a", "bc", "Déf", "x1", "日本", "&", "<", ">", "\"", "'", "\u{a0}", "\u{3000}", " ", "  ",
+    "\n", "\t", " \r\n ", "\u{c}",
 ];
 
 #[derive(Debug)]
@@ -153,10 +159,18 @@ fn gen_node(u: &mut Unstructured, depth: usize) -> arbitrary::Result<Html> {
 fn serialize(nodes: &[Html], out: &mut String) {
     for node in nodes {
         match node {
-            Html::Text(text) => {
-                out.push_str(&text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"))
-            }
-            Html::Element { tag, id, class, children } => {
+            Html::Text(text) => out.push_str(
+                &text
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;"),
+            ),
+            Html::Element {
+                tag,
+                id,
+                class,
+                children,
+            } => {
                 out.push('<');
                 out.push_str(tag);
                 if let Some(id) = id {
@@ -178,7 +192,10 @@ fn serialize(nodes: &[Html], out: &mut String) {
 /// (NBSP, U+3000) are ordinary characters.
 fn collapse(text: &str) -> String {
     let is_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\u{c}' | '\r');
-    text.split(is_space).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
+    text.split(is_space)
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn visible_text(nodes: &[Html], out: &mut String) {
@@ -213,7 +230,12 @@ fn model(nodes: &[Html], depth: usize, out: &mut Vec<Expected>) {
                 loose.push_str(text);
                 continue;
             }
-            Html::Element { tag, id, class, children } => (tag, id, class, children),
+            Html::Element {
+                tag,
+                id,
+                class,
+                children,
+            } => (tag, id, class, children),
         };
         flush(&mut loose, out);
         let mut label = (*tag).to_owned();
@@ -240,13 +262,21 @@ fn model(nodes: &[Html], depth: usize, out: &mut Vec<Expected>) {
 
 /// What bevy_markup built below `entity`, in the model's shape, plus the
 /// `HtmlElement` entities in depth-first order.
-fn observe(world: &World, entity: Entity, depth: usize, out: &mut Vec<Expected>, elements: &mut Vec<Entity>) {
+fn observe(
+    world: &World,
+    entity: Entity,
+    depth: usize,
+    out: &mut Vec<Expected>,
+    elements: &mut Vec<Entity>,
+) {
     for &child in world.entity(entity).get::<Children>().into_iter().flatten() {
         let child_ref = world.entity(child);
         if child_ref.contains::<TextSpan>() {
             continue;
         }
-        let label = child_ref.get::<HtmlElement>().map_or("-".to_owned(), common::element_label);
+        let label = child_ref
+            .get::<HtmlElement>()
+            .map_or("-".to_owned(), common::element_label);
         if child_ref.contains::<HtmlElement>() {
             elements.push(child);
         }
@@ -283,9 +313,12 @@ fn generated_documents_build_the_html_model() {
         let mut expected = Vec::new();
         model(&nodes, 0, &mut expected);
 
-        let mut ui = TestUi::new("structured-html", &[("page.html", &page), ("style.css", BASE_CSS)])
-            .stylesheet("style.css")
-            .spawn("page.html", TemplateContext::new(), Node::default());
+        let mut ui = TestUi::new(
+            "structured-html",
+            &[("page.html", &page), ("style.css", BASE_CSS)],
+        )
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
         ui.settle();
         let root = ui.root();
         let (mut actual, mut elements) = (Vec::new(), Vec::new());
@@ -294,9 +327,16 @@ fn generated_documents_build_the_html_model() {
 
         let iterated = ui
             .world_mut()
-            .run_system_once(move |html: HtmlElements| html.iter(root).map(|(entity, _)| entity).collect::<Vec<_>>())
+            .run_system_once(move |html: HtmlElements| {
+                html.iter(root)
+                    .map(|(entity, _)| entity)
+                    .collect::<Vec<_>>()
+            })
             .unwrap();
-        assert_eq!(iterated, elements, "HtmlElements::iter order, page: {page:?}");
+        assert_eq!(
+            iterated, elements,
+            "HtmlElements::iter order, page: {page:?}"
+        );
         Ok(())
     })
     .budget_ms(600)

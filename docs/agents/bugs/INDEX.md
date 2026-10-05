@@ -12,7 +12,7 @@ Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below
 (bug_0001–0005: property testing, stateful testing and fuzzing — the fuzzers
-immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s).
+immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s; bug_0020: the picking-driven signals tests).
 
 ## Bugs
 
@@ -37,6 +37,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0017](bug_0017.md) | Restyle fallback rebuild despawned app-nested `HtmlUi`s (same_shape counted them as shape mismatches) | `src/build.rs` (`same_shape`) | high | fixed (`d079b08`) | startup crash of the demo, traced via `bevy/debug` |
 | [bug_0018](bug_0018.md) | An app `ImageNode` on a built element turned every restyle into a rebuild (rebuild every frame) | `src/build.rs` (`same_shape`) | high | fixed (`f99c6ec`) | prototype_19 integration (entity-id sampling over BRP) |
 | [bug_0019](bug_0019.md) | A value-less attribute (`autofocus`) ate the next attribute's first character | upstream `tl` 0.7.8 (UPSTREAM.md U11) | high | fixed (`f81acce`): dependency switched to `astral-tl` 0.8.0 | prototype_19 integration (gamepad smoke run) |
+| [bug_0020](bug_0020.md) | `pointer-events: none` didn't stop clicks on a block's text (spans carried no `Pickable`) | `src/build.rs` (text spans) | medium | fixed (working tree) | new picking-driven signals tests (`tests/signals.rs`) |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -106,6 +107,21 @@ settle (rebuild observed) and the resulting dump to match a reference model.
 - **Session start HEAD:** `e1b910c` — "Add browser based layout oracle".
 - **Harnesses:** proptest-stateful ops for `HtmlStylesheet`/`FontFamilies`, a structure-aware arbtest document model (PropertyTests subagent), and the layout oracle extended to flex/sizes/margins.
 - **Discovery agent:** `anthropic/claude-opus-5-5:high` with subagents.
+
+## Discovery session metadata: bug_0020
+
+- **Date:** 2026-10-05; same machine (`anne`) and toolchain.
+- **Session start state:** working tree mid-development (uncommitted
+  signals/focus work on top of the signals bindings).
+- **Harness:** the new picking-driven test harness — `TestUi::with_pointer`
+  (`tests/common/mod.rs`) spawns a primary window and aims the layout camera
+  at it, then the tests write real `WindowEvent`s (`CursorMoved`,
+  `MouseButtonInput`) so Bevy's full picking stack runs end to end
+  (`PointerInputPlugin` → UI picking backend → pointer events → bevy_markup's
+  observers and hover tracking). The `pointer-events: none` test failed on
+  its first run; component dumps (`Pickable` was correctly on the block and
+  its text node) pinned the miss to the span entities.
+- **Discovery agent:** model `zai/glm-5.3-flash:high`.
 
 ## Discovery session metadata: bug_0016
 

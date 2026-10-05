@@ -10,8 +10,11 @@ use bevy::asset::uuid::Uuid;
 use bevy::asset::{AssetMetaCheck, UntypedHandle};
 use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
 use bevy::image::{CompressedImageFormats, ImageLoader};
+use bevy::input::ButtonState;
+use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource};
+use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent, WindowRef};
 use bevy_markup::prelude::*;
 
 pub const FRAME_PNG: &[u8] = include_bytes!("../fixtures/frame.png"); // 32×24
@@ -58,7 +61,9 @@ pub fn vectors_with(file: &str) -> Vec<String> {
         .unwrap()
         .filter_map(|entry| {
             let path = entry.ok()?.path();
-            path.join(file).exists().then(|| path.file_name()?.to_str().map(str::to_owned))?
+            path.join(file)
+                .exists()
+                .then(|| path.file_name()?.to_str().map(str::to_owned))?
         })
         .collect();
     names.sort();
@@ -87,6 +92,36 @@ impl TestUi {
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn with_layout(name: &str, files: &[(&str, &str)], viewport: UVec2) -> Self {
         Self::build(name, files, Some(viewport))
+    }
+
+    /// Like [`with_layout`](Self::with_layout), plus a primary window and a
+    /// camera targeting it, so the real picking input path runs: the helpers
+    /// below write [`WindowEvent`]s (what winit would send), Bevy's
+    /// `PointerInputPlugin` turns them into `PointerInput`, the UI picking
+    /// backend hits the laid-out nodes, and bevy_markup's observers and hover
+    /// tracking emit [`ElementSignal`]s and `PseudoState`s.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn with_pointer(name: &str, files: &[(&str, &str)], viewport: UVec2) -> Self {
+        let mut ui = Self::with_layout(name, files, viewport);
+        let world = ui.app.world_mut();
+        // `mouse_pick_events` normalizes window events against the primary
+        // window, and the UI picking backend only considers pointers whose
+        // target matches the camera's — so the camera must point at it. (The
+        // window's own size is unused: layout reads the camera's hand-set
+        // `computed.target_info`, as in [`with_layout`](Self::with_layout).)
+        world.spawn((
+            Window {
+                resolution: bevy::window::WindowResolution::new(viewport.x, viewport.y),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        let mut target = world
+            .query_filtered::<&mut RenderTarget, With<bevy::ui::IsDefaultUiCamera>>()
+            .single_mut(world)
+            .expect("with_layout camera");
+        *target = RenderTarget::Window(WindowRef::Primary);
+        ui
     }
 
     fn build(name: &str, files: &[(&str, &str)], viewport: Option<UVec2>) -> Self {
@@ -227,12 +262,20 @@ impl TestUi {
             files.push(("locales/en-US/messages.ftl", messages));
         }
         let ui = Self::new(name, &files).stylesheet("style.css");
-        let ui = if messages.is_some() { ui.locale(BUNDLE) } else { ui };
+        let ui = if messages.is_some() {
+            ui.locale(BUNDLE)
+        } else {
+            ui
+        };
         ui.spawn(page, TemplateContext::new(), Node::default())
     }
 
     pub fn load<A: Asset>(&mut self, path: &str) -> Handle<A> {
-        let handle: Handle<A> = self.app.world().resource::<AssetServer>().load(path.to_owned());
+        let handle: Handle<A> = self
+            .app
+            .world()
+            .resource::<AssetServer>()
+            .load(path.to_owned());
         self.tracked.push(handle.clone().untyped());
         handle
     }
@@ -286,7 +329,10 @@ impl TestUi {
             last_builds = builds;
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        panic!("UI never settled (assets loading or no rebuild); dump:\n{}", self.dump());
+        panic!(
+            "UI never settled (assets loading or no rebuild); dump:\n{}",
+            self.dump()
+        );
     }
 
     #[allow(dead_code)] // not every test binary exercises every helper
@@ -314,6 +360,98 @@ impl TestUi {
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn builds(&self) -> usize {
         self.app.world().resource::<Builds>().0
+    }
+
+    /// The primary window the pointer input targets
+    /// ([`with_pointer`](Self::with_pointer) spawned it).
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn window(&mut self) -> Entity {
+        let world = self.app.world_mut();
+        world
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(world)
+            .expect("primary window")
+    }
+
+    /// Writes a `CursorMoved` window event and runs one frame (what winit
+    /// does when the user moves the mouse): picking recomputes the hover,
+    /// enter/leave signals and hover pseudo states update.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn move_pointer(&mut self, position: Vec2) -> &mut Self {
+        let window = self.window();
+        self.app
+            .world_mut()
+            .resource_mut::<Messages<WindowEvent>>()
+            .write(WindowEvent::CursorMoved(CursorMoved {
+                window,
+                position,
+                delta: None,
+            }));
+        self.update(1)
+    }
+
+    /// Writes a left-button press window event and runs one frame.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn press_pointer(&mut self) -> &mut Self {
+        let window = self.window();
+        self.app
+            .world_mut()
+            .resource_mut::<Messages<WindowEvent>>()
+            .write(WindowEvent::MouseButtonInput(MouseButtonInput {
+                button: MouseButton::Left,
+                state: ButtonState::Pressed,
+                window,
+            }));
+        self.update(1)
+    }
+
+    /// Writes a left-button release window event and runs one frame.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn release_pointer(&mut self) -> &mut Self {
+        let window = self.window();
+        self.app
+            .world_mut()
+            .resource_mut::<Messages<WindowEvent>>()
+            .write(WindowEvent::MouseButtonInput(MouseButtonInput {
+                button: MouseButton::Left,
+                state: ButtonState::Released,
+                window,
+            }));
+        self.update(1)
+    }
+
+    /// Moves the pointer to `position`, then presses and releases — each in
+    /// its own frame, like a real click.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn click_at(&mut self, position: Vec2) -> &mut Self {
+        self.move_pointer(position);
+        self.press_pointer();
+        self.release_pointer()
+    }
+
+    /// Drains the [`ElementSignal`]s written since the last call (both
+    /// message buffers). Test frames are ~1 ms, so Bevy's fixed-tick-gated
+    /// message update rarely runs and per-cycle iteration would re-serve
+    /// old messages; draining is exact at any frame rate.
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn take_signals(&mut self) -> Vec<ElementSignal> {
+        self.app
+            .world_mut()
+            .resource_mut::<Messages<ElementSignal>>()
+            .drain()
+            .collect()
+    }
+
+    /// Like [`update`](Self::update), accumulating the [`ElementSignal`]s of
+    /// every frame (see [`take_signals`](Self::take_signals)).
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn update_collecting_signals(&mut self, frames: usize) -> Vec<ElementSignal> {
+        let mut signals = Vec::new();
+        for _ in 0..frames {
+            self.update(1);
+            signals.extend(self.take_signals());
+        }
+        signals
     }
 
     pub fn dump(&mut self) -> String {
@@ -395,7 +533,11 @@ impl TestUi {
                     || server.load_state(handle.id()).is_failed()
             });
             let builds = self.app.world().resource::<Builds>().0;
-            stable = if loaded && builds == last_builds { stable + 1 } else { 0 };
+            stable = if loaded && builds == last_builds {
+                stable + 1
+            } else {
+                0
+            };
             if stable >= 5 {
                 self.builds_seen = builds;
                 return self;
@@ -403,7 +545,10 @@ impl TestUi {
             last_builds = builds;
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        panic!("UI never settled (assets loading or builds churning); dump:\n{}", self.dump());
+        panic!(
+            "UI never settled (assets loading or builds churning); dump:\n{}",
+            self.dump()
+        );
     }
 }
 
@@ -448,7 +593,11 @@ pub fn style_label(font: &TextFont, color: &TextColor) -> String {
     };
     let mut label = format!("{} {size} {}", face_label(&font.font), hex(color.0));
     if font.weight != FontWeight::default() {
-        label += if font.weight == FontWeight::BOLD { " bold" } else { " weight?" };
+        label += if font.weight == FontWeight::BOLD {
+            " bold"
+        } else {
+            " weight?"
+        };
     }
     if font.style != FontStyle::default() {
         label += " italic";
@@ -502,7 +651,12 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
             write!(line, " gap={gap}").unwrap();
         }
         if node.overflow != Overflow::DEFAULT {
-            write!(line, " overflow={:?},{:?}", node.overflow.x, node.overflow.y).unwrap();
+            write!(
+                line,
+                " overflow={:?},{:?}",
+                node.overflow.x, node.overflow.y
+            )
+            .unwrap();
         }
         if node.position_type == PositionType::Absolute {
             write!(line, " pos=abs").unwrap();
@@ -513,7 +667,12 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         }
         let radius = node.border_radius;
         if radius != BorderRadius::DEFAULT {
-            let corners = [radius.top_left, radius.top_right, radius.bottom_right, radius.bottom_left];
+            let corners = [
+                radius.top_left,
+                radius.top_right,
+                radius.bottom_right,
+                radius.bottom_left,
+            ];
             write!(line, " radius={}", corners.map(val).join(",")).unwrap();
         }
     }
@@ -538,7 +697,10 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         )
         .unwrap();
     }
-    if entity_ref.get::<Pickable>().is_some_and(|pickable| !pickable.is_hoverable) {
+    if entity_ref
+        .get::<Pickable>()
+        .is_some_and(|pickable| !pickable.is_hoverable)
+    {
         write!(line, " pick=none").unwrap();
     }
     if let Some(background) = entity_ref.get::<BackgroundColor>()
@@ -559,7 +721,12 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
             SliceScaleMode::Stretch => "stretch",
             SliceScaleMode::Tile { .. } => "tile",
         };
-        write!(line, " slice={file} {},{},{},{} {mode}", min.y, max.x, max.y, min.x).unwrap();
+        write!(
+            line,
+            " slice={file} {},{},{},{} {mode}",
+            min.y, max.x, max.y, min.x
+        )
+        .unwrap();
         // CSS `border-image` covers the border box; flag anything else.
         if !matches!(image.visual_box, VisualBox::BorderBox) {
             write!(line, " visual-box={:?}", image.visual_box).unwrap();
@@ -618,7 +785,11 @@ fn propagate_visibility(
                 _ => {}
             }
         }
-        let value = if visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
+        let value = if visible {
+            InheritedVisibility::VISIBLE
+        } else {
+            InheritedVisibility::HIDDEN
+        };
         inherited.set_if_neq(value);
     }
 }

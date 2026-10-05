@@ -19,8 +19,12 @@ use std::path::PathBuf;
 fn corpus(target: &str) -> Vec<String> {
     let mut inputs = Vec::new();
     for dir in ["fuzz/seeds", "fuzz/corpus"] {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(dir).join(target);
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(dir)
+            .join(target);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let before = inputs.len();
         inputs.extend(
             entries
@@ -28,9 +32,16 @@ fn corpus(target: &str) -> Vec<String> {
                 .filter(|bytes| bytes.len() <= 64 * 1024)
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         );
-        eprintln!("fuzz_corpus: {} inputs from {}", inputs.len() - before, dir.display());
+        eprintln!(
+            "fuzz_corpus: {} inputs from {}",
+            inputs.len() - before,
+            dir.display()
+        );
     }
-    assert!(!inputs.is_empty(), "no inputs: fuzz/seeds/{target}/ is committed");
+    assert!(
+        !inputs.is_empty(),
+        "no inputs: fuzz/seeds/{target}/ is committed"
+    );
     inputs
 }
 

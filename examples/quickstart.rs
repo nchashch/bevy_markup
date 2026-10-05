@@ -21,7 +21,6 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, switch_language)
         .add_observer(wire_coin_button)
-
         .run();
 }
 
@@ -53,7 +52,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
 
     commands.spawn((
         HtmlUi::new(asset_server.load("quickstart/hello.html")),
-        TemplateContext::new().with("player", "Ada").with("coins", &0),
+        TemplateContext::new()
+            .with("player", "Ada")
+            .with("coins", &0),
         Node {
             width: Val::Px(560.0),
             margin: UiRect::all(Val::Auto),

@@ -131,7 +131,12 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    const PHASES: [Option<Phase>; 4] = [None, Some(Phase::Ready), Some(Phase::Loading), Some(Phase::Failed)];
+    const PHASES: [Option<Phase>; 4] = [
+        None,
+        Some(Phase::Ready),
+        Some(Phase::Loading),
+        Some(Phase::Failed),
+    ];
 
     /// The stylesheet an update must use, or `None` while one it depends on
     /// loads (stated per CSS-like fallback, independently of `decide`).
@@ -153,7 +158,11 @@ mod tests {
     /// A state that has built once (so restyles are possible).
     fn built() -> RebuildState {
         let mut state = RebuildState::default();
-        let first = state.decide(Frame { document_ready: true, content_changed: true, ..Frame::default() });
+        let first = state.decide(Frame {
+            document_ready: true,
+            content_changed: true,
+            ..Frame::default()
+        });
         assert_eq!(first, Decision::Build(Source::Unstyled));
         state
     }
@@ -185,7 +194,12 @@ mod tests {
     fn nothing_changed_never_updates() {
         for own in PHASES {
             for default in PHASES {
-                let decision = built().decide(Frame { own, default, document_ready: true, ..Frame::default() });
+                let decision = built().decide(Frame {
+                    own,
+                    default,
+                    document_ready: true,
+                    ..Frame::default()
+                });
                 assert!(
                     matches!(decision, Decision::Skip | Decision::Wait),
                     "own {own:?}, default {default:?}: {decision:?}"
@@ -198,14 +212,46 @@ mod tests {
     /// at once rebuild.
     #[test]
     fn style_changes_restyle_and_structure_changes_rebuild() {
-        let ready = Frame { default: Some(Phase::Ready), document_ready: true, ..Frame::default() };
+        let ready = Frame {
+            default: Some(Phase::Ready),
+            document_ready: true,
+            ..Frame::default()
+        };
         let cases = [
-            (Frame { default_changed: true, ..ready }, Decision::Restyle(Source::Default)),
-            (Frame { fonts_changed: true, ..ready }, Decision::Restyle(Source::Default)),
-            (Frame { own_changed: true, ..ready }, Decision::Restyle(Source::Default)),
-            (Frame { content_changed: true, ..ready }, Decision::Build(Source::Default)),
             (
-                Frame { content_changed: true, fonts_changed: true, ..ready },
+                Frame {
+                    default_changed: true,
+                    ..ready
+                },
+                Decision::Restyle(Source::Default),
+            ),
+            (
+                Frame {
+                    fonts_changed: true,
+                    ..ready
+                },
+                Decision::Restyle(Source::Default),
+            ),
+            (
+                Frame {
+                    own_changed: true,
+                    ..ready
+                },
+                Decision::Restyle(Source::Default),
+            ),
+            (
+                Frame {
+                    content_changed: true,
+                    ..ready
+                },
+                Decision::Build(Source::Default),
+            ),
+            (
+                Frame {
+                    content_changed: true,
+                    fonts_changed: true,
+                    ..ready
+                },
                 Decision::Build(Source::Default),
             ),
         ];
@@ -218,8 +264,16 @@ mod tests {
     /// (there's nothing to restyle).
     #[test]
     fn first_update_builds() {
-        let frame = Frame { default: Some(Phase::Ready), document_ready: true, default_changed: true, ..Frame::default() };
-        assert_eq!(RebuildState::default().decide(frame), Decision::Build(Source::Default));
+        let frame = Frame {
+            default: Some(Phase::Ready),
+            document_ready: true,
+            default_changed: true,
+            ..Frame::default()
+        };
+        assert_eq!(
+            RebuildState::default().decide(frame),
+            Decision::Build(Source::Default)
+        );
     }
 
     /// A default-stylesheet change under a ready override changes nothing
@@ -235,7 +289,11 @@ mod tests {
         };
         assert_eq!(built().decide(frame(Some(Phase::Ready))), Decision::Skip);
         for own in [None, Some(Phase::Failed)] {
-            assert_eq!(built().decide(frame(own)), Decision::Restyle(Source::Default), "own {own:?}");
+            assert_eq!(
+                built().decide(frame(own)),
+                Decision::Restyle(Source::Default),
+                "own {own:?}"
+            );
         }
     }
 
@@ -246,11 +304,31 @@ mod tests {
     #[test]
     fn deferred_changes_update_once_when_the_sheet_resolves() {
         let mut state = built();
-        let loading = Frame { default: Some(Phase::Loading), document_ready: true, ..Frame::default() };
-        assert_eq!(state.decide(Frame { default_changed: true, ..loading }), Decision::Wait);
-        assert_eq!(state.decide(Frame { content_changed: true, ..loading }), Decision::Wait);
+        let loading = Frame {
+            default: Some(Phase::Loading),
+            document_ready: true,
+            ..Frame::default()
+        };
+        assert_eq!(
+            state.decide(Frame {
+                default_changed: true,
+                ..loading
+            }),
+            Decision::Wait
+        );
+        assert_eq!(
+            state.decide(Frame {
+                content_changed: true,
+                ..loading
+            }),
+            Decision::Wait
+        );
         assert_eq!(state.decide(loading), Decision::Wait);
-        let failed = Frame { default: Some(Phase::Failed), document_ready: true, ..Frame::default() };
+        let failed = Frame {
+            default: Some(Phase::Failed),
+            document_ready: true,
+            ..Frame::default()
+        };
         assert_eq!(state.decide(failed), Decision::Build(Source::Unstyled));
         assert_eq!(state.decide(failed), Decision::Skip);
     }
@@ -260,10 +338,16 @@ mod tests {
     #[test]
     fn waits_for_the_document() {
         let mut state = RebuildState::default();
-        let pending = Frame { content_changed: true, ..Frame::default() };
+        let pending = Frame {
+            content_changed: true,
+            ..Frame::default()
+        };
         assert_eq!(state.decide(pending), Decision::Wait);
         assert_eq!(state.decide(Frame::default()), Decision::Wait);
-        let ready = Frame { document_ready: true, ..Frame::default() };
+        let ready = Frame {
+            document_ready: true,
+            ..Frame::default()
+        };
         assert_eq!(state.decide(ready), Decision::Build(Source::Unstyled));
     }
 
@@ -288,7 +372,13 @@ mod tests {
                     own,
                     default,
                     document_ready,
-                    [own_changed, default_changed, fonts_changed, state_changed, content_changed],
+                    [
+                        own_changed,
+                        default_changed,
+                        fonts_changed,
+                        state_changed,
+                        content_changed,
+                    ],
                 )| {
                     Frame {
                         own,

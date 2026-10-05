@@ -46,7 +46,13 @@ use crate::template::{HtmlDocument, HtmlTemplate, error_chain};
 /// ```
 #[derive(Component, Clone, Debug, Reflect)]
 #[reflect(Component)]
-#[require(Node, TemplateContext, RenderedHtml, LocalizedText, crate::rebuild::RebuildState)]
+#[require(
+    Node,
+    TemplateContext,
+    RenderedHtml,
+    LocalizedText,
+    crate::rebuild::RebuildState
+)]
 pub struct HtmlUi(pub Handle<HtmlTemplate>);
 
 impl HtmlUi {
@@ -264,7 +270,10 @@ mod tests {
         let mut context = tera::Context::new();
         context.insert("player", "Ada");
         let converted = TemplateContext::from(context);
-        assert_eq!(converted.get("player").and_then(|value| value.as_str()), Some("Ada"));
+        assert_eq!(
+            converted.get("player").and_then(|value| value.as_str()),
+            Some("Ada")
+        );
     }
 
     fn element(tag: &str, id: Option<&str>, classes: &[&str]) -> HtmlElement {
@@ -285,18 +294,31 @@ mod tests {
         let mut world = World::new();
         // <div.a><p#x.a>…</p></div> <anonymous text> <p#x.b> <section><p.a></section>
         let root = world.spawn_empty().id();
-        let div = world.spawn((element("div", None, &["a"]), ChildOf(root))).id();
-        let nested = world.spawn((element("p", Some("x"), &["a"]), ChildOf(div))).id();
+        let div = world
+            .spawn((element("div", None, &["a"]), ChildOf(root)))
+            .id();
+        let nested = world
+            .spawn((element("p", Some("x"), &["a"]), ChildOf(div)))
+            .id();
         let anonymous = world.spawn(ChildOf(root)).id();
-        let shallow = world.spawn((element("p", Some("x"), &["b"]), ChildOf(root))).id();
-        let section = world.spawn((element("section", None, &[]), ChildOf(root))).id();
-        let deep = world.spawn((element("p", None, &["a"]), ChildOf(section))).id();
+        let shallow = world
+            .spawn((element("p", Some("x"), &["b"]), ChildOf(root)))
+            .id();
+        let section = world
+            .spawn((element("section", None, &[]), ChildOf(root)))
+            .id();
+        let deep = world
+            .spawn((element("p", None, &["a"]), ChildOf(section)))
+            .id();
         let elsewhere = world.spawn(element("p", Some("x"), &["a"])).id();
 
         let found = world
             .run_system_once(move |elements: HtmlElements| {
                 (
-                    elements.iter(root).map(|(entity, _)| entity).collect::<Vec<_>>(),
+                    elements
+                        .iter(root)
+                        .map(|(entity, _)| entity)
+                        .collect::<Vec<_>>(),
                     elements.by_id(root, "x"),
                     elements.by_class(root, "a").collect::<Vec<_>>(),
                     elements.by_tag(root, "p").collect::<Vec<_>>(),

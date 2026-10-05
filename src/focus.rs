@@ -134,7 +134,9 @@ pub(crate) fn focusable(tag: &tl::HTMLTag, signals: &[SignalBinding]) -> Option<
         .and_then(|value| value.as_utf8_str().trim().parse::<i32>().ok());
     let focusable = match tabindex {
         Some(index) => index >= 0,
-        None => signals.iter().any(|binding| binding.trigger == SignalTrigger::Click),
+        None => signals
+            .iter()
+            .any(|binding| binding.trigger == SignalTrigger::Click),
     };
     focusable.then(|| Focusable {
         autofocus: attributes.contains("autofocus"),
@@ -163,7 +165,11 @@ pub(crate) fn plugin(app: &mut App) {
 }
 
 /// The `HtmlUi` `entity` belongs to (itself included).
-fn html_root(entity: Entity, parents: &Query<&ChildOf>, roots: &Query<(), With<HtmlUi>>) -> Option<Entity> {
+fn html_root(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    roots: &Query<(), With<HtmlUi>>,
+) -> Option<Entity> {
     std::iter::once(entity)
         .chain(parents.iter_ancestors(entity))
         .find(|&ancestor| roots.contains(ancestor))
@@ -173,7 +179,11 @@ fn html_root(entity: Entity, parents: &Query<&ChildOf>, roots: &Query<(), With<H
 /// directly (the nearest non-`Inherited` value up the tree decides; all
 /// `Inherited` = visible) rather than `InheritedVisibility`, which lags a
 /// frame behind spawns and needs the render-side propagation systems.
-fn visible_in_hierarchy(entity: Entity, visibility: &Query<&Visibility>, parents: &Query<&ChildOf>) -> bool {
+fn visible_in_hierarchy(
+    entity: Entity,
+    visibility: &Query<&Visibility>,
+    parents: &Query<&ChildOf>,
+) -> bool {
     for ancestor in std::iter::once(entity).chain(parents.iter_ancestors(entity)) {
         match visibility.get(ancestor) {
             Ok(Visibility::Hidden) => return false,
@@ -259,9 +269,13 @@ fn sync_navigation(
             None => roots_in_scope.contains(root) && visible(root),
         });
         if wanted && !navigable {
-            commands.entity(entity).insert(AutoDirectionalNavigation::default());
+            commands
+                .entity(entity)
+                .insert(AutoDirectionalNavigation::default());
         } else if !wanted && navigable {
-            commands.entity(entity).remove::<AutoDirectionalNavigation>();
+            commands
+                .entity(entity)
+                .remove::<AutoDirectionalNavigation>();
         }
     }
 }
@@ -287,7 +301,8 @@ fn repair_focus(
     }
     let remembered = memory.id.as_deref().and_then(|id| {
         navigable.iter().find_map(|(entity, element, _)| {
-            (element.id.as_deref() == Some(id) && html_root(entity, &parents, &roots) == memory.root)
+            (element.id.as_deref() == Some(id)
+                && html_root(entity, &parents, &roots) == memory.root)
                 .then_some(entity)
         })
     });
@@ -335,7 +350,11 @@ fn activate_element(
     let Ok((signals, element)) = elements.get(activate.entity) else {
         return;
     };
-    for binding in signals.0.iter().filter(|binding| binding.trigger == SignalTrigger::Click) {
+    for binding in signals
+        .0
+        .iter()
+        .filter(|binding| binding.trigger == SignalTrigger::Click)
+    {
         writer.write(ElementSignal {
             name: Cow::Owned(binding.name.clone()),
             trigger: SignalTrigger::Click,

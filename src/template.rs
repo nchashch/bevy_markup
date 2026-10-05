@@ -56,7 +56,10 @@ impl HtmlDocument {
         // SAFETY: `parse_owned` leaks `html` and frees it when the returned
         // `VDomGuard` drops; `VDomGuard::get_ref` ties borrows to the guard.
         let dom = unsafe { tl::parse_owned(html, tl::ParserOptions::default()) }?;
-        Ok(Self { dom: Box::new(dom), source })
+        Ok(Self {
+            dom: Box::new(dom),
+            source,
+        })
     }
 
     /// The HTML text this document was parsed from.
@@ -203,7 +206,10 @@ mod tests {
     /// instead of `&#39;`), which would show raw entities in the UI.
     #[test]
     fn decodes_the_five_escapes() {
-        assert_eq!(decode_entities("&lt;b&gt; &quot;x&quot; &#39;y&#39; &amp;"), "<b> \"x\" 'y' &");
+        assert_eq!(
+            decode_entities("&lt;b&gt; &quot;x&quot; &#39;y&#39; &amp;"),
+            "<b> \"x\" 'y' &"
+        );
     }
 
     /// Decoding undoes exactly one level of escaping: an escaped entity
@@ -222,7 +228,9 @@ mod tests {
     /// partial decode such as `&amp;nbsp;` → `&nbsp;` → something else.
     #[test]
     fn other_references_are_left_alone() {
-        for text in ["&nbsp;", "&#169;", "&#x3C;", "&copy;", "a & b", "&lt", "&;", "&#39"] {
+        for text in [
+            "&nbsp;", "&#169;", "&#x3C;", "&copy;", "a & b", "&lt", "&;", "&#39",
+        ] {
             assert_eq!(decode_entities(text), text);
         }
     }
@@ -269,13 +277,11 @@ mod tests {
             "<div class=\"a\">\n  <p>Hi <b>there</b></p>\n  <p data-l10n-id=\"t\">x</p>\n  <p data-l10n-id=\"e\">y</p>\n</div>".to_owned(),
         )
         .unwrap();
-        let paragraphs: Vec<tl::NodeHandle> = document
-            .dom()
-            .query_selector("p")
-            .unwrap()
-            .collect();
+        let paragraphs: Vec<tl::NodeHandle> = document.dom().query_selector("p").unwrap().collect();
         let mut localized = LocalizedText::default();
-        localized.0.insert(paragraphs[1], Ok("Translated".to_owned()));
+        localized
+            .0
+            .insert(paragraphs[1], Ok("Translated".to_owned()));
         localized.0.insert(paragraphs[2], Err("missing".to_owned()));
         let expected = "\
 div class=\"a\"
@@ -307,7 +313,16 @@ div class=\"a\"
                 self.1.as_deref().map(|layer| layer as _)
             }
         }
-        let error = Layer("render failed", Some(Box::new(Layer("in t.html", Some(Box::new(Layer("unknown variable `x`", None)))))));
-        assert_eq!(error_chain(&error), "render failed: in t.html: unknown variable `x`");
+        let error = Layer(
+            "render failed",
+            Some(Box::new(Layer(
+                "in t.html",
+                Some(Box::new(Layer("unknown variable `x`", None))),
+            ))),
+        );
+        assert_eq!(
+            error_chain(&error),
+            "render failed: in t.html: unknown variable `x`"
+        );
     }
 }

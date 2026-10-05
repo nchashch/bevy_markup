@@ -79,6 +79,8 @@ examples/
                    selection), consts.rs (fonts)
 tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
+  signals.rs       picking-driven signal tests: real WindowEvent input → Bevy picking → ElementSignal/PseudoState
+                   (needs TestUi::with_pointer; see Testing)
   properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips,
                    selector lists/formatting/duplicates, color notations, relative font sizes, 9-slice manifests)
   quickcheck.rs    quickcheck structured-input properties (cascade vs reference models — single rule winner and
@@ -293,10 +295,12 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   parent's padding box (every parent acts positioned).
 - Element components (`build.rs` `apply_css_owned`): `border-color` →
   `BorderColor`, `z-index` → `ZIndex`, computed `pointer-events: none` →
-  `Pickable::IGNORE` (also on a boxed block's inner text node). An app may set
-  these itself, so `CssOwned` records what CSS set and a restyle without the
-  declaration resets only that (`BorderColor`/`ZIndex` are `Node`'s required
-  components: reset to default, never removed).
+  `Pickable::IGNORE` (also on a boxed block's inner text node, and on the
+  block's `TextSpan`s: bevy_picking resolves text hits against the span
+  entity, so an ignored block's spans must ignore too, bug_0020). An app may
+  set these itself, so `CssOwned` records what CSS set and a restyle without
+  the declaration resets only that (`BorderColor`/`ZIndex` are `Node`'s
+  required components: reset to default, never removed).
 - Box properties (`cascade.rs` → `build.rs`): `border-image` (shorthand +
   `-source`/`-slice`/`-repeat`), `border-width`, `padding` (absolute lengths)
   on blocks, containers and the `html` rule; `background-color` on blocks and
@@ -483,6 +487,31 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   generated sizes on real headless layout, 1px tolerance: `row-reverse` mirrors
   `row`, `margin: auto` centers, zero-basis `flex-grow` splits by factor,
   `space-between` spreads evenly, wrapped items stay inside without overlap.
+- **Signals** (`tests/signals.rs`, `cargo test --test signals`): interaction
+  end to end over the real picking stack. `TestUi::with_pointer` extends the
+  layout harness with a primary `Window` entity and aims the camera at it
+  (`RenderTarget::Window(WindowRef::Primary)`; the camera's `computed.target_info`
+  is still set by hand, so layout is unchanged). The tests then write
+  `WindowEvent::CursorMoved`/`MouseButtonInput` messages — what winit sends —
+  one action per frame (`move_pointer`/`press_pointer`/`release_pointer`/
+  `click_at`; a click spans three frames, like a real one), and Bevy's full
+  chain runs: `PointerInputPlugin` → UI picking backend → `Pointer<Click>`-style
+  entity events (bubbling through text spans) → `HoverMap` → bevy_markup's
+  observers, `hover_signals` and `update_pseudo_states`. Assertions read the
+  drained `ElementSignal`s (`take_signals`) and `PseudoState`s, plus element
+  rects (`node_rect`) for click positions. Vectors: click/press/release with
+  payload and position, deepest-bound-element-wins (nesting), enter/leave over
+  a subtree, the despawn-leave after a rebuild under a stationary cursor,
+  hover/active pseudo states, `pointer-events: none` (bug_0020), inline hooks
+  staying dead.
+  Gotchas learned here: Bevy's message updates are gated on fixed ticks
+  (`signal_message_update_system` runs in `FixedPostUpdate`), and at ~1 ms
+  test frames those are rare — per-cycle message iteration
+  (`iter_current_update_messages`) re-serves old signals, so the harness
+  drains both buffers (`Messages::drain`). Cursor-based `MessageReader`s
+  (the real picking path) are unaffected. Pressing a focusable element
+  focuses it (press-to-focus), so `PseudoState.focused` is set after a click
+  even where the test only cares about hover/active.
 - **Content lint** (`tests/content_lint.rs`): checks the examples' content
   in `examples/assets/` (committed, so it runs everywhere, CI included).
   `PAGES` lists every template with

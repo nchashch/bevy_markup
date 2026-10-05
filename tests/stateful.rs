@@ -99,7 +99,9 @@ impl UiModel {
     /// outline hasn't replaced content.
     fn expected(&self) -> (String, Option<String>) {
         let root = match self.effective() {
-            Theme::Framed => "html-ui border=16,16,16,16 padding=10,10,10,10 slice=frame.png 4,4,4,4 stretch",
+            Theme::Framed => {
+                "html-ui border=16,16,16,16 padding=10,10,10,10 slice=frame.png 4,4,4,4 stretch"
+            }
             Theme::Plain => "html-ui padding=4,4,4,4",
             // Unstyled: the app's own 3px padding is restored.
             Theme::Broken => "html-ui padding=3,3,3,3",
@@ -176,13 +178,28 @@ impl ModelState for UiModel {
 
     async fn init_test_run(&self) -> TestUi {
         let files = [
-            ("page.html", r#"<p data-l10n-id="count" data-l10n-args='{"n": {{ n }}}'>{{ n }}</p>"#),
-            ("framed.css", r#"html { color: #ffffff; font-family: Spectral; font-size: 20px; border-image: url("frame.png") 4 fill stretch; border-width: 16px; padding: 10px }"#),
-            ("plain.css", "html { color: #00ff00; font-family: Spectral; font-size: 12px; padding: 4px }"),
+            (
+                "page.html",
+                r#"<p data-l10n-id="count" data-l10n-args='{"n": {{ n }}}'>{{ n }}</p>"#,
+            ),
+            (
+                "framed.css",
+                r#"html { color: #ffffff; font-family: Spectral; font-size: 20px; border-image: url("frame.png") 4 fill stretch; border-width: 16px; padding: 10px }"#,
+            ),
+            (
+                "plain.css",
+                "html { color: #00ff00; font-family: Spectral; font-size: 12px; padding: 4px }",
+            ),
             ("broken.css", "{ not css"),
-            ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
+            (
+                "locales/en-US/main.ftl.ron",
+                r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+            ),
             ("locales/en-US/ui.ftl", "count = { $n } items"),
-            ("locales/de/main.ftl.ron", r#"(locale: "de", resources: ["ui.ftl"])"#),
+            (
+                "locales/de/main.ftl.ron",
+                r#"(locale: "de", resources: ["ui.ftl"])"#,
+            ),
             ("locales/de/ui.ftl", "count = { $n } Dinge"),
         ];
         let mut ui = TestUi::new("stateful-ui", &files)
@@ -191,7 +208,10 @@ impl ModelState for UiModel {
                 "page.html",
                 TemplateContext::new().with("n", &self.n),
                 // The app's own padding, restored whenever CSS drops it.
-                Node { padding: UiRect::all(Val::Px(3.0)), ..default() },
+                Node {
+                    padding: UiRect::all(Val::Px(3.0)),
+                    ..default()
+                },
             );
         // Preload everything an op may switch to.
         let _: Handle<Stylesheet> = ui.load("plain.css");
@@ -213,11 +233,14 @@ impl ModelState for UiModel {
             }
             Op::SetTheme(theme) => {
                 let handle: Handle<Stylesheet> = ctxt.load(theme.path());
-                ctxt.world_mut().insert_resource(DefaultStylesheet::new(handle));
+                ctxt.world_mut()
+                    .insert_resource(DefaultStylesheet::new(handle));
             }
             Op::SetOwnSheet(theme) => {
                 let handle: Handle<Stylesheet> = ctxt.load(theme.path());
-                ctxt.world_mut().entity_mut(root).insert(HtmlStylesheet(handle));
+                ctxt.world_mut()
+                    .entity_mut(root)
+                    .insert(HtmlStylesheet(handle));
             }
             Op::RemoveOwnSheet => {
                 ctxt.world_mut().entity_mut(root).remove::<HtmlStylesheet>();
@@ -232,7 +255,9 @@ impl ModelState for UiModel {
             }
             Op::ToggleOutline => {
                 if self.outline {
-                    ctxt.world_mut().entity_mut(root).remove::<HtmlDebugOutline>();
+                    ctxt.world_mut()
+                        .entity_mut(root)
+                        .remove::<HtmlDebugOutline>();
                 } else {
                     ctxt.world_mut().entity_mut(root).insert(HtmlDebugOutline);
                 }
@@ -247,7 +272,9 @@ impl ModelState for UiModel {
                 } else {
                     FontFaces::new(MONO.clone())
                 };
-                ctxt.world_mut().resource_mut::<FontFamilies>().insert("Spectral", faces);
+                ctxt.world_mut()
+                    .resource_mut::<FontFamilies>()
+                    .insert("Spectral", faces);
             }
         }
         if self.rebuilds(op) {
@@ -261,9 +288,15 @@ impl ModelState for UiModel {
         let dump = ctxt.dump();
         let (root, run) = self.expected();
         let first = dump.lines().next().unwrap_or_default();
-        assert_eq!(first, root, "root box mismatch (model {self:?})\n--- dump ---\n{dump}");
+        assert_eq!(
+            first, root,
+            "root box mismatch (model {self:?})\n--- dump ---\n{dump}"
+        );
         if let Some(run) = run {
-            assert!(dump.contains(&run), "missing run {run:?} (model {self:?})\n--- dump ---\n{dump}");
+            assert!(
+                dump.contains(&run),
+                "missing run {run:?} (model {self:?})\n--- dump ---\n{dump}"
+            );
         } else {
             // The outline shows the localized DOM instead of styled runs. The
             // outline text is one Debug-escaped run, so quotes appear as \".
@@ -272,7 +305,10 @@ impl ModelState for UiModel {
                 Locale::En => format!("l10n \\\"{} items\\\"", self.n),
                 Locale::De => format!("l10n \\\"{} Dinge\\\"", self.n),
             };
-            assert!(dump.contains(&marker), "outline missing {marker:?} (model {self:?})\n--- dump ---\n{dump}");
+            assert!(
+                dump.contains(&marker),
+                "outline missing {marker:?} (model {self:?})\n--- dump ---\n{dump}"
+            );
         }
     }
 

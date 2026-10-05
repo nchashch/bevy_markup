@@ -193,10 +193,17 @@ mod tests {
                 ((false, false), regular.clone()),
                 ((true, false), pick(&[(1, &bold)])),
                 ((false, true), pick(&[(2, &italic)])),
-                ((true, true), pick(&[(4, &bold_italic), (2, &italic), (1, &bold)])),
+                (
+                    (true, true),
+                    pick(&[(4, &bold_italic), (2, &italic), (1, &bold)]),
+                ),
             ];
             for ((b, i), face) in expected {
-                assert_eq!(faces.face(b, i), face.into(), "faces mask {mask:03b}, bold {b}, italic {i}");
+                assert_eq!(
+                    faces.face(b, i),
+                    face.into(),
+                    "faces mask {mask:03b}, bold {b}, italic {i}"
+                );
             }
         }
     }
@@ -220,9 +227,18 @@ mod tests {
         let spectral = families.resolve(&[named("spectral")]);
         let iosevka = families.resolve(&[named("IOSEVKA SLAB")]);
         assert!(spectral.is_some() && iosevka.is_some() && spectral != iosevka);
-        assert_eq!(families.resolve(&[named("Iosevka Slab"), named("Spectral")]), iosevka);
-        assert_eq!(families.resolve(&[named("Nope"), named("Spectral")]), spectral);
-        assert_eq!(families.faces(spectral.unwrap()).unwrap().regular, font(1).into());
+        assert_eq!(
+            families.resolve(&[named("Iosevka Slab"), named("Spectral")]),
+            iosevka
+        );
+        assert_eq!(
+            families.resolve(&[named("Nope"), named("Spectral")]),
+            spectral
+        );
+        assert_eq!(
+            families.faces(spectral.unwrap()).unwrap().regular,
+            font(1).into()
+        );
     }
 
     /// Unregistered names, unmapped generics and generics mapped to
@@ -235,7 +251,10 @@ mod tests {
         let serif = FamilyRef::Generic(GenericFamily::Serif);
         let cursive = FamilyRef::Generic(GenericFamily::Cursive);
         let mono = FamilyRef::Generic(GenericFamily::Monospace);
-        assert_eq!(families.resolve(&[serif.clone(), cursive.clone(), mono]), iosevka);
+        assert_eq!(
+            families.resolve(&[serif.clone(), cursive.clone(), mono]),
+            iosevka
+        );
         assert_eq!(families.resolve(&[named("Nope"), serif, cursive]), None);
         assert_eq!(families.resolve(&[]), None);
     }
@@ -249,6 +268,9 @@ mod tests {
         families.insert("SPECTRAL", FontFaces::new(font(9)));
         assert_eq!(families.resolve(&[named("Spectral")]), before);
         assert_eq!(families.get("spectral").unwrap().regular, font(9).into());
-        assert_eq!(families.get("Iosevka Slab").unwrap().regular, font(2).into());
+        assert_eq!(
+            families.get("Iosevka Slab").unwrap().regular,
+            font(2).into()
+        );
     }
 }

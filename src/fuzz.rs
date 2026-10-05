@@ -40,11 +40,15 @@ fn fake_frame() -> Image {
 pub fn render_html(source: &str, context_json: &str) -> Result<String, String> {
     let name = "fuzz/template.html";
     let mut tera = tera::Tera::new();
-    tera.add_raw_template(name, source).map_err(|err| err.to_string())?;
+    tera.add_raw_template(name, source)
+        .map_err(|err| err.to_string())?;
     let value: serde_json::Value =
         serde_json::from_str(context_json).map_err(|err| err.to_string())?;
     let context = tera::Context::from_serialize(&value).map_err(|err| err.to_string())?;
-    let template = HtmlTemplate { tera, name: name.to_owned() };
+    let template = HtmlTemplate {
+        tera,
+        name: name.to_owned(),
+    };
     let document = template.render(&context).map_err(|err| err.to_string())?;
     Ok(document.outline(&LocalizedText::default()))
 }
@@ -61,7 +65,11 @@ pub fn cascade(css: &str) -> Result<String, String> {
     let urls = image_urls(&sheet);
     let mut assets = Assets::<Image>::default();
     let handles: Vec<_> = (0..urls.len()).map(|_| assets.add(fake_frame())).collect();
-    let stylesheet = Stylesheet { sheet, image_urls: urls, images: handles };
+    let stylesheet = Stylesheet {
+        sheet,
+        image_urls: urls,
+        images: handles,
+    };
 
     let styles = HtmlStyles::from_sheet(&stylesheet.sheet);
     let fonts = FontFamilies::default();
@@ -75,12 +83,36 @@ pub fn cascade(css: &str) -> Result<String, String> {
     };
 
     let elements = [
-        HtmlElement { tag: "html".into(), id: None, classes: vec![] },
-        HtmlElement { tag: "p".into(), id: None, classes: vec![] },
-        HtmlElement { tag: "p".into(), id: Some("lead".into()), classes: vec!["note".into()] },
-        HtmlElement { tag: "div".into(), id: None, classes: vec!["panel".into(), "wide".into()] },
-        HtmlElement { tag: "li".into(), id: None, classes: vec![] },
-        HtmlElement { tag: "pre".into(), id: None, classes: vec![] },
+        HtmlElement {
+            tag: "html".into(),
+            id: None,
+            classes: vec![],
+        },
+        HtmlElement {
+            tag: "p".into(),
+            id: None,
+            classes: vec![],
+        },
+        HtmlElement {
+            tag: "p".into(),
+            id: Some("lead".into()),
+            classes: vec!["note".into()],
+        },
+        HtmlElement {
+            tag: "div".into(),
+            id: None,
+            classes: vec!["panel".into(), "wide".into()],
+        },
+        HtmlElement {
+            tag: "li".into(),
+            id: None,
+            classes: vec![],
+        },
+        HtmlElement {
+            tag: "pre".into(),
+            id: None,
+            classes: vec![],
+        },
     ];
     let mut out = String::new();
     // One hit per element, then a repeat: exercises the cascade's match cache.
@@ -119,10 +151,9 @@ pub fn cascade(css: &str) -> Result<String, String> {
 pub fn translate(ftl: &str, id: &str, args_json: &str) -> Result<String, String> {
     // Unparsable FTL is skipped: this fluent version drops the partial
     // resource, so there is no recovery path to fuzz.
-    let resource = fluent::FluentResource::try_new(ftl.to_owned())
-        .map_err(|errors| format!("{errors:?}"))?;
-    let locale: unic_langid::LanguageIdentifier =
-        "en".parse().map_err(|err| format!("{err:?}"))?;
+    let resource =
+        fluent::FluentResource::try_new(ftl.to_owned()).map_err(|errors| format!("{errors:?}"))?;
+    let locale: unic_langid::LanguageIdentifier = "en".parse().map_err(|err| format!("{err:?}"))?;
     let mut bundle = fluent::concurrent::FluentBundle::new_concurrent(vec![locale]);
     bundle
         .add_resource(resource)
@@ -153,7 +184,11 @@ mod tests {
     #[test]
     fn deeply_nested_expressions_are_an_error_not_a_stack_overflow() {
         let placeables = format!("x = {}\"a\"{}\n", "{".repeat(100_000), "}".repeat(100_000));
-        let calls = format!("x = {{ {}1{} }}\n", "F(".repeat(100_000), ")".repeat(100_000));
+        let calls = format!(
+            "x = {{ {}1{} }}\n",
+            "F(".repeat(100_000),
+            ")".repeat(100_000)
+        );
         for ftl in [placeables, calls] {
             let result = std::thread::Builder::new()
                 .stack_size(2 * 1024 * 1024)
@@ -170,8 +205,12 @@ mod tests {
     #[test]
     fn nesting_up_to_the_limit_still_works() {
         let nested = |depth: usize| format!("{}\"a\"{}", "{".repeat(depth), "}".repeat(depth));
-        assert_eq!(translate(&format!("x = {}\n", nested(100)), "x", "{}"), Ok("a".to_owned()));
-        let resource = fluent::FluentResource::try_new(format!("deep = {}\nok = fine\n", nested(101)));
+        assert_eq!(
+            translate(&format!("x = {}\n", nested(100)), "x", "{}"),
+            Ok("a".to_owned())
+        );
+        let resource =
+            fluent::FluentResource::try_new(format!("deep = {}\nok = fine\n", nested(101)));
         let (resource, errors) = resource.expect_err("depth 101 is an error");
         assert_eq!(errors.len(), 1, "{errors:?}");
         let ids: Vec<&str> = resource

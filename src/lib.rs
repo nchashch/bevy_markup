@@ -148,7 +148,9 @@ pub use {bevy_fluent, lightningcss, tera, tl};
 
 /// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {
-    pub use crate::focus::{ActivateElement, FocusEdge, Focusable, HtmlFocus, HtmlModal, HtmlNoFocus};
+    pub use crate::focus::{
+        ActivateElement, FocusEdge, Focusable, HtmlFocus, HtmlModal, HtmlNoFocus,
+    };
     pub use crate::fonts::{FontFaces, FontFamilies, GenericFamily};
     pub use crate::html::{
         HtmlDebugOutline, HtmlElement, HtmlElements, HtmlUi, HtmlUiBuilt, HtmlUiRestyled,

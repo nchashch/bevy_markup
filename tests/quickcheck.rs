@@ -56,7 +56,9 @@ impl Arbitrary for Rule {
         Self {
             tag: bool::arbitrary(g),
             ids,
-            classes: (0..n_classes).map(|_| *g.choose(&[0u8, 1, 2]).unwrap()).collect(),
+            classes: (0..n_classes)
+                .map(|_| *g.choose(&[0u8, 1, 2]).unwrap())
+                .collect(),
             important: bool::arbitrary(g),
             color: [u8::arbitrary(g), u8::arbitrary(g), u8::arbitrary(g)],
         }
@@ -87,7 +89,11 @@ fn rule_matches(rule: &Rule, element: &Element) -> bool {
 
 /// (ids, classes, type), the CSS specificity tuple.
 fn specificity(rule: &Rule) -> (u8, u8, u8) {
-    ((rule.ids > 0) as u8, rule.classes.len() as u8, rule.tag as u8)
+    (
+        (rule.ids > 0) as u8,
+        rule.classes.len() as u8,
+        rule.tag as u8,
+    )
 }
 
 /// The winning color per CSS precedence: importance, then specificity, then
@@ -115,7 +121,10 @@ fn rule_css(rule: &Rule) -> String {
         selector.push_str(&format!(".c{class}"));
     }
     let bang = if rule.important { " !important" } else { "" };
-    format!("{} {{ color: #{:02x}{:02x}{:02x}{} }} ", selector, rule.color[0], rule.color[1], rule.color[2], bang)
+    format!(
+        "{} {{ color: #{:02x}{:02x}{:02x}{} }} ",
+        selector, rule.color[0], rule.color[1], rule.color[2], bang
+    )
 }
 
 /// For any stylesheet of compound rules, the color bevy_markup puts on the target
@@ -126,13 +135,19 @@ fn cascade_winner_matches_precedence_model(case: CascadeCase) {
     let id_attr = if element.has_id { " id=\"the-id\"" } else { "" };
     let classes: Vec<String> = (0..element.n_classes).map(|c| format!("c{c}")).collect();
     let page = format!("<p{id_attr} class=\"{}\">Text</p>", classes.join(" "));
-    let css = format!("{BASE_CSS} {}", case.rules.iter().map(rule_css).collect::<String>());
+    let css = format!(
+        "{BASE_CSS} {}",
+        case.rules.iter().map(rule_css).collect::<String>()
+    );
 
     let mut ui = TestUi::new("qc-cascade", &[("page.html", &page), ("style.css", &css)])
         .stylesheet("style.css")
         .spawn("page.html", TemplateContext::new(), Node::default());
     let color = expected_color(&case);
-    let expected = format!("\"Text\" default 20px #{:02x}{:02x}{:02x}", color[0], color[1], color[2]);
+    let expected = format!(
+        "\"Text\" default 20px #{:02x}{:02x}{:02x}",
+        color[0], color[1], color[2]
+    );
     let dump = ui.settle().dump();
     assert!(
         dump.contains(&expected),
@@ -182,7 +197,9 @@ impl Arbitrary for Selector {
         Self {
             tag: bool::arbitrary(g),
             id: *g.choose(&[0u8, 0, 1, 2, 3]).unwrap(),
-            classes: (0..n_classes).map(|_| *g.choose(&[0u8, 1, 2]).unwrap()).collect(),
+            classes: (0..n_classes)
+                .map(|_| *g.choose(&[0u8, 1, 2]).unwrap())
+                .collect(),
         }
     }
 }
@@ -193,7 +210,9 @@ impl Arbitrary for ListRule {
         let color = [u8::arbitrary(g), u8::arbitrary(g), u8::arbitrary(g)];
         let size = *g.choose(&[8u8, 10, 12, 14, 24, 30, 36]).unwrap();
         // At least one declaration, so every rule can matter.
-        let (has_color, has_size) = *g.choose(&[(true, false), (false, true), (true, true)]).unwrap();
+        let (has_color, has_size) = *g
+            .choose(&[(true, false), (false, true), (true, true)])
+            .unwrap();
         Self {
             selectors: (0..n_selectors).map(|_| Selector::arbitrary(g)).collect(),
             color: has_color.then(|| (color, *g.choose(&[false, false, true]).unwrap())),
@@ -219,7 +238,11 @@ impl Arbitrary for ListCase {
 
 fn selector_matches(selector: &Selector, element: &ListElement) -> bool {
     let id_ok = selector.id == 0 || selector.id == element.id;
-    id_ok && selector.classes.iter().all(|&class| class < 2 && element.classes & (1 << class) != 0)
+    id_ok
+        && selector
+            .classes
+            .iter()
+            .all(|&class| class < 2 && element.classes & (1 << class) != 0)
 }
 
 /// The rule's specificity *for this element*: the most specific of its
@@ -228,7 +251,13 @@ fn list_specificity(rule: &ListRule, element: &ListElement) -> Option<(u8, u8, u
     rule.selectors
         .iter()
         .filter(|selector| selector_matches(selector, element))
-        .map(|selector| ((selector.id > 0) as u8, selector.classes.len() as u8, selector.tag as u8))
+        .map(|selector| {
+            (
+                (selector.id > 0) as u8,
+                selector.classes.len() as u8,
+                selector.tag as u8,
+            )
+        })
         .max()
 }
 
@@ -256,7 +285,11 @@ fn list_rule_css(rule: &ListRule) -> String {
         .selectors
         .iter()
         .map(|selector| {
-            let mut css = if selector.tag { "p".to_owned() } else { "*".to_owned() };
+            let mut css = if selector.tag {
+                "p".to_owned()
+            } else {
+                "*".to_owned()
+            };
             css.push_str(["", "#i0", "#i1", "#ghost"][selector.id as usize]);
             for class in &selector.classes {
                 css.push_str(&format!(".c{class}"));
@@ -272,7 +305,11 @@ fn list_rule_css(rule: &ListRule) -> String {
     if let Some((size, important)) = rule.size {
         declarations.push(format!("font-size: {size}px{}", bang(important)));
     }
-    format!("{} {{ {} }}\n", selectors.join(", "), declarations.join("; "))
+    format!(
+        "{} {{ {} }}\n",
+        selectors.join(", "),
+        declarations.join("; ")
+    )
 }
 
 /// Several elements under one stylesheet of selector-list rules whose
@@ -295,7 +332,10 @@ fn selector_lists_cascade_per_element_and_property(case: ListCase) {
             .collect();
         page.push_str(&format!("<p{id} class=\"{}\">E{k}</p>", classes.join(" ")));
     }
-    let css = format!("{BASE_CSS}\n{}", case.rules.iter().map(list_rule_css).collect::<String>());
+    let css = format!(
+        "{BASE_CSS}\n{}",
+        case.rules.iter().map(list_rule_css).collect::<String>()
+    );
 
     let mut ui = TestUi::new("qc-lists", &[("page.html", &page), ("style.css", &css)])
         .stylesheet("style.css")
@@ -326,9 +366,7 @@ const SAFE: &[u8] = b"abcXYZ0123456789.,:;!?()[]{}<>+-*/=#%&\"'\\_|~^$@`";
 impl Arbitrary for SafeText {
     fn arbitrary(g: &mut Gen) -> Self {
         let len = *g.choose(&[1usize, 5, 10, 20, 40]).unwrap();
-        let chars: String = (0..len)
-            .map(|_| *g.choose(SAFE).unwrap() as char)
-            .collect();
+        let chars: String = (0..len).map(|_| *g.choose(SAFE).unwrap() as char).collect();
         Self(chars)
     }
 }
@@ -341,7 +379,11 @@ fn context_text_round_trips_through_template(text: SafeText) {
     let page = "<p>{{ s }}</p>";
     let mut ui = TestUi::new("qc-text", &[("page.html", page), ("style.css", BASE_CSS)])
         .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new().with("s", s), Node::default());
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("s", s),
+            Node::default(),
+        );
     let expected = format!("{s:?} default 20px #ffffff");
     let dump = ui.settle().dump();
     assert!(

@@ -169,7 +169,10 @@ where
     }
     // Drop the Unicode bidi isolation marks Fluent wraps placeables in; the
     // bundle is shared behind an `Arc`, so `set_use_isolating` isn't reachable.
-    Ok(text.chars().filter(|c| !matches!(c, '\u{2068}' | '\u{2069}')).collect())
+    Ok(text
+        .chars()
+        .filter(|c| !matches!(c, '\u{2068}' | '\u{2069}'))
+        .collect())
 }
 
 fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
@@ -188,7 +191,11 @@ fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
             // Translations are parsed as markup; keep values as text.
             serde_json::Value::String(string) => args.set(key, escape_html(&string)),
             serde_json::Value::Bool(flag) => args.set(key, flag.to_string()),
-            _ => return Err(format!("`{key}`: only numbers, strings and bools are supported")),
+            _ => {
+                return Err(format!(
+                    "`{key}`: only numbers, strings and bools are supported"
+                ));
+            }
         }
     }
     Ok(args)
@@ -222,7 +229,9 @@ mod tests {
         // The element type is inferred: `unic-langid` is only a direct
         // dependency with the `fuzzing` feature.
         let mut bundle = FluentBundle::new(vec!["en-US".parse().unwrap()]);
-        bundle.add_resource(FluentResource::try_new(ftl.to_owned()).unwrap()).unwrap();
+        bundle
+            .add_resource(FluentResource::try_new(ftl.to_owned()).unwrap())
+            .unwrap();
         bundle
     }
 
@@ -231,7 +240,8 @@ mod tests {
     /// Text dense in markup characters and entity look-alikes (`&lt;`
     /// typed as text), plus arbitrary characters other than the bidi
     /// isolation marks `translate` strips.
-    const MARKUP_TEXT: &str = "(&lt;|&gt;|&amp;|&quot;|&#39;|[<>&\"';# a-z]|[^\u{2068}\u{2069}]){0,24}";
+    const MARKUP_TEXT: &str =
+        "(&lt;|&gt;|&amp;|&quot;|&#39;|[<>&\"';# a-z]|[^\u{2068}\u{2069}]){0,24}";
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
@@ -276,22 +286,46 @@ mod tests {
     #[test]
     fn float_args_are_numbers() {
         let bundle = bundle(ITEMS);
-        assert_eq!(translate(&bundle, "items", Some(r#"{"n": 1.0}"#)), Ok("one item".to_owned()));
-        assert_eq!(translate(&bundle, "items", Some(r#"{"n": 1.5}"#)), Ok("1.5 items".to_owned()));
+        assert_eq!(
+            translate(&bundle, "items", Some(r#"{"n": 1.0}"#)),
+            Ok("one item".to_owned())
+        );
+        assert_eq!(
+            translate(&bundle, "items", Some(r#"{"n": 1.5}"#)),
+            Ok("1.5 items".to_owned())
+        );
         // CLDR plural operand `n` is the absolute value: -1 is `one` too.
-        assert_eq!(translate(&bundle, "items", Some(r#"{"n": -1}"#)), Ok("one item".to_owned()));
-        assert_eq!(translate(&bundle, "items", Some(r#"{"n": -2}"#)), Ok("-2 items".to_owned()));
+        assert_eq!(
+            translate(&bundle, "items", Some(r#"{"n": -1}"#)),
+            Ok("one item".to_owned())
+        );
+        assert_eq!(
+            translate(&bundle, "items", Some(r#"{"n": -2}"#)),
+            Ok("-2 items".to_owned())
+        );
         // A *string* "1" is not the number 1: it matches only a `[1]` key.
-        assert_eq!(translate(&bundle, "items", Some(r#"{"n": "1"}"#)), Ok("1 items".to_owned()));
+        assert_eq!(
+            translate(&bundle, "items", Some(r#"{"n": "1"}"#)),
+            Ok("1 items".to_owned())
+        );
     }
 
     /// Bools become the strings `true`/`false`, usable as selector keys.
     #[test]
     fn bool_args_are_strings() {
         let bundle = bundle("m = { $on ->\n    [true] on\n   *[false] off\n}\nraw = { $on }\n");
-        assert_eq!(translate(&bundle, "m", Some(r#"{"on": true}"#)), Ok("on".to_owned()));
-        assert_eq!(translate(&bundle, "m", Some(r#"{"on": false}"#)), Ok("off".to_owned()));
-        assert_eq!(translate(&bundle, "raw", Some(r#"{"on": true}"#)), Ok("true".to_owned()));
+        assert_eq!(
+            translate(&bundle, "m", Some(r#"{"on": true}"#)),
+            Ok("on".to_owned())
+        );
+        assert_eq!(
+            translate(&bundle, "m", Some(r#"{"on": false}"#)),
+            Ok("off".to_owned())
+        );
+        assert_eq!(
+            translate(&bundle, "raw", Some(r#"{"on": true}"#)),
+            Ok("true".to_owned())
+        );
     }
 
     /// Arg names are taken verbatim, including the `-`/`_` Fluent
