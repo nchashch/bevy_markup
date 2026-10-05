@@ -635,6 +635,53 @@ fn root_box_keeps_the_apps_own_image() {
     assert_eq!(image.image, backdrop);
 }
 
+/// An `ImageNode` the app put on a built element (an icon) is app state, not
+/// a CSS frame: a restyle keeps the element and its image instead of
+/// rebuilding. Before the frame got its own marker, the image failed the
+/// restyle's shape check, so every restyle — including the `PseudoState`
+/// insert after each build — rebuilt the UI and the app re-attached the
+/// image: a rebuild every frame.
+#[test]
+fn restyle_keeps_an_apps_image_on_an_element() {
+    #[derive(Resource, Default)]
+    struct Builds(usize);
+
+    let mut ui = TestUi::new(
+        "element-image",
+        &[
+            ("page.html", r#"<div id="icon"></div><p>Label</p>"#),
+            ("red.css", "html { color: #ff0000 }"),
+            ("blue.css", "html { color: #0000ff } #icon { width: 16px }"),
+        ],
+    )
+    .stylesheet("red.css");
+    let blue = ui.load::<Stylesheet>("blue.css");
+    let icon_image = ui.load::<Image>("frame.png");
+    let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
+    ui.world_mut().init_resource::<Builds>();
+    ui.world_mut()
+        .add_observer(|_: On<HtmlUiBuilt>, mut builds: ResMut<Builds>| builds.0 += 1);
+    ui.settle();
+    let world = ui.world_mut();
+    let mut elements = world.query::<(Entity, &HtmlElement)>();
+    let icon = elements
+        .iter(world)
+        .find(|(_, element)| element.id.as_deref() == Some("icon"))
+        .map(|(entity, _)| entity)
+        .unwrap();
+    world.entity_mut(icon).insert(ImageNode::new(icon_image.clone()));
+    let builds = world.resource::<Builds>().0;
+
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(blue);
+    ui.settle_quiet();
+    ui.update(10);
+    let world = ui.world_mut();
+    assert_eq!(world.resource::<Builds>().0, builds, "restyled, not rebuilt");
+    let entity = world.entity(icon);
+    assert_eq!(entity.get::<Node>().unwrap().width, Val::Px(16.0), "restyle applied");
+    assert_eq!(entity.get::<ImageNode>().expect("the app's image survived").image, icon_image);
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]

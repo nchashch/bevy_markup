@@ -35,6 +35,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0015](bug_0015.md) | Deeply nested FTL expressions overflow the stack | upstream `fluent-syntax` 0.11.1 | medium | fixed in the fluent-syntax fork (git patch; first fix missed nested calls); **upstream unfixed**, PR pending | fuzz-corpus coverage replay |
 | [bug_0016](bug_0016.md) | Rebuilding an `HtmlUi` under a rebuilding ancestor `HtmlUi` panics (commands on despawned entities) | `src/build.rs` | high | fixed (`9d21b17`) | user report (demo locale click), minimized to a vector |
 | [bug_0017](bug_0017.md) | Restyle fallback rebuild despawned app-nested `HtmlUi`s (same_shape counted them as shape mismatches) | `src/build.rs` (`same_shape`) | high | fixed (`d079b08`) | startup crash of the demo, traced via `bevy/debug` |
+| [bug_0018](bug_0018.md) | An app `ImageNode` on a built element turned every restyle into a rebuild (rebuild every frame) | `src/build.rs` (`same_shape`) | high | fixed (uncommitted at filing) | prototype_19 integration (entity-id sampling over BRP) |
 
 ## Discovery session metadata: bug_0001–0005
 

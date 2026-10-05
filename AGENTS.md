@@ -175,7 +175,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   existing children in place (`apply_spec`, `HtmlUiRestyled`) when they have
   the same shape (`same_shape`: text/element/frame presence, span and child
   counts) — otherwise it rebuilds. Restyles keep entities and app-attached
-  components. `restyle_matches_a_fresh_build` (properties) guards that both
+  components. Shape compares only what the spec owns: a frame is the
+  `CssFrame` marker spawned with its `ImageNode` (an app `ImageNode` is app
+  state, bug_0018), nested `HtmlUi` children are skipped (bug_0017).
+  `restyle_matches_a_fresh_build` (properties) guards that both
   paths agree; keyed reconciliation can later extend `NodeSpec` with keys.
 - fluent-syntax comes from a fork, `nchashch/fluent-rs` branch
   `fix/fuzzing-bugs-0.11` (upstream's 0.11.1 tag plus fixes; Cargo.lock pins

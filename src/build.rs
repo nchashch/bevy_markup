@@ -575,6 +575,14 @@ impl NodeSpec {
     }
 }
 
+/// Marks an element whose `ImageNode` is its CSS `border-image` frame, i.e.
+/// owned by the pipeline. [`same_shape`] compares this marker, not
+/// `ImageNode` itself, so an `ImageNode` the app inserted on a built element
+/// (an icon, say) is app state like any other component: restyles keep it
+/// instead of rebuilding.
+#[derive(Component)]
+pub(crate) struct CssFrame;
+
 /// The existing children's structure, for [`same_shape`] and [`apply_spec`].
 type Tree<'w, 's> = Query<
     'w,
@@ -584,7 +592,7 @@ type Tree<'w, 's> = Query<
         Has<Text>,
         Has<TextSpan>,
         Has<HtmlElement>,
-        Has<ImageNode>,
+        Has<CssFrame>,
         Has<HtmlUi>,
     ),
 >;
@@ -731,7 +739,7 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
         entity.insert(BackgroundColor(background));
     }
     if let Some(image) = spec.image {
-        entity.insert(image);
+        entity.insert((image, CssFrame));
     }
     match spec.text {
         Some(text) => {
@@ -761,7 +769,7 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
 /// restyles keep them (and their subtrees), rebuilds replace them
 /// wholesale.
 fn same_shape(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
-    let Ok((children, has_text, _, has_element, has_image, _is_ui)) = tree.get(entity) else {
+    let Ok((children, has_text, _, has_element, has_frame, _is_ui)) = tree.get(entity) else {
         return false;
     };
     let owned: Vec<Entity> = children
@@ -772,7 +780,7 @@ fn same_shape(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
         .collect();
     if has_text != spec.text.is_some()
         || has_element != spec.element.is_some()
-        || has_image != spec.image.is_some()
+        || has_frame != spec.image.is_some()
     {
         return false;
     }
@@ -811,7 +819,7 @@ fn apply_spec(commands: &mut Commands, entity: Entity, spec: NodeSpec, tree: &Tr
         None => target.remove::<BackgroundColor>(),
     };
     if let Some(image) = spec.image {
-        target.insert(image);
+        target.insert((image, CssFrame));
     }
     match spec.text {
         Some(text) => {
