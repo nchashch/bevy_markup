@@ -259,3 +259,18 @@ AGENTS.md       detailed project notes: architecture, conventions, gotchas
 An early prototype on Bevy 0.19. The API may still change. Things not
 built yet include CSS combinators and pseudo-classes (`:hover`), keyed
 updates that keep entities across content changes, and forms or inputs.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.

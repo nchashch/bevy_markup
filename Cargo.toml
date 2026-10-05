@@ -2,6 +2,7 @@
 name = "bevy_markup"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
 [features]
 # Parley falls back to installed system fonts per script (e.g. CJK, which the
