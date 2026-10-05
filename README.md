@@ -134,11 +134,12 @@ The crate documentation (`cargo doc --open`) is the full guide.
 
 ### Recommended: patched fluent-syntax
 
-The fluent-syntax version Bevy's Fluent integration uses (0.11) has two
-bugs that a malformed translation file can trigger: a panic on a broken
-unicode escape, and a stack overflow (process abort) on deeply nested
-expressions. Fixes are proposed upstream; until they're released, add this
-to your app's `Cargo.toml` (cargo applies `[patch]` only in the top-level
+The fluent-syntax version Bevy's Fluent integration uses
+(0.11) has two bugs that a malformed translation file can
+trigger: a panic on a broken unicode escape, and a stack
+overflow (process abort) on deeply nested expressions. Until
+upstream fixes are released, add this to your app's
+`Cargo.toml` (cargo applies `[patch]` only in the top-level
 project, so bevy_markup can't do it for you):
 
 ```toml
