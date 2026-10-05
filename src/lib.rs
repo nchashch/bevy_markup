@@ -111,6 +111,10 @@
 //!   [`define_html_element`](custom_elements::HtmlCustomElementsExt::define_html_element)
 //!   each time the element is spawned, with its `data-*` attributes — app
 //!   components (materials, images, markers) declared in the template.
+//! - **Anchored overlays** ([`anchor`]): [`HtmlAnchor`](anchor::HtmlAnchor)
+//!   keeps a tooltip or popover root beside an element (right, left, above,
+//!   below), inside the viewport, on the element's UI camera, and despawns
+//!   it with the element.
 //! - **Focus and navigation** ([`focus`]): `data-on-click` and
 //!   `tabindex="0"` elements are focusable (`tabindex="-1"` opts out),
 //!   `autofocus` takes the initial focus, focus survives rebuilds by `id`,
@@ -138,6 +142,7 @@ use bevy_fluent::FluentPlugin;
 #[doc(hidden)]
 pub mod fuzz;
 
+pub mod anchor;
 mod build;
 mod cascade;
 pub mod custom_elements;
@@ -156,6 +161,7 @@ pub use {bevy_fluent, lightningcss, tera, tl};
 
 /// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {
+    pub use crate::anchor::{AnchorPlacement, HtmlAnchor};
     pub use crate::custom_elements::{ElementConnected, HtmlCustomElementsExt};
     pub use crate::focus::{
         ActivateElement, FocusEdge, Focusable, HtmlFocus, HtmlModal, HtmlNoFocus,
@@ -238,6 +244,9 @@ impl Plugin for BevyMarkupPlugin {
                     l10n::localize.in_set(HtmlUiSystems::Localize),
                     build::build_html_ui.in_set(HtmlUiSystems::Build),
                     nine_slice::apply_nine_slices.before(UiSystems::Prepare),
+                    anchor::place_anchored
+                        .after(HtmlUiSystems::Build)
+                        .before(UiSystems::Prepare),
                 ),
             );
         focus::plugin(app);

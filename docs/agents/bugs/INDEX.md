@@ -38,7 +38,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0018](bug_0018.md) | An app `ImageNode` on a built element turned every restyle into a rebuild (rebuild every frame) | `src/build.rs` (`same_shape`) | high | fixed (`f99c6ec`) | prototype_19 integration (entity-id sampling over BRP) |
 | [bug_0019](bug_0019.md) | A value-less attribute (`autofocus`) ate the next attribute's first character | upstream `tl` 0.7.8 (UPSTREAM.md U11) | high | fixed (`f81acce`): dependency switched to `astral-tl` 0.8.0 | prototype_19 integration (gamepad smoke run) |
 | [bug_0020](bug_0020.md) | `pointer-events: none` didn't stop clicks on a block's text (spans carried no `Pickable`) | `src/build.rs` (text spans) | medium | fixed (`96f2cd3`) | new picking-driven signals tests (`tests/signals.rs`) |
-| [bug_0021](bug_0021.md) | Despawning a UI in the same frame panicked `update_pseudo_states` (plain insert on a despawned element) | `src/signals.rs`, `src/focus.rs` | high | fixed (uncommitted at filing) | prototype_19 integration (headless smoke run) |
+| [bug_0021](bug_0021.md) | Despawning a UI in the same frame panicked `update_pseudo_states` (plain insert on a despawned element) | `src/signals.rs`, `src/focus.rs` | high | fixed (`ebfbf22`) | prototype_19 integration (headless smoke run) |
 
 ## Discovery session metadata: bug_0001–0005
 

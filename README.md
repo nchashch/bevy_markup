@@ -133,6 +133,8 @@ bevy_markup implements a useful subset of the web, not all of it:
   `define_html_element("gcd-ring", system)` with the element and its `data-*`
   attributes whenever it's built — attach materials, images or markers
   without looking elements up by id.
+- **Anchored overlays:** `HtmlAnchor` keeps a tooltip or popover beside an
+  element — following it, kept on screen, gone when the element goes.
 - **Fluent:** messages, arguments, plurals and selectors, inline markup.
 - **Fonts:** you register font files under CSS family names
   (`FontFamilies`), including bold and italic faces and the generic

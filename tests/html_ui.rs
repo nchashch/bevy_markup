@@ -1297,6 +1297,94 @@ fn root_rule_styles_the_html_ui_entity() {
     assert_eq!(world.get::<Pickable>(root), None);
 }
 
+/// `HtmlAnchor` keeps an overlay beside its element on the requested side,
+/// follows the element when it moves, stays inside the viewport once it has
+/// a size, and is despawned with the element.
+#[test]
+fn anchored_overlay_follows_clamps_and_despawns() {
+    let mut ui = TestUi::with_layout(
+        "anchor",
+        &[
+            ("page.html", r#"<div id="a"></div>"#),
+            (
+                "style.css",
+                "html { flex-direction: column; padding: 20px }
+                 #a { width: 100px; height: 30px; margin-top: 100px }",
+            ),
+            (
+                "far.css",
+                "html { flex-direction: column; padding: 20px }
+                 #a { width: 100px; height: 30px; margin-top: 100px; margin-left: 250px }",
+            ),
+        ],
+        UVec2::new(320, 240),
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let root = ui.root();
+    let world = ui.world_mut();
+    let a = element_by_id(world, root, "a");
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(60.0),
+                height: Val::Px(20.0),
+                ..default()
+            },
+            HtmlAnchor::new(a, AnchorPlacement::Right).with_gap(4.0),
+        ))
+        .id();
+    let rects = |ui: &mut TestUi| {
+        ui.update(3);
+        let world = ui.world_mut();
+        (
+            node_rect(world, a).unwrap(),
+            node_rect(world, overlay).unwrap(),
+        )
+    };
+    let (element, placed) = rects(&mut ui);
+    assert_eq!(element, Rect::new(20.0, 120.0, 120.0, 150.0));
+    assert_eq!(
+        placed.min,
+        Vec2::new(124.0, 120.0),
+        "right of it, tops aligned"
+    );
+
+    for (placement, min) in [
+        (AnchorPlacement::Below, Vec2::new(20.0, 154.0)),
+        (AnchorPlacement::Above, Vec2::new(20.0, 96.0)),
+        (AnchorPlacement::Left, Vec2::new(-44.0, 120.0)),
+    ] {
+        ui.world_mut()
+            .get_mut::<HtmlAnchor>(overlay)
+            .unwrap()
+            .placement = placement;
+        assert_eq!(rects(&mut ui).1.min, min, "{placement:?}");
+    }
+
+    // The element moves to the right edge (a restyle keeps its entity): the
+    // overlay follows, clamped to the 320px viewport.
+    ui.world_mut()
+        .get_mut::<HtmlAnchor>(overlay)
+        .unwrap()
+        .placement = AnchorPlacement::Right;
+    let far = ui.load::<Stylesheet>("far.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(far);
+    ui.settle();
+    let (element, placed) = rects(&mut ui);
+    assert_eq!(element.min.x, 270.0);
+    assert_eq!(placed.min, Vec2::new(260.0, 120.0), "clamped to 320 - 60");
+
+    ui.world_mut().entity_mut(root).despawn();
+    ui.update(2);
+    assert!(
+        ui.world_mut().get_entity(overlay).is_err(),
+        "despawned with its element"
+    );
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]
