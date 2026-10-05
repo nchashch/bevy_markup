@@ -909,6 +909,45 @@ fn html_focus_navigates_by_layout_and_reports_edges() {
     assert_eq!(names, ["bottom"]);
 }
 
+/// Writing a `TemplateContext` whose render is unchanged (same values, or a
+/// value the template doesn't print) builds nothing: entities and attached
+/// components stay. A change that alters the output rebuilds once.
+#[test]
+fn identical_render_skips_the_rebuild() {
+    #[derive(Component)]
+    struct Wired;
+
+    let mut ui = TestUi::new("same-render", &[("page.html", r#"<p id="n">{{ n }}</p>"#)]).spawn(
+        "page.html",
+        TemplateContext::new().with("n", &1).with("unused", &0),
+        Node::default(),
+    );
+    ui.settle();
+    let root = ui.root();
+    let world = ui.world_mut();
+    let paragraph = element_by_id(world, root, "n");
+    world.entity_mut(paragraph).insert(Wired);
+    let builds = ui.builds();
+
+    for (key, value) in [("n", 1), ("unused", 7)] {
+        ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert(key, &value);
+        ui.update(5);
+        assert_eq!(ui.builds(), builds, "{key} = {value}: nothing to rebuild");
+    }
+    let world = ui.world_mut();
+    assert!(world.entity(paragraph).contains::<Wired>(), "entity and its components kept");
+
+    world.get_mut::<TemplateContext>(root).unwrap().insert("n", &2);
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p#n
+    "2" default 16px #ffffff
+"#,
+    );
+    assert_eq!(ui.builds(), builds + 1, "a changed render rebuilds once");
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]

@@ -183,8 +183,8 @@ fn class_beats_type_selector_regardless_of_order(
     prop_assert_eq!(dump, b.settle().dump());
 }
 
-/// Idempotence: rebuilding with no input change produces the identical
-/// subtree (one generation of children, no leftovers).
+/// Idempotence: re-setting the same context value leaves the subtree as it
+/// was — no rebuild at all (the render is identical), same dump.
 #[proptest(cases = 24)]
 fn rebuild_with_same_context_is_idempotent(#[strategy(0i64..1000)] n: i64) {
     let mut ui = TestUi::new(
@@ -203,7 +203,9 @@ fn rebuild_with_same_context_is_idempotent(#[strategy(0i64..1000)] n: i64) {
         .get_mut::<TemplateContext>(root)
         .unwrap()
         .insert("n", &n); // same value; only the mutation is detected
-    let after = ui.settle().dump();
+    let builds = ui.builds();
+    let after = ui.settle_quiet().dump();
+    prop_assert_eq!(ui.builds(), builds, "an identical render must not rebuild");
     prop_assert_eq!(before, after);
 }
 

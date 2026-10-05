@@ -62,7 +62,9 @@ impl From<Handle<HtmlTemplate>> for HtmlUi {
 }
 
 /// Tera variables for this entity's template. Mutate it (it derefs to
-/// [`tera::Context`]) to re-render.
+/// [`tera::Context`]) to re-render. A render whose HTML equals the previous
+/// one changes nothing (no rebuild, attached components kept), so there's no
+/// need to diff values before writing them.
 #[derive(Component, Default, Clone, Deref, DerefMut)]
 pub struct TemplateContext(pub tera::Context);
 
@@ -222,11 +224,28 @@ pub(crate) fn render_templates(
         let Some(template) = templates.get(&html.0) else {
             continue;
         };
-        *rendered = match template.render(&context) {
+        // An identical render changes nothing: leave `RenderedHtml`
+        // untouched (no change tick, so no rebuild). Apps can then write
+        // their `TemplateContext` freely, e.g. every frame.
+        let source = match template.render_source(&context) {
+            Ok(source) => source,
+            Err(err) => {
+                let message = error_chain(&err);
+                if !matches!(&*rendered, RenderedHtml::Failed(previous) if *previous == message) {
+                    error!("rendering {}: {message}", template.name());
+                    *rendered = RenderedHtml::Failed(message);
+                }
+                continue;
+            }
+        };
+        if matches!(&*rendered, RenderedHtml::Ready(document) if document.source() == source) {
+            continue;
+        }
+        *rendered = match HtmlDocument::parse(source) {
             Ok(document) => RenderedHtml::Ready(document),
             Err(err) => {
-                let message = error_chain(&*err);
-                error!("rendering {}: {message}", template.name());
+                let message = error_chain(&err);
+                error!("parsing {}: {message}", template.name());
                 RenderedHtml::Failed(message)
             }
         };

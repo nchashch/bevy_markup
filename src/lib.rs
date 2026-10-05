@@ -51,7 +51,9 @@
 //! }
 //! ```
 //!
-//! Mutating [`TemplateContext`](html::TemplateContext) re-renders; swapping
+//! Mutating [`TemplateContext`](html::TemplateContext) re-renders — and
+//! rebuilds only if the rendered HTML changed, so writing it every frame is
+//! cheap while the output stays the same; swapping
 //! [`ActiveLocale`](l10n::ActiveLocale) re-localizes; swapping
 //! [`DefaultStylesheet`](style::DefaultStylesheet) restyles — all at runtime.
 //! After every (re)build an [`HtmlUiBuilt`](html::HtmlUiBuilt) event fires on

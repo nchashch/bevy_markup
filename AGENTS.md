@@ -23,7 +23,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `BevyMarkupPlugin` | Plugin | loaders, resources, systems; adds bevy_fluent's `FluentPlugin` if absent |
 | `HtmlUiSystems::{Render, Localize, Build}` | SystemSet | chained in `PostUpdate`, before `UiSystems::Prepare` |
 | `HtmlUi(Handle<HtmlTemplate>)` | Component | the UI; requires `Node`, `TemplateContext`, `RenderedHtml`, `LocalizedText` |
-| `TemplateContext(tera::Context)` | Component | Tera variables; `.with(k, &v)` builder; Deref to `tera::Context`; mutate → re-render |
+| `TemplateContext(tera::Context)` | Component | Tera variables; `.with(k, &v)` builder; Deref to `tera::Context`; mutate → re-render (rebuild only if the HTML changed) |
 | `HtmlStylesheet(Handle<Stylesheet>)` | Component | per-entity stylesheet override |
 | `HtmlDebugOutline` | Component | show the DOM outline (styled like `pre`) instead of the UI |
 | `RenderedHtml` | Component | `Pending` / `Ready(HtmlDocument)` / `Failed(msg)` (read-only) |
@@ -222,7 +222,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 
 - Templates: compiled at load (syntax errors fail the load); name = asset path,
   so `.html` gets Tera HTML autoescaping. Plain HTML renders to itself.
-- Update triggers: rebuild on template/context change or reload, locale
+- Update triggers: rebuild on template/context change or reload when the
+  rendered HTML differs from the previous render (`render_templates` compares
+  `HtmlDocument::source`; an identical render leaves `RenderedHtml`
+  untouched, a repeated identical error is logged once), locale
   change or bundle (re)load, outline marker added or removed; restyle on
   stylesheet swap or (re)load (a failed sheet updates unstyled once, when it
   resolves), a stylesheet's `border-image` image loading, `FontFamilies`

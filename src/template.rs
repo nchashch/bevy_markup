@@ -28,8 +28,12 @@ impl HtmlTemplate {
         &self,
         context: &tera::Context,
     ) -> Result<HtmlDocument, Box<dyn std::error::Error + Send + Sync>> {
-        let html = self.tera.render(&self.name, context)?;
-        Ok(HtmlDocument::parse(html)?)
+        Ok(HtmlDocument::parse(self.render_source(context)?)?)
+    }
+
+    /// Renders with `context` to HTML text, without parsing it.
+    pub fn render_source(&self, context: &tera::Context) -> tera::TeraResult<String> {
+        self.tera.render(&self.name, context)
     }
 
     /// The template's name (its asset path).
@@ -40,15 +44,24 @@ impl HtmlTemplate {
 
 /// Parsed HTML. Owns its source text.
 pub struct HtmlDocument {
-    dom: tl::VDomGuard,
+    /// Boxed: a `VDomGuard` is ~200 bytes, and `RenderedHtml` holds this.
+    dom: Box<tl::VDomGuard>,
+    /// The HTML text `dom` was parsed from (`dom` borrows its own leaked copy).
+    source: String,
 }
 
 impl HtmlDocument {
     pub fn parse(html: String) -> Result<Self, tl::ParseError> {
+        let source = html.clone();
         // SAFETY: `parse_owned` leaks `html` and frees it when the returned
         // `VDomGuard` drops; `VDomGuard::get_ref` ties borrows to the guard.
         let dom = unsafe { tl::parse_owned(html, tl::ParserOptions::default()) }?;
-        Ok(Self { dom })
+        Ok(Self { dom: Box::new(dom), source })
+    }
+
+    /// The HTML text this document was parsed from.
+    pub fn source(&self) -> &str {
+        &self.source
     }
 
     /// The parsed DOM.
