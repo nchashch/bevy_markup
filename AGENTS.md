@@ -253,7 +253,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `FontFamilies`, generics via `set_generic`; no registered name → Bevy's
   default font, as browsers do), `font-size` (`px`, `em`/`%`, `rem`, keywords
   with medium = 16px, `smaller`/`larger`), `font-weight` (bold above 500, CSS
-  font matching), `font-style`; blocks:
+  font matching), `font-style`, `pointer-events` (`none`/`auto`; arrives as
+  an unknown property — lightningcss has no typed one); blocks:
   `background-color`. `html` is the
   starting point even without `<html>`; nothing declared → white, Bevy's
   default font, 16px. Missing font faces fall back as CSS font matching does
@@ -275,6 +276,17 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `grid-area`; `GridLineDecl` pairs → `GridPlacement`). Named lines and
   `grid-template-areas` are skipped (Bevy places by number only). Bare
   `grid-auto-flow: dense` fails lightningcss's parser (UPSTREAM.md U10).
+  `position` (`CssPosition`: static/relative/absolute) + insets
+  (`top`/`right`/`bottom`/`left`/`inset`), and `border-radius` corners, are
+  `LayoutDecl` too: `static`/undeclared leaves `PositionType::Relative` with
+  insets at `auto` (CSS ignores insets there); Bevy places `absolute` in the
+  parent's padding box (every parent acts positioned).
+- Element components (`build.rs` `apply_css_owned`): `border-color` →
+  `BorderColor`, `z-index` → `ZIndex`, computed `pointer-events: none` →
+  `Pickable::IGNORE` (also on a boxed block's inner text node). An app may set
+  these itself, so `CssOwned` records what CSS set and a restyle without the
+  declaration resets only that (`BorderColor`/`ZIndex` are `Node`'s required
+  components: reset to default, never removed).
 - Box properties (`cascade.rs` → `build.rs`): `border-image` (shorthand +
   `-source`/`-slice`/`-repeat`), `border-width`, `padding` (absolute lengths)
   on blocks, containers and the `html` rule; `background-color` on blocks and
@@ -306,8 +318,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   viewport. A framed node that scrolls itself needs `overflow_clip_margin:
   OverflowClipMargin::content_box()`.
 - Every UI `Node` is pickable and blocks pointer input below it. Invisible
-  layout-only wrappers must carry `Pickable::IGNORE` (a full-window wrapper
-  once broke all scrolling and clicking).
+  layout-only wrappers must not catch the pointer: `pointer-events: none` in
+  CSS (or `Pickable::IGNORE` on app nodes) — a full-window wrapper once broke
+  all scrolling and clicking.
 - Nested `HtmlUi`s: an ancestor's rebuild replaces its whole subtree and
   despawns nested UIs with it — spawn them into slots on `HtmlUiBuilt`
   (the demo's `wire_shell_build`). The build system skips a nested UI whose
@@ -576,6 +589,15 @@ known gaps:
     with `minmax()`, column dense flow, `grid-area`, item alignment, container
     and boxed-block items) matches Chromium to the pixel; the mapping is
     pinned per value by `cascade::tests::grid_*`.
+  - [x] Positioning: vector `layout_position` (`absolute` by `top`/`left` and
+    by `right: %`/`bottom`, `relative` offset, `static` ignoring insets, plus
+    `z-index`/`border-radius`/`border-color` that must not move anything)
+    matches Chromium to the pixel (spot-checked by dropping the `top`
+    mapping); component mapping and the CSS-owned reset are pinned by
+    `positioning_radius_border_color_z_index_and_pointer_events`
+    (`tests/html_ui.rs`, dump keys `pos=` `inset=` `radius=` `bcolor=` `z=`
+    `pick=none`) and `cascade::tests::{position_and_insets,
+    radius_border_color_z_index_and_pointer_events}`.
 - [x] **4. Lint tests over real content** (`tests/content_lint.rs`, see
   Testing): locale parity, templates render with the examples' data and every
   `data-l10n-id` resolves, no hard-coded text, CSS `url()`s, pseudo-locale run.
@@ -803,9 +825,10 @@ Known limits (each skipped/ignored value is logged at `debug`):
 
 - **Layout:** flex and grid layout, sizes, margins and `box-sizing` work on
   blocks and containers (see the CSS subset), not on the `html` rule (the
-  `HtmlUi` node's `Node` stays the app's); no `position`, `order`, named grid
+  `HtmlUi` node's `Node` stays the app's); `position: fixed`/`sticky`, `order`, named grid
   lines or `grid-template-areas`, `place-*` shorthands, `gap` in `%`, or
-  font-relative lengths (`em`/`rem`) for layout. The `HtmlUi` node's default `Node` is a
+  font-relative lengths (`em`/`rem`) for layout. `absolute` resolves against
+  the parent (Bevy has no containing-block search). The `HtmlUi` node's default `Node` is a
   flex *row*, so apps must set `flex_direction: Column` themselves (as the
   guide's example does), or blocks sit side by side.
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
@@ -815,8 +838,8 @@ Known limits (each skipped/ignored value is logged at `debug`):
   (`div p`, `>`), attribute selectors, other pseudo-classes or
   pseudo-elements.
 - **Properties:** no `text-align`, `line-height`, `letter-spacing`,
-  `text-decoration`, `opacity`, `border-radius`, `border-color`/solid
-  borders, `overflow`. Lengths: px/em/rem/% for `font-size`, absolute only
+  `text-decoration`, `opacity`, elliptical `border-radius`, border styles
+  (every border is solid), `overflow`. Lengths: px/em/rem/% for `font-size`, absolute only
   for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins.
 - **border-image:** center always drawn, `-width`/`-outset` ignored, one
   repeat mode for all sides (Bevy `TextureSlicer` limits).

@@ -1,0 +1,9 @@
+/* Layout vector: `position` + insets, `z-index`, `border-radius` and
+   `border-color` (the last three don't move anything; they must not either).
+   Default font only, font size keeps 1.2 x size whole. */
+html { font-size: 20px }
+.stage { position: relative; width: 400px; height: 300px; border-style: solid; border-width: 2px; border-color: #ff0000; border-radius: 8px }
+.corner { position: absolute; top: 10px; left: 20px; z-index: 3 }
+.far { position: absolute; right: 5%; bottom: 0px }
+.nudged { position: relative; top: 7px; left: 11px }
+.still { position: static; top: 50px; left: 50px }

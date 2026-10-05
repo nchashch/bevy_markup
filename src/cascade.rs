@@ -16,7 +16,10 @@ use lightningcss::properties::flex as css_flex;
 use lightningcss::properties::grid::{
     self as css_grid, RepeatCount, TrackBreadth, TrackListItem, TrackSize, TrackSizing,
 };
+use lightningcss::properties::custom::CustomPropertyName;
+use lightningcss::properties::position as css_position;
 use lightningcss::properties::size::{self as css_size, MaxSize, Size};
+use lightningcss::values::size::Size2D;
 use lightningcss::properties::border::BorderSideWidth;
 use lightningcss::properties::border_image::{
     BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
@@ -124,6 +127,22 @@ pub(crate) struct LayoutDecl {
     pub grid_row: [Option<GridLineDecl>; 2],
     /// `[start, end]` of `grid-column`.
     pub grid_column: [Option<GridLineDecl>; 2],
+    /// `position`.
+    pub position: Option<CssPosition>,
+    /// `top`/`right`/`bottom`/`left` (`[top, right, bottom, left]`); they
+    /// only apply to a `relative`/`absolute` element, as in CSS.
+    pub inset: [Option<Val>; 4],
+    /// `[top-left, top-right, bottom-right, bottom-left]` radii.
+    pub border_radius: [Option<Val>; 4],
+}
+
+/// A declared `position`. `static` is CSS's initial value: Bevy's
+/// `PositionType::Relative` with the insets ignored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CssPosition {
+    Static,
+    Relative,
+    Absolute,
 }
 
 impl LayoutDecl {
@@ -165,6 +184,22 @@ impl LayoutDecl {
         set(&mut node.grid_auto_flow, &self.grid_auto_flow);
         set(&mut node.grid_row, &grid_placement(self.grid_row));
         set(&mut node.grid_column, &grid_placement(self.grid_column));
+        let corners = &mut node.border_radius;
+        set(&mut corners.top_left, &self.border_radius[0]);
+        set(&mut corners.top_right, &self.border_radius[1]);
+        set(&mut corners.bottom_right, &self.border_radius[2]);
+        set(&mut corners.bottom_left, &self.border_radius[3]);
+        let position_type = match self.position {
+            Some(CssPosition::Absolute) => PositionType::Absolute,
+            Some(CssPosition::Relative) => PositionType::Relative,
+            // Static: insets are ignored (CSS), so they stay `auto`.
+            Some(CssPosition::Static) | None => return,
+        };
+        node.position_type = position_type;
+        set(&mut node.top, &self.inset[0]);
+        set(&mut node.right, &self.inset[1]);
+        set(&mut node.bottom, &self.inset[2]);
+        set(&mut node.left, &self.inset[3]);
     }
 }
 
@@ -201,10 +236,18 @@ pub(crate) struct ElementStyle {
     pub border_image: Option<BorderImageDecl>,
     /// `[top, right, bottom, left]` in px.
     pub border_width: [Option<f32>; 4],
+    /// `[top, right, bottom, left]` border colors. Undeclared sides stay
+    /// transparent (CSS's initial `currentColor` would draw a border around
+    /// every `border-image` frame).
+    pub border_color: [Option<Color>; 4],
     /// `[top, right, bottom, left]` in px.
     pub padding: [Option<f32>; 4],
     /// `row-gap` (or `gap`'s row part) in px, for containers.
     pub row_gap: Option<f32>,
+    /// `z-index`: `Some(None)` is `auto`.
+    pub z_index: Option<Option<i32>>,
+    /// `pointer-events` (inherited): `true` for `auto`, `false` for `none`.
+    pub pointer_events: Option<bool>,
     /// Flex, size and margin properties (containers and blocks).
     pub layout: LayoutDecl,
 }
@@ -580,6 +623,73 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             style.layout.grid_row = [grid_line(&area.row_start), grid_line(&area.row_end)];
             style.layout.grid_column =
                 [grid_line(&area.column_start), grid_line(&area.column_end)];
+        }
+        Property::Position(position) => {
+            style.layout.position = match position {
+                css_position::Position::Static => Some(CssPosition::Static),
+                css_position::Position::Relative => Some(CssPosition::Relative),
+                css_position::Position::Absolute => Some(CssPosition::Absolute),
+                css_position::Position::Sticky(_) | css_position::Position::Fixed => {
+                    unsupported("position sticky/fixed")
+                }
+            };
+        }
+        Property::Top(value) => style.layout.inset[0] = auto_val(value),
+        Property::Right(value) => style.layout.inset[1] = auto_val(value),
+        Property::Bottom(value) => style.layout.inset[2] = auto_val(value),
+        Property::Left(value) => style.layout.inset[3] = auto_val(value),
+        Property::Inset(inset) => {
+            style.layout.inset =
+                [&inset.top, &inset.right, &inset.bottom, &inset.left].map(auto_val);
+        }
+        Property::ZIndex(z) => {
+            style.z_index = Some(match z {
+                css_position::ZIndex::Auto => None,
+                css_position::ZIndex::Integer(z) => Some(*z),
+            });
+        }
+        Property::BorderColor(colors) => {
+            style.border_color =
+                [&colors.top, &colors.right, &colors.bottom, &colors.left].map(to_color);
+        }
+        Property::BorderTopColor(color) => style.border_color[0] = to_color(color),
+        Property::BorderRightColor(color) => style.border_color[1] = to_color(color),
+        Property::BorderBottomColor(color) => style.border_color[2] = to_color(color),
+        Property::BorderLeftColor(color) => style.border_color[3] = to_color(color),
+        Property::BorderRadius(radius, _) => {
+            style.layout.border_radius = [
+                &radius.top_left,
+                &radius.top_right,
+                &radius.bottom_right,
+                &radius.bottom_left,
+            ]
+            .map(corner_radius);
+        }
+        Property::BorderTopLeftRadius(radius, _) => {
+            style.layout.border_radius[0] = corner_radius(radius);
+        }
+        Property::BorderTopRightRadius(radius, _) => {
+            style.layout.border_radius[1] = corner_radius(radius);
+        }
+        Property::BorderBottomRightRadius(radius, _) => {
+            style.layout.border_radius[2] = corner_radius(radius);
+        }
+        Property::BorderBottomLeftRadius(radius, _) => {
+            style.layout.border_radius[3] = corner_radius(radius);
+        }
+        // lightningcss has no typed `pointer-events` (it's SVG/UI-only): it
+        // arrives as an unknown property with its raw value.
+        Property::Custom(custom)
+            if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "pointer-events") =>
+        {
+            let value = declaration
+                .value_to_css_string(PrinterOptions::default())
+                .unwrap_or_default();
+            style.pointer_events = match value.trim().to_ascii_lowercase().as_str() {
+                "none" => Some(false),
+                "auto" => Some(true),
+                _ => unsupported("pointer-events value (only `auto`/`none`)"),
+            };
         }
         _ => {}
     }
@@ -966,6 +1076,17 @@ fn length_percentage_val(value: &LengthPercentage) -> Option<Val> {
 fn unsupported<T>(what: &str) -> Option<T> {
     debug!("html css: unsupported {what}");
     None
+}
+
+/// One `border-*-radius` corner: Bevy has one radius per corner, so an
+/// elliptical corner (different horizontal and vertical radii) is
+/// unsupported. `%` is Bevy's (of the node's smaller side), not CSS's
+/// per-axis percentage.
+fn corner_radius(radius: &Size2D<LengthPercentage>) -> Option<Val> {
+    if radius.0 != radius.1 {
+        return unsupported("elliptical border radius");
+    }
+    length_percentage_val(&radius.0)
 }
 
 /// `padding` in px; `auto`, `%` and `calc()` are unsupported.
@@ -1568,5 +1689,62 @@ mod tests {
         assert!(matches!(style.border_image.and_then(|decl| decl.source), Some(None)));
         let sheet = owned_sheet(r#"p { border-image-source: url("b.png") } div { border-image: url("c.png") 4 }"#);
         assert_eq!(image_urls(&sheet), ["b.png", "c.png"]);
+    }
+
+    /// `position` and the insets: shorthand and longhands, `static` kept as
+    /// such (it ignores insets), `fixed`/`sticky` unsupported.
+    #[test]
+    fn position_and_insets() {
+        let layout = |css: &str| declared(css).layout;
+        assert_eq!(layout("position: absolute").position, Some(CssPosition::Absolute));
+        assert_eq!(layout("position: relative").position, Some(CssPosition::Relative));
+        assert_eq!(layout("position: static").position, Some(CssPosition::Static));
+        assert_eq!(layout("position: fixed").position, None);
+        assert_eq!(
+            layout("inset: 1px 2% auto 4px").inset,
+            [Some(Val::Px(1.0)), Some(Val::Percent(2.0)), Some(Val::Auto), Some(Val::Px(4.0))]
+        );
+        assert_eq!(
+            layout("top: 1px; right: 2px; bottom: 3px; left: 4vw").inset,
+            [Some(Val::Px(1.0)), Some(Val::Px(2.0)), Some(Val::Px(3.0)), Some(Val::Vw(4.0))]
+        );
+
+        let mut node = Node::default();
+        layout("position: absolute; top: 5px; left: 6px").apply_to(&mut node);
+        assert_eq!((node.position_type, node.top, node.left), (PositionType::Absolute, Val::Px(5.0), Val::Px(6.0)));
+        // `static` (and no `position`): insets don't apply, as in CSS.
+        for css in ["position: static; top: 5px", "top: 5px"] {
+            let mut node = Node::default();
+            layout(css).apply_to(&mut node);
+            assert_eq!((node.position_type, node.top), (PositionType::Relative, Val::Auto), "{css}");
+        }
+    }
+
+    /// `border-radius` per corner (circular only), `border-color` per side,
+    /// `z-index` and `pointer-events`.
+    #[test]
+    fn radius_border_color_z_index_and_pointer_events() {
+        assert_eq!(
+            declared("border-radius: 1px 2px 3px 50%").layout.border_radius,
+            [Some(Val::Px(1.0)), Some(Val::Px(2.0)), Some(Val::Px(3.0)), Some(Val::Percent(50.0))]
+        );
+        assert_eq!(declared("border-top-right-radius: 7px").layout.border_radius[1], Some(Val::Px(7.0)));
+        assert_eq!(declared("border-radius: 4px / 8px").layout.border_radius[0], None, "elliptical");
+        let mut node = Node::default();
+        declared("border-radius: 9px").layout.apply_to(&mut node);
+        assert_eq!(node.border_radius, BorderRadius::all(Val::Px(9.0)));
+
+        let colors = declared("border-color: #ff0000 green; border-left-color: #0000ff").border_color;
+        assert_eq!(colors, [Some(RED), Some(GREEN), Some(RED), Some(Color::srgb_u8(0, 0, 255))]);
+        assert_eq!(declared("border-color: currentColor").border_color, [None; 4]);
+
+        assert_eq!(declared("z-index: 7").z_index, Some(Some(7)));
+        assert_eq!(declared("z-index: -2").z_index, Some(Some(-2)));
+        assert_eq!(declared("z-index: auto").z_index, Some(None));
+
+        assert_eq!(declared("pointer-events: none").pointer_events, Some(false));
+        assert_eq!(declared("pointer-events: AUTO").pointer_events, Some(true));
+        assert_eq!(declared("pointer-events: visiblePainted").pointer_events, None);
+        assert_eq!(declared("color: red").pointer_events, None);
     }
 }

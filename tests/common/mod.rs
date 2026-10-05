@@ -500,6 +500,32 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         if node.overflow != Overflow::DEFAULT {
             write!(line, " overflow={:?},{:?}", node.overflow.x, node.overflow.y).unwrap();
         }
+        if node.position_type == PositionType::Absolute {
+            write!(line, " pos=abs").unwrap();
+        }
+        let inset = [node.top, node.right, node.bottom, node.left];
+        if inset.iter().any(|side| *side != Val::Auto) {
+            write!(line, " inset={}", inset.map(val).join(",")).unwrap();
+        }
+        let radius = node.border_radius;
+        if radius != BorderRadius::DEFAULT {
+            let corners = [radius.top_left, radius.top_right, radius.bottom_right, radius.bottom_left];
+            write!(line, " radius={}", corners.map(val).join(",")).unwrap();
+        }
+    }
+    if let Some(colors) = entity_ref.get::<BorderColor>()
+        && *colors != BorderColor::DEFAULT
+    {
+        let sides = [colors.top, colors.right, colors.bottom, colors.left].map(hex);
+        write!(line, " bcolor={}", sides.join(",")).unwrap();
+    }
+    if let Some(z) = entity_ref.get::<ZIndex>()
+        && z.0 != 0
+    {
+        write!(line, " z={}", z.0).unwrap();
+    }
+    if entity_ref.get::<Pickable>().is_some_and(|pickable| !pickable.is_hoverable) {
+        write!(line, " pick=none").unwrap();
     }
     if let Some(background) = entity_ref.get::<BackgroundColor>()
         && background.0 != Color::NONE

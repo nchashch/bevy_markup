@@ -17,11 +17,18 @@
 //!   attribute selectors and other pseudo-classes are skipped (logged at
 //!   `debug`).
 //! - inherited: `color`, `font-family`, `font-size`, `font-weight`,
-//!   `font-style`
+//!   `font-style`, `pointer-events` (`none` → `Pickable::IGNORE` on the
+//!   element and, by inheritance, its descendants; `auto` turns it back on)
 //! - box properties on blocks, containers and the `html` rule (= the `HtmlUi`
 //!   node itself): `border-image` (+ `-source`, `-slice`, `-repeat`),
 //!   `border-width`, `padding` (absolute lengths); `background-color` on
 //!   blocks and containers; `gap` / `row-gap` / `column-gap` on containers
+//! - on blocks and containers: `border-color` (+ `-top`/… sides; Bevy's
+//!   `BorderColor`, undeclared sides transparent — needs a `border-width`),
+//!   `border-radius` (+ the four corner longhands; circular corners only,
+//!   `%` of the node's smaller side as Bevy does), `z-index` (an integer →
+//!   `ZIndex` among siblings; `auto` = 0). An app's own `BorderColor` /
+//!   `ZIndex` / `Pickable` is left alone unless a rule sets it.
 //! - layout on blocks and containers (not the `html` rule: the `HtmlUi`
 //!   node's own `Node` stays the app's): `display` (`none`, `block`, `flex`,
 //!   `grid`), `flex-direction`, `flex-wrap`, `flex-flow`, `justify-content`,
@@ -29,7 +36,12 @@
 //!   `justify-self`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex`;
 //!   `width`, `height`, `min-*`, `max-*` (px, `%`, `vw`/`vh`/`vmin`/`vmax`,
 //!   `auto`/`none`); `margin` (+ sides; px, `%`, `auto`); `box-sizing`. As
-//!   in CSS, sizes default to the content box.
+//!   in CSS, sizes default to the content box. `position` (`static`,
+//!   `relative`, `absolute`; `absolute` is placed in its parent's padding
+//!   box, Bevy's rule, i.e. as if every parent were positioned) with `top` /
+//!   `right` / `bottom` / `left` / `inset` (px, `%`, viewport units, `auto`),
+//!   which apply only to `relative`/`absolute`, as in CSS; `fixed` and
+//!   `sticky` are skipped.
 //!   Containers are flex columns unless `flex-direction` (or `display:
 //!   block`) says otherwise — `display: flex` alone keeps the column — and
 //!   neither containers nor blocks shrink by default (`flex-shrink: 0`).

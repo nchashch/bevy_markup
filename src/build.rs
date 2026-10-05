@@ -31,6 +31,8 @@ pub(crate) struct Style {
     pub(crate) size: f32,
     pub(crate) bold: bool,
     pub(crate) italic: bool,
+    /// `pointer-events: auto` (`false` = `none`); inherited, as in CSS.
+    pub(crate) pointer_events: bool,
 }
 
 /// A stretch of text in one style.
@@ -88,6 +90,8 @@ enum Item {
         signals: Vec<SignalBinding>,
         /// Box properties, computed with the element's interaction state.
         boxed: BoxStyle,
+        /// The element's computed `pointer-events` (inherited).
+        pointer_events: bool,
         children: Vec<Item>,
     },
 }
@@ -97,11 +101,14 @@ enum Item {
 #[derive(Default)]
 pub(crate) struct BoxStyle {
     pub(crate) border: [Option<f32>; 4],
+    pub(crate) border_color: [Option<Color>; 4],
     pub(crate) padding: [Option<f32>; 4],
     pub(crate) background: Option<Color>,
     pub(crate) image: Option<(Handle<Image>, TextureSlicer)>,
     /// `row-gap` for containers (not part of `is_empty`: blocks ignore it).
     pub(crate) row_gap: Option<f32>,
+    /// `z-index` (`None` for `auto`/undeclared).
+    pub(crate) z_index: Option<i32>,
     /// Not part of `is_empty`: a `Text` node takes these itself.
     pub(crate) layout: LayoutDecl,
 }
@@ -119,6 +126,20 @@ impl BoxStyle {
         Some(ImageNode {
             visual_box: VisualBox::BorderBox,
             ..ImageNode::new(image.clone()).with_mode(NodeImageMode::Sliced(slicer.clone()))
+        })
+    }
+
+    /// The declared border colors (undeclared sides transparent), if any.
+    fn border_color(&self) -> Option<BorderColor> {
+        if self.border_color.iter().all(Option::is_none) {
+            return None;
+        }
+        let side = |color: Option<Color>| color.unwrap_or(Color::NONE);
+        Some(BorderColor {
+            top: side(self.border_color[0]),
+            right: side(self.border_color[1]),
+            bottom: side(self.border_color[2]),
+            left: side(self.border_color[3]),
         })
     }
 }
@@ -177,6 +198,7 @@ impl Styler<'_> {
                 .map_or(inherited.size, |size| size.resolve(inherited.size, self.root_size)),
             bold: declared.bold.unwrap_or(inherited.bold),
             italic: declared.italic.unwrap_or(inherited.italic),
+            pointer_events: declared.pointer_events.unwrap_or(inherited.pointer_events),
         }
     }
 
@@ -246,10 +268,12 @@ impl Styler<'_> {
         });
         BoxStyle {
             border: declared.border_width,
+            border_color: declared.border_color,
             padding: declared.padding,
             background: declared.background,
             image,
             row_gap: declared.row_gap,
+            z_index: declared.z_index.flatten(),
             layout: declared.layout.clone(),
         }
     }
@@ -264,6 +288,7 @@ pub(crate) fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Ass
         size: DEFAULT_FONT_SIZE,
         bold: false,
         italic: false,
+        pointer_events: true,
     };
     Styler {
         styles,
@@ -546,6 +571,10 @@ struct NodeSpec {
     handle: Option<tl::NodeHandle>,
     background: Option<Color>,
     image: Option<ImageNode>,
+    border_color: Option<BorderColor>,
+    z_index: Option<ZIndex>,
+    /// `false` for `pointer-events: none` (`Pickable::IGNORE`).
+    pickable: bool,
     /// `Text` nodes hold spans, never child nodes.
     text: Option<TextSpec>,
     children: Vec<NodeSpec>,
@@ -569,10 +598,71 @@ impl NodeSpec {
             handle: None,
             background: None,
             image: None,
+            border_color: None,
+            z_index: None,
+            pickable: true,
             text: None,
             children: Vec::new(),
         }
     }
+}
+
+/// Which of an element's components its stylesheet set (and may therefore
+/// take back on a restyle): `BorderColor`, `ZIndex` and `Pickable` are also
+/// things an app sets itself, so a restyle without the declaration resets
+/// only what CSS set. `BorderColor`/`ZIndex` are `Node`'s required
+/// components: taking them back means resetting them to their defaults.
+#[derive(Component, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CssOwned {
+    border_color: bool,
+    z_index: bool,
+    pickable: bool,
+}
+
+/// Sets a node's CSS-owned components; on a restyle, resets the ones CSS set
+/// earlier and no longer declares.
+fn apply_css_owned(
+    target: &mut EntityCommands,
+    border_color: Option<BorderColor>,
+    z_index: Option<ZIndex>,
+    pickable: bool,
+) {
+    let owned = CssOwned {
+        border_color: border_color.is_some(),
+        z_index: z_index.is_some(),
+        pickable: !pickable,
+    };
+    target.queue(move |mut entity: EntityWorldMut| {
+        let before = entity.get::<CssOwned>().copied().unwrap_or_default();
+        match border_color {
+            Some(color) => {
+                entity.insert(color);
+            }
+            None if before.border_color => {
+                entity.insert(BorderColor::DEFAULT);
+            }
+            None => {}
+        }
+        match z_index {
+            Some(z) => {
+                entity.insert(z);
+            }
+            None if before.z_index => {
+                entity.insert(ZIndex::default());
+            }
+            None => {}
+        }
+        if owned.pickable {
+            entity.insert(Pickable::IGNORE);
+        } else if before.pickable {
+            entity.remove::<Pickable>();
+        }
+        if owned == CssOwned::default() {
+            entity.remove::<CssOwned>();
+        } else {
+            entity.insert(owned);
+        }
+    });
 }
 
 /// Marks an element whose `ImageNode` is its CSS `border-image` frame, i.e.
@@ -598,15 +688,16 @@ type Tree<'w, 's> = Query<
 >;
 
 fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
-    let (element, handle, signals, boxed, children) = match item {
+    let (element, handle, signals, boxed, pointer_events, children) = match item {
         Item::Block(block) => return block_spec(styler, block),
         Item::Container {
             element,
             handle,
             signals,
             boxed,
+            pointer_events,
             children,
-        } => (element, handle, signals, boxed, children),
+        } => (element, handle, signals, boxed, pointer_events, children),
     };
     let mut node = Node {
         flex_direction: FlexDirection::Column,
@@ -625,6 +716,9 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
         handle,
         background: boxed.background,
         image: boxed.sliced_image(),
+        border_color: boxed.border_color(),
+        z_index: boxed.z_index.map(ZIndex),
+        pickable: pointer_events,
         children: children
             .into_iter()
             .map(|child| item_spec(styler, child, default_gap))
@@ -684,6 +778,9 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             element: block.element,
             signals: block.signals,
             handle: block.handle,
+            border_color: boxed.border_color(),
+            z_index: boxed.z_index.map(ZIndex),
+            pickable: block.style.pointer_events,
             text: Some(text),
             ..NodeSpec::new(node)
         };
@@ -709,7 +806,11 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         handle: block.handle,
         background: boxed.background,
         image: boxed.sliced_image(),
+        border_color: boxed.border_color(),
+        z_index: boxed.z_index.map(ZIndex),
+        pickable: block.style.pointer_events,
         children: vec![NodeSpec {
+            pickable: block.style.pointer_events,
             text: Some(text),
             ..NodeSpec::new(text_node)
         }],
@@ -741,6 +842,7 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
     if let Some(image) = spec.image {
         entity.insert((image, CssFrame));
     }
+    apply_css_owned(&mut entity, spec.border_color, spec.z_index, spec.pickable);
     match spec.text {
         Some(text) => {
             entity.insert((Text::new(text.prefix), text.font, TextColor(text.color)));
@@ -821,6 +923,7 @@ fn apply_spec(commands: &mut Commands, entity: Entity, spec: NodeSpec, tree: &Tr
     if let Some(image) = spec.image {
         target.insert((image, CssFrame));
     }
+    apply_css_owned(&mut target, spec.border_color, spec.z_index, spec.pickable);
     match spec.text {
         Some(text) => {
             // `TextLayout` is required by `Text`: replace, never remove.
@@ -1068,6 +1171,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                     handle: Some(handle),
                     signals,
                     boxed,
+                    pointer_events: style.pointer_events,
                     children,
                 });
             }

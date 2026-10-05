@@ -682,6 +682,55 @@ fn restyle_keeps_an_apps_image_on_an_element() {
     assert_eq!(entity.get::<ImageNode>().expect("the app's image survived").image, icon_image);
 }
 
+/// `position`/insets, `border-radius`, `border-color`, `z-index` and
+/// `pointer-events` reach the built nodes; `pointer-events` inherits (the
+/// block inside `.overlay` is unpickable too); `static` ignores insets.
+/// A stylesheet swap without them takes back only what CSS inserted: an
+/// app's own `ZIndex` on another element survives.
+#[test]
+fn positioning_radius_border_color_z_index_and_pointer_events() {
+    let page = r#"<div class="overlay"><p id="tip">Tip</p></div><div id="static"></div><div id="app"></div>"#;
+    let css = ".overlay { position: absolute; top: 4px; left: 8px; z-index: 5; pointer-events: none; \
+               border-radius: 3px; border-width: 1px; border-color: #ff0000 }
+               #static { position: static; top: 9px }";
+    let mut ui = TestUi::new("positioning", &[("page.html", page), ("a.css", css), ("b.css", "p { color: #ffffff }")])
+        .stylesheet("a.css");
+    let plain = ui.load::<Stylesheet>("b.css");
+    let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div.overlay border=1,1,1,1 pos=abs inset=4,auto,auto,8 radius=3,3,3,3 bcolor=#ff0000,#ff0000,#ff0000,#ff0000 z=5 pick=none
+    p#tip pick=none
+      "Tip" default 16px #ffffff
+  div#static
+  div#app
+"#,
+    );
+    let world = ui.world_mut();
+    let mut elements = world.query::<(Entity, &HtmlElement)>();
+    let app = elements
+        .iter(world)
+        .find(|(_, element)| element.id.as_deref() == Some("app"))
+        .map(|(entity, _)| entity)
+        .unwrap();
+    world.entity_mut(app).insert(ZIndex(2));
+
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(plain);
+    ui.settle_quiet();
+    ui.update(10);
+    ui.assert_dump(
+        r#"
+html-ui
+  div.overlay
+    p#tip
+      "Tip" default 16px #ffffff
+  div#static
+  div#app z=2
+"#,
+    );
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]
