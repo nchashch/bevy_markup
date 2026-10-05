@@ -115,6 +115,15 @@ em {
   background-color: #28282e;
 }
 
+.opt:hover {
+  background-color: #3a3a46;
+}
+
+.opt:active {
+  background-color: #dc3232;
+}
+
+
 .opt.active {
   background-color: #dc3232;
   color: #ffffff;

@@ -68,7 +68,9 @@
 //!   becomes a `Text` node with a `TextSpan` per styled run; blocks and
 //!   containers carry an [`HtmlElement`](html::HtmlElement) (tag, id, classes).
 //! - **CSS** ([`style`]): type, `.class`, `#id` and compound selectors with
-//!   specificity; `color`, `font-family`, `font-size`,
+//!   specificity, plus the interaction pseudo-classes `:hover`/`:active`
+//!   (state comes from picking; a change restyles in place); `color`,
+//!   `font-family`, `font-size`,
 //!   `font-weight`, `font-style` (inherited); `border-image` (9-slice),
 //!   `border-width`, `padding`, `background-color` on blocks, containers and
 //!   the `HtmlUi` node (`html` rule, except background); `gap` on containers;
@@ -139,7 +141,9 @@ pub mod prelude {
     };
     pub use crate::l10n::ActiveLocale;
     pub use crate::nine_slice::{NineSlice, NineSliceFrame};
-    pub use crate::signals::{ElementSignal, ElementSignals, SignalBinding, SignalTrigger};
+    pub use crate::signals::{
+        ElementSignal, ElementSignals, PseudoState, SignalBinding, SignalTrigger,
+    };
     pub use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
     pub use crate::template::HtmlTemplate;
     pub use crate::{BevyMarkupPlugin, HtmlUiSystems};
@@ -186,7 +190,10 @@ impl Plugin for BevyMarkupPlugin {
             .init_resource::<l10n::ActiveLocale>()
             .init_resource::<fonts::FontFamilies>()
             .add_message::<signals::ElementSignal>()
-            .add_systems(Update, signals::hover_signals)
+            .add_systems(
+                Update,
+                (signals::hover_signals, signals::update_pseudo_states),
+            )
             .configure_sets(
                 PostUpdate,
                 (

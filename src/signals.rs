@@ -28,7 +28,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use bevy::picking::events::{Click, Pointer, Press, Release};
-use bevy::picking::hover::HoverMap;
+use bevy::picking::hover::{HoverMap, PickingInteraction};
 use bevy::picking::pointer::PointerId;
 use bevy::prelude::*;
 use serde_json::Value;
@@ -330,6 +330,61 @@ pub(crate) fn hover_signals(
 pub(crate) struct Hovering {
     element: HtmlElement,
     leaves: Vec<SignalBinding>,
+}
+
+/// The interaction pseudo-state of an element: `:hover` / `:active` for the
+/// cascade. Maintained from the picking hover map for every element; a
+/// change restyles the element's UI (in place). Apps may also set it to
+/// force the styles.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PseudoState {
+    pub hovered: bool,
+    pub active: bool,
+}
+
+/// Maintains [`PseudoState`] on every element from the picking hover map
+/// and the pressed entities: an element is hovered while the pointer is
+/// over it or any descendant, and active while a press started on it or a
+/// descendant (like CSS).
+pub(crate) fn update_pseudo_states(
+    hover_map: Option<Res<HoverMap>>,
+    interactions: Query<(Entity, &PickingInteraction)>,
+    elements: Query<(Entity, &HtmlElement, Option<&PseudoState>)>,
+    parents: Query<&ChildOf>,
+    mut commands: Commands,
+) {
+    let Some(hover_map) = hover_map else {
+        // No picking plugins (headless tests).
+        return;
+    };
+    let chain = |root: Entity, set: &mut HashSet<Entity>| {
+        let mut current = Some(root);
+        while let Some(node) = current {
+            set.insert(node);
+            current = parents.get(node).ok().map(|parent| parent.0);
+        }
+    };
+    let mut hovered = HashSet::new();
+    for hovered_entities in hover_map.values() {
+        for entity in hovered_entities.keys() {
+            chain(*entity, &mut hovered);
+        }
+    }
+    let mut active = HashSet::new();
+    for (entity, interaction) in &interactions {
+        if *interaction == PickingInteraction::Pressed {
+            chain(entity, &mut active);
+        }
+    }
+    for (entity, _, state) in &elements {
+        let desired = PseudoState {
+            hovered: hovered.contains(&entity),
+            active: active.contains(&entity),
+        };
+        if state.copied() != Some(desired) {
+            commands.entity(entity).insert(desired);
+        }
+    }
 }
 
 #[cfg(test)]

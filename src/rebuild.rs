@@ -46,6 +46,9 @@ pub(crate) struct Frame {
     pub default_changed: bool,
     /// `FontFamilies` changed.
     pub fonts_changed: bool,
+    /// An element's `:hover`/`:active` state changed: restyle (the styles
+    /// are state-dependent, the structure isn't).
+    pub state_changed: bool,
     /// Structure: template output, translations or the debug outline changed.
     pub content_changed: bool,
 }
@@ -89,7 +92,8 @@ impl RebuildState {
         let own_ready = frame.own == Some(Phase::Ready);
         let style = frame.own_changed
             || (!own_ready && frame.default_changed)
-            || frame.fonts_changed;
+            || frame.fonts_changed
+            || frame.state_changed;
         let change = if frame.content_changed {
             Some(Update::Build)
         } else if style {
@@ -273,17 +277,31 @@ mod tests {
     }
 
     fn frame() -> impl Strategy<Value = Frame> {
-        (phase(), phase(), prop::bool::weighted(0.8), prop::array::uniform4(any::<bool>())).prop_map(
-            |(own, default, document_ready, [own_changed, default_changed, fonts_changed, content_changed])| Frame {
-                own,
-                default,
-                document_ready,
-                own_changed,
-                default_changed,
-                fonts_changed,
-                content_changed,
-            },
+        (
+            phase(),
+            phase(),
+            prop::bool::weighted(0.8),
+            prop::array::uniform5(any::<bool>()),
         )
+            .prop_map(
+                |(
+                    own,
+                    default,
+                    document_ready,
+                    [own_changed, default_changed, fonts_changed, state_changed, content_changed],
+                )| {
+                    Frame {
+                        own,
+                        default,
+                        document_ready,
+                        own_changed,
+                        default_changed,
+                        fonts_changed,
+                        state_changed,
+                        content_changed,
+                    }
+                },
+            )
     }
 
     proptest! {
@@ -301,6 +319,7 @@ mod tests {
                 waiting_structure |= frame.content_changed;
                 waiting_style |= frame.own_changed
                     || frame.fonts_changed
+                    || frame.state_changed
                     || (frame.own != Some(Phase::Ready) && frame.default_changed);
                 let decision = state.decide(*frame);
                 match expected_source(frame.own, frame.default) {

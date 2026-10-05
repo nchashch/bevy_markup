@@ -6,14 +6,14 @@ use bevy::asset::{AssetEvent, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
-use crate::cascade::{HtmlStyles, LayoutDecl, SliceValue};
+use crate::cascade::{HtmlStyles, LayoutDecl, Pseudo, SliceValue};
 use crate::fonts::FontFamilies;
 use crate::html::{
     HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, HtmlUiRestyled, RenderedHtml,
 };
 use crate::l10n::LocalizedText;
 use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
-use crate::signals::{self, ElementSignals, SignalBinding};
+use crate::signals::{self, ElementSignals, PseudoState, SignalBinding};
 use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
 use crate::template::decode_entities;
 
@@ -52,8 +52,12 @@ struct Block {
     element: Option<HtmlElement>,
     /// The element's `data-on-*` hooks.
     signals: Vec<SignalBinding>,
+    /// The DOM node, for `:hover`/`:active` restyles.
+    handle: Option<tl::NodeHandle>,
     /// The block element's own computed style (bullet; root `Text` font).
     style: Style,
+    /// Box properties, computed with the element's interaction state.
+    boxed: BoxStyle,
     runs: Vec<Run>,
 }
 
@@ -80,7 +84,10 @@ enum Item {
     Block(Block),
     Container {
         element: HtmlElement,
+        handle: Option<tl::NodeHandle>,
         signals: Vec<SignalBinding>,
+        /// Box properties, computed with the element's interaction state.
+        boxed: BoxStyle,
         children: Vec<Item>,
     },
 }
@@ -149,8 +156,14 @@ pub(crate) struct Styler<'a> {
 
 impl Styler<'_> {
     /// `element`'s computed style: its declared values over `inherited`.
-    pub(crate) fn style_of(&self, element: &HtmlElement, inherited: Style) -> Style {
-        let declared = self.styles.get(element);
+    /// `pseudo` is the element's interaction state (`:hover`/`:active`).
+    pub(crate) fn style_of(
+        &self,
+        element: &HtmlElement,
+        inherited: Style,
+        pseudo: Pseudo,
+    ) -> Style {
+        let declared = self.styles.get(element, pseudo);
         Style {
             color: declared.color.unwrap_or(inherited.color),
             // A declared list with no registered family falls back to the
@@ -190,8 +203,8 @@ impl Styler<'_> {
 
     /// `element`'s box properties. A `border-image` whose `%` slices need the
     /// image size is skipped until the image has loaded (its load rebuilds).
-    pub(crate) fn box_of(&self, element: &HtmlElement) -> BoxStyle {
-        let declared = self.styles.get(element);
+    pub(crate) fn box_of(&self, element: &HtmlElement, pseudo: Pseudo) -> BoxStyle {
+        let declared = self.styles.get(element, pseudo);
         let image = declared.border_image.as_ref().and_then(|decl| {
             let url = decl.source.as_ref()?.as_ref()?;
             let handle = self.sheet?.image(url)?;
@@ -259,7 +272,7 @@ pub(crate) fn root_style(styles: &HtmlStyles, fonts: &FontFamilies, images: &Ass
         sheet: None,
         images,
     }
-    .style_of(&element_tag("html"), defaults)
+    .style_of(&element_tag("html"), defaults, Pseudo::default())
 }
 
 pub(crate) fn build_html_ui(
@@ -285,6 +298,8 @@ pub(crate) fn build_html_ui(
     mut roots: Query<(&mut Node, Option<&CssRootBox>), With<HtmlUi>>,
     parents: Query<&ChildOf>,
     tree: Tree,
+    dom_nodes: Query<(&DomNode, Option<&PseudoState>)>,
+    pseudo_changed: Query<Entity, Changed<PseudoState>>,
     mut removed_outlines: RemovedComponents<HtmlDebugOutline>,
     mut removed_sheets: RemovedComponents<HtmlStylesheet>,
 ) {
@@ -322,6 +337,20 @@ pub(crate) fn build_html_ui(
     let default_changed =
         default_sheet.is_changed() || default_sheet.0.as_ref().is_some_and(refreshed);
 
+    // UIs with an element whose `:hover`/`:active` state changed: the state
+    // change restyles that UI (the owning `HtmlUi` is the walk's first hit).
+    let mut state_restyle: HashSet<Entity> = HashSet::new();
+    for entity in pseudo_changed.iter() {
+        let mut current = Some(entity);
+        while let Some(node) = current {
+            if views.contains(node) {
+                state_restyle.insert(node);
+                break;
+            }
+            current = parents.get(node).ok().map(|parent| parent.0);
+        }
+    }
+
     // First pass: the decision per UI. Nested UIs need the whole set before
     // anything acts (see the suppression below).
     let mut decisions: Vec<(Entity, Decision)> = Vec::new();
@@ -334,6 +363,7 @@ pub(crate) fn build_html_ui(
                 || own_sheet.as_ref().is_some_and(|own| own.is_changed() || refreshed(&own.0)),
             default_changed,
             fonts_changed: fonts.is_changed(),
+            state_changed: state_restyle.contains(&entity),
             content_changed: rendered.is_changed()
                 || localized.is_changed()
                 || removed_outlines.contains(&entity)
@@ -392,8 +422,33 @@ pub(crate) fn build_html_ui(
         };
 
         if let Ok((mut node, state)) = roots.get_mut(entity) {
-            let root_box = styler.box_of(&element_tag("html"));
+            let root_box = styler.box_of(&element_tag("html"), Pseudo::default());
             apply_root_box(&mut commands, entity, &mut node, state, root_box);
+        }
+
+        // The elements' interaction state by DOM node, so the collected
+        // items style for `:hover`/`:active`. Nested `HtmlUi`s have their
+        // own documents — their handles index those, not this one — so their
+        // subtrees are skipped (the starting entity is the UI root itself).
+        let mut states = HashMap::new();
+        let mut stack = vec![entity];
+        while let Some(current) = stack.pop() {
+            if let Ok((handle, state)) = dom_nodes.get(current) {
+                states.insert(
+                    **handle,
+                    state.copied().map_or(Pseudo::default(), |state| Pseudo {
+                        hover: state.hovered,
+                        active: state.active,
+                    }),
+                );
+            }
+            let nested_root = current != entity
+                && tree.get(current).is_ok_and(|(.., nested_ui)| nested_ui);
+            if !nested_root
+                && let Ok((children, ..)) = tree.get(current)
+            {
+                stack.extend(children.iter().flat_map(|children| children.iter()));
+            }
         }
 
         let items = if outline.is_some() {
@@ -406,25 +461,35 @@ pub(crate) fn build_html_ui(
                 }
                 RenderedHtml::Failed(message) => format!("failed to render: {message}"),
             };
-            let style = styler.style_of(&element_tag("pre"), root);
+            let style = styler.style_of(&element_tag("pre"), root, Pseudo::default());
             vec![Item::Block(Block {
                 kind: BlockKind::Paragraph,
                 element: None,
+                handle: None,
                 signals: Vec::new(),
                 style,
+                boxed: BoxStyle::default(),
                 runs: vec![Run { text, style }],
             })]
         } else {
             match &*rendered {
                 RenderedHtml::Pending => continue,
                 RenderedHtml::Ready(document) => {
-                    collect_items(document.dom(), &localized.0, &styler, root)
+                    collect_items(
+                        document.dom(),
+                        &localized.0,
+                        Some(&states),
+                        &styler,
+                        root,
+                    )
                 }
                 RenderedHtml::Failed(message) => vec![Item::Block(Block {
                     kind: BlockKind::Paragraph,
                     element: None,
-                signals: Vec::new(),
+                    handle: None,
+                    signals: Vec::new(),
                     style: root,
+                    boxed: BoxStyle::default(),
                     runs: vec![Run {
                         text: format!("failed to render: {message}"),
                         style: root,
@@ -477,6 +542,8 @@ struct NodeSpec {
     element: Option<HtmlElement>,
     /// The element's `data-on-*` hooks.
     signals: Vec<SignalBinding>,
+    /// The DOM node, for `:hover`/`:active` restyles.
+    handle: Option<tl::NodeHandle>,
     background: Option<Color>,
     image: Option<ImageNode>,
     /// `Text` nodes hold spans, never child nodes.
@@ -499,6 +566,7 @@ impl NodeSpec {
             node,
             element: None,
             signals: Vec::new(),
+            handle: None,
             background: None,
             image: None,
             text: None,
@@ -517,19 +585,21 @@ type Tree<'w, 's> = Query<
         Has<TextSpan>,
         Has<HtmlElement>,
         Has<ImageNode>,
+        Has<HtmlUi>,
     ),
 >;
 
 fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
-    let (element, signals, children) = match item {
+    let (element, handle, signals, boxed, children) = match item {
         Item::Block(block) => return block_spec(styler, block),
         Item::Container {
             element,
+            handle,
             signals,
+            boxed,
             children,
-        } => (element, signals, children),
+        } => (element, handle, signals, boxed, children),
     };
-    let boxed = styler.box_of(&element);
     let mut node = Node {
         flex_direction: FlexDirection::Column,
         flex_shrink: 0.0,
@@ -544,6 +614,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
     NodeSpec {
         element: Some(element),
         signals,
+        handle,
         background: boxed.background,
         image: boxed.sliced_image(),
         children: children
@@ -555,11 +626,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
 }
 
 fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
-    let boxed = block
-        .element
-        .as_ref()
-        .map(|element| styler.box_of(element))
-        .unwrap_or_default();
+    let boxed = block.boxed;
     let indent = match block.kind {
         BlockKind::ListItem => UiRect::left(Val::Px(12.0)),
         _ => UiRect::DEFAULT,
@@ -608,6 +675,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         return NodeSpec {
             element: block.element,
             signals: block.signals,
+            handle: block.handle,
             text: Some(text),
             ..NodeSpec::new(node)
         };
@@ -630,6 +698,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
     NodeSpec {
         element: block.element,
         signals: block.signals,
+        handle: block.handle,
         background: boxed.background,
         image: boxed.sliced_image(),
         children: vec![NodeSpec {
@@ -640,10 +709,18 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
     }
 }
 
+/// The entity's DOM node: lets a restyle look up the element's
+/// `:hover`/`:active` state.
+#[derive(Component, Clone, Copy, Debug, Deref)]
+pub(crate) struct DomNode(pub tl::NodeHandle);
+
 fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
     let mut entity = parent.spawn(spec.node);
     if let Some(element) = spec.element {
         entity.insert(element);
+    }
+    if let Some(handle) = spec.handle {
+        entity.insert(DomNode(handle));
     }
     if !spec.signals.is_empty() {
         let signals = ElementSignals(spec.signals);
@@ -680,11 +757,19 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
 
 /// Whether `entity` (an existing child) has the structure `spec` would
 /// spawn: the same text/element/frame presence, span count and children.
+/// Children the app attached — nested `HtmlUi` roots — aren't the spec's:
+/// restyles keep them (and their subtrees), rebuilds replace them
+/// wholesale.
 fn same_shape(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
-    let Ok((children, has_text, _, has_element, has_image)) = tree.get(entity) else {
+    let Ok((children, has_text, _, has_element, has_image, _is_ui)) = tree.get(entity) else {
         return false;
     };
-    let children: &[Entity] = children.map_or(&[], |children| children);
+    let owned: Vec<Entity> = children
+        .map_or(&[][..], |children| children)
+        .iter()
+        .copied()
+        .filter(|child| !tree.get(*child).is_ok_and(|(.., nested_ui)| nested_ui))
+        .collect();
     if has_text != spec.text.is_some()
         || has_element != spec.element.is_some()
         || has_image != spec.image.is_some()
@@ -693,14 +778,14 @@ fn same_shape(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
     }
     match &spec.text {
         Some(text) => {
-            children.len() == text.spans.len()
-                && children
+            owned.len() == text.spans.len()
+                && owned
                     .iter()
-                    .all(|child| tree.get(*child).is_ok_and(|(_, _, is_span, ..)| is_span))
+                    .all(|child| tree.get(*child).is_ok_and(|(_, _, has_span, ..)| has_span))
         }
         None => {
-            children.len() == spec.children.len()
-                && children
+            owned.len() == spec.children.len()
+                && owned
                     .iter()
                     .zip(&spec.children)
                     .all(|(child, spec)| same_shape(spec, *child, tree))
@@ -812,6 +897,9 @@ struct Ctx<'a, 'p, 'buf> {
     /// Translations by node of `parser`'s document (empty inside a
     /// translation: its markup isn't localized again).
     localized: &'a HashMap<tl::NodeHandle, Result<String, String>>,
+    /// The elements' `:hover`/`:active` state by DOM node (`None` inside a
+    /// translation: fragment handles index the fragment, not the document).
+    states: Option<&'a HashMap<tl::NodeHandle, Pseudo>>,
     styler: &'a Styler<'a>,
     /// Inside a translation: the source element's `data-l10n-name`
     /// descendants, each usable once (fluent-dom's named overlays).
@@ -870,6 +958,7 @@ fn walk_translation(
     let fragment_ctx = Ctx {
         parser: fragment.parser(),
         localized: &unlocalized,
+        states: None,
         styler: ctx.styler,
         named: Some(&named),
     };
@@ -880,12 +969,14 @@ fn walk_translation(
 fn collect_items(
     dom: &tl::VDom,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
+    states: Option<&HashMap<tl::NodeHandle, Pseudo>>,
     styler: &Styler,
     root: Style,
 ) -> Vec<Item> {
     let ctx = Ctx {
         parser: dom.parser(),
         localized,
+        states,
         styler,
         named: None,
     };
@@ -911,8 +1002,10 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                 items.push(Item::Block(Block {
                     kind: BlockKind::Paragraph,
                     element: None,
+                    handle: None,
                     signals: Vec::new(),
                     style: inherited,
+                    boxed: BoxStyle::default(),
                     runs,
                 }));
             }
@@ -922,6 +1015,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
     };
 
     let signals = signals::signal_bindings(tag);
+    let state = ctx.states.and_then(|states| states.get(&handle)).copied().unwrap_or_default();
     let Some(element) = ctx.element(tag) else {
         // Unmatched `data-l10n-name` in a translation: content only.
         for child in tag.children().top().iter() {
@@ -929,7 +1023,8 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         }
         return;
     };
-    let style = ctx.styler.style_of(&element, inherited);
+    let style = ctx.styler.style_of(&element, inherited, state);
+    let boxed = ctx.styler.box_of(&element, state);
     let kind = match element.tag.as_str() {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
         "p" => BlockKind::Paragraph,
@@ -962,7 +1057,9 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
             if container {
                 items.push(Item::Container {
                     element,
+                    handle: Some(handle),
                     signals,
+                    boxed,
                     children,
                 });
             }
@@ -976,8 +1073,10 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
     items.push(Item::Block(Block {
         kind,
         element: Some(element),
+        handle: Some(handle),
         signals,
         style,
+        boxed,
         runs: finish_runs(runs, preformatted),
     }));
 }
@@ -1066,7 +1165,9 @@ fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run
             // An unmatched `data-l10n-name` element is plain text.
             let style = ctx
                 .element(tag)
-                .map_or(style, |element| ctx.styler.style_of(&element, style));
+                .map_or(style, |element| {
+                    ctx.styler.style_of(&element, style, Pseudo::default())
+                });
             push_content_runs(ctx, handle, tag, style, runs);
         }
         Some(tl::Node::Comment(_)) | None => {}

@@ -1390,3 +1390,146 @@ fn data_on_hooks_attach_to_elements() {
     assert_eq!(found.0[0].name, "buy");
     assert_eq!(found.0[0].payload["n"], 3);
 }
+
+/// `:hover`/`:active` styles apply from the element's [`PseudoState`] and
+/// update in place: the state change restyles, it doesn't rebuild (the
+/// entity keeps whatever the app attached).
+#[test]
+fn hover_state_restyles_in_place() {
+    let mut ui = TestUi::new(
+        "pseudo-hover",
+        &[
+            (
+                "page.html",
+                r#"<div id="box" class="card"><p>Hello</p></div>"#,
+            ),
+            (
+                "style.css",
+                r#"
+html { color: #ffffff; font-size: 20px }
+.card { background-color: #111111 }
+.card:hover { background-color: #222222; color: #00ff00 }
+"#,
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+
+    let box_entity = {
+        let world = ui.world_mut();
+        let mut query = world.query::<(Entity, &HtmlElement)>();
+        query
+            .iter(world)
+            .find(|(_, element)| element.id.as_deref() == Some("box"))
+            .map(|(entity, _)| entity)
+            .expect("box")
+    };
+
+    // Hover: the state change restyles the card in place.
+    ui.world_mut()
+        .entity_mut(box_entity)
+        .insert(PseudoState { hovered: true, active: false });
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div#box.card bg=#222222
+    p
+      "Hello" default 20px #00ff00
+"#,
+    );
+
+    // Unhover: back to the base styles.
+    ui.world_mut()
+        .entity_mut(box_entity)
+        .insert(PseudoState::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div#box.card bg=#111111
+    p
+      "Hello" default 20px #ffffff
+"#,
+    );
+}
+
+/// A restyle of an `HtmlUi` whose slots hold app-nested `HtmlUi`s must not
+/// fall back to a rebuild: `same_shape` ignores nested-UI children, and the
+/// fallback's `despawn_related` killed the nested UIs — panicking when they
+/// updated the same frame (bug_0017).
+#[test]
+fn restyle_with_nested_uis_keeps_them() {
+    let mut ui = TestUi::new(
+        "nested-restyle",
+        &[
+            (
+                "outer.html",
+                r#"<div id="slot"><p class="card">Outer</p></div>"#,
+            ),
+            ("inner.html", r#"<p class="card">Inner</p>"#),
+            (
+                "style.css",
+                r#"
+html { color: #ffffff; font-size: 20px }
+.card { background-color: #111111 }
+.card:hover { background-color: #222222 }
+"#,
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("outer.html", TemplateContext::new(), Node::default());
+    ui.settle();
+
+    let (slot, inner_template) = {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement)>();
+        let slot = elements
+            .iter(world)
+            .find(|(_, element)| element.id.as_deref() == Some("slot"))
+            .map(|(entity, _)| entity)
+            .expect("slot");
+        let template = world.resource::<AssetServer>().load("inner.html");
+        (slot, template)
+    };
+    let inner = ui
+        .world_mut()
+        .spawn((HtmlUi::new(inner_template), TemplateContext::new(), Node::default(), ChildOf(slot)))
+        .id();
+    ui.settle();
+
+    // Hover both UIs in the same frame: the outer restyles (its slots keep
+    // the nested UI), the inner restyles too — nobody despawns anybody.
+    let mut cards = ui
+        .world_mut()
+        .query::<(Entity, &HtmlElement, Option<&PseudoState>)>();
+    let cards: Vec<Entity> = cards
+        .iter(ui.world_mut())
+        .filter(|(_, element, _)| element.has_class("card"))
+        .map(|(entity, _, _)| entity)
+        .collect();
+    assert_eq!(cards.len(), 2);
+    for entity in cards {
+        ui.world_mut()
+            .entity_mut(entity)
+            .insert(PseudoState { hovered: true, active: false });
+    }
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div#slot
+    p.card bg=#222222
+      -
+        "Outer" default 20px #ffffff
+    -
+      p.card bg=#222222
+        -
+          "Inner" default 20px #ffffff
+"#,
+    );
+    assert!(
+        ui.world_mut().get_entity(inner).is_ok(),
+        "the nested UI survived the outer restyle"
+    );
+}

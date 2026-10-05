@@ -34,6 +34,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0014](bug_0014.md) | Text in a boxed block never wraps: it overflows the box | `src/build.rs` | medium | fixed (uncommitted) | mutation-testing triage (layout oracle case) |
 | [bug_0015](bug_0015.md) | Deeply nested FTL expressions overflow the stack | upstream `fluent-syntax` 0.11.1 | medium | fixed in the fluent-syntax fork (git patch; first fix missed nested calls); **upstream unfixed**, PR pending | fuzz-corpus coverage replay |
 | [bug_0016](bug_0016.md) | Rebuilding an `HtmlUi` under a rebuilding ancestor `HtmlUi` panics (commands on despawned entities) | `src/build.rs` | high | fixed (uncommitted, on the demo rewrite) | user report (demo locale click), minimized to a vector |
+| [bug_0017](bug_0017.md) | Restyle fallback rebuild despawned app-nested `HtmlUi`s (same_shape counted them as shape mismatches) | `src/build.rs` (`same_shape`) | high | fixed (uncommitted, with the `:hover` work) | startup crash of the demo, traced via `bevy/debug` |
 
 ## Discovery session metadata: bug_0001–0005
 

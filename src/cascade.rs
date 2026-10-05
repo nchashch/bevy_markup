@@ -183,18 +183,30 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
     urls
 }
 
+/// Interaction pseudo-classes a compound selector requires: the rule only
+/// matches elements whose [`PseudoState`](crate::signals::PseudoState) has
+/// these set. Specificity counts them like classes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct Pseudo {
+    pub hover: bool,
+    pub active: bool,
+}
+
 /// A compound selector: optional type (or `*`), then any number of `.class`
-/// and `#id` parts, e.g. `p.note`, `.a.b`, `#title`.
+/// and `#id` parts, e.g. `p.note`, `.a.b`, `#title`; optionally qualified
+/// by `:hover` / `:active`.
 #[derive(Clone, Debug)]
 struct Compound {
     /// Lowercase; `None` for `*` or no type.
     tag: Option<String>,
     ids: Vec<String>,
     classes: Vec<String>,
+    pseudo: Pseudo,
 }
 
 impl Compound {
-    /// `None` for anything else (combinators, attributes, pseudo-classes).
+    /// `None` for anything else (combinators, attributes, other
+    /// pseudo-classes).
     fn parse(selector: &str) -> Option<Self> {
         let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
         let mut rest = selector;
@@ -210,14 +222,27 @@ impl Compound {
         }
         let mut ids = Vec::new();
         let mut classes = Vec::new();
+        let mut pseudo = Pseudo::default();
         while let Some((_, kind)) = rest.char_indices().next() {
-            // Only `.class`/`#id` parts continue the selector; anything else
-            // (combinator, pseudo, or a non-ASCII ident character) is
-            // unsupported. Check before slicing: `kind.len_utf8()` may be > 1.
-            if kind != '.' && kind != '#' {
-                return None;
-            }
-            let body = &rest[kind.len_utf8()..];
+            // Only `.class`, `#id` and `:pseudo` parts continue the selector;
+            // anything else (combinator, attribute, or a non-ASCII ident
+            // character) is unsupported. Check before slicing: `kind.len_utf8()`
+            // may be > 1.
+            let body = match kind {
+                '.' | '#' => &rest[kind.len_utf8()..],
+                ':' => {
+                    let body = &rest[1..];
+                    let end = body.find(|c| !is_ident(c)).unwrap_or(body.len());
+                    match &body[..end] {
+                        "hover" => pseudo.hover = true,
+                        "active" => pseudo.active = true,
+                        _ => return None,
+                    }
+                    rest = &body[end..];
+                    continue;
+                }
+                _ => return None,
+            };
             let end = body.find(|c| !is_ident(c)).unwrap_or(body.len());
             if end == 0 {
                 return None;
@@ -232,20 +257,31 @@ impl Compound {
         if tag.is_none() && ids.is_empty() && classes.is_empty() && selector != "*" {
             return None;
         }
-        Some(Self { tag, ids, classes })
+        Some(Self {
+            tag,
+            ids,
+            classes,
+            pseudo,
+        })
     }
 
-    /// CSS specificity: (ids, classes, types).
+    /// CSS specificity: (ids, classes, types); pseudo-classes count as
+    /// classes.
     fn specificity(&self) -> (u32, u32, u32) {
+        let classes = self.classes.len()
+            + usize::from(self.pseudo.hover)
+            + usize::from(self.pseudo.active);
         (
             self.ids.len() as u32,
-            self.classes.len() as u32,
+            classes as u32,
             self.tag.is_some() as u32,
         )
     }
 
-    fn matches(&self, element: &HtmlElement) -> bool {
-        self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
+    fn matches(&self, element: &HtmlElement, pseudo: Pseudo) -> bool {
+        (!self.pseudo.hover || pseudo.hover)
+            && (!self.pseudo.active || pseudo.active)
+            && self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
             && self.ids.iter().all(|id| element.id.as_ref() == Some(id))
             && self.classes.iter().all(|class| element.has_class(class))
     }
@@ -259,11 +295,12 @@ struct Rule<'a> {
     declarations: &'a [Property<'static>],
 }
 
-/// A stylesheet's rules, matched per element (cached by tag + id + classes).
+/// A stylesheet's rules, matched per element (cached by tag + id + classes
+/// + pseudo-state).
 #[derive(Default)]
 pub(crate) struct HtmlStyles<'a> {
     rules: Vec<Rule<'a>>,
-    cache: RefCell<HashMap<(String, Option<String>, Vec<String>), ElementStyle>>,
+    cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo), ElementStyle>>,
 }
 
 impl<'a> HtmlStyles<'a> {
@@ -305,15 +342,24 @@ impl<'a> HtmlStyles<'a> {
         }
     }
 
-    /// The declared style for `element`: every matching rule's declarations,
-    /// applied in cascade order.
-    pub fn get(&self, element: &HtmlElement) -> ElementStyle {
-        let key = (element.tag.clone(), element.id.clone(), element.classes.clone());
+    /// The declared style for `element` in the given interaction state:
+    /// every matching rule's declarations, applied in cascade order.
+    pub fn get(&self, element: &HtmlElement, pseudo: Pseudo) -> ElementStyle {
+        let key = (
+            element.tag.clone(),
+            element.id.clone(),
+            element.classes.clone(),
+            pseudo,
+        );
         if let Some(style) = self.cache.borrow().get(&key) {
             return style.clone();
         }
         let mut style = ElementStyle::default();
-        for rule in self.rules.iter().filter(|rule| rule.selector.matches(element)) {
+        for rule in self
+            .rules
+            .iter()
+            .filter(|rule| rule.selector.matches(element, pseudo))
+        {
             for declaration in rule.declarations {
                 apply(&mut style, declaration);
             }
@@ -753,8 +799,12 @@ mod tests {
     const BLUE: Color = Color::srgb_u8(0, 0, 255);
 
     fn color(css: &'static str, element: &HtmlElement) -> Option<Color> {
+        color_with(css, element, Pseudo::default())
+    }
+
+    fn color_with(css: &'static str, element: &HtmlElement, pseudo: Pseudo) -> Option<Color> {
         let sheet = sheet(css);
-        HtmlStyles::from_sheet(&sheet).get(element).color
+        HtmlStyles::from_sheet(&sheet).get(element, pseudo).color
     }
 
     #[test]
@@ -764,6 +814,53 @@ mod tests {
         assert_eq!(color(".note { color: red } p.note { color: green }", &note), Some(GREEN));
         let titled = element("p", Some("title"), &["note", "big"]);
         assert_eq!(color("#title { color: green } p.note.big { color: red }", &titled), Some(GREEN));
+    }
+
+    /// `:hover`/`:active` match only in that state; they add class-level
+    /// specificity; other pseudo-classes skip the rule.
+    #[test]
+    fn interaction_pseudo_classes() {
+        let p = element("p", None, &[]);
+        let hovered = color_with("p:hover { color: green } p { color: red }", &p, Pseudo { hover: true, ..Pseudo::default() });
+        assert_eq!(hovered, Some(GREEN));
+        assert_eq!(color("p:hover { color: green } p { color: red }", &p), Some(RED));
+
+        let active = color_with("p:active { color: green } p { color: red }", &p, Pseudo { active: true, ..Pseudo::default() });
+        assert_eq!(active, Some(GREEN));
+
+        // `:hover` and `:active` combine; equal specificity → source order.
+        let both = color_with(
+            "p:hover { color: red } p:active { color: blue } p { color: green }",
+            &p,
+            Pseudo { hover: true, active: true },
+        );
+        assert_eq!(both, Some(BLUE));
+    }
+
+    /// A state-qualified rule beats an unqualified one of equal base
+    /// specificity (the pseudo-class counts).
+    #[test]
+    fn pseudo_class_adds_specificity() {
+        let button = element("div", None, &["opt"]);
+        let hovered = Pseudo { hover: true, ..Pseudo::default() };
+        assert_eq!(
+            color_with(".opt { color: red } div:hover { color: blue }", &button, hovered),
+            Some(BLUE)
+        );
+        assert_eq!(
+            color_with(".opt { color: red } div:hover { color: blue }", &button, Pseudo::default()),
+            Some(RED)
+        );
+    }
+
+    /// Unsupported pseudo-classes skip the whole rule.
+    #[test]
+    fn unsupported_pseudo_classes_are_skipped() {
+        let p = element("p", None, &[]);
+        for state in [Pseudo::default(), Pseudo { hover: true, active: true }] {
+            assert_eq!(color("p:focus { color: green } p { color: red }", &p), Some(RED));
+            assert_eq!(color_with("p:focus { color: green } p { color: red }", &p, state), Some(RED));
+        }
     }
 
     #[test]
@@ -823,7 +920,7 @@ mod tests {
     /// `p`'s declared style under one `p { declarations }` rule.
     fn declared(declarations: &str) -> ElementStyle {
         let sheet = owned_sheet(&format!("p {{ {declarations} }}"));
-        HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]))
+        HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), Pseudo::default())
     }
 
     /// Every supported layout property and value maps onto the Bevy value

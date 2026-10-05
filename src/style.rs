@@ -9,9 +9,13 @@
 //! Supported CSS (parsed with lightningcss; a syntax error fails the load):
 //! - selectors: compound selectors — a type (or `*`) plus any `.class` /
 //!   `#id` parts: `p`, `.note`, `#title`, `p.note`, `.a.b`, `h1#x.big` — incl.
-//!   comma lists. Matched against each element's tag, `id` and `class`
-//!   attributes. Combinators, attribute selectors and pseudo-classes are
-//!   skipped (logged at `debug`).
+//!   comma lists, plus the interaction pseudo-classes `:hover` and `:active`
+//!   (each adds class-level specificity; the rule applies while the element's
+//!   [`PseudoState`](crate::signals::PseudoState) has the bit set, which the
+//!   library maintains from picking — a change restyles in place). Matched
+//!   against each element's tag, `id` and `class` attributes. Combinators,
+//!   attribute selectors and other pseudo-classes are skipped (logged at
+//!   `debug`).
 //! - inherited: `color`, `font-family`, `font-size`, `font-weight`,
 //!   `font-style`
 //! - box properties on blocks, containers and the `html` rule (= the `HtmlUi`

@@ -235,9 +235,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   HTML-escaped, fluent-rs number formatting (no grouping). CJK paragraphs go
   on one line (a wrapped line becomes a stray space).
 - CSS subset (`style.rs` docs): compound selectors (type or `*` + `.class` /
-  `#id` parts, comma lists; combinators/attributes/pseudo-classes skipped at
-  `debug`), matched per element (`HtmlElement` tag/id/classes, cached per
-  combination) with CSS precedence: `!important`, then specificity (ids,
+  `#id` parts, comma lists, plus `:hover`/`:active`; combinators/attributes/
+  other pseudo-classes skipped at `debug`), matched per element (`HtmlElement`
+  tag/id/classes + `PseudoState`, cached per combination) with CSS
+  precedence: `!important`, then specificity (ids,
   classes, type), then source order. Inherited `color`, `font-family` (first name registered in
   `FontFamilies`, generics via `set_generic`; no registered name → Bevy's
   default font, as browsers do), `font-size` (`px`, `em`/`%`, `rem`, keywords
@@ -292,7 +293,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   despawns nested UIs with it — spawn them into slots on `HtmlUiBuilt`
   (the demo's `wire_shell_build`). The build system skips a nested UI whose
   ancestor rebuilds the same frame (bug_0016): its own queued commands would
-  otherwise hit the despawned entity and panic.
+  otherwise hit the despawned entity and panic. Restyles don't despawn:
+  `same_shape` ignores nested-UI children (bug_0017), so a restyle keeps
+  them and their app-attached state.
 - Bevy 0.19: `BorderRadius` is a `Node` field, not a component.
 - `tl::VDom` borrows its input; `HtmlDocument` uses `tl::parse_owned` (unsafe
   fn, sound per its docs) → `VDomGuard`, which only hands out shared borrows,
@@ -778,8 +781,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
   guide's example does), or blocks sit side by side.
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
   hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
-- **Selectors:** compound only (type/`*` + `.class` + `#id`); no combinators
-  (`div p`, `>`), attribute selectors, pseudo-classes (`:hover`) or
+- **Selectors:** compound only (type/`*` + `.class` + `#id`, plus the
+  interaction pseudo-classes `:hover`/`:active`); no combinators
+  (`div p`, `>`), attribute selectors, other pseudo-classes or
   pseudo-elements.
 - **Properties:** no `text-align`, `line-height`, `letter-spacing`,
   `text-decoration`, `opacity`, `border-radius`, `border-color`/solid
@@ -795,7 +799,8 @@ Known limits (each skipped/ignored value is logged at `debug`):
   observers, enter/leave via hover tracking that survives rebuilds — the
   deepest bound element wins, so buttons can nest). What signals *mean* is
   app code reading the queue (the demo's `controls::read_signals`). No
-  built-in reactions, no forms/inputs, no `:hover` styling yet.
+  built-in reactions, no forms/inputs. `:hover`/`:active` styling works
+  (see the Selectors limit); no `:focus` (no focus tracking).
 - **Rebuilds:** content changes (template, context, locale) rebuild the
   whole `HtmlUi` subtree (no diffing); style changes restyle in place unless
   the node structure changes. A run merge (e.g. `b` restyled to its parent's
@@ -818,8 +823,10 @@ Next steps (roughly in order of value):
 1. ~~Flex layout from CSS~~ (done: flex, sizes, margins, `box-sizing`).
 2. Descendant/child combinators (`.panel p`, `.panel > p`) — needs the
    ancestor chain during matching; specificity sums.
-3. `:hover` / `:active` via `Interaction` or picking, re-styling without a full
-   rebuild.
+3. ~~`:hover` / `:active` via `Interaction` or picking, re-styling without a
+   full rebuild~~ (done: `PseudoState` from the picking hover map +
+   pressed entities; a state change is a `Restyle` — in place; `:focus` is
+   still open, there's no focus tracking).
 4. Lists done properly: `list-style-type`, `ol` numbering, CSS-driven indent.
 5. Text properties: `text-align` (`Justify`), `line-height` (`LineHeight`).
 6. Keyed reconciliation for content changes: keep entities for unchanged
