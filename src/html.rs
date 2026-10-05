@@ -36,7 +36,7 @@ use crate::template::{HtmlDocument, HtmlTemplate, error_chain};
 ///
 /// ```no_run
 /// # use bevy::prelude::*;
-/// # use p23::prelude::*;
+/// # use bevy_markup::prelude::*;
 /// # fn system(mut commands: Commands, asset_server: Res<AssetServer>) {
 /// commands.spawn((
 ///     HtmlUi::new(asset_server.load("ui/inventory.html")),
@@ -134,7 +134,7 @@ impl HtmlElement {
 ///
 /// ```no_run
 /// # use bevy::prelude::*;
-/// # use p23::prelude::*;
+/// # use bevy_markup::prelude::*;
 /// fn wire_buttons(built: On<HtmlUiBuilt>, elements: HtmlElements, mut commands: Commands) {
 ///     if let Some(save) = elements.by_id(built.entity, "save") {
 ///         commands.entity(save).insert(Button).observe(|_: On<Pointer<Click>>| {

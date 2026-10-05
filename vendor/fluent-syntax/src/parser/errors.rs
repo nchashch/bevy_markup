@@ -166,7 +166,7 @@ pub enum ErrorKind {
     ExpectedSimpleExpressionAsSelector,
     #[error("Expected a string or number literal")]
     ExpectedLiteral,
-    // PATCH(p23): see `MAX_PLACEABLE_DEPTH` in core.rs (bug_0015).
+    // PATCH(bevy_markup): see `MAX_PLACEABLE_DEPTH` in core.rs (bug_0015).
     #[error("Placeables are nested too deeply")]
     PlaceableNestingTooDeep,
 }

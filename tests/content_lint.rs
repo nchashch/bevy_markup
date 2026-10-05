@@ -30,9 +30,9 @@ use std::path::{Component, Path, PathBuf};
 
 use bevy::prelude::*;
 use fluent_syntax::ast;
-use p23::l10n::LocalizedText;
-use p23::prelude::*;
-use p23::tl;
+use bevy_markup::l10n::LocalizedText;
+use bevy_markup::prelude::*;
+use bevy_markup::tl;
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
@@ -590,7 +590,7 @@ fn locale_check_reports_missing_extra_and_mismatched_messages() {
 /// path, so `.html` autoescapes).
 fn compile(assets: &Path, template: &str) -> Result<(), String> {
     let source = std::fs::read_to_string(assets.join(template)).map_err(|err| err.to_string())?;
-    let mut tera = p23::tera::Tera::new();
+    let mut tera = bevy_markup::tera::Tera::new();
     tera.add_raw_template(template, &source)
         .map_err(|err| error_chain(&err))
 }
@@ -733,7 +733,7 @@ fn decode_entities(text: &str) -> String {
 
 /// Visible text in `dom` that isn't under a `data-l10n-id` element and
 /// [needs translation](needs_translation), as `tag > tag: "text"`. Skips what
-/// p23 never shows: `head`, `script`, `style`, comments.
+/// bevy_markup never shows: `head`, `script`, `style`, comments.
 fn hard_coded_text(dom: &tl::VDom, data: &[String]) -> Vec<String> {
     fn visit(
         parser: &tl::Parser,
@@ -919,7 +919,7 @@ fn resolve_url(css: &str, url: &str) -> Result<String, String> {
 /// the asset root `root`: parse errors (lightningcss, as the `Stylesheet`
 /// loader parses) and `url()`s that don't resolve to a file.
 fn stylesheet_problems(root: &Path, css: &str, source: &str) -> Vec<String> {
-    use p23::lightningcss::stylesheet::{ParserOptions, StyleSheet};
+    use bevy_markup::lightningcss::stylesheet::{ParserOptions, StyleSheet};
     let mut problems = Vec::new();
     let options = ParserOptions {
         filename: css.to_owned(),
@@ -952,7 +952,7 @@ fn css_url_scanner_finds_only_url_tokens() {
 
 #[test]
 fn stylesheet_check_reports_parse_errors_and_dangling_urls() {
-    let root = std::env::temp_dir().join(format!("p23-content-lint-css-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("bevy_markup-content-lint-css-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("ui/themes")).unwrap();
     std::fs::write(root.join("ui/frame.png"), common::FRAME_PNG).unwrap();

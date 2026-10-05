@@ -1,11 +1,11 @@
 // Records what Fluent's reference DOM bindings (@fluent/dom, in jsdom) make
-// of a p23 test vector: for every `tests/vectors/*/` holding `page.html` +
+// of a bevy_markup test vector: for every `tests/vectors/*/` holding `page.html` +
 // `messages.ftl` (or the directories given), translate the page's
 // `data-l10n-id` elements with an en-US bundle and write the translated DOM
 // to `fluent.html` next to the inputs.
 //
-// The Rust test `fluent_oracle` (tests/html_ui.rs) then requires p23 built
-// from `page.html` + the bundle to equal p23 built from `fluent.html` with no
+// The Rust test `fluent_oracle` (tests/html_ui.rs) then requires bevy_markup built
+// from `page.html` + the bundle to equal bevy_markup built from `fluent.html` with no
 // locale. No Node is needed to run the tests.
 //
 // Run via `scripts/fluent_oracle.sh [VECTOR_DIR ...]` (installs the pinned
@@ -36,7 +36,7 @@ async function translate(vector) {
     throw new Error(`${vector}: oracle vectors must be plain HTML (no Tera syntax)`);
   }
 
-  // p23 strips Fluent's bidi isolation marks (U+2068/U+2069); turn them off
+  // bevy_markup strips Fluent's bidi isolation marks (U+2068/U+2069); turn them off
   // here instead of comparing around them.
   const bundle = new FluentBundle(LOCALE, { useIsolating: false });
   const errors = bundle.addResource(new FluentResource(ftl));

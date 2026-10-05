@@ -6,7 +6,7 @@
 //! between English and German.
 
 use bevy::prelude::*;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 
 fn main() {
     App::new()

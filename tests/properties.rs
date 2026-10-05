@@ -12,8 +12,8 @@ mod common;
 use common::TestUi;
 
 use bevy::prelude::*;
-use p23::bevy_fluent::BundleAsset;
-use p23::prelude::*;
+use bevy_markup::bevy_fluent::BundleAsset;
+use bevy_markup::prelude::*;
 use proptest::strategy::Strategy;
 use proptest::{prop_assert, prop_assert_eq};
 use test_strategy::proptest;

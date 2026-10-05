@@ -11,5 +11,5 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let css = String::from_utf8_lossy(data);
-    let _ = p23::fuzz::cascade(&css);
+    let _ = bevy_markup::fuzz::cascade(&css);
 });

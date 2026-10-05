@@ -20,8 +20,8 @@ use common::{MONO, SERIF, TestUi};
 
 use async_trait::async_trait;
 use bevy::prelude::*;
-use p23::bevy_fluent::BundleAsset;
-use p23::prelude::*;
+use bevy_markup::bevy_fluent::BundleAsset;
+use bevy_markup::prelude::*;
 use proptest::prelude::*;
 use proptest_stateful::{ModelState, ProptestStatefulConfig};
 use std::time::Duration;

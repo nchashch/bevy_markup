@@ -11,7 +11,7 @@ mod common;
 use common::TestUi;
 
 use bevy::prelude::*;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 use quickcheck::{Arbitrary, Gen};
 use quickcheck_macros::quickcheck;
 
@@ -118,7 +118,7 @@ fn rule_css(rule: &Rule) -> String {
     format!("{} {{ color: #{:02x}{:02x}{:02x}{} }} ", selector, rule.color[0], rule.color[1], rule.color[2], bang)
 }
 
-/// For any stylesheet of compound rules, the color p23 puts on the target
+/// For any stylesheet of compound rules, the color bevy_markup puts on the target
 /// `<p>` is the one CSS precedence picks.
 #[quickcheck]
 fn cascade_winner_matches_precedence_model(case: CascadeCase) {

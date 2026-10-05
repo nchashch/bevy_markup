@@ -18,5 +18,5 @@ fuzz_target!(|data: &[u8]| {
     else {
         return;
     };
-    let _ = p23::fuzz::translate(ftl, id, args);
+    let _ = bevy_markup::fuzz::translate(ftl, id, args);
 });

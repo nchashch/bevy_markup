@@ -2,7 +2,7 @@
 //! the [`DefaultStylesheet`], restyling every `HtmlUi` without its own sheet.
 
 use bevy::prelude::*;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 
 use crate::selector::{Selector, spawn_selector_panel};
 

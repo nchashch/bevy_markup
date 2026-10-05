@@ -17,7 +17,7 @@ mod common;
 use common::*;
 
 use bevy::prelude::*;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 
 // ---------------------------------------------------------------------------
 // Vectors
@@ -593,7 +593,7 @@ fn root_box_keeps_the_apps_own_image() {
     assert_eq!(image.image, backdrop);
 }
 
-/// Untyped loads (folders, `load_untyped`) pick p23's loaders by file
+/// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]
 fn loaders_are_found_by_extension() {
@@ -615,7 +615,7 @@ fn loaders_are_found_by_extension() {
         ("a.css", TypeId::of::<Stylesheet>()),
         ("b.html", TypeId::of::<HtmlTemplate>()),
         ("c.htm", TypeId::of::<HtmlTemplate>()),
-        ("d.slice.ron", TypeId::of::<p23::nine_slice::NineSlice>()),
+        ("d.slice.ron", TypeId::of::<bevy_markup::nine_slice::NineSlice>()),
     ];
     let handles: Vec<_> = expected
         .iter()
@@ -815,11 +815,11 @@ fn browser_oracle() {
 // Layout
 // ---------------------------------------------------------------------------
 
-/// Bevy UI's headless layout of p23's column model, derived by hand: the
+/// Bevy UI's headless layout of bevy_markup's column model, derived by hand: the
 /// default font (FiraMono) advances 0.6em per character and lines are 1.2em;
 /// the root's padding insets everything, a container's border and padding
 /// inset its children and `gap` separates them, text wraps at the content
-/// width (50 characters at 12px), `pre` adds p23's 8px padding.
+/// width (50 characters at 12px), `pre` adds bevy_markup's 8px padding.
 #[test]
 fn layout_column_stacking() {
     let mut ui = TestUi::from_layout_vector("layout_blocks", UVec2::new(640, 480));
@@ -841,8 +841,8 @@ const LAYOUT_TOLERANCE: f32 = 1.0;
 /// Every `tests/vectors/layout_*/` with a `browser.json` is laid out by Bevy
 /// UI headlessly (in the oracle's viewport, under a full-width column root)
 /// and each root/block/container border box compared with Chromium's
-/// `getBoundingClientRect` under the oracle's p23 layout stylesheet
-/// (`P23_CSS` in `scripts/browser_oracle.py`), within [`LAYOUT_TOLERANCE`]
+/// `getBoundingClientRect` under the oracle's bevy_markup layout stylesheet
+/// (`BEVY_MARKUP_CSS` in `scripts/browser_oracle.py`), within [`LAYOUT_TOLERANCE`]
 /// per value.
 #[test]
 fn layout_oracle() {
@@ -879,7 +879,7 @@ fn layout_oracle() {
                 .map(|value| value.as_f64().unwrap() as f32)
                 .collect();
             if ours.iter().zip(&theirs).any(|(a, b)| (a - b).abs() > LAYOUT_TOLERANCE) {
-                failures.push(format!("{name}: {label} [x, y, w, h]: p23 {ours:?} vs browser {theirs:?}"));
+                failures.push(format!("{name}: {label} [x, y, w, h]: bevy_markup {ours:?} vs browser {theirs:?}"));
             }
         }
     }
@@ -898,7 +898,7 @@ fn layout_oracle() {
 /// Every `tests/vectors/*/` with a `fluent.html` (written by
 /// `scripts/fluent_oracle.sh`: Fluent's reference DOM bindings, `@fluent/dom`,
 /// translating `page.html` with `messages.ftl`) must build the same world
-/// localized by p23 as unlocalized from that reference translation — same
+/// localized by bevy_markup as unlocalized from that reference translation — same
 /// nodes, runs, faces, sizes and colors.
 #[test]
 fn fluent_oracle() {
@@ -912,7 +912,7 @@ fn fluent_oracle() {
         let mut reference = TestUi::vector_page(name, "fluent.html", false);
         let theirs = reference.settle().dump();
         if ours != theirs {
-            failures.push(format!("{name} (- @fluent/dom, + p23):\n{}", line_diff(&theirs, &ours)));
+            failures.push(format!("{name} (- @fluent/dom, + bevy_markup):\n{}", line_diff(&theirs, &ours)));
         }
     }
     assert!(
@@ -955,11 +955,11 @@ fn line_diff(old: &str, new: &str) -> String {
 
 // Deliberate, documented differences from browsers (skipped by
 // `compare_with_browser`):
-// - root `background-color`: p23 leaves the `HtmlUi` node's background to the
+// - root `background-color`: bevy_markup leaves the `HtmlUi` node's background to the
 //   app.
-// - `border-style`: p23 ignores it (a `border-width` always applies); vectors
+// - `border-style`: bevy_markup ignores it (a `border-width` always applies); vectors
 //   set `border-style: solid` so browsers compute the widths.
-// - bullets: p23's `li` prefix `• ` is text on the `Text` root (not compared);
+// - bullets: bevy_markup's `li` prefix `• ` is text on the `Text` root (not compared);
 //   browsers draw a marker.
 
 const FIXTURE_SIZE: (f32, f32) = (32.0, 24.0);
@@ -1038,13 +1038,13 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
         .collect();
     let text = |chars: &[(char, String, f64, String)]| chars.iter().map(|c| c.0).collect::<String>();
     if text(&ours) != text(&theirs) {
-        problems.push(format!("text differs: p23 {:?} vs browser {:?}", text(&ours), text(&theirs)));
+        problems.push(format!("text differs: bevy_markup {:?} vs browser {:?}", text(&ours), text(&theirs)));
     } else if let Some(index) = (0..ours.len()).find(|&i| ours[i] != theirs[i]) {
         let context: String = ours[index.saturating_sub(8)..=index].iter().map(|c| c.0).collect();
         let (_, face, size, color) = &ours[index];
         let (_, b_face, b_size, b_color) = &theirs[index];
         problems.push(format!(
-            "text style at …{context:?}: p23 {face} {size}px {color} vs browser {b_face} {b_size}px {b_color}"
+            "text style at …{context:?}: bevy_markup {face} {size}px {color} vs browser {b_face} {b_size}px {b_color}"
         ));
     }
 
@@ -1072,7 +1072,7 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
         };
         let mut check = |what: &str, ours: String, browser: String| {
             if ours != browser {
-                problems.push(format!("{label}: {what} p23 {ours} vs browser {browser}"));
+                problems.push(format!("{label}: {what} bevy_markup {ours} vs browser {browser}"));
             }
         };
 
@@ -1107,7 +1107,7 @@ fn compare_with_browser(ui: &mut TestUi, oracle: &serde_json::Value) -> Vec<Stri
                 Val::Px(px) => px as f64,
                 _ => 0.0,
             };
-            // `normal` = no CSS gap → p23 uses the root's gap (0 here).
+            // `normal` = no CSS gap → bevy_markup uses the root's gap (0 here).
             let their_gap = theirs["rowGap"].as_str().unwrap().trim_end_matches("px").parse().unwrap_or(0.0);
             check("gap", format!("{our_gap}"), format!("{their_gap}"));
         }
@@ -1177,7 +1177,7 @@ fn collect_chars(world: &World, entity: Entity, out: &mut Vec<(char, String, f64
     }
 }
 
-/// p23's root and block/container entities paired, in document order, with
+/// bevy_markup's root and block/container entities paired, in document order, with
 /// the browser's records of the same elements (inline elements have no
 /// entity), each labelled `tag.class…`.
 fn pair_elements<'o>(
@@ -1197,7 +1197,7 @@ fn pair_elements<'o>(
         })
         .collect();
     if ours.len() != theirs.len() {
-        return Err(format!("element count: p23 {} vs browser {}", ours.len(), theirs.len()));
+        return Err(format!("element count: bevy_markup {} vs browser {}", ours.len(), theirs.len()));
     }
     let mut pairs = Vec::new();
     for (entity, record) in ours.into_iter().zip(theirs) {
@@ -1212,7 +1212,7 @@ fn pair_elements<'o>(
         if let Some(element) = world.entity(entity).get::<HtmlElement>()
             && element.tag != tag
         {
-            return Err(format!("{label}: element order differs (p23 has {})", element.tag));
+            return Err(format!("{label}: element order differs (bevy_markup has {})", element.tag));
         }
         pairs.push((entity, record, label));
     }

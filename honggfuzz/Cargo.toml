@@ -1,12 +1,12 @@
 [package]
-name = "p23-honggfuzz"
+name = "bevy_markup_honggfuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
 
 [dependencies]
 honggfuzz = "0.5"
-p23 = { path = "..", features = ["fuzzing"] }
+bevy_markup = { path = "..", features = ["fuzzing"] }
 
 [[bin]]
 name = "html"

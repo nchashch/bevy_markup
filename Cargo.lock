@@ -1163,6 +1163,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_markup"
+version = "0.1.0"
+dependencies = [
+ "arbtest",
+ "async-trait",
+ "bevy",
+ "bevy_fluent",
+ "fluent",
+ "fluent-syntax",
+ "lightningcss",
+ "proptest",
+ "proptest-stateful",
+ "quickcheck",
+ "quickcheck_macros",
+ "ron",
+ "serde",
+ "serde_json",
+ "tera",
+ "test-strategy",
+ "tl",
+ "unic-langid",
+ "wgpu-types",
+]
+
+[[package]]
 name = "bevy_material"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4482,31 +4507,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
  "ttf-parser",
-]
-
-[[package]]
-name = "p23"
-version = "0.1.0"
-dependencies = [
- "arbtest",
- "async-trait",
- "bevy",
- "bevy_fluent",
- "fluent",
- "fluent-syntax",
- "lightningcss",
- "proptest",
- "proptest-stateful",
- "quickcheck",
- "quickcheck_macros",
- "ron",
- "serde",
- "serde_json",
- "tera",
- "test-strategy",
- "tl",
- "unic-langid",
- "wgpu-types",
 ]
 
 [[package]]

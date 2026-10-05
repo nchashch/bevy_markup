@@ -15,7 +15,7 @@ use arbtest::{arbtest, arbitrary};
 use arbitrary::Unstructured;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 
 const BASE_CSS: &str = "html { color: #ffffff; font-size: 20px }";
 const SIZED_PAGE: &str = r#"<div class="outer"><p id="lead" class="note">Text</p><section><p>Deep</p></section><ul><li>One</li></ul></div>"#;
@@ -194,7 +194,7 @@ fn visible_text(nodes: &[Html], out: &mut String) {
 /// anonymous text), and its text (`None` for containers).
 type Expected = (usize, String, Option<String>);
 
-/// The nodes p23 must build for `nodes` at container level: containers
+/// The nodes bevy_markup must build for `nodes` at container level: containers
 /// nest, blocks take all their descendants' text as one collapsed line
 /// (`li` with a bullet), inline elements outside a block are walked
 /// through, and each run of loose text becomes an anonymous block.
@@ -238,7 +238,7 @@ fn model(nodes: &[Html], depth: usize, out: &mut Vec<Expected>) {
     flush(&mut loose, out);
 }
 
-/// What p23 built below `entity`, in the model's shape, plus the
+/// What bevy_markup built below `entity`, in the model's shape, plus the
 /// `HtmlElement` entities in depth-first order.
 fn observe(world: &World, entity: Entity, depth: usize, out: &mut Vec<Expected>, elements: &mut Vec<Entity>) {
     for &child in world.entity(entity).get::<Children>().into_iter().flatten() {

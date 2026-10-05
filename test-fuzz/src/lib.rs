@@ -25,7 +25,7 @@ mod tests {
             // No delimiter: render with an empty context.
             None => (text.as_ref(), "{}"),
         };
-        let _ = p23::fuzz::render_html(source, context_json);
+        let _ = bevy_markup::fuzz::render_html(source, context_json);
     }
 
     #[test_fuzz::test_fuzz]
@@ -34,7 +34,7 @@ mod tests {
             return;
         }
         let css = String::from_utf8_lossy(&x);
-        let _ = p23::fuzz::cascade(&css);
+        let _ = bevy_markup::fuzz::cascade(&css);
     }
 
     #[test_fuzz::test_fuzz]
@@ -49,6 +49,6 @@ mod tests {
         else {
             return;
         };
-        let _ = p23::fuzz::translate(ftl, id, args);
+        let _ = bevy_markup::fuzz::translate(ftl, id, args);
     }
 }

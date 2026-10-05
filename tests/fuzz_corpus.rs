@@ -1,6 +1,6 @@
 //! Replays the cargo-fuzz inputs, the committed seeds (`fuzz/seeds/<target>/`)
 //! and the local working corpus (`fuzz/corpus/<target>/`, gitignored),
-//! through the same `p23::fuzz` harnesses the fuzz targets call, so coverage
+//! through the same `bevy_markup::fuzz` harnesses the fuzz targets call, so coverage
 //! tools can measure what fuzzing reaches alongside the tests
 //! (`scripts/coverage.py`). Inputs are split exactly as in
 //! `fuzz/fuzz_targets/*.rs`.
@@ -39,7 +39,7 @@ fn corpus(target: &str) -> Vec<String> {
 fn replay_html_corpus() {
     for text in corpus("html") {
         let (source, context_json) = text.split_once("\n---\n").unwrap_or((&text, "{}"));
-        let _ = p23::fuzz::render_html(source, context_json);
+        let _ = bevy_markup::fuzz::render_html(source, context_json);
     }
 }
 
@@ -47,7 +47,7 @@ fn replay_html_corpus() {
 #[ignore = "replays thousands of corpus inputs; run for coverage"]
 fn replay_css_corpus() {
     for css in corpus("css") {
-        let _ = p23::fuzz::cascade(&css);
+        let _ = bevy_markup::fuzz::cascade(&css);
     }
 }
 
@@ -59,7 +59,7 @@ fn replay_ftl_corpus() {
         if let (Some(ftl), Some(id), Some(args), None) =
             (parts.next(), parts.next(), parts.next(), parts.next())
         {
-            let _ = p23::fuzz::translate(ftl, id, args);
+            let _ = bevy_markup::fuzz::translate(ftl, id, args);
         }
     }
 }

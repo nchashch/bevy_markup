@@ -1,5 +1,5 @@
 // Fluent is a localization system; see the original crate docs below.
-// PATCH(p23): this vendored copy exists for two patches: the boundary-safe
+// PATCH(bevy_markup): this vendored copy exists for two patches: the boundary-safe
 // `Slice::slice` (src/parser/slice.rs, bug_0005) and a placeable nesting
 // limit (`MAX_PLACEABLE_DEPTH` in src/parser/core.rs, bug_0015); silence
 // its lints.

@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 use serde::Serialize;
 
 use crate::consts::{BODY_COLOR, BODY_FONT_PATH, FRAME_PATH, HEADER_COLOR, HEADER_FONT_PATH};

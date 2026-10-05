@@ -9,7 +9,7 @@ use common::{TestUi, node_rect};
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 use proptest::collection::vec;
 use proptest::prop_assert;
 use test_strategy::proptest;

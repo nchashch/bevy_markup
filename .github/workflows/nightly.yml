@@ -13,7 +13,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   # Dated nightly for the fuzz jobs, so their build caches (keyed on the
   # toolchain version) survive across days; = cache.yml. Bump both together.
-  P23_NIGHTLY: nightly-2026-09-09
+  BEVY_MARKUP_NIGHTLY: nightly-2026-09-09
 
 jobs:
   golden:
@@ -62,12 +62,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Regenerate tests/vectors/*/browser.json with headless Chrome
         env:
-          P23_BROWSER: google-chrome
+          BEVY_MARKUP_BROWSER: google-chrome
         run: scripts/browser_oracle.py
       - name: Compare with the committed references (ignoring the generator line)
         run: |
           if ! git diff --exit-code -I '"generator"' -- tests/vectors; then
-            echo "::error::Chrome computes differently from the committed browser.json: review; if the browser is right, regenerate and commit, then fix p23"
+            echo "::error::Chrome computes differently from the committed browser.json: review; if the browser is right, regenerate and commit, then fix bevy_markup"
             exit 1
           fi
 
@@ -141,7 +141,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.P23_NIGHTLY }}
+          toolchain: ${{ env.BEVY_MARKUP_NIGHTLY }}
       - id: cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -169,7 +169,7 @@ jobs:
           if [ "$(date -u +%u)" != 7 ] || [ "$(count)" = 0 ]; then exit 0; fi
           before=$(count)
           host=$(rustc -vV | sed -n 's/^host: //p')
-          (cd fuzz && cargo "+$P23_NIGHTLY" fuzz cmin --target "$host" ${{ matrix.target }})
+          (cd fuzz && cargo "+$BEVY_MARKUP_NIGHTLY" fuzz cmin --target "$host" ${{ matrix.target }})
           echo "corpus minimized: $before → $(count) inputs"
       - name: Fuzz
         run: |
@@ -212,7 +212,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends binutils-dev libunwind-dev liblzma-dev
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.P23_NIGHTLY }}
+          toolchain: ${{ env.BEVY_MARKUP_NIGHTLY }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |

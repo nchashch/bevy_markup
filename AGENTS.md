@@ -1,4 +1,4 @@
-# p23
+# bevy_markup
 
 Bevy 0.19 library: HTML templates (Tera) + Fluent + CSS → Bevy UI, with
 9-slice frames. Dependencies are limited to that; don't add unrelated crates.
@@ -14,7 +14,7 @@ features its code uses (`ui_api`, `default_font`, `bevy_log`; see
 app's choice. Examples get full Bevy via `[dev-dependencies]`, whose features
 never reach library users. A missing feature shows up in `cargo check --lib`.
 
-## Public API (`p23::prelude::*`)
+## Public API (`bevy_markup::prelude::*`)
 
 | Item | Kind | Role |
 |---|---|---|
@@ -42,7 +42,7 @@ Re-exported crates (their types appear in the API): `tera`, `tl`,
 ## Layout
 
 ```
-README.md        human-facing overview: what p23 is, how it works, testing strategy (keep in sync)
+README.md        human-facing overview: what bevy_markup is, how it works, testing strategy (keep in sync)
 src/
   lib.rs           crate docs (guide), HtmlUiPlugin, HtmlUiSystems, prelude, re-exports
   html.rs          HtmlUi, TemplateContext, RenderedHtml, HtmlDebugOutline, HtmlElement,
@@ -75,7 +75,7 @@ tests/
                    templates render (+ every data-l10n-id resolves), no hard-coded text, CSS url()s, pseudo-locale
   golden.rs        golden images (#[ignore]d): tests/golden/<scene>/ rendered offscreen by real Bevy,
                    compared with expected.png within a tolerance (see Testing)
-  fuzz_corpus.rs   replays fuzz/seeds/* + local fuzz/corpus/* through p23::fuzz (#[ignore]d, --features fuzzing) for coverage
+  fuzz_corpus.rs   replays fuzz/seeds/* + local fuzz/corpus/* through bevy_markup::fuzz (#[ignore]d, --features fuzzing) for coverage
   common/mod.rs    shared headless harness: TestUi (temp asset root, settle, dump; with_layout = Bevy UI layout)
   vectors/<name>/  file-based vectors: page.html, style.css, browser.json (CSS oracle output);
                    Fluent vectors add messages.ftl + fluent.html (Fluent oracle output);
@@ -86,7 +86,7 @@ tests/
   ci.yml           per push to main / PR: -D warnings check/build/doc, cargo test, fuzzing-feature
                    tests, Fluent oracle references current
   nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 5 min
-                   cargo-fuzz per target, other fuzz drivers build (fuzz on pinned P23_NIGHTLY)
+                   cargo-fuzz per target, other fuzz drivers build (fuzz on pinned BEVY_MARKUP_NIGHTLY)
   mutants.yml      weekly mutation testing, 4 shards, --in-place, fast settings, informational
   cache.yml        builds the shared `mutants` and `fuzz` dependency caches once (push to main,
                    daily); scheduled jobs only restore them (see Testing, CI)
@@ -104,7 +104,7 @@ scripts/
                      header; they encapsulate the per-driver workarounds
                      described under Testing TODO 5)
 fuzz/
-  fuzz_targets/      cargo-fuzz targets (`html`, `css`, `ftl`) over `p23::fuzz`
+  fuzz_targets/      cargo-fuzz targets (`html`, `css`, `ftl`) over `bevy_markup::fuzz`
   seeds/<target>/    committed minimized seed corpora (read-only extra input to every fuzz run)
   corpus/, artifacts/, coverage/  gitignored (corpus/ = working corpus; CI carries it over nightly)
 honggfuzz/
@@ -165,7 +165,7 @@ assets/            (gitignored — see Gotchas)
   paths agree; keyed reconciliation can later extend `NodeSpec` with keys.
 - `vendor/fluent-syntax` is a patched fork (wired via `[patch.crates-io]` in
   the root, `fuzz/` and `honggfuzz/` manifests) carrying two fixes for bugs
-  reachable from any FTL asset, both marked `PATCH(p23)`:
+  reachable from any FTL asset, both marked `PATCH(bevy_markup)`:
   - bug_0005: upstream panics slicing FTL source at byte ranges inside
     multi-byte characters (broken `\U` escapes etc.); `Slice::slice` clamps
     to char boundaries.
@@ -235,7 +235,7 @@ assets/            (gitignored — see Gotchas)
   default font, 16px. Missing font faces fall back as CSS font matching does
   (style before weight): bold-italic → italic → bold → regular.
 - Layout properties (`LayoutDecl` in `cascade.rs`, applied by
-  `LayoutDecl::apply_to` in `build.rs` over p23's defaults): `display`
+  `LayoutDecl::apply_to` in `build.rs` over bevy_markup's defaults): `display`
   (`none`/`block`/`flex`), `flex-*`, `justify-content`, `align-*`, sizes
   (px/%/vw…/auto), margins (px/%/auto, over `li`'s 12px indent), `gap` both
   axes, `box-sizing` — on containers and on a block's outer node (the text
@@ -319,7 +319,7 @@ assets/            (gitignored — see Gotchas)
   `content_lint` does).
 - A pseudo-locale opening marker must not be a text `[` at the start of a
   line (FTL reads a variant key); use a string-literal placeable `{"["}`.
-- Bevy/taffy size the border box by default; p23 nodes set
+- Bevy/taffy size the border box by default; bevy_markup nodes set
   `BoxSizing::ContentBox` (CSS initial); `box-sizing` overrides.
 - `cargo mutants` copies the source tree and ignores nested `.gitignore`s:
   park the fuzz drivers' `target/`/corpus dirs first and point `TMPDIR` at
@@ -376,13 +376,13 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   32×24 fixture, background, container gap). Regenerate after changing a
   vector's inputs: `scripts/browser_oracle.py [tests/vectors/<name>]`, then
   review the `browser.json` diff (one record per line) and commit it. The page
-  is `* { all: unset }` + `P23_CSS` (p23's defaults and layout model as CSS:
+  is `* { all: unset }` + `BEVY_MARKUP_CSS` (bevy_markup's defaults and layout model as CSS:
   flex-column root and containers, block blocks, Bevy's default font at line
   height 1.2, white text, `li` indent and bullet, `pre` 8px padding — keep in
   sync with `build.rs`) + `style.css` + `page.html`, so vectors must be plain
   HTML (no Tera / `data-l10n-id`; the script refuses them and skips Fluent
   vectors), set `color` on
-  `html` (browsers default to black, p23 to white) and `border-style: solid`
+  `html` (browsers default to black, bevy_markup to white) and `border-style: solid`
   where widths matter. Deliberate differences (root background,
   `border-style`, `li` bullets) are skipped and listed above
   `FIXTURE_SIZE` in `tests/html_ui.rs`; add new ones there with a reason. The
@@ -443,13 +443,13 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   letter is ~0.1%). `scripts/golden.sh --update` rewrites references;
   mismatches write `target/tmp/golden/<scene>.{actual,diff}.png`.
 - **Fluent oracle** (`fluent_oracle` test): every `tests/vectors/*/` with a
-  `fluent.html` must build the same dump localized by p23 (`page.html` +
+  `fluent.html` must build the same dump localized by bevy_markup (`page.html` +
   `messages.ftl` as the en-US bundle, via `TestUi::from_vector`) as
   unlocalized from `fluent.html` — the DOM Fluent's reference bindings
   (`@fluent/dom` 0.10.2 + `@fluent/bundle` 0.19.1 in jsdom, `useIsolating:
-  false` because p23 strips the isolation marks) produce from the same
+  false` because bevy_markup strips the isolation marks) produce from the same
   inputs, `data-l10n-*` attributes removed. Failures print a line diff
-  (`-` fluent-dom, `+` p23). Regenerate after changing a vector:
+  (`-` fluent-dom, `+` bevy_markup). Regenerate after changing a vector:
   `scripts/fluent_oracle.sh [tests/vectors/<name>]`; fluent-dom's warnings
   (missing messages, sanitizer and name decisions) are recorded as comments
   at the top of `fluent.html`. Vectors: `fluent_basics` (plurals,
@@ -525,9 +525,9 @@ known gaps:
   (hand-derived) and `layout_oracle` (Chromium rects) over `layout_*`
   vectors. See Testing.
   - [x] Flex layout, sizes, margins, `box-sizing`: vectors `layout_flex`,
-    `layout_sizes` (match Chromium to the pixel); `P23_CSS` models p23's
+    `layout_sizes` (match Chromium to the pixel); `BEVY_MARKUP_CSS` models bevy_markup's
     `flex-shrink: 0`; `tests/layout_properties.rs` checks flexbox invariants.
-    The oracle found Bevy's border-box default (p23 now uses content-box).
+    The oracle found Bevy's border-box default (bevy_markup now uses content-box).
 - [x] **4. Lint tests over real content** (`tests/content_lint.rs`, see
   Testing): locale parity, templates render with the examples' data and every
   `data-l10n-id` resolves, no hard-coded text, CSS `url()`s, pseudo-locale run.
@@ -535,7 +535,7 @@ known gaps:
   - [ ] Overflow: lay out the pseudo-locale (`TestUi::with_layout`) against a
     size budget per panel.
 - [x] **5. Fuzzing** (robustness). Four drivers over the same
-  `#[doc(hidden)]` `p23::fuzz` harness (feature `fuzzing`), which calls the
+  `#[doc(hidden)]` `bevy_markup::fuzz` harness (feature `fuzzing`), which calls the
   internal glue directly — a full Bevy app is far too slow per exec.
   Contract for every target: no panic/hang/abort; errors are values.
   Easiest entry point: `scripts/fuzz-<driver>.sh <html|css|ftl> [seconds]`.
@@ -570,7 +570,7 @@ known gaps:
     nightly). Data lands in `test-fuzz/target/` (gitignored).
   - [x] cargo-fuzz's first `css` run found a real crash: a selector with a
     non-ASCII first character panicked in `Compound::parse` (`&rest[1..]`
-    byte-sliced past a multi-byte char). Fixed to skip the rule (p23 idents
+    byte-sliced past a multi-byte char). Fixed to skip the rule (bevy_markup idents
     are ASCII-only by design); regression test
     `multibyte_selector_characters_are_skipped`.
   - [x] honggfuzz's first `ftl` run found an *upstream* crash: fluent-syntax
@@ -609,9 +609,9 @@ known gaps:
   With these, the build is 0.8 s per mutant in a warm tree. The Bevy guide's
   nightly options don't help (measured, same settings, rebuild per mutant):
   stable 1.03 s; nightly 2.03 s; + `-Zshare-generics` 2.08 s; + Cranelift
-  for p23 (LLVM for deps) 1.97 s; both 2.03 s. Share-generics only trims
+  for bevy_markup (LLVM for deps) 1.97 s; both 2.03 s. Share-generics only trims
   the one-time build (150 s → 128 s). `-j`/`--minimum-test-timeout` are set by
-  the script: use `P23_MUTANTS_JOBS` / `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT`.
+  the script: use `BEVY_MARKUP_MUTANTS_JOBS` / `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT`.
   No mold on CI (measured, not worth it): rustc ≥ 1.90 already links
   through its bundled `rust-lld` on x86_64 Linux (`-fuse-ld=lld` + its own
   `gcc-ld` dir), so `rui314/setup-mold` — which swaps `/usr/bin/ld` — never
@@ -666,7 +666,7 @@ known gaps:
       logged (the fallback arm returns the same value).
     - `style.rs` `ParserOptions { filename }`: only the file name in CSS
       parse-error messages.
-    - `build.rs` `same_shape` top check `||` → `&&`: every shape change p23
+    - `build.rs` `same_shape` top check `||` → `&&`: every shape change bevy_markup
       produces also changes the child/span structure checked next, so a
       wrong top-level answer is rejected one level down (redundant check).
     Gotcha: under `-j 6` with the full suite, two mutants hit the 60 s test
@@ -856,7 +856,7 @@ Next steps (roughly in order of value):
   nightly changes rust-cache's key: 11–19 min each for 60 s of fuzzing) and
   the mutants shards missed after a week. Now `cache.yml` builds the
   `mutants` and `fuzz` caches once, CI's `test` job the `dev` cache, and
-  consumers only restore them; the fuzz jobs pin `P23_NIGHTLY`
+  consumers only restore them; the fuzz jobs pin `BEVY_MARKUP_NIGHTLY`
   (`nightly-2026-09-09`, the nightly every fuzz driver was verified on
   locally; bump it in nightly.yml and cache.yml together). Verified locally
   in a fresh target dir: after the producer commands, cargo-mutants'
@@ -877,13 +877,13 @@ Next steps (roughly in order of value):
       if !*done && t.elapsed_secs() > 5.0 {
           *done = true;
           c.spawn(bevy::render::view::screenshot::Screenshot::primary_window())
-              .observe(bevy::render::view::screenshot::save_to_disk("/tmp/p23_shot.png"));
+              .observe(bevy::render::view::screenshot::save_to_disk("/tmp/bevy_markup_shot.png"));
       }
   });
   ```
 
 - DOM outlines (`HtmlDebugOutline`) are logged at `debug`:
-  `RUST_LOG=p23=debug timeout 15 cargo run --example demo`.
+  `RUST_LOG=bevy_markup=debug timeout 15 cargo run --example demo`.
 - Pointer interaction: write `bevy::window::WindowEvent::{CursorMoved,
   MouseWheel, MouseButtonInput}` messages from a throwaway system (move, then
   press and release in later frames), then check state. Real input sometimes

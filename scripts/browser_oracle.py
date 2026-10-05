@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Record a real browser's computed styles (and layout) for p23 test vectors.
+"""Record a real browser's computed styles (and layout) for bevy_markup test vectors.
 
 For each vector directory (default: every `tests/vectors/*/` holding
 `page.html` + `style.css`) this builds a page with
 
     <style>* { all: unset }</style>   (no browser defaults)
-    <style>{P23_CSS}</style>          (p23's own defaults and layout model)
+    <style>{BEVY_MARKUP_CSS}</style>          (bevy_markup's own defaults and layout model)
     <style>{style.css}</style>
     <body>{page.html}<script>{collector}</script></body>
 
@@ -14,7 +14,7 @@ writes `browser.json` next to the inputs: computed styles per element
 (document order, `html` first) and the parent element's text style per
 non-whitespace text node. For `layout_*` vectors each element also gets its
 border box (`getBoundingClientRect`). The Rust tests `browser_oracle` and
-`layout_oracle` in `tests/html_ui.rs` compare p23's output against it; no
+`layout_oracle` in `tests/html_ui.rs` compare bevy_markup's output against it; no
 browser is needed to run the tests.
 
 Oracle vectors must be plain HTML (no Tera syntax, no `data-l10n-id`): the
@@ -29,7 +29,7 @@ Usage:
 
 Only the Python standard library is required, plus cargo and a
 Chromium/Chrome binary (found on PATH, or given with --browser /
-$P23_BROWSER).
+$BEVY_MARKUP_BROWSER).
 """
 
 import argparse
@@ -50,18 +50,18 @@ BROWSERS = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stab
 VIEWPORT = (640, 480)
 DEFAULT_FONT = "FiraMono-subset.ttf"
 
-# p23's defaults and layout model as CSS, between the reset and the vector's
+# bevy_markup's defaults and layout model as CSS, between the reset and the vector's
 # stylesheet. Keep in sync with `src/build.rs`: the `HtmlUi` root (the test
 # spawns a full-width column) and containers are flex columns, so mixed
-# inline content in them becomes one item per piece, as p23 does; blocks are
-# blocks; containers and blocks don't shrink (p23's `flex_shrink: 0`); text
+# inline content in them becomes one item per piece, as bevy_markup does; blocks are
+# blocks; containers and blocks don't shrink (bevy_markup's `flex_shrink: 0`); text
 # defaults to white in Bevy's default font at Bevy's default line height
-# (1.2); `li` gets p23's indent and bullet text; `pre` keeps whitespace,
-# doesn't wrap and has p23's 8px padding.
-P23_CSS = """
-@font-face { font-family: "p23 default"; src: url("FiraMono-subset.ttf"); }
+# (1.2); `li` gets bevy_markup's indent and bullet text; `pre` keeps whitespace,
+# doesn't wrap and has bevy_markup's 8px padding.
+BEVY_MARKUP_CSS = """
+@font-face { font-family: "bevy_markup default"; src: url("FiraMono-subset.ttf"); }
 html { display: flex; flex-direction: column; color: #ffffff;
-       font-family: "p23 default"; font-size: 16px; line-height: 1.2; }
+       font-family: "bevy_markup default"; font-size: 16px; line-height: 1.2; }
 body, div, section, article, header, footer, main, nav, aside, ul, ol,
 blockquote, figure, form { display: flex; flex-direction: column; flex-shrink: 0; }
 h1, h2, h3, h4, h5, h6, p, li, pre { display: block; flex-shrink: 0; }
@@ -124,7 +124,7 @@ COLLECTOR = r"""
     };
     visit(document.body);
     const out = document.createElement("pre");
-    out.id = "p23-oracle";
+    out.id = "bevy_markup-oracle";
     out.textContent = JSON.stringify({ elements, runs });
     document.body.append(out);
   });
@@ -147,10 +147,10 @@ def default_font():
 
 
 def find_browser(explicit):
-    for candidate in [explicit, os.environ.get("P23_BROWSER"), *BROWSERS]:
+    for candidate in [explicit, os.environ.get("BEVY_MARKUP_BROWSER"), *BROWSERS]:
         if candidate and (path := shutil.which(candidate)):
             return path
-    sys.exit("no Chromium/Chrome found; pass --browser PATH or set P23_BROWSER")
+    sys.exit("no Chromium/Chrome found; pass --browser PATH or set BEVY_MARKUP_BROWSER")
 
 
 def browser_version(browser):
@@ -169,11 +169,11 @@ def record(browser, vector, font):
 
     document = (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
-        f"<style>* {{ all: unset; }}</style><style>{P23_CSS}</style>"
+        f"<style>* {{ all: unset; }}</style><style>{BEVY_MARKUP_CSS}</style>"
         f"<style>{css}</style></head><body>{page}"
         f"<script>{COLLECTOR}</script></body></html>"
     )
-    with tempfile.TemporaryDirectory(prefix="p23-oracle-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="bevy_markup-oracle-") as tmp:
         harness = Path(tmp) / "index.html"
         harness.write_text(document, encoding="utf-8")
         shutil.copy(font, Path(tmp) / DEFAULT_FONT)
@@ -196,7 +196,7 @@ def record(browser, vector, font):
             check=True,
         )
         base = Path(tmp).as_uri() + "/"
-    match = re.search(r'<pre id="p23-oracle">(.*?)</pre>', result.stdout, re.S)
+    match = re.search(r'<pre id="bevy_markup-oracle">(.*?)</pre>', result.stdout, re.S)
     if not match:
         sys.exit(f"{vector}: collector output missing; browser stderr:\n{result.stderr}")
     data = json.loads(html.unescape(match.group(1)))

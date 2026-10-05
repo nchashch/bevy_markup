@@ -12,7 +12,7 @@ use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
 use bevy::image::{CompressedImageFormats, ImageLoader};
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource};
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 
 pub const FRAME_PNG: &[u8] = include_bytes!("../fixtures/frame.png"); // 32×24
 
@@ -92,7 +92,7 @@ impl TestUi {
     fn build(name: &str, files: &[(&str, &str)], viewport: Option<UVec2>) -> Self {
         static RUN: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "p23-test-{name}-{}-{}",
+            "bevy_markup-test-{name}-{}-{}",
             std::process::id(),
             RUN.fetch_add(1, Ordering::Relaxed)
         ));
@@ -183,7 +183,7 @@ impl TestUi {
 
     /// A layout vector from `tests/vectors/<name>/` (`page.html` +
     /// `style.css`, see [`with_layout`](Self::with_layout)) under a
-    /// full-width column root, the way p23 apps set up their `HtmlUi` node.
+    /// full-width column root, the way bevy_markup apps set up their `HtmlUi` node.
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn from_layout_vector(name: &str, viewport: UVec2) -> Self {
         let dir = vectors_dir().join(name);

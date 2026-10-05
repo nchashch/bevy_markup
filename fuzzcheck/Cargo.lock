@@ -796,6 +796,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_markup"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_fluent",
+ "fluent",
+ "lightningcss",
+ "ron",
+ "serde",
+ "serde_json",
+ "tera",
+ "tl",
+ "unic-langid",
+ "wgpu-types",
+]
+
+[[package]]
+name = "bevy_markup_fuzzcheck"
+version = "0.0.0"
+dependencies = [
+ "bevy_markup",
+ "fuzzcheck",
+]
+
+[[package]]
 name = "bevy_material"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3072,31 +3097,6 @@ name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
-
-[[package]]
-name = "p23"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_fluent",
- "fluent",
- "lightningcss",
- "ron",
- "serde",
- "serde_json",
- "tera",
- "tl",
- "unic-langid",
- "wgpu-types",
-]
-
-[[package]]
-name = "p23-fuzzcheck"
-version = "0.0.0"
-dependencies = [
- "fuzzcheck",
- "p23",
-]
 
 [[package]]
 name = "parcel_selectors"

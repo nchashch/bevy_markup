@@ -2,7 +2,7 @@
 //! fuzzcheck instead. Contract: never panics. Run with `cargo +nightly
 //! fuzzcheck --test <name> fuzz_<name> --stop-after-duration 60` from this
 //! directory.
-use p23 as _p23;
+use bevy_markup as _bevy_markup;
 
 #[test]
 fn fuzz_html() {
@@ -16,7 +16,7 @@ fn fuzz_html() {
             // No delimiter: render with an empty context.
             None => (text.as_ref(), "{}"),
         };
-        let _ = p23::fuzz::render_html(source, context_json);
+        let _ = bevy_markup::fuzz::render_html(source, context_json);
     })
     .default_options()
     .launch();

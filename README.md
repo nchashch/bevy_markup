@@ -1,11 +1,11 @@
-# p23
+# bevy_markup
 
 Write game UI the way you'd write a web page, and get native
 [Bevy](https://bevyengine.org) UI out of it.
 
-p23 is a Bevy 0.19 library. You describe a piece of UI as an HTML template,
+bevy_markup is a Bevy 0.19 library. You describe a piece of UI as an HTML template,
 style it with CSS, and translate it with [Fluent](https://projectfluent.org);
-p23 turns that into ordinary Bevy UI entities (`Node`, `Text`, `TextSpan`,
+bevy_markup turns that into ordinary Bevy UI entities (`Node`, `Text`, `TextSpan`,
 `ImageNode`). No browser, no web view: the result is plain Bevy UI that lays
 out with Bevy's own flexbox and renders like everything else in your game.
 
@@ -45,7 +45,7 @@ hello-coins =
 
 ```rust
 use bevy::prelude::*;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 
 fn main() {
     App::new()
@@ -104,12 +104,12 @@ flowchart LR
    `HtmlElements` system parameter and attach behaviour after every build
    (the `HtmlUiBuilt` event).
 
-When only the styling changes (a new theme, a reloaded stylesheet), p23
+When only the styling changes (a new theme, a reloaded stylesheet), bevy_markup
 restyles the existing entities in place instead of rebuilding them.
 
 ### What's supported
 
-p23 implements a useful subset of the web, not all of it:
+bevy_markup implements a useful subset of the web, not all of it:
 
 - **HTML:** headings, paragraphs, lists, `pre`, inline elements, and
   containers as nested flex nodes.
@@ -140,22 +140,22 @@ not in this repository yet.
 
 A UI library is easy to get subtly wrong: a rule that applies in the wrong
 order, a translation that never updates, a layout that's a few pixels off,
-or a crash on input nobody thought of. p23 checks itself in layers, each
+or a crash on input nobody thought of. bevy_markup checks itself in layers, each
 catching a different kind of mistake.
 
 **Examples, written down.** Unit tests cover the small pieces (CSS value
 mapping, the cascade, the rebuild logic). Test *vectors* are complete small
 pages in `tests/vectors/`: HTML, CSS, sometimes translations, plus the
-expected result. A headless test harness runs p23 inside a real Bevy app
+expected result. A headless test harness runs bevy_markup inside a real Bevy app
 without a window and compares a text dump of the resulting UI tree with the
 expected one.
 
 **Compared against the real thing.** For vectors, the expected results don't
-come from p23 itself. Two *oracles* produce them independently:
+come from bevy_markup itself. Two *oracles* produce them independently:
 
 - headless Chrome computes the CSS (styles and layout positions) of every
-  vector, and p23's output must match what the browser does;
-- Mozilla's own `@fluent/dom` translates the Fluent vectors, and p23 must
+  vector, and bevy_markup's output must match what the browser does;
+- Mozilla's own `@fluent/dom` translates the Fluent vectors, and bevy_markup must
   produce the same text.
 
 Both reference outputs are committed, and CI checks nightly that the current

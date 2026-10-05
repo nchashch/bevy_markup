@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Line coverage of p23's library code (src/) per testing layer, and merged.
+"""Line coverage of bevy_markup's library code (src/) per testing layer, and merged.
 
 Each layer runs alone under source-based coverage (cargo-llvm-cov) and is
 exported as lcov. The report shows, per layer, the src/ lines it covers and
@@ -16,7 +16,7 @@ uncovered.txt. Needs `cargo install cargo-llvm-cov` and
 `rustup component add llvm-tools-preview`.
 
 Not covered here: golden images (they need a GPU adapter and exercise
-Bevy's rendering, not p23's logic) and doc tests. src/fuzz.rs (test-only
+Bevy's rendering, not bevy_markup's logic) and doc tests. src/fuzz.rs (test-only
 glue behind the `fuzzing` feature) is excluded from the denominator.
 """
 

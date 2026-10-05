@@ -48,7 +48,7 @@ fi
 export WGPU_BACKEND=vulkan
 unset WGPU_ADAPTER_NAME
 if [ "${1:-}" = --update ]; then
-    export P23_UPDATE_GOLDEN=1
+    export BEVY_MARKUP_UPDATE_GOLDEN=1
 fi
 cd "$root"
 exec cargo test --test golden -- --ignored --nocapture

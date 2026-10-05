@@ -1,6 +1,6 @@
-# Testing p23
+# Testing bevy_markup
 
-How to write tests, run them, and find bugs with p23's testing harness. It
+How to write tests, run them, and find bugs with bevy_markup's testing harness. It
 covers unit tests, the headless test vectors and oracles, the property
 frameworks, the fuzzers, golden images and mutation testing. `AGENTS.md`
 (Testing, Testing TODO, Gotchas, Verification) has the history and the
@@ -41,9 +41,9 @@ Rules that always hold:
 |---|---|---|
 | Unit tests | `#[cfg(test)] mod tests` in `src/*.rs` | logic of pure pieces: cascade matching and property mapping, entity decoding, Fluent args, font fallback, the rebuild state machine |
 | Test vectors | `tests/html_ui.rs`, `tests/vectors/<name>/` | the HTML/CSS/Fluent/Tera → Bevy world mapping, through the real pipeline, headless |
-| CSS oracle | `browser_oracle` test + `browser.json` | p23's computed styles vs headless Chromium |
+| CSS oracle | `browser_oracle` test + `browser.json` | bevy_markup's computed styles vs headless Chromium |
 | Layout oracle | `layout_oracle` test + `layout_*` vectors | Bevy UI's real layout rects vs Chromium's |
-| Fluent oracle | `fluent_oracle` test + `fluent.html` | p23's localization vs `@fluent/dom` |
+| Fluent oracle | `fluent_oracle` test + `fluent.html` | bevy_markup's localization vs `@fluent/dom` |
 | Metamorphic properties | `tests/properties.rs` (proptest + test-strategy) | relationships that must hold for any input |
 | Layout properties | `tests/layout_properties.rs` | flexbox invariants over generated sizes |
 | Reference models | `tests/quickcheck.rs` | cascade results vs an independent precedence model |
@@ -156,17 +156,17 @@ tests needs no browser or Node.
 ### CSS and layout oracle (`scripts/browser_oracle.py`)
 
 The script loads each vector in headless Chromium as `* { all: unset }` +
-`P23_CSS` + the vector's `style.css` + `page.html`, and records
+`BEVY_MARKUP_CSS` + the vector's `style.css` + `page.html`, and records
 `getComputedStyle` per element (and `getBoundingClientRect` for `layout_*`
 vectors) into `browser.json`.
 
-- `P23_CSS` expresses p23's own defaults and layout model as CSS: root and
+- `BEVY_MARKUP_CSS` expresses bevy_markup's own defaults and layout model as CSS: root and
   containers are flex columns, blocks are blocks, nothing shrinks, white
   text in Bevy's default font at line height 1.2, the `li` indent and
   bullet, `pre` with 8 px padding. Keep it in sync with `src/build.rs`.
 - Vectors must be plain HTML (no Tera syntax, no `data-l10n-id`). Set
   `color` on `html` (browsers default to black) and `border-style: solid`
-  wherever border widths matter (p23 ignores `border-style`).
+  wherever border widths matter (bevy_markup ignores `border-style`).
 - Layout vectors (`layout_*`) must not set `font-family`, must be ASCII
   only, and should use font sizes whose 1.2 line height is a whole number:
   Bevy rounds every text node up to a whole pixel, browsers don't.
@@ -182,8 +182,8 @@ vectors) into `browser.json`.
 The script runs `@fluent/dom` in jsdom over each vector's `page.html` +
 `messages.ftl` and writes the translated DOM to `fluent.html`, with
 fluent-dom's warnings as comments at the top. The `fluent_oracle` test
-requires p23's localized build to equal p23's build of `fluent.html`, and
-prints a line diff (`-` fluent-dom, `+` p23).
+requires bevy_markup's localized build to equal bevy_markup's build of `fluent.html`, and
+prints a line diff (`-` fluent-dom, `+` bevy_markup).
 
 Deliberate differences (no sanitizing of translation markup, escaped string
 arguments, fluent-rs number formatting) stay out of oracle vectors and are
@@ -291,7 +291,7 @@ the matching package into `target/golden-lavapipe/`.
 
 ## Fuzzing
 
-All fuzzers drive the `#[doc(hidden)]` `p23::fuzz` harness (feature
+All fuzzers drive the `#[doc(hidden)]` `bevy_markup::fuzz` harness (feature
 `fuzzing`), which calls the internal glue directly: `render_html`,
 `cascade`, `translate`. Contract: arbitrary input may return `Err` or any
 output, but must never panic, hang or abort.
@@ -359,7 +359,7 @@ test catches.
   (cargo-mutants copies the tree and ignores nested `.gitignore`s) and puts
   them back on exit.
 - `-j` and `--minimum-test-timeout` are set by the script: use
-  `P23_MUTANTS_JOBS` and `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT`.
+  `BEVY_MARKUP_MUTANTS_JOBS` and `CARGO_MUTANTS_MINIMUM_TEST_TIMEOUT`.
 - To rerun specific survivors: `--re '^(src/build\.rs:625:9|…):'` anchored on
   `file:line:col`. cargo-mutants 27.1 doesn't apply `--re` to
   struct-field-deletion mutants; they always run.
@@ -413,7 +413,7 @@ scripts/coverage.py --layer stateful --layer unit
    - stateful: the minimal op sequence is printed; replay it as a small
      throwaway test if it's timing-dependent.
    - oracle diff: the failure names the element and both values.
-3. **Decide who's wrong.** Oracle and spec beat p23 unless the difference is
+3. **Decide who's wrong.** Oracle and spec beat bevy_markup unless the difference is
    deliberate. If it is, list it as an allowed difference with a reason.
 4. **Write the regression test first**, watch it fail, then fix the code.
    Prefer the fastest layer that catches it (a unit test over a full app).
@@ -444,7 +444,7 @@ discovery order) and a row in `docs/agents/bugs/INDEX.md`. Include:
 
 Use the existing reports as templates.
 
-A defect in a dependency or tool (whether found as a p23 bug or while
+A defect in a dependency or tool (whether found as a bevy_markup bug or while
 setting up a tool) also gets an entry in `docs/agents/bugs/UPSTREAM.md`:
 reproduction, the local workaround and where it lives, a PR sketch, and a
 status from unreported to fixed upstream. That's the list to work from when
@@ -480,7 +480,7 @@ from GitHub's 7-day eviction. The key is the toolchain version plus every
 manifests and lockfiles, so producer and consumer must agree on all of them:
 change a job's `env` or toolchain only together with its pair (comments in
 the workflows mark them). A consumer that misses logs a `::warning::` and
-builds from scratch. The fuzz jobs use a dated nightly (`P23_NIGHTLY` in
+builds from scratch. The fuzz jobs use a dated nightly (`BEVY_MARKUP_NIGHTLY` in
 nightly.yml and cache.yml; `scripts/fuzz-libfuzzer.sh` honours it), because
 a floating nightly changes the key every day. Coverage (instrumented
 `RUSTFLAGS`) and the fuzz-driver checks keep their own per-job caches;

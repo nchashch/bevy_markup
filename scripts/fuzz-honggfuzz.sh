@@ -1,5 +1,5 @@
 #!/bin/sh
-# honggfuzz-rs (hardware-counter feedback) over p23::fuzz harnesses.
+# honggfuzz-rs (hardware-counter feedback) over bevy_markup::fuzz harnesses.
 # Usage: scripts/fuzz-honggfuzz.sh <html|css|ftl> [seconds]
 #
 # HFUZZ_BUILD_ARGS points cargo at the honggfuzz manifest and overrides the

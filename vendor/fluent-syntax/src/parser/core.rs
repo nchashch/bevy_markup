@@ -7,7 +7,7 @@ use crate::ast;
 
 pub type Result<T, E = ParserError> = std::result::Result<T, E>;
 
-// PATCH(p23): placeables nest recursively (placeable → expression → inline
+// PATCH(bevy_markup): placeables nest recursively (placeable → expression → inline
 // expression or select variant → placeable) and upstream has no limit, so a
 // few KB of `{{{…}}}` overflow the stack (bug_0015: a debug build on a 2 MB
 // thread overflowed between 200 and 400 levels). Real translations nest a
@@ -18,7 +18,7 @@ pub struct Parser<S> {
     pub(super) source: S,
     pub(super) ptr: usize,
     pub(super) length: usize,
-    // PATCH(p23): current placeable nesting (see MAX_PLACEABLE_DEPTH).
+    // PATCH(bevy_markup): current placeable nesting (see MAX_PLACEABLE_DEPTH).
     pub(super) depth: usize,
 }
 
@@ -297,7 +297,7 @@ where
     }
 
     pub(super) fn get_placeable(&mut self) -> Result<ast::Expression<S>> {
-        // PATCH(p23): bound the recursion (see MAX_PLACEABLE_DEPTH). The
+        // PATCH(bevy_markup): bound the recursion (see MAX_PLACEABLE_DEPTH). The
         // entry fails as Junk and parsing resumes at the next entry.
         if self.depth >= MAX_PLACEABLE_DEPTH {
             return error!(ErrorKind::PlaceableNestingTooDeep, self.ptr);

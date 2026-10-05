@@ -63,12 +63,12 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
-      P23_NIGHTLY: nightly-2026-09-09 # = nightly.yml
+      BEVY_MARKUP_NIGHTLY: nightly-2026-09-09 # = nightly.yml
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.P23_NIGHTLY }}
+          toolchain: ${{ env.BEVY_MARKUP_NIGHTLY }}
       - id: cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -85,4 +85,4 @@ jobs:
         working-directory: fuzz
         run: |
           host=$(rustc -vV | sed -n 's/^host: //p')
-          cargo "+$P23_NIGHTLY" fuzz build --target "$host"
+          cargo "+$BEVY_MARKUP_NIGHTLY" fuzz build --target "$host"

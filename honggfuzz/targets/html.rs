@@ -10,7 +10,7 @@ fn main() {
                 // No delimiter: render with an empty context.
                 None => (text.as_ref(), "{}"),
             };
-            let _ = p23::fuzz::render_html(source, context_json);
+            let _ = bevy_markup::fuzz::render_html(source, context_json);
         });
     }
 }

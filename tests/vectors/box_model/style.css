@@ -1,4 +1,4 @@
-/* `border-style: solid` is ignored by p23 but needed by browsers, which
+/* `border-style: solid` is ignored by bevy_markup but needed by browsers, which
    compute border widths as 0 without a style. */
 html {
   color: #ffffff; font-family: Spectral; font-size: 20px;

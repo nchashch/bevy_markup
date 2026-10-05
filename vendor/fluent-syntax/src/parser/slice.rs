@@ -11,7 +11,7 @@ pub trait Slice<'s>: AsRef<str> + Clone + PartialEq {
 
 impl<'s> Slice<'s> for String {
     fn slice(&self, range: Range<usize>) -> Self {
-        // PATCH(p23): the parser computes some ranges in bytes minus one or
+        // PATCH(bevy_markup): the parser computes some ranges in bytes minus one or
         // with byte guesses, which can land inside a multi-byte character.
         // Clamp to char boundaries instead of panicking.
         let start = clamp_boundary(self, range.start);
@@ -26,7 +26,7 @@ impl<'s> Slice<'s> for String {
 
 impl<'s> Slice<'s> for &'s str {
     fn slice(&self, range: Range<usize>) -> Self {
-        // PATCH(p23): see the `String` impl above.
+        // PATCH(bevy_markup): see the `String` impl above.
         let start = clamp_boundary(self, range.start);
         let end = clamp_boundary(self, range.end);
         &self[start..end]
@@ -37,7 +37,7 @@ impl<'s> Slice<'s> for &'s str {
     }
 }
 
-// PATCH(p23): nearest char boundary at or before `index` (see `Slice::slice`).
+// PATCH(bevy_markup): nearest char boundary at or before `index` (see `Slice::slice`).
 fn clamp_boundary(source: &str, index: usize) -> usize {
     let index = index.min(source.len());
     if source.is_char_boundary(index) {

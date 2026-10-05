@@ -3,6 +3,11 @@
 Upstream defects (in dependencies and tools) are also tracked in
 [UPSTREAM.md](UPSTREAM.md) until they're reported and fixed upstream.
 
+The crate was called `p23` until 2026-10-05 and is now `bevy_markup`; the
+reports keep the name, paths and commands as they were at the time
+(`p23::fuzz` is now `bevy_markup::fuzz`, `P23_*` variables are
+`BEVY_MARKUP_*`).
+
 Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below

@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use p23::prelude::NineSliceFrame;
+use bevy_markup::prelude::NineSliceFrame;
 use crate::consts::{BODY_COLOR, BODY_FONT_PATH, FRAME_PATH, HEADER_COLOR, HEADER_FONT_PATH};
 
 const BUTTON_IDLE: Color = Color::srgb_u8(40, 40, 46);

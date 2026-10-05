@@ -11,7 +11,7 @@ fn main() {
             else {
                 return;
             };
-            let _ = p23::fuzz::translate(ftl, id, args);
+            let _ = bevy_markup::fuzz::translate(ftl, id, args);
         });
     }
 }

@@ -377,7 +377,7 @@ pub fn read_prf_data(prf_data: &[u8]) -> Result<Vec<PrfData>, ReadCovMapError> {
         let _values = read_u64(prf_data, &mut idx); // values are only used for PGO, not coverage instrumentation
         let _extra = read_u64(prf_data, &mut idx);
 
-        // PATCH(p23): current LLVM (rustc 1.100-nightly) — the record is
+        // PATCH(bevy_markup): current LLVM (rustc 1.100-nightly) — the record is
         // 9 × u64 = 72 bytes; NumCounters sits at offset 0x38 (verified
         // against the section of a `-C instrument-coverage` build: the
         // per-function counter totals match the `__llvm_prf_cnts` section).
@@ -395,7 +395,7 @@ pub fn read_prf_data(prf_data: &[u8]) -> Result<Vec<PrfData>, ReadCovMapError> {
         });
     }
 
-    // PATCH(p23): diagnostic
+    // PATCH(bevy_markup): diagnostic
     eprintln!(
         "DIAG prf_data: {} records, {} counters total",
         counts.len(),

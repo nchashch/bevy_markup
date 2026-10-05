@@ -97,7 +97,7 @@ pub(crate) struct LayoutDecl {
     pub margin: [Option<Val>; 4],
     /// `column-gap` (or `gap`'s column part) in px.
     pub column_gap: Option<f32>,
-    /// `box-sizing` (p23's nodes default to CSS's `content-box`).
+    /// `box-sizing` (bevy_markup's nodes default to CSS's `content-box`).
     pub box_sizing: Option<BoxSizing>,
 }
 

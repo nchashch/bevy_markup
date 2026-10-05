@@ -2,7 +2,7 @@
 //! fuzzcheck instead. Contract: never panics. Run with `cargo +nightly
 //! fuzzcheck --test <name> fuzz_<name> --stop-after-duration 60` from this
 //! directory.
-use p23 as _p23;
+use bevy_markup as _bevy_markup;
 
 #[test]
 fn fuzz_ftl() {
@@ -17,7 +17,7 @@ fn fuzz_ftl() {
         else {
             return;
         };
-        let _ = p23::fuzz::translate(ftl, id, args);
+        let _ = bevy_markup::fuzz::translate(ftl, id, args);
     })
     .default_options()
     .launch();

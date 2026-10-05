@@ -6,7 +6,7 @@
 //!
 //! ```no_run
 //! # use bevy::prelude::*;
-//! # use p23::prelude::*;
+//! # use bevy_markup::prelude::*;
 //! fn register(asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
 //!     fonts
 //!         .insert(

@@ -1,8 +1,8 @@
 # Upstream issues
 
-Defects in dependencies and tools that p23 works around locally, tracked so
+Defects in dependencies and tools that bevy_markup works around locally, tracked so
 they can be reported upstream (issue and/or pull request) and the local
-workarounds removed once upstream releases a fix. p23's own bugs are in
+workarounds removed once upstream releases a fix. bevy_markup's own bugs are in
 `INDEX.md`; entries here link to a bug report when one exists.
 
 Status per entry: **unreported** → **reported** (issue link) → **PR open**
@@ -12,7 +12,7 @@ the issue may already be fixed or reported.
 
 ## Summary
 
-| # | Project | Issue | Impact on p23 | Local workaround | Status |
+| # | Project | Issue | Impact on bevy_markup | Local workaround | Status |
 |---|---|---|---|---|---|
 | U1 | fluent-syntax (fluent-rs) | Slicing panics inside multi-byte characters ([bug_0005](bug_0005.md)) | panic from any FTL asset | vendored patch | unreported |
 | U2 | fluent-syntax (fluent-rs) | Unbounded placeable nesting overflows the stack ([bug_0015](bug_0015.md)) | stack overflow (abort) from a few KB of FTL | vendored patch | unreported |
@@ -38,7 +38,7 @@ the issue may already be fixed or reported.
   panics with "byte index … is not a char boundary". A second variant: a
   long error context of multi-byte characters
   (`format!("x = {}{{{}", "é".repeat(48), "é")`).
-- **Local fix:** `vendor/fluent-syntax/src/parser/slice.rs` (`PATCH(p23)`)
+- **Local fix:** `vendor/fluent-syntax/src/parser/slice.rs` (`PATCH(bevy_markup)`)
   rounds ranges up to the next char boundary, wired via `[patch.crates-io]`
   in the root, `fuzz/`, `honggfuzz/` and `fuzzcheck/` manifests.
   Regression tests: `src/fuzz.rs`
@@ -61,7 +61,7 @@ the issue may already be fixed or reported.
 - **Reproduction:**
   `FluentResource::try_new(format!("x = {}\"a\"{}\n", "{".repeat(100_000), "}".repeat(100_000)))`
   aborts with a stack overflow.
-- **Local fix:** `vendor/fluent-syntax/src/parser/core.rs` (`PATCH(p23)`):
+- **Local fix:** `vendor/fluent-syntax/src/parser/core.rs` (`PATCH(bevy_markup)`):
   a depth counter in `get_placeable`, the single choke point for both
   `parse` and `parse_runtime`, returns the new
   `ErrorKind::PlaceableNestingTooDeep` past `MAX_PLACEABLE_DEPTH` = 100; the
@@ -99,7 +99,7 @@ the issue may already be fixed or reported.
   `-C instrument-coverage` section dump), so counter counts and offsets are
   garbage.
 - **Local fix:** `fuzzcheck/vendor/fuzzcheck/src/code_coverage_sensor/llvm_coverage.rs`
-  (`PATCH(p23)`): read the relative counter pointer as a signed offset,
+  (`PATCH(bevy_markup)`): read the relative counter pointer as a signed offset,
   track `counter_offset` per record, read NumCounters at the new offset.
   It also prints a `DIAG prf_data` line (a debugging leftover to drop
   before upstreaming).
@@ -132,7 +132,7 @@ the issue may already be fixed or reported.
   27.1.0.
 - **Problem:** `--re` and `--exclude-re` select mutants by name, but
   "delete field `x` from struct `Y` expression" mutants are always included,
-  even when their name matches neither filter. Reproduction in p23: a regex
+  even when their name matches neither filter. Reproduction in bevy_markup: a regex
   matching no mutant at all, e.g.
   `cargo mutants --list --re '^src/nonexistent\.rs:'`, still lists every
   struct-field deletion in the crate (31 on 2026-10-04).

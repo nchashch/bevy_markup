@@ -1,7 +1,7 @@
 {
-  "name": "p23-fluent-oracle",
+  "name": "bevy_markup-fluent-oracle",
   "private": true,
-  "description": "Reference Fluent DOM translation (@fluent/dom in jsdom) for p23 test vectors",
+  "description": "Reference Fluent DOM translation (@fluent/dom in jsdom) for bevy_markup test vectors",
   "type": "module",
   "dependencies": {
     "@fluent/bundle": "0.19.1",

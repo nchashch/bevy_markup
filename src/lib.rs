@@ -1,4 +1,4 @@
-//! # p23 — HTML + CSS + Fluent + Tera as Bevy UI
+//! # bevy_markup — HTML + CSS + Fluent + Tera as Bevy UI
 //!
 //! Write UI as HTML templates; get Bevy UI nodes.
 //!
@@ -12,7 +12,7 @@
 //!
 //! ```no_run
 //! use bevy::prelude::*;
-//! use p23::prelude::*;
+//! use bevy_markup::prelude::*;
 //!
 //! fn main() {
 //!     App::new()
@@ -109,7 +109,7 @@ pub mod template;
 /// Dependencies whose types appear in this crate's API.
 pub use {bevy_fluent, lightningcss, tera, tl};
 
-/// Everything needed to build HTML UIs: `use p23::prelude::*;`.
+/// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {
     pub use crate::fonts::{FontFaces, FontFamilies, GenericFamily};
     pub use crate::html::{

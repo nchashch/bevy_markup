@@ -1,11 +1,11 @@
 [package]
-name = "p23-test-fuzz"
+name = "bevy_markup_test_fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
 
 [dependencies]
-p23 = { path = "..", features = ["fuzzing"] }
+bevy_markup = { path = "..", features = ["fuzzing"] }
 
 [dev-dependencies]
 serde = "1.0.229"

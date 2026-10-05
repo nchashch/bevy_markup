@@ -6,7 +6,7 @@
 //!
 //! `#[ignore]`d (needs a GPU adapter; plain `cargo test` must not depend on
 //! one). Run with `scripts/golden.sh`, which pins the software rasterizer
-//! the references were recorded with. `P23_UPDATE_GOLDEN=1` rewrites the
+//! the references were recorded with. `BEVY_MARKUP_UPDATE_GOLDEN=1` rewrites the
 //! references instead of comparing. On mismatch the actual image and a diff
 //! (differing pixels red over a dimmed reference) are written under
 //! `target/tmp/golden/` and their paths printed.
@@ -31,7 +31,7 @@ use bevy::render::render_resource::{
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::ExitCondition;
-use p23::prelude::*;
+use bevy_markup::prelude::*;
 
 const FRAME_PNG: &[u8] = include_bytes!("fixtures/frame.png");
 
@@ -86,7 +86,7 @@ struct Builds(usize);
 #[ignore = "needs a GPU adapter; run scripts/golden.sh"]
 fn golden_scenes() {
     let started = Instant::now();
-    let root = std::env::temp_dir().join(format!("p23-golden-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("bevy_markup-golden-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let mut app = render_app(&root);
     let adapter = app.world().resource::<RenderAdapterInfo>().0.clone();
@@ -104,7 +104,7 @@ fn golden_scenes() {
     std::fs::remove_dir_all(&root).ok();
     eprintln!("golden: rendered in {:.1?}", started.elapsed());
 
-    let update = std::env::var_os("P23_UPDATE_GOLDEN").is_some_and(|v| v != "0");
+    let update = std::env::var_os("BEVY_MARKUP_UPDATE_GOLDEN").is_some_and(|v| v != "0");
     // Drop a previous run's actual/diff images so only this run's remain.
     std::fs::remove_dir_all(failure_dir()).ok();
     let mut failures = Vec::new();
@@ -375,7 +375,7 @@ fn compare(name: &str, expected_path: &Path, actual: &Rgba) -> Result<(), String
     let Some(expected) = Rgba::load(expected_path) else {
         actual.save(&actual_path);
         return Err(format!(
-            "{name}: no reference {} (actual: {}; P23_UPDATE_GOLDEN=1 records it)",
+            "{name}: no reference {} (actual: {}; BEVY_MARKUP_UPDATE_GOLDEN=1 records it)",
             expected_path.display(),
             actual_path.display()
         ));
