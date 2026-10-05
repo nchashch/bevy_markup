@@ -1,0 +1,14 @@
+{# Rendered by Tera first, then parsed by tl. #}
+<section class="inventory">
+  <h1 class="{% if hp < max_hp / 2 %}hurt{% else %}healthy{% endif %}">
+    {{ player | title }}
+  </h1>
+  <p>HP {{ hp }} / {{ max_hp }}</p>
+  <ul>
+    {% for item in items %}
+    <li {% if item.count == 0 %}class="empty"{% endif %} data-index="{{ loop.index }}">
+      {{ item.name | upper }} x{{ item.count }}
+    </li>
+    {% endfor %}
+  </ul>
+</section>

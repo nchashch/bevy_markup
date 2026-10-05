@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 
 use bevy_markup::prelude::NineSliceFrame;
-use crate::consts::{BODY_COLOR, BODY_FONT_PATH, FRAME_PATH, HEADER_COLOR, HEADER_FONT_PATH};
+use crate::consts::{text_font, BODY_COLOR, BODY_FONT, FRAME_PATH, HEADER_COLOR, HEADER_FONT};
 
 const BUTTON_IDLE: Color = Color::srgb_u8(40, 40, 46);
 const BUTTON_HOVER: Color = Color::srgb_u8(64, 64, 72);
@@ -35,9 +35,7 @@ pub(super) fn spawn_selector_panel<'a>(
     position: Node,
     marker: impl Bundle,
 ) {
-    let label_font = TextFont::default()
-        .with_font(asset_server.load(BODY_FONT_PATH))
-        .with_font_size(18.0);
+    let label_font = text_font(BODY_FONT, 18.0);
 
     commands
         .spawn((
@@ -53,9 +51,7 @@ pub(super) fn spawn_selector_panel<'a>(
         .with_children(|panel| {
             panel.spawn((
                 Text::new(title),
-                TextFont::default()
-                    .with_font(asset_server.load(HEADER_FONT_PATH))
-                    .with_font_size(24.0),
+                text_font(HEADER_FONT, 24.0),
                 TextColor(HEADER_COLOR),
             ));
             panel

@@ -1,0 +1,53 @@
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  /* 9-slice frame: image relative to this file, 16px insets, center drawn. */
+  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-width: 16px;
+  padding: 20px 32px;
+}
+
+h1 {
+  color: #f0b429;
+  font-size: 44px;
+  font-weight: bold;
+}
+
+b {
+  color: #ffffff;
+  font-weight: bold;
+}
+
+em {
+  color: #f0b429;
+  font-style: italic;
+}
+
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+/* Classes (and ids) work like in browsers: `.action` beats `p`. */
+.action {
+  color: #f0b429;
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 4px 16px;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}
+
+/* Containers (div, section, ul, …) are nodes too: frame and space them. */
+.wallet {
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 12px 16px;
+  background-color: #1a1a1a;
+  gap: 8px;
+}

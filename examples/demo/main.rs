@@ -15,7 +15,14 @@ use bevy_markup::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, BevyMarkupPlugin))
+        .add_plugins((
+            // The example assets live beside the examples, not in ./assets.
+            DefaultPlugins.set(AssetPlugin {
+                file_path: "examples/assets".into(),
+                ..default()
+            }),
+            BevyMarkupPlugin,
+        ))
         .insert_resource(ClearColor(Color::srgb_u8(20, 24, 32)))
         .add_systems(
             Startup,
@@ -35,22 +42,20 @@ fn main() {
                 theme_panel::apply_theme_selection,
             ),
         )
+
         .run();
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
+fn setup(mut commands: Commands, mut fonts: ResMut<FontFamilies>) {
     commands.spawn(Camera2d);
 
-    for (name, [regular, bold, italic, bold_italic]) in consts::FONT_FAMILIES {
-        fonts.insert(
-            *name,
-            FontFaces::new(asset_server.load(*regular))
-                .with_bold(asset_server.load(*bold))
-                .with_italic(asset_server.load(*italic))
-                .with_bold_italic(asset_server.load(*bold_italic)),
-        );
-    }
+    // System font families for the CSS generic keywords the themes use. One
+    // source per family: bold and italic are picked by the system.
     fonts
-        .set_generic(GenericFamily::Serif, "Spectral")
-        .set_generic(GenericFamily::Monospace, "Iosevka Slab Mono");
+        .insert("System Sans", FontFaces::new(consts::HEADER_FONT))
+        .insert("System Serif", FontFaces::new(consts::BODY_FONT))
+        .insert("System Mono", FontFaces::new(consts::MONO_FONT))
+        .set_generic(GenericFamily::SansSerif, "System Sans")
+        .set_generic(GenericFamily::Serif, "System Serif")
+        .set_generic(GenericFamily::Monospace, "System Mono");
 }

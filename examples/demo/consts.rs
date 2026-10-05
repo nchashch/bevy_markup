@@ -1,53 +1,22 @@
 use bevy::prelude::*;
 
-pub const MONO_FONT_PATH: &str = "fonts/IosevkaSlabMono-Regular.ttf";
-pub const MONO_BOLD_FONT_PATH: &str = "fonts/IosevkaSlabMono-Bold.ttf";
-pub const MONO_ITALIC_FONT_PATH: &str = "fonts/IosevkaSlabMono-Italic.ttf";
-pub const MONO_BOLD_ITALIC_FONT_PATH: &str = "fonts/IosevkaSlabMono-BoldItalic.ttf";
-
 pub const FRAME_PATH: &str = "ui/frame.slice.ron";
 
-pub const HEADER_FONT_PATH: &str = "fonts/IosevkaSlabQP-Regular.ttf";
-pub const HEADER_BOLD_FONT_PATH: &str = "fonts/IosevkaSlabQP-Bold.ttf";
-pub const HEADER_ITALIC_FONT_PATH: &str = "fonts/IosevkaSlabQP-Italic.ttf";
-pub const HEADER_BOLD_ITALIC_FONT_PATH: &str = "fonts/IosevkaSlabQP-BoldItalic.ttf";
+/// The demo's three typefaces, all from the fonts installed on the system
+/// (Bevy's `system_font_discovery`): the CSS themes use the generic keywords
+/// `sans-serif` (headings), `serif` (body) and `monospace` (code), and the
+/// plain Bevy UI panels use the same families directly.
+pub const HEADER_FONT: FontSource = FontSource::SansSerif;
+pub const BODY_FONT: FontSource = FontSource::Serif;
+pub const MONO_FONT: FontSource = FontSource::Monospace;
 
-pub const BODY_FONT_PATH: &str = "fonts/Spectral-Regular.ttf";
-pub const BODY_BOLD_FONT_PATH: &str = "fonts/Spectral-Bold.ttf";
-pub const BODY_ITALIC_FONT_PATH: &str = "fonts/Spectral-Italic.ttf";
-pub const BODY_BOLD_ITALIC_FONT_PATH: &str = "fonts/Spectral-BoldItalic.ttf";
-
-/// Font families the demo's CSS themes name, as `[regular, bold, italic,
-/// bold-italic]` asset paths; registered in `FontFamilies` at startup.
-pub const FONT_FAMILIES: &[(&str, [&str; 4])] = &[
-    (
-        "Iosevka Slab QP",
-        [
-            HEADER_FONT_PATH,
-            HEADER_BOLD_FONT_PATH,
-            HEADER_ITALIC_FONT_PATH,
-            HEADER_BOLD_ITALIC_FONT_PATH,
-        ],
-    ),
-    (
-        "Spectral",
-        [
-            BODY_FONT_PATH,
-            BODY_BOLD_FONT_PATH,
-            BODY_ITALIC_FONT_PATH,
-            BODY_BOLD_ITALIC_FONT_PATH,
-        ],
-    ),
-    (
-        "Iosevka Slab Mono",
-        [
-            MONO_FONT_PATH,
-            MONO_BOLD_FONT_PATH,
-            MONO_ITALIC_FONT_PATH,
-            MONO_BOLD_ITALIC_FONT_PATH,
-        ],
-    ),
-];
+/// A `TextFont` for plain Bevy UI text in `font` at `size` px.
+pub fn text_font(font: FontSource, size: f32) -> TextFont {
+    TextFont {
+        font,
+        ..TextFont::from_font_size(size)
+    }
+}
 
 pub const HEADER_COLOR: Color = Color::srgb_u8(220, 50, 50);
 

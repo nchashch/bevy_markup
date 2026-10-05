@@ -169,9 +169,19 @@ impl Styler<'_> {
             .and_then(|family| self.fonts.faces(family))
             .map(|faces| faces.face(style.bold, style.italic))
             .unwrap_or_default();
-        TextFont::default()
-            .with_font(font)
-            .with_font_size(style.size)
+        let mut text_font = TextFont::default().with_font_size(style.size);
+        // A file is one face (its weight and style are baked in); a system
+        // family is many, and the system picks by the requested weight/style.
+        if !matches!(font, FontSource::Handle(_)) {
+            if style.bold {
+                text_font.weight = FontWeight::BOLD;
+            }
+            if style.italic {
+                text_font.style = FontStyle::Italic;
+            }
+        }
+        text_font.font = font;
+        text_font
     }
 
     /// `element`'s box properties. A `border-image` whose `%` slices need the

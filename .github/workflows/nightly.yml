@@ -116,7 +116,7 @@ jobs:
           path: fuzz/corpus/ftl
           key: fuzz-corpus-ftl-for-coverage-${{ github.run_id }}
           restore-keys: fuzz-corpus-ftl-
-      - name: Measure (content lint skips in CI; assets/ is gitignored)
+      - name: Measure
         run: |
           scripts/coverage.py --html | tee coverage.txt
           { echo '### Line coverage of src/ per testing layer'; echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

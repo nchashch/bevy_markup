@@ -1,0 +1,6 @@
+(
+    locale: "ru",
+    resources: [
+        "ui.ftl",
+    ],
+)

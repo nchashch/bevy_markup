@@ -14,7 +14,7 @@
 //! Scene inputs live in `tests/golden/<scene>/`: `page.html`, `style.css`,
 //! optionally `messages.ftl` (made the active en-US bundle). Each scene gets
 //! a copy of `tests/fixtures/frame.png` beside its CSS. Text uses Bevy's
-//! embedded default font only (`assets/` is not committed).
+//! embedded default font only (reproducible: no system fonts).
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;

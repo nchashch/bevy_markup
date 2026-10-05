@@ -10,10 +10,18 @@ use bevy_markup::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, BevyMarkupPlugin))
+        .add_plugins((
+            // The example assets live beside the examples, not in ./assets.
+            DefaultPlugins.set(AssetPlugin {
+                file_path: "examples/assets".into(),
+                ..default()
+            }),
+            BevyMarkupPlugin,
+        ))
         .add_systems(Startup, setup)
         .add_systems(Update, switch_language)
         .add_observer(wire_coin_button)
+
         .run();
 }
 
@@ -24,19 +32,13 @@ struct Languages(Vec<Handle<BundleAsset>>);
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
     commands.spawn(Camera2d);
 
-    // CSS font-family names → font files.
+    // CSS generic keywords → the system's fonts (Bevy's system_font_discovery).
+    // One source per family: the system picks bold and italic faces.
     fonts
-        .insert(
-            "Spectral",
-            FontFaces::new(asset_server.load("fonts/Spectral-Regular.ttf"))
-                .with_bold(asset_server.load("fonts/Spectral-Bold.ttf"))
-                .with_italic(asset_server.load("fonts/Spectral-Italic.ttf")),
-        )
-        .insert(
-            "Iosevka Slab Mono",
-            FontFaces::new(asset_server.load("fonts/IosevkaSlabMono-Regular.ttf")),
-        )
-        .set_generic(GenericFamily::Monospace, "Iosevka Slab Mono");
+        .insert("System Serif", FontFaces::new(FontSource::Serif))
+        .insert("System Mono", FontFaces::new(FontSource::Monospace))
+        .set_generic(GenericFamily::Serif, "System Serif")
+        .set_generic(GenericFamily::Monospace, "System Mono");
 
     commands.insert_resource(DefaultStylesheet::new(
         asset_server.load("quickstart/style.css"),

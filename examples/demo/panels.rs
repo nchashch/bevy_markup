@@ -6,7 +6,7 @@ use bevy::ui_widgets::ScrollArea;
 use bevy_markup::prelude::*;
 use serde::Serialize;
 
-use crate::consts::{BODY_COLOR, BODY_FONT_PATH, FRAME_PATH, HEADER_COLOR, HEADER_FONT_PATH};
+use crate::consts::{text_font, BODY_COLOR, BODY_FONT, FRAME_PATH, HEADER_COLOR, HEADER_FONT};
 use crate::scroll::{SCROLLBAR_GAP, spawn_scrollbar, viewport_node};
 
 const PLAIN_PATH: &str = "ui/content/test.html";
@@ -128,9 +128,7 @@ fn spawn_plain_panel(commands: &mut Commands, asset_server: &AssetServer) {
         children![
             (
                 Text::new("Bevy UI"),
-                TextFont::default()
-                    .with_font(asset_server.load(HEADER_FONT_PATH))
-                    .with_font_size(28.0),
+                text_font(HEADER_FONT, 28.0),
                 TextColor(HEADER_COLOR),
             ),
             (
@@ -138,9 +136,7 @@ fn spawn_plain_panel(commands: &mut Commands, asset_server: &AssetServer) {
                     "This panel is plain Bevy UI. Its background is ui/frame.png, \
                      9-sliced so the corners keep their size as the panel grows.",
                 ),
-                TextFont::default()
-                    .with_font(asset_server.load(BODY_FONT_PATH))
-                    .with_font_size(20.0),
+                text_font(BODY_FONT, 20.0),
                 TextColor(BODY_COLOR),
             ),
         ],

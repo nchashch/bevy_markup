@@ -6,7 +6,7 @@ use bevy_markup::prelude::*;
 
 use crate::selector::{Selector, spawn_selector_panel};
 
-/// (directory under `assets/locales/`, native name). The first is active at
+/// (directory under `examples/assets/locales/`, native name). The first is active at
 /// startup.
 const LOCALES: &[(&str, &str)] = &[
     ("en-US", "English"),

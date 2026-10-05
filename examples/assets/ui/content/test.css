@@ -1,0 +1,16 @@
+/* Test stylesheet for the .css loader; not applied to anything yet. */
+h1,
+h2 {
+  color: #dc3232;
+  font-family: sans-serif;
+}
+
+p.note {
+  color: rgb(225 225 225);
+  margin: 4px 0;
+}
+
+li > code,
+pre {
+  font-family: monospace;
+}

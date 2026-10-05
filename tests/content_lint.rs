@@ -1,12 +1,8 @@
-//! Lint tests over the real content in `assets/`: the bugs content authors
+//! Lint tests over the real content in `examples/assets/`: the bugs content authors
 //! hit (a locale missing a message, a hard-coded English string, a template
 //! that fails to render, a stylesheet pointing at a moved image).
 //!
-//! `assets/` is gitignored, so a fresh clone has no content to lint: every
-//! content test then returns early with an `eprintln!` note instead of
-//! failing (there is nothing wrong to report, and `cargo test` must pass in
-//! any checkout). The checkers themselves are unit-tested on inline inputs
-//! below and always run.
+//! The checkers themselves are also unit-tested on inline inputs below.
 //!
 //! The checks:
 //! 1. FTL: each locale of a bundle family defines the same messages (value +
@@ -18,7 +14,7 @@
 //!    `data-l10n-id` resolves (no `l10n error`) in every locale.
 //! 3. Localized templates hold no hard-coded text outside `data-l10n-id`
 //!    elements (see [`needs_translation`] for the rule).
-//! 4. Every CSS file parses; every `url()` resolves to a file in `assets/`.
+//! 4. Every CSS file parses; every `url()` resolves to a file in `examples/assets/`.
 //! 5. A pseudo-locale generated from `en-US` (accented, bracketed, ~30%
 //!    longer) leaves no untranslated text run in the rendered UI.
 
@@ -39,22 +35,15 @@ use serde_json::{Value, json};
 // Content inventory
 // ---------------------------------------------------------------------------
 
-/// `assets/`, or `None` with a note when the checkout has none (gitignored).
-fn assets(test: &str) -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
-    if dir.is_dir() {
-        Some(dir)
-    } else {
-        eprintln!("{test}: skipped, no assets/ (gitignored; absent in a fresh clone)");
-        None
-    }
+/// The examples' assets, which this file lints (committed with the repo).
+fn assets() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/assets")
 }
 
-/// Top-level `assets/` directories the pages never load, so they aren't
+/// Top-level `examples/assets/` directories the pages never load, so they aren't
 /// copied into the test asset roots.
 const NOT_CONTENT: &[&str] = &[
-    // Font files (~80 MB): apps register families, the harness fakes them.
-    "fonts", // Artwork sources (.kra) for the UI images.
+    // Artwork sources (.kra) for the UI images.
     "src",
 ];
 
@@ -284,9 +273,7 @@ fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
 
 #[test]
 fn every_template_is_listed() {
-    let Some(assets) = assets("every_template_is_listed") else {
-        return;
-    };
+    let assets = assets();
     let on_disk: BTreeSet<String> = content_files(&assets, "html").into_iter().collect();
     let listed: BTreeSet<String> = PAGES.iter().map(|page| page.template.to_owned()).collect();
     let mut problems: Vec<String> = on_disk
@@ -502,9 +489,7 @@ fn families(assets: &Path) -> BTreeMap<PathBuf, Vec<PathBuf>> {
 
 #[test]
 fn every_locale_defines_the_en_us_messages() {
-    let Some(assets) = assets("every_locale_defines_the_en_us_messages") else {
-        return;
-    };
+    let assets = assets();
     let families = families(&assets);
     assert!(!families.is_empty(), "no bundle families under assets/");
     let mut problems = Vec::new();
@@ -607,9 +592,7 @@ fn render_failure(ui: &mut TestUi) -> Option<String> {
 
 #[test]
 fn templates_render_with_the_examples_context_and_stylesheets() {
-    let Some(assets) = assets("templates_render_with_the_examples_context_and_stylesheets") else {
-        return;
-    };
+    let assets = assets();
     let mut problems = Vec::new();
     for page in PAGES {
         if let Err(err) = compile(&assets, page.template) {
@@ -670,9 +653,7 @@ fn l10n_errors(ui: &mut TestUi) -> Vec<String> {
 
 #[test]
 fn every_l10n_id_resolves_in_every_locale() {
-    let Some(assets) = assets("every_l10n_id_resolves_in_every_locale") else {
-        return;
-    };
+    let assets = assets();
     let families = families(&assets);
     let mut problems = Vec::new();
     'pages: for page in PAGES {
@@ -801,9 +782,7 @@ fn hard_coded_text_check_finds_untranslated_text() {
 
 #[test]
 fn localized_templates_have_no_hard_coded_text() {
-    let Some(assets) = assets("localized_templates_have_no_hard_coded_text") else {
-        return;
-    };
+    let assets = assets();
     let mut problems = Vec::new();
     'pages: for page in PAGES.iter().filter(|page| page.unlocalized.is_none()) {
         let contexts = (page.contexts)();
@@ -990,9 +969,7 @@ fn stylesheet_check_reports_parse_errors_and_dangling_urls() {
 
 #[test]
 fn every_stylesheet_parses_and_its_urls_resolve() {
-    let Some(assets) = assets("every_stylesheet_parses_and_its_urls_resolve") else {
-        return;
-    };
+    let assets = assets();
     let sheets = content_files(&assets, "css");
     assert!(!sheets.is_empty(), "no stylesheets under assets/");
     let problems: Vec<String> = sheets
@@ -1238,9 +1215,7 @@ uses-brand =
 
 #[test]
 fn pseudo_locale_shows_every_string_translated() {
-    let Some(assets) = assets("pseudo_locale_shows_every_string_translated") else {
-        return;
-    };
+    let assets = assets();
     let mut problems = Vec::new();
     'pages: for page in PAGES.iter().filter(|page| page.unlocalized.is_none()) {
         // The pseudo bundle: en-US's resources, pseudo-localized, as en-XA.

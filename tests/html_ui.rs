@@ -76,6 +76,48 @@ html-ui
     );
 }
 
+/// System font families (any `FontSource` but a handle): one registered
+/// source covers every face, and bold/italic are *requested* (TextFont
+/// weight/style) for the system to pick. A file family (`Mono`, regular
+/// face only) never gets a weight or style: its faces are fixed files.
+#[test]
+fn system_font_families_request_weight_and_style() {
+    let mut ui = TestUi::new(
+        "system-fonts",
+        &[
+            (
+                "page.html",
+                "<p>plain</p><p><b>strong</b></p><p><i>slanted</i></p><p><b><i>both</i></b></p>\
+                 <p class=\"m\"><b><i>mono</i></b></p>",
+            ),
+            (
+                "style.css",
+                "html { font-family: Body; color: #ffffff } b { font-weight: bold } \
+                 i { font-style: italic } .m { font-family: monospace }",
+            ),
+        ],
+    );
+    ui.world_mut()
+        .resource_mut::<FontFamilies>()
+        .insert("Body", FontFaces::new(FontSource::Serif));
+    let mut ui = ui.stylesheet("style.css").spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "plain" Serif 16px #ffffff
+  p
+    "strong" Serif 16px #ffffff bold
+  p
+    "slanted" Serif 16px #ffffff italic
+  p
+    "both" Serif 16px #ffffff bold italic
+  p.m
+    "mono" mono 16px #ffffff
+"#,
+    );
+}
+
 /// CSS: specificity (id > class > type, compound counts), inheritance into
 /// inline elements, font faces from weight/style, missing-face fallback,
 /// generic family, em/rem/% sizes, unknown family keeps the inherited one.

@@ -10,7 +10,7 @@ bevy_markup turns that into ordinary Bevy UI entities (`Node`, `Text`, `TextSpan
 out with Bevy's own flexbox and renders like everything else in your game.
 
 ```html
-<!-- assets/quickstart/hello.html -->
+<!-- examples/assets/quickstart/hello.html -->
 <h1 data-l10n-id="hello-title">Hello, HTML!</h1>
 <p data-l10n-id="hello-greeting" data-l10n-args='{"name": "{{ player }}"}'>Welcome, {{ player }}.</p>
 <div class="wallet">
@@ -20,10 +20,10 @@ out with Bevy's own flexbox and renders like everything else in your game.
 ```
 
 ```css
-/* assets/quickstart/style.css */
+/* examples/assets/quickstart/style.css */
 html {
   color: #e6e6e6;
-  font-family: Spectral, serif;
+  font-family: serif;
   font-size: 24px;
   border-image: url("../ui/frame.png") 16 fill stretch; /* a 9-slice frame */
   border-width: 16px;
@@ -33,7 +33,7 @@ h1 { color: #f0b429; font-size: 44px; font-weight: bold; }
 ```
 
 ```ftl
-# assets/quickstart/locales/en-US/hello.ftl
+# examples/assets/quickstart/locales/en-US/hello.ftl
 hello-greeting = Welcome, <b>{ $name }</b>.
 hello-coins =
     { $coins ->
@@ -157,8 +157,10 @@ cargo run --example quickstart   # the code above, plus a button and a language 
 cargo run --example demo         # themes, languages, scrolling, 9-slice frames, DOM outlines
 ```
 
-The examples need the `assets/` folder (fonts, images, templates), which is
-not in this repository yet.
+Their templates, stylesheets, translations and images are in
+`examples/assets/`. Text uses the fonts installed on your system (CSS
+`serif`, `sans-serif` and `monospace`, via Bevy's `system_font_discovery`),
+so no font files ship with the repository.
 
 ## Testing
 

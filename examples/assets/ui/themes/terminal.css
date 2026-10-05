@@ -1,0 +1,57 @@
+/* Terminal: monospace everywhere, phosphor green, compact sizes. */
+
+html {
+  color: #7cf07c;
+  font-family: monospace;
+  font-size: 16px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: #b6ffb6;
+  font-weight: bold;
+}
+
+h1 {
+  font-size: 22px;
+}
+
+h2 {
+  font-size: 19px;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: 17px;
+}
+
+pre {
+  background-color: #0a1f0a;
+  color: #5fd75f;
+  font-size: 14px;
+}
+
+code,
+kbd,
+samp,
+tt {
+  color: #e0ff6a;
+}
+
+b,
+strong {
+  color: #d2ffd2;
+  font-weight: bold;
+}
+
+i,
+em {
+  color: #a8e6a8;
+  font-style: italic;
+}

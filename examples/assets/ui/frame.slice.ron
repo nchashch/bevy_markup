@@ -1,0 +1,10 @@
+// 9-slice style for frame.png (256x256). The red brush border sits within
+// ~11px of each edge; 16px keeps its rough corners intact.
+(
+    image: "frame.png",
+    border: (left: 16.0, right: 16.0, top: 16.0, bottom: 16.0),
+    // sides: Tile(1.0),
+    sides: Stretch,
+    center: Stretch,
+    max_corner_scale: 1.0,
+)

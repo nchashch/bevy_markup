@@ -1,0 +1,64 @@
+/* Styling for HTML rendered as Bevy UI (src/ui/html_ui.rs, subset documented
+   in src/ui/html_style.rs). Type selectors only.
+   Inherited: color, font-family, font-size, font-weight, font-style.
+   Blocks only: background-color.
+   `html` sets the starting values, also for fragments without an <html>.
+   font-family: the generic keywords sans-serif (headings), serif (body) and
+   monospace (code); the demo maps them to the system's fonts. */
+
+html {
+  color: #e1e1e1;
+  font-family: serif;
+  font-size: 20px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: #dc3232;
+  font-family: sans-serif;
+}
+
+h1 {
+  font-size: 28px;
+}
+
+h2 {
+  font-size: 24px;
+}
+
+h3 {
+  font-size: 22px;
+}
+
+h4,
+h5,
+h6 {
+  font-size: 20px;
+}
+
+pre {
+  background-color: #1c1c22;
+  font-family: monospace;
+  font-size: 16px;
+}
+
+code,
+kbd,
+samp,
+tt {
+  font-family: monospace;
+}
+
+b,
+strong {
+  font-weight: bold;
+}
+
+i,
+em {
+  font-style: italic;
+}

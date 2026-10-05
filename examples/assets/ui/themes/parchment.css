@@ -1,0 +1,70 @@
+/* Parchment: warm sepia ink, all-serif, italic gold headings. */
+
+html {
+  color: #e8d9b5;
+  font-family: serif;
+  font-size: 20px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: #d4a73a;
+  font-family: serif;
+  font-style: italic;
+}
+
+h1 {
+  font-size: 32px;
+}
+
+h2 {
+  font-size: 26px;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: 22px;
+}
+
+li {
+  color: #cdbb92;
+}
+
+pre {
+  background-color: #2b2418;
+  color: #e3c98a;
+  font-family: monospace;
+  font-size: 15px;
+  /* Longhands; 6.25% of the 256px image = 16px insets; tiled sides. */
+  border-image-source: url("../frame_transparent.png");
+  border-image-slice: 6.25% fill;
+  border-image-repeat: repeat;
+  border-width: 12px;
+  padding: 4px;
+}
+
+code,
+kbd,
+samp,
+tt {
+  color: #e3a857;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+b,
+strong {
+  color: #f3e6c4;
+  font-weight: bold;
+}
+
+i,
+em {
+  font-style: italic;
+}

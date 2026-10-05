@@ -47,7 +47,7 @@ jobs:
         run: cargo check --lib
       - name: All targets
         run: cargo build --all-targets
-      - name: Tests (content lint skips without the gitignored assets/)
+      - name: Tests
         run: cargo test
       - name: Fuzz harness unit tests
         run: cargo test --lib --features fuzzing

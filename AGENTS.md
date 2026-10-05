@@ -30,7 +30,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
 | `ActiveLocale(Option<Handle<BundleAsset>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
-| `FontFamilies` / `FontFaces` / `GenericFamily` | Resource + types | CSS `font-family` name → font handles (+ generic keyword mapping) |
+| `FontFamilies` / `FontFaces` / `GenericFamily` | Resource + types | CSS `font-family` name → faces: font files or system families (any `FontSource`; for system families bold/italic are requested via `TextFont` weight/style), + generic keyword mapping |
 | `HtmlTemplate`, `Stylesheet`, `NineSlice` | Assets | `.html`/`.htm`, `.css`, `*.slice.ron` |
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
@@ -73,7 +73,7 @@ tests/
                    locale, context, outline toggle, FontFamilies swap) vs a reference model
   layout_properties.rs  flexbox invariants on real headless layout (row-reverse mirror, auto margins,
                    grow shares, space-between, wrap without overlap)
-  content_lint.rs  lint tests over the real assets/ content (skipped without assets/): locale parity,
+  content_lint.rs  lint tests over the examples' content in examples/assets/: locale parity,
                    templates render (+ every data-l10n-id resolves), no hard-coded text, CSS url()s, pseudo-locale
   golden.rs        golden images (#[ignore]d): tests/golden/<scene>/ rendered offscreen by real Bevy,
                    compared with expected.png within a tolerance (see Testing)
@@ -83,7 +83,7 @@ tests/
                    Fluent vectors add messages.ftl + fluent.html (Fluent oracle output);
                    layout_* vectors also get rects in browser.json (layout oracle)
   golden/<scene>/  page.html, style.css, [messages.ftl], expected.png (text, frame, l10n)
-  fixtures/        frame.png (32×24, committed; `assets/` is not)
+  fixtures/        frame.png (32×24)
 .github/workflows/
   ci.yml           per push to main / PR: -D warnings check/build/doc, cargo test, fuzzing-feature
                    tests, Fluent oracle references current
@@ -125,8 +125,8 @@ test-fuzz/
                      `#[test_fuzz]` (`cargo +nightly test-fuzz tests::fuzz_html`
                      from this directory; corpus seeds come from plain
                      `cargo test` runs)
-assets/            (gitignored — see Gotchas)
-  fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
+examples/assets/   the examples' content (AssetPlugin file_path; no fonts: system fonts)
+  src/             artwork sources (frame.kra) for the UI images
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
   ui/frame.png     256x256 frame; ui/frame.slice.ron slices it (16px borders); frame_transparent.png (clear center)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print
@@ -182,9 +182,12 @@ assets/            (gitignored — see Gotchas)
 - `vendor/honggfuzz` is a patched fork of the honggfuzz crate used only by
   `honggfuzz/` targets: its bundled C source fails against current binutils
   (`bfd.h` no longer defines `TRUE`).
-- Demo typography: headers IosevkaSlabQP (red), body Spectral (off-white),
-  code/debug Iosevka Slab Mono — in the CSS themes for HTML, in
-  `examples/demo/consts.rs` for plain Bevy UI panels.
+- Demo typography: system fonts (Bevy `system_font_discovery`, a
+  dev-dependency feature) — headers `sans-serif` (red), body `serif`
+  (off-white), code/debug `monospace`. CSS themes use the generic keywords;
+  the examples map them to `FontSource::{SansSerif, Serif, Monospace}`
+  families (`FontFaces::new(FontSource::Serif)` etc.); plain Bevy UI panels
+  use the same sources (`examples/demo/consts.rs`).
 
 ## Pipeline
 
@@ -266,7 +269,6 @@ assets/            (gitignored — see Gotchas)
 
 ## Gotchas (verified)
 
-- `assets/` is gitignored: new asset files are not committed.
 - Bevy `ImageNode` defaults to `VisualBox::ContentBox` (draws inside padding);
   frames need `BorderBox` (`NineSliceFrame` sets it).
 - Scrollable panels (demo `scroll.rs`): framed row node with `max_height` and
@@ -421,9 +423,9 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   generated sizes on real headless layout, 1px tolerance: `row-reverse` mirrors
   `row`, `margin: auto` centers, zero-basis `flex-grow` splits by factor,
   `space-between` spreads evenly, wrapped items stay inside without overlap.
-- **Content lint** (`tests/content_lint.rs`): checks the real `assets/`
-  content; without `assets/` (gitignored) each content test prints a skip note
-  and passes (checker unit tests always run). `PAGES` lists every template with
+- **Content lint** (`tests/content_lint.rs`): checks the examples' content
+  in `examples/assets/` (committed, so it runs everywhere, CI included).
+  `PAGES` lists every template with
   the examples' context, stylesheets, bundle family and an optional
   `unlocalized` reason (`every_template_is_listed` keeps it complete). Checks:
   locale message/attribute parity with en-US; templates render for every
@@ -828,10 +830,9 @@ Next steps (roughly in order of value):
   every run, also after a crash) and are minimized with `cargo fuzz cmin`
   on Sundays. Before this (2026-10-05) every night started from an empty
   corpus: 60 s reached cov 3830 on `html` vs 5572 for the local corpus.
-  `assets/` isn't in the repo, so `content_lint` skips in CI. The nightly
+  The nightly
   `coverage` job runs `scripts/coverage.py --html`: the per-layer table goes
-  to the job summary, the reports to the `coverage` artifact (without
-  `assets/`, content lint covers nothing in CI; the fuzz-corpora layer
+  to the job summary, the reports to the `coverage` artifact (the fuzz-corpora layer
   replays the committed seeds plus the newest CI corpus caches). Each fuzz
   job also uploads its corpus as the `fuzz-corpus-<target>` artifact (90
   days) so CI's finds can be merged into `fuzz/seeds` (testing guide).

@@ -435,12 +435,21 @@ pub fn rect(rect: UiRect) -> Option<String> {
         .then(|| sides.map(val).join(","))
 }
 
+/// `face size color`, plus `bold` / `italic` when a weight or style is
+/// requested from the font system (system families only).
 pub fn style_label(font: &TextFont, color: &TextColor) -> String {
     let size = match font.font_size {
         FontSize::Px(px) => format!("{px}px"),
         other => format!("{other:?}"),
     };
-    format!("{} {size} {}", face_label(&font.font), hex(color.0))
+    let mut label = format!("{} {size} {}", face_label(&font.font), hex(color.0));
+    if font.weight != FontWeight::default() {
+        label += if font.weight == FontWeight::BOLD { " bold" } else { " weight?" };
+    }
+    if font.style != FontStyle::default() {
+        label += " italic";
+    }
+    label
 }
 
 /// `tag#id.class…`.

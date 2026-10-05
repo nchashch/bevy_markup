@@ -4,16 +4,25 @@
 //! picks the first registered name in a `font-family` list, and the face by
 //! `font-weight`/`font-style`. Changing the resource rebuilds every `HtmlUi`.
 //!
+//! A face is any [`FontSource`]: a loaded font file, or a family resolved
+//! from the fonts installed on the system (a name like `"DejaVu Serif"` or a
+//! generic like [`FontSource::Serif`]; needs Bevy's `system_font_discovery`,
+//! which the `system_fonts` feature enables). For system families, bold and
+//! italic are requested from the system, which picks the family's real faces.
+//!
 //! ```no_run
 //! # use bevy::prelude::*;
 //! # use bevy_markup::prelude::*;
 //! fn register(asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
 //!     fonts
+//!         // Font files: one per face.
 //!         .insert(
 //!             "Iosevka Slab Mono",
 //!             FontFaces::new(asset_server.load("fonts/IosevkaSlabMono-Regular.ttf"))
 //!                 .with_bold(asset_server.load("fonts/IosevkaSlabMono-Bold.ttf")),
 //!         )
+//!         // The system's serif family, all faces.
+//!         .insert("Body", FontFaces::new(FontSource::Serif))
 //!         .set_generic(GenericFamily::Monospace, "Iosevka Slab Mono");
 //! }
 //! ```
@@ -34,41 +43,43 @@ pub enum GenericFamily {
 
 /// The faces of one family. Missing faces fall back as CSS font matching
 /// does (style narrows before weight): bold-italic → italic → bold → regular.
+/// A system family (any [`FontSource`] other than a handle) usually needs
+/// only `regular`: bold and italic are then requested from the system.
 #[derive(Clone, Debug)]
 pub struct FontFaces {
-    pub regular: Handle<Font>,
-    pub bold: Option<Handle<Font>>,
-    pub italic: Option<Handle<Font>>,
-    pub bold_italic: Option<Handle<Font>>,
+    pub regular: FontSource,
+    pub bold: Option<FontSource>,
+    pub italic: Option<FontSource>,
+    pub bold_italic: Option<FontSource>,
 }
 
 impl FontFaces {
-    pub fn new(regular: Handle<Font>) -> Self {
+    pub fn new(regular: impl Into<FontSource>) -> Self {
         Self {
-            regular,
+            regular: regular.into(),
             bold: None,
             italic: None,
             bold_italic: None,
         }
     }
 
-    pub fn with_bold(mut self, bold: Handle<Font>) -> Self {
-        self.bold = Some(bold);
+    pub fn with_bold(mut self, bold: impl Into<FontSource>) -> Self {
+        self.bold = Some(bold.into());
         self
     }
 
-    pub fn with_italic(mut self, italic: Handle<Font>) -> Self {
-        self.italic = Some(italic);
+    pub fn with_italic(mut self, italic: impl Into<FontSource>) -> Self {
+        self.italic = Some(italic.into());
         self
     }
 
-    pub fn with_bold_italic(mut self, bold_italic: Handle<Font>) -> Self {
-        self.bold_italic = Some(bold_italic);
+    pub fn with_bold_italic(mut self, bold_italic: impl Into<FontSource>) -> Self {
+        self.bold_italic = Some(bold_italic.into());
         self
     }
 
     /// The face for this weight/style, with fallbacks.
-    pub fn face(&self, bold: bool, italic: bool) -> Handle<Font> {
+    pub fn face(&self, bold: bool, italic: bool) -> FontSource {
         let pick = match (bold, italic) {
             // CSS font matching: an italic face (bold synthesized) beats an
             // upright bold one.
@@ -185,7 +196,7 @@ mod tests {
                 ((true, true), pick(&[(4, &bold_italic), (2, &italic), (1, &bold)])),
             ];
             for ((b, i), face) in expected {
-                assert_eq!(faces.face(b, i), face, "faces mask {mask:03b}, bold {b}, italic {i}");
+                assert_eq!(faces.face(b, i), face.into(), "faces mask {mask:03b}, bold {b}, italic {i}");
             }
         }
     }
@@ -211,7 +222,7 @@ mod tests {
         assert!(spectral.is_some() && iosevka.is_some() && spectral != iosevka);
         assert_eq!(families.resolve(&[named("Iosevka Slab"), named("Spectral")]), iosevka);
         assert_eq!(families.resolve(&[named("Nope"), named("Spectral")]), spectral);
-        assert_eq!(families.faces(spectral.unwrap()).unwrap().regular, font(1));
+        assert_eq!(families.faces(spectral.unwrap()).unwrap().regular, font(1).into());
     }
 
     /// Unregistered names, unmapped generics and generics mapped to
@@ -237,7 +248,7 @@ mod tests {
         let before = families.resolve(&[named("Spectral")]);
         families.insert("SPECTRAL", FontFaces::new(font(9)));
         assert_eq!(families.resolve(&[named("Spectral")]), before);
-        assert_eq!(families.get("spectral").unwrap().regular, font(9));
-        assert_eq!(families.get("Iosevka Slab").unwrap().regular, font(2));
+        assert_eq!(families.get("spectral").unwrap().regular, font(9).into());
+        assert_eq!(families.get("Iosevka Slab").unwrap().regular, font(2).into());
     }
 }

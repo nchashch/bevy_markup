@@ -49,7 +49,7 @@ Rules that always hold:
 | Reference models | `tests/quickcheck.rs` | cascade results vs an independent precedence model |
 | Robustness + structure | `tests/arbtest.rs` | arbitrary bytes never panic or wedge; generated documents match an HTML model |
 | State machine | `tests/stateful.rs` (proptest-stateful) | rebuild/restyle bugs over random runtime operation sequences |
-| Content lint | `tests/content_lint.rs` | problems in the real `assets/` content (skips when `assets/` is absent) |
+| Content lint | `tests/content_lint.rs` | problems in the examples' content (`examples/assets/`) |
 | Golden images | `tests/golden.rs` (`#[ignore]`d) | real rendering: glyphs, wrapping, 9-slice drawing |
 | Fuzzers | `fuzz/`, `honggfuzz/`, `fuzzcheck/`, `test-fuzz/` | panics and hangs in parsing/glue code |
 | Mutation testing | `scripts/mutants.sh`, `.github/workflows/mutants.yml` | gaps in all of the above |
@@ -265,11 +265,10 @@ Proptest works inside `#[cfg(test)]` modules too.
 
 ## Content lint (`tests/content_lint.rs`)
 
-It checks the real `assets/` content: locale message parity, templates
+It checks the examples' content in `examples/assets/` (committed): locale message parity, templates
 render with the examples' data, every `data-l10n-id` resolves, no hard-coded
 text, CSS parses and its `url()`s exist, and a generated pseudo-locale
-(`en-XA`) leaves no untranslated text. `assets/` is gitignored, so without it
-each content test prints a skip note and passes.
+(`en-XA`) leaves no untranslated text.
 
 New template: add it to `PAGES`. A deliberately unlocalized template gets
 `unlocalized: Some(reason)`.
