@@ -130,7 +130,7 @@ The crate documentation (`cargo doc --open`) is the full guide.
 
 | bevy_markup | Bevy | bevy_fluent |
 |---|---|---|
-| 0.1 (unreleased) | 0.19 | 0.15 |
+| 0.1 | 0.19 | 0.15 |
 
 ### Recommended: patched fluent-syntax
 
