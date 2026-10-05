@@ -12,7 +12,7 @@ use bevy::image::Image;
 use bevy::prelude::*;
 
 use crate::build::{BoxStyle, Styler, root_style};
-use crate::cascade::{HtmlStyles, image_urls};
+use crate::cascade::{HtmlStyles, Pseudo, image_urls};
 use crate::fonts::FontFamilies;
 use crate::html::HtmlElement;
 use crate::l10n::LocalizedText;
@@ -86,8 +86,8 @@ pub fn cascade(css: &str) -> Result<String, String> {
     // One hit per element, then a repeat: exercises the cascade's match cache.
     for round in 0..2 {
         for element in &elements {
-            let style = styler.style_of(element, root);
-            let boxed: BoxStyle = styler.box_of(element);
+            let style = styler.style_of(element, root, Pseudo::default());
+            let boxed: BoxStyle = styler.box_of(element, Pseudo::default());
             std::fmt::write(
                 &mut out,
                 format_args!(

@@ -322,6 +322,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 - Bevy's `Query::iter_descendants` is breadth-first; use `iter_descendants_depth_first` for document order (`HtmlElements`).
 - HTML white-space collapsing covers ASCII whitespace only (space, `\t`, `\n`, `\f`, `\r`); `char::is_whitespace` would also eat NBSP/U+3000.
 - Tests: `TestUi::settle()` demands a new build; for a change that legitimately rebuilds nothing (e.g. a `DefaultStylesheet` swap under a ready own `HtmlStylesheet`) use `settle_quiet()`.
+- API changes that touch `src/fuzz.rs`'s imports (`Styler`, `cascade`) need
+  `cargo check --lib --features fuzzing`: the module only compiles under the
+  feature, and plain `cargo test`/`check` don't see it (CI runs the
+  fuzzing-feature tests).
 - CLDR plural operand `n` is the absolute value: English `-1` selects `one`.
 - Offscreen rendering (`tests/golden.rs`): pipelines compile asynchronously and
   a draw whose pipeline isn't ready is silently skipped; wait until the render
