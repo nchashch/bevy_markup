@@ -34,7 +34,7 @@ IGNORE = r"(^|/)(tests|vendor|fuzz|examples|honggfuzz|fuzzcheck|test-fuzz)/|src/
 LAYERS = {
     "unit": ["--lib"],
     "vectors+oracles": ["--test", "html_ui"],
-    "signals": ["--test", "signals"],
+    "signals": ["--test", "signals", "--test", "signal_properties"],
     "properties": ["--test", "properties", "--test", "layout_properties", "--test", "quickcheck"],
     "arbtest": ["--test", "arbtest"],
     "stateful": ["--test", "stateful"],

@@ -25,6 +25,7 @@ the issue may already be fixed or reported.
 | U9 | Bevy 0.19 | `UiPlugin`'s `viewport_picking` panics without the picking plugins | headless UI layout tests need extra plugins | add `DefaultPickingPlugins` in `tests/common` | discuss first |
 | U10 | lightningcss | Bare `grid-auto-flow: dense` fails to parse | the declaration is dropped (CSS means `row dense`) | none (documented; write `row dense`) | unreported |
 | U11 | tl | A value-less attribute eats the next attribute's first character ([bug_0019](bug_0019.md)) | `autofocus data-on-click` lost the click hook and focusability | switched to `astral-tl` 0.8.0 (astral-sh's maintained fork, fixed there) | fixed in astral-tl; y21/tl 0.7.8 affected |
+| U12 | bevy_picking / bevy_ui | Text-section hits resolve `Pickable` on the span entity, not the text node ([bug_0020](bug_0020.md)) | `pointer-events: none` on a text-bearing element leaked clicks | `Pickable::IGNORE` on the spans too (`src/build.rs`) | unreported |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -212,6 +213,35 @@ CI clippy command and workspace tests pass on both.
   Regression test: `focus_navigation_scope_and_styles` (`autofocus` first).
 - **Status:** not reported to y21/tl (fixed in the maintained fork; y21/tl
   has had no release since 0.7.8).
+
+## U12 — bevy_picking: text-section hits resolve `Pickable` on the span, not the text node
+
+- **Project:** [bevyengine/bevy](https://github.com/bevyengine/bevy) 0.19.1
+  (`bevy_ui` 0.19.1 picking backend + `bevy_picking` 0.19.1 hover map).
+- **Problem:** for a `Text` node, `bevy_ui`'s `ui_picking` reports the *text
+  span entity* as the hit target and attaches the text **node**'s `Pickable`
+  to the hit. `bevy_picking`'s `build_hover_map` then resolves `Pickable`
+  with a query on the **target** entity — the span, which normally has no
+  `Pickable` — so the node's `should_block_lower: false` /
+  `is_hoverable: false` never apply: the span hovers and blocks by default,
+  and the event bubbles up from it. Concretely, `pointer-events: none` on a
+  UI element didn't make its text unclickable (bevy_markup
+  [bug_0020](bug_0020.md)).
+- **Reproduction:** the backend pushes the hit with the node's `Pickable`;
+  put `Pickable::IGNORE` on a text node under a click point and observe that
+  the click still reaches the node's ancestors (observers) instead of
+  falling through to what's behind. bevy_markup's
+  `pointer_events_none_silences_an_element` (`tests/signals.rs`) is the
+  end-to-end form; it failed before the local fix and passes with spans
+  carrying `Pickable::IGNORE`.
+- **Local workaround:** `src/build.rs` puts `Pickable::IGNORE` on every span
+  of an ignored block (`spawn_spec`), and takes it back on restyle
+  (`apply_spec`).
+- **Upstream question (discuss first):** should `build_hover_map` use the
+  `Pickable` recorded on the hit (the text node's) rather than re-querying
+  the target entity, or should the backend report the text node as the
+  target? Either fixes text under `pointer-events: none`; the second also
+  changes which entity `Pointer<Over>` observers see.
 
 ## Not upstream bugs (recorded so they aren't re-filed)
 

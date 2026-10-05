@@ -81,6 +81,8 @@ tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
   signals.rs       picking-driven signal tests: real WindowEvent input → Bevy picking → ElementSignal/PseudoState
                    (needs TestUi::with_pointer; see Testing)
+  signal_properties.rs  proptest: random pages (nested hooks, pointer-events none) × random pointer-op
+                   sequences vs a reference signal model over the real picking stack (see Testing)
   properties.rs    proptest metamorphic properties over the pipeline (shorthand=longhands, round trips,
                    selector lists/formatting/duplicates, color notations, relative font sizes, 9-slice manifests)
   quickcheck.rs    quickcheck structured-input properties (cascade vs reference models — single rule winner and
@@ -512,6 +514,20 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   (the real picking path) are unaffected. Pressing a focusable element
   focuses it (press-to-focus), so `PseudoState.focused` is set after a click
   even where the test only cares about hover/active.
+- **Signal properties** (`tests/signal_properties.rs`, also in the
+  coverage script's `signals` layer): random pages of bound containers
+  (nested up to two levels, random trigger subsets, random
+  `pointer-events: none` subtrees) × random pointer-op sequences
+  (move/press/release, 1–12 ops), compared op by op with a reference model
+  of the real semantics: deepest non-ignored node owns the hit and the
+  deepest chain element bound for a trigger emits it; enter/leave track the
+  chain's covered set; a release clicks only if the hovered node is (still)
+  pressed — bevy_picking keeps presses across releases — and always runs
+  the hovered chain's release hooks. Pages are text-free so hit chains are
+  pure rect containment (the text-span path is pinned by `tests/signals.rs`).
+  Both model halves were spot-checked by breaking the library (disabling
+  `covered_by_deeper`, cutting the hover ancestor walk): the property fails
+  under each and passes restored.
 - **Content lint** (`tests/content_lint.rs`): checks the examples' content
   in `examples/assets/` (committed, so it runs everywhere, CI included).
   `PAGES` lists every template with
@@ -609,8 +625,10 @@ known gaps:
     commented/duplicated sheet; color notations (`#rgb`/hex/`rgb()`/named);
     em/%/rem bases; 9-slice manifest sides; quickcheck selector lists with
     per-declaration `!important` over several elements; stateful ops for
-    per-entity `HtmlStylesheet` set/remove and `FontFamilies` swaps. The
-    stateful ops found three rebuild bugs (override removal never rebuilt; a
+    per-entity `HtmlStylesheet` set/remove and `FontFamilies` swaps; random
+    pages × pointer-op sequences vs a signal reference model
+    (`tests/signal_properties.rs`, over the real picking stack). The stateful
+    ops found three rebuild bugs (override removal never rebuilt; a
     failed override ignored default swaps; a re-requested failed sheet's
     one-frame `Loading` ate the swap signal).
   - [ ] Shrink quality: stateful ops shrink only by removal; proptest value
@@ -951,7 +969,7 @@ Next steps (roughly in order of value):
   every run, also after a crash) and are minimized with `cargo fuzz cmin`
   on Sundays. Before this (2026-10-05) every night started from an empty
   corpus: 60 s reached cov 3830 on `html` vs 5572 for the local corpus.
-  The nightly
+  nightly
   `coverage` job runs `scripts/coverage.py --html`: the per-layer table goes
   to the job summary, the reports to the `coverage` artifact (the fuzz-corpora layer
   replays the committed seeds plus the newest CI corpus caches). Each fuzz
@@ -962,10 +980,14 @@ Next steps (roughly in order of value):
   *render*-failure path (`template_render_failure_shows_the_error_and_recovers`
   in `html_ui`) and the CSS mapping arms nothing ran
   (`alignment_values_map_to_bevy_values`,
-  `units_keywords_and_unsupported_values` in `cascade::tests`) — now 98.0%
-  (vectors+oracles 83.5%, properties 77.5%, unit 38.7%, fuzz corpora
-  13.4%). The rest of `uncovered.txt` is `#[derive]` lines, `debug!`
-  fallbacks, defensive early returns and the outline-mode render failure.
+  `units_keywords_and_unsupported_values` in `cascade::tests`) — measured
+  98.0% then. Latest measurement (2026-10-05, at `96f2cd3`): merged 88.1%
+  of ~3112 lines — the total grew with the interaction/focus work and its
+  new uncovered paths. The new `signals` layer (unit-style tests + signal
+  properties) covers `src/signals.rs` at 95.1% alone, 99.0% merged (the
+  rest is two defensive race guards). The rest of `uncovered.txt` is
+  `#[derive]` lines, `debug!` fallbacks, defensive early returns and the
+  outline-mode render failure.
   Mutants couldn't flag the mapping gaps (no arm of an exhaustive match can
   be deleted): read coverage and mutation results together.
   GitHub moves `ubuntu-latest` to Ubuntu 26 from 2026-10-19: that can change

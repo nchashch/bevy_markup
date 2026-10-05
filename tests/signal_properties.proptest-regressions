@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 39665447690eb560c0685ba2648048e2c25b7e43292dcca426d130698e32539a # shrinks to input = _PointerOpSequencesMatchTheSignalModelArgs { case: (Spec { ids: ["a", "a-0"], parents: [None, Some(0)], bindings: [[1], [1]], none: [false, false] }, [Move(0), Press]) }
+cc 8ba69552a6819ff03f9b30e773c182bf5f3b3ae95acf1ae04a6555227abcd6a6 # shrinks to input = _PointerOpSequencesMatchTheSignalModelArgs { case: (Spec { ids: ["a", "b", "c", "c-0"], parents: [None, None, None, Some(2)], bindings: [[], [], [3], [3]], none: [false, false, false, false] }, [Move(2)]) }
+cc b1d95506cf0908aeddd93f2a3d99c62f779693e17ccd3ef8b1b454d3429f12b7 # shrinks to input = _PointerOpSequencesMatchTheSignalModelArgs { case: (Spec { ids: ["a"], parents: [None], bindings: [[0, 2, 3, 4]], none: [false] }, [Move(0), Press, Release, Release]) }
