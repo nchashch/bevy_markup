@@ -75,11 +75,12 @@
 //!   (state comes from picking; a change restyles in place); `color`,
 //!   `font-family`, `font-size`,
 //!   `font-weight`, `font-style`, `pointer-events` (inherited); `border-image` (9-slice),
-//!   `border-width`, `padding`, `background-color` on blocks, containers and
-//!   the `HtmlUi` node (`html` rule, except background); `gap` on containers;
-//!   flex and grid layout, sizes, margins, `box-sizing`, `position` with
-//!   insets, `z-index`, `border-radius` and `border-color` on blocks and
-//!   containers.
+//!   `border-width`, `padding`, `background-color`, `gap`, flex and grid
+//!   layout, sizes, margins, `box-sizing`, `position` with insets,
+//!   `z-index`, `border-radius` and `border-color` on blocks, containers and
+//!   the `HtmlUi` node itself (the `html` rule, or the template's own
+//!   `<html class="…">`; what it stops declaring goes back to the app's
+//!   values).
 //! - **Fluent** ([`l10n`]): `data-l10n-id` / `data-l10n-args` /
 //!   `data-l10n-name` (fluent-dom convention) on any element; translations
 //!   may contain inline markup.

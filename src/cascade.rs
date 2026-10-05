@@ -92,7 +92,7 @@ pub(crate) enum GridLineDecl {
 
 /// Declared flex, grid, size and margin properties of a container or block,
 /// as Bevy values (`None` = not declared).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LayoutDecl {
     pub display: Option<Display>,
     pub flex_direction: Option<FlexDirection>,
@@ -200,6 +200,131 @@ impl LayoutDecl {
         set(&mut node.right, &self.inset[1]);
         set(&mut node.bottom, &self.inset[2]);
         set(&mut node.left, &self.inset[3]);
+    }
+
+    /// Undoes [`apply_to`](Self::apply_to): copies every field this
+    /// declaration sets from `base` into `node`, leaving the rest alone.
+    pub fn restore_from(&self, base: &Node, node: &mut Node) {
+        fn put<T: Clone, D>(target: &mut T, base: &T, declared: &Option<D>) {
+            if declared.is_some() {
+                *target = base.clone();
+            }
+        }
+        put(&mut node.display, &base.display, &self.display);
+        put(
+            &mut node.flex_direction,
+            &base.flex_direction,
+            &self.flex_direction,
+        );
+        put(&mut node.flex_wrap, &base.flex_wrap, &self.flex_wrap);
+        put(
+            &mut node.justify_content,
+            &base.justify_content,
+            &self.justify_content,
+        );
+        put(&mut node.align_items, &base.align_items, &self.align_items);
+        put(
+            &mut node.align_content,
+            &base.align_content,
+            &self.align_content,
+        );
+        put(&mut node.align_self, &base.align_self, &self.align_self);
+        put(
+            &mut node.justify_items,
+            &base.justify_items,
+            &self.justify_items,
+        );
+        put(
+            &mut node.justify_self,
+            &base.justify_self,
+            &self.justify_self,
+        );
+        put(&mut node.flex_grow, &base.flex_grow, &self.flex_grow);
+        put(&mut node.flex_shrink, &base.flex_shrink, &self.flex_shrink);
+        put(&mut node.flex_basis, &base.flex_basis, &self.flex_basis);
+        put(&mut node.width, &base.width, &self.width);
+        put(&mut node.height, &base.height, &self.height);
+        put(&mut node.min_width, &base.min_width, &self.min_width);
+        put(&mut node.min_height, &base.min_height, &self.min_height);
+        put(&mut node.max_width, &base.max_width, &self.max_width);
+        put(&mut node.max_height, &base.max_height, &self.max_height);
+        put(&mut node.margin.top, &base.margin.top, &self.margin[0]);
+        put(&mut node.margin.right, &base.margin.right, &self.margin[1]);
+        put(
+            &mut node.margin.bottom,
+            &base.margin.bottom,
+            &self.margin[2],
+        );
+        put(&mut node.margin.left, &base.margin.left, &self.margin[3]);
+        put(&mut node.column_gap, &base.column_gap, &self.column_gap);
+        put(&mut node.box_sizing, &base.box_sizing, &self.box_sizing);
+        put(
+            &mut node.grid_template_rows,
+            &base.grid_template_rows,
+            &self.grid_template_rows,
+        );
+        put(
+            &mut node.grid_template_columns,
+            &base.grid_template_columns,
+            &self.grid_template_columns,
+        );
+        put(
+            &mut node.grid_auto_rows,
+            &base.grid_auto_rows,
+            &self.grid_auto_rows,
+        );
+        put(
+            &mut node.grid_auto_columns,
+            &base.grid_auto_columns,
+            &self.grid_auto_columns,
+        );
+        put(
+            &mut node.grid_auto_flow,
+            &base.grid_auto_flow,
+            &self.grid_auto_flow,
+        );
+        put(
+            &mut node.grid_row,
+            &base.grid_row,
+            &grid_placement(self.grid_row),
+        );
+        put(
+            &mut node.grid_column,
+            &base.grid_column,
+            &grid_placement(self.grid_column),
+        );
+        let (corners, base_corners) = (&mut node.border_radius, &base.border_radius);
+        put(
+            &mut corners.top_left,
+            &base_corners.top_left,
+            &self.border_radius[0],
+        );
+        put(
+            &mut corners.top_right,
+            &base_corners.top_right,
+            &self.border_radius[1],
+        );
+        put(
+            &mut corners.bottom_right,
+            &base_corners.bottom_right,
+            &self.border_radius[2],
+        );
+        put(
+            &mut corners.bottom_left,
+            &base_corners.bottom_left,
+            &self.border_radius[3],
+        );
+        // `apply_to` sets the position and insets only for `relative`/`absolute`.
+        if matches!(
+            self.position,
+            Some(CssPosition::Absolute | CssPosition::Relative)
+        ) {
+            node.position_type = base.position_type;
+            put(&mut node.top, &base.top, &self.inset[0]);
+            put(&mut node.right, &base.right, &self.inset[1]);
+            put(&mut node.bottom, &base.bottom, &self.inset[2]);
+            put(&mut node.left, &base.left, &self.inset[3]);
+        }
     }
 }
 

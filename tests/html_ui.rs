@@ -1203,6 +1203,100 @@ fn custom_elements_run_on_every_spawn() {
     assert_eq!(ui.world_mut().resource::<IconsAtBuilt>().0, [2, 2]);
 }
 
+/// The root rule — `html`, and the document's own `<html id class>` —
+/// styles the `HtmlUi` entity itself: layout, position and insets, padding,
+/// `border-radius` on its `Node`; `background-color`, `z-index`,
+/// `pointer-events` as components. Only what it declares: the app's other
+/// fields (moved every frame, say) survive rebuilds, and a stylesheet that
+/// stops declaring something gives the app's value back.
+#[test]
+fn root_rule_styles_the_html_ui_entity() {
+    let mut ui = TestUi::new(
+        "root-rule",
+        &[
+            (
+                "page.html",
+                r#"<html class="hud {{ extra }}"><p>x</p></html>"#,
+            ),
+            (
+                "styled.css",
+                "html { padding: 3px }
+                 .hud { position: absolute; top: 10px; width: 40%; flex-direction: column;
+                        background-color: #ff0000; z-index: 5; pointer-events: none;
+                        border-radius: 4px }
+                 .wide { width: 90% }",
+            ),
+            ("plain.css", "p { color: #ffffff }"),
+        ],
+    )
+    .stylesheet("styled.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("extra", ""),
+        Node {
+            left: Val::Px(7.0),
+            width: Val::Px(50.0),
+            padding: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+    );
+    let root = ui.root();
+    let blue = Color::srgb(0.0, 0.0, 1.0);
+    ui.world_mut()
+        .entity_mut(root)
+        .insert(BackgroundColor(blue));
+    ui.settle();
+
+    let world = ui.world_mut();
+    let node = world.get::<Node>(root).unwrap().clone();
+    assert_eq!(node.position_type, PositionType::Absolute);
+    assert_eq!(
+        (node.top, node.left),
+        (Val::Px(10.0), Val::Px(7.0)),
+        "top CSS, left the app's"
+    );
+    assert_eq!(node.width, Val::Percent(40.0));
+    assert_eq!(node.flex_direction, FlexDirection::Column);
+    assert_eq!(
+        node.padding,
+        UiRect::all(Val::Px(3.0)),
+        "the `html` rule applies too"
+    );
+    assert_eq!(node.border_radius.top_left, Val::Px(4.0));
+    assert_eq!(
+        world.get::<BackgroundColor>(root).unwrap().0,
+        Color::srgb(1.0, 0.0, 0.0)
+    );
+    assert_eq!(world.get::<ZIndex>(root), Some(&ZIndex(5)));
+    assert_eq!(world.get::<Pickable>(root), Some(&Pickable::IGNORE));
+
+    // The app moves its UI; a rebuild (new class) keeps that and restyles.
+    world.get_mut::<Node>(root).unwrap().left = Val::Px(20.0);
+    world
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("extra", "wide");
+    ui.settle();
+    let node = ui.world_mut().get::<Node>(root).unwrap().clone();
+    assert_eq!((node.width, node.left), (Val::Percent(90.0), Val::Px(20.0)));
+
+    // A stylesheet without root rules: everything back to the app's.
+    let plain = ui.load::<Stylesheet>("plain.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(plain);
+    ui.settle();
+    let world = ui.world_mut();
+    let node = world.get::<Node>(root).unwrap().clone();
+    assert_eq!(node.position_type, PositionType::Relative);
+    assert_eq!((node.top, node.left), (Val::Auto, Val::Px(20.0)));
+    assert_eq!(node.width, Val::Px(50.0));
+    assert_eq!(node.flex_direction, FlexDirection::Row);
+    assert_eq!(node.padding, UiRect::all(Val::Px(1.0)));
+    assert_eq!(node.border_radius.top_left, Val::ZERO);
+    assert_eq!(world.get::<BackgroundColor>(root).unwrap().0, blue);
+    assert_eq!(world.get::<ZIndex>(root), Some(&ZIndex(0)));
+    assert_eq!(world.get::<Pickable>(root), None);
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]

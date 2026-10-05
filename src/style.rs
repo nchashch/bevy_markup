@@ -20,8 +20,8 @@
 //! - inherited: `color`, `font-family`, `font-size`, `font-weight`,
 //!   `font-style`, `pointer-events` (`none` → `Pickable::IGNORE` on the
 //!   element and, by inheritance, its descendants; `auto` turns it back on)
-//! - box properties on blocks, containers and the `html` rule (= the `HtmlUi`
-//!   node itself): `border-image` (+ `-source`, `-slice`, `-repeat`),
+//! - box properties on blocks, containers and the root rule (the `HtmlUi`
+//!   node itself, see below): `border-image` (+ `-source`, `-slice`, `-repeat`),
 //!   `border-width`, `padding` (absolute lengths); `background-color` on
 //!   blocks and containers; `gap` / `row-gap` / `column-gap` on containers
 //! - on blocks and containers: `outline` (+ `-style`, `-width`, `-color`;
@@ -32,8 +32,7 @@
 //!   `%` of the node's smaller side as Bevy does), `z-index` (an integer →
 //!   `ZIndex` among siblings; `auto` = 0). An app's own `BorderColor` /
 //!   `ZIndex` / `Pickable` is left alone unless a rule sets it.
-//! - layout on blocks and containers (not the `html` rule: the `HtmlUi`
-//!   node's own `Node` stays the app's): `display` (`none`, `block`, `flex`,
+//! - layout on blocks, containers and the root rule: `display` (`none`, `block`, `flex`,
 //!   `grid`), `flex-direction`, `flex-wrap`, `flex-flow`, `justify-content`,
 //!   `align-items`, `align-content`, `align-self`, `justify-items`,
 //!   `justify-self`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex`;
@@ -60,7 +59,18 @@
 //!   doesn't parse (lightningcss); write `row dense`.
 //! - cascade: `!important` beats normal declarations, then higher specificity
 //!   (ids, classes, type) wins, then the later rule
-//! - an `html` rule sets the starting values, also for fragments without `<html>`
+//! - the root rule styles the `HtmlUi` node itself: the `html` rule, plus
+//!   the document's own top-level `<html id="…" class="…">` if it has one
+//!   (so each template can style its root: `<html class="hud">` with
+//!   `.hud { position: absolute; top: 0; right: 0 }`). It takes everything a
+//!   container does — layout, sizes, margins, `position` and insets,
+//!   `border-radius`, box properties, `gap`, `background-color`,
+//!   `border-color`, `z-index` (`ZIndex`; Bevy orders root nodes by
+//!   `GlobalZIndex`, then `ZIndex`), `pointer-events: none` — and its
+//!   inherited properties start the cascade, also for fragments. Only what
+//!   it declares: the app's other `Node` fields and components stay, and
+//!   whatever a later stylesheet or document stops declaring goes back to
+//!   the app's value.
 //!
 //! `font-family` uses the first name registered in
 //! [`FontFamilies`](crate::fonts::FontFamilies) (generic keywords via
@@ -90,8 +100,8 @@
 //! node's `border`/`padding`, insetting the content. Bevy differences: the
 //! center is always drawn (`fill` or not), corners keep their image size
 //! (`border-image-width`/`-outset` are ignored), and one repeat mode applies to
-//! all sides. Box properties from the `html` rule are applied to the `HtmlUi`
-//! node and restored when a later stylesheet drops them.
+//! all sides. Box properties from the root rule (see above) are applied to
+//! the `HtmlUi` node and restored when a later stylesheet drops them.
 
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;

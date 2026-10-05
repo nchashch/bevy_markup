@@ -186,13 +186,31 @@ fn rect_over(base: UiRect, sides: [Option<f32>; 4]) -> UiRect {
     }
 }
 
-/// What the `html` rule's box properties replaced on an `HtmlUi` node, so
-/// they can be restored when a later stylesheet drops them.
+/// What the root rule (the `html` rule, or the document's own `<html>`
+/// element with its `id`/`class`) set on an `HtmlUi` entity, and the app's
+/// values it replaced, so a later stylesheet or document that stops
+/// declaring something gives it back. Fields and components the rule never
+/// declared stay the app's (an app may move its UI every frame).
 #[derive(Component)]
-pub(crate) struct CssRootBox {
-    border: UiRect,
-    padding: UiRect,
-    image: bool,
+pub(crate) struct CssRoot {
+    /// The `Node` before CSS: the declared fields hold the app's values.
+    base: Node,
+    layout: LayoutDecl,
+    border: [Option<f32>; 4],
+    padding: [Option<f32>; 4],
+    row_gap: Option<f32>,
+    owned: RootOwned,
+}
+
+/// Components the root rule set: `Some(app's)` while CSS owns one (`None`
+/// inside = the app had none, so giving it back removes it).
+#[derive(Default)]
+struct RootOwned {
+    background: Option<Option<BackgroundColor>>,
+    border_color: Option<Option<BorderColor>>,
+    z_index: Option<Option<ZIndex>>,
+    pickable: Option<Option<Pickable>>,
+    image: Option<Option<ImageNode>>,
 }
 
 /// Computes styles from declared CSS + registered fonts.
@@ -312,12 +330,13 @@ impl Styler<'_> {
     }
 }
 
-/// The `html` rule's values (the starting point even for fragments without
-/// `<html>`), over the defaults.
+/// The root rule's values (`root`: the document's `<html>` element, or a
+/// bare `html` for fragments without one), over the defaults.
 pub(crate) fn root_style(
     styles: &HtmlStyles,
     fonts: &FontFamilies,
     images: &Assets<Image>,
+    root: &HtmlElement,
 ) -> Style {
     let defaults = Style {
         color: DEFAULT_COLOR,
@@ -334,7 +353,18 @@ pub(crate) fn root_style(
         sheet: None,
         images,
     }
-    .style_of(&element_tag("html"), defaults, Pseudo::default())
+    .style_of(root, defaults, Pseudo::default())
+}
+
+/// The element the `HtmlUi` node itself is styled as: the document's
+/// top-level `<html>` (with its `id`/`class`), or a bare `html` for
+/// fragments.
+pub(crate) fn root_element(dom: &tl::VDom) -> HtmlElement {
+    dom.children()
+        .iter()
+        .filter_map(|handle| handle.get(dom.parser())?.as_tag())
+        .find(|tag| tag.name().as_utf8_str().eq_ignore_ascii_case("html"))
+        .map_or_else(|| element_tag("html"), element_of)
 }
 
 pub(crate) fn build_html_ui(
@@ -357,7 +387,7 @@ pub(crate) fn build_html_ui(
         ),
         With<HtmlUi>,
     >,
-    mut roots: Query<(&mut Node, Option<&CssRootBox>), With<HtmlUi>>,
+    roots: Query<(&Node, Option<&CssRoot>), With<HtmlUi>>,
     parents: Query<&ChildOf>,
     tree: Tree,
     dom_nodes: Query<(&DomNode, Option<&PseudoState>)>,
@@ -476,7 +506,11 @@ pub(crate) fn build_html_ui(
         let styles = css
             .map(|css| HtmlStyles::from_sheet(css.sheet()))
             .unwrap_or_default();
-        let root = root_style(&styles, &fonts, &images);
+        let root_element = match (&*rendered, &outline) {
+            (RenderedHtml::Ready(document), None) => root_element(document.dom()),
+            _ => element_tag("html"),
+        };
+        let root = root_style(&styles, &fonts, &images, &root_element);
         let styler = Styler {
             styles: &styles,
             fonts: &fonts,
@@ -485,10 +519,23 @@ pub(crate) fn build_html_ui(
             images: &images,
         };
 
-        if let Ok((mut node, state)) = roots.get_mut(entity) {
-            let root_box = styler.box_of(&element_tag("html"), Pseudo::default());
-            apply_root_box(&mut commands, entity, &mut node, state, root_box);
-        }
+        let root_box = styler.box_of(&root_element, Pseudo::default());
+        // Nested containers space their children like the root does.
+        let default_gap = match root_box.row_gap {
+            Some(gap) => Val::Px(gap),
+            None => roots.get(entity).map_or(Val::Auto, |(node, state)| {
+                match state.filter(|state| state.row_gap.is_some()) {
+                    Some(state) => state.base.row_gap,
+                    None => node.row_gap,
+                }
+            }),
+        };
+        let root_pointer_events = root.pointer_events;
+        commands
+            .entity(entity)
+            .queue(move |mut entity: EntityWorldMut| {
+                apply_root(&mut entity, root_box, root_pointer_events);
+            });
 
         // The elements' interaction state by DOM node, so the collected
         // items style for `:hover`/`:active`. Nested `HtmlUi`s have their
@@ -560,10 +607,6 @@ pub(crate) fn build_html_ui(
             }
         };
 
-        // Nested containers space their children like the root does.
-        let default_gap = roots
-            .get(entity)
-            .map_or(Val::Auto, |(node, _)| node.row_gap);
         let specs: Vec<NodeSpec> = items
             .into_iter()
             .map(|item| item_spec(&styler, item, default_gap))
@@ -1084,62 +1127,117 @@ fn apply_spec(commands: &mut Commands, entity: Entity, spec: NodeSpec, tree: &Tr
     }
 }
 
-/// Applies the `html` rule's `border-image`, `border-width` and `padding` to
-/// the `HtmlUi` node itself, remembering what they replaced (in
-/// [`CssRootBox`]) so a stylesheet without them restores the node.
-/// `background-color` stays block-only (the node's own `BackgroundColor`
-/// belongs to the app).
-fn apply_root_box(
-    commands: &mut Commands,
-    entity: Entity,
-    node: &mut Node,
-    state: Option<&CssRootBox>,
-    boxed: BoxStyle,
-) {
-    let (base_border, base_padding) = state.map_or((node.border, node.padding), |state| {
-        (state.border, state.padding)
-    });
-    let image = boxed.sliced_image();
-    let applies = image.is_some()
-        || boxed.border.iter().any(Option::is_some)
-        || boxed.padding.iter().any(Option::is_some);
-    let had_image = state.is_some_and(|state| state.image);
-
-    if !applies {
-        if state.is_some() {
-            node.border = base_border;
-            node.padding = base_padding;
-            let mut entity = commands.entity(entity);
-            entity.remove::<CssRootBox>();
-            if had_image {
-                entity.remove::<ImageNode>();
-            }
-        }
+/// Applies the root rule to the `HtmlUi` entity itself: its box
+/// (`border-image`, `border-width`, `padding`, `gap`), layout (flex/grid,
+/// sizes, margins, `position` and insets, `border-radius`) on the `Node`,
+/// and `background-color`, `border-color`, `z-index` (`ZIndex`: among
+/// sibling roots too, as Bevy sorts roots by `GlobalZIndex` then `ZIndex`)
+/// and `pointer-events: none` as components. What it no longer declares goes
+/// back to the app's value ([`CssRoot`]).
+fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool) {
+    let state = entity.take::<CssRoot>();
+    let Some(current) = entity.get::<Node>().cloned() else {
         return;
+    };
+    // Back to the app's values, then the new declarations over them.
+    let mut base = current.clone();
+    if let Some(state) = &state {
+        state.layout.restore_from(&state.base, &mut base);
+        restore_sides(&mut base.border, state.base.border, state.border);
+        restore_sides(&mut base.padding, state.base.padding, state.padding);
+        if state.row_gap.is_some() {
+            base.row_gap = state.base.row_gap;
+        }
+    }
+    let mut node = base.clone();
+    boxed.layout.apply_to(&mut node);
+    node.border = rect_over(node.border, boxed.border);
+    node.padding = rect_over(node.padding, boxed.padding);
+    if let Some(gap) = boxed.row_gap {
+        node.row_gap = Val::Px(gap);
+    }
+    if node != current {
+        entity.insert(node);
     }
 
-    let border = rect_over(base_border, boxed.border);
-    let padding = rect_over(base_padding, boxed.padding);
-    if node.border != border {
-        node.border = border;
+    let mut owned = state.map(|state| state.owned).unwrap_or_default();
+    claim(
+        entity,
+        boxed.background.map(BackgroundColor),
+        &mut owned.background,
+    );
+    claim(entity, boxed.border_color(), &mut owned.border_color);
+    claim(entity, boxed.z_index.map(ZIndex), &mut owned.z_index);
+    claim(
+        entity,
+        (!pointer_events).then_some(Pickable::IGNORE),
+        &mut owned.pickable,
+    );
+    claim(entity, boxed.sliced_image(), &mut owned.image);
+
+    let declares_node = boxed
+        .border
+        .iter()
+        .chain(&boxed.padding)
+        .any(Option::is_some)
+        || boxed.row_gap.is_some()
+        || boxed.layout != LayoutDecl::default();
+    let owns_component = owned.background.is_some()
+        || owned.border_color.is_some()
+        || owned.z_index.is_some()
+        || owned.pickable.is_some()
+        || owned.image.is_some();
+    if declares_node || owns_component {
+        entity.insert(CssRoot {
+            base,
+            layout: boxed.layout,
+            border: boxed.border,
+            padding: boxed.padding,
+            row_gap: boxed.row_gap,
+            owned,
+        });
     }
-    if node.padding != padding {
-        node.padding = padding;
+}
+
+/// Undoes [`rect_over`]: the `declared` sides of `rect` back to `base`'s.
+fn restore_sides(rect: &mut UiRect, base: UiRect, declared: [Option<f32>; 4]) {
+    let sides = [
+        (&mut rect.top, base.top),
+        (&mut rect.right, base.right),
+        (&mut rect.bottom, base.bottom),
+        (&mut rect.left, base.left),
+    ];
+    for ((side, base), declared) in sides.into_iter().zip(declared) {
+        if declared.is_some() {
+            *side = base;
+        }
     }
-    let mut entity = commands.entity(entity);
-    entity.insert(CssRootBox {
-        border: base_border,
-        padding: base_padding,
-        image: image.is_some(),
-    });
-    match image {
-        Some(image) => {
-            entity.insert(image);
+}
+
+/// Sets `css` on `entity` while declared, remembering the app's value in
+/// `owned` the first time; when no longer declared, gives the app's value
+/// back (or removes the component if the app had none).
+fn claim<C: Component<Mutability = bevy::ecs::component::Mutable> + Clone>(
+    entity: &mut EntityWorldMut,
+    css: Option<C>,
+    owned: &mut Option<Option<C>>,
+) {
+    match css {
+        Some(value) => {
+            if owned.is_none() {
+                *owned = Some(entity.get::<C>().cloned());
+            }
+            entity.insert(value);
         }
-        None if had_image => {
-            entity.remove::<ImageNode>();
-        }
-        None => {}
+        None => match owned.take() {
+            Some(Some(app)) => {
+                entity.insert(app);
+            }
+            Some(None) => {
+                entity.remove::<C>();
+            }
+            None => {}
+        },
     }
 }
 
@@ -1376,7 +1474,7 @@ fn element_of(tag: &tl::HTMLTag) -> HtmlElement {
 }
 
 /// An element known only by its tag (`html` root, `pre` for outlines).
-fn element_tag(tag: &str) -> HtmlElement {
+pub(crate) fn element_tag(tag: &str) -> HtmlElement {
     HtmlElement {
         tag: tag.to_owned(),
         ..default()

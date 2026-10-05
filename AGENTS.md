@@ -314,8 +314,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   required components: reset to default, never removed).
 - Box properties (`cascade.rs` → `build.rs`): `border-image` (shorthand +
   `-source`/`-slice`/`-repeat`), `border-width`, `padding` (absolute lengths)
-  on blocks, containers and the `html` rule; `background-color` on blocks and
-  containers; `gap`/`row-gap` on containers.
+  on blocks, containers and the root rule; `background-color` and
+  `gap`/`row-gap` on containers and the root rule, `background-color` also on
+  blocks.
   `url()` resolves relative to the `.css`; the `Stylesheet` loader loads the
   images as dependencies. Maps to Bevy's sliced `ImageNode`
   (`VisualBox::BorderBox`) + `Node::border`/`padding`. Slice numbers = image px,
@@ -323,9 +324,21 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   repeats → `Tile`; one mode for all sides. Bevy always draws the center;
   `border-image-width`/`-outset` ignored (corners at image size). Blocks with
   box properties get a wrapper node (a node can't be both `Text` and
-  `ImageNode`); the `HtmlElement` is on the wrapper. The `html` rule's box is
-  applied to the `HtmlUi` node itself, with the replaced border/padding kept in
-  `CssRootBox` and restored if a later stylesheet drops them.
+  `ImageNode`); the `HtmlElement` is on the wrapper.
+- Root rule (`build.rs` `apply_root`, queued per build/restyle): the `HtmlUi`
+  entity is styled as the document's top-level `<html>` element (`root_element`:
+  its `id`/`class`; a bare `html` for fragments, outline mode and failures) —
+  box, `gap`, the whole `LayoutDecl` on its `Node`, and `background-color`,
+  `border-color`, `z-index` (`ZIndex`: Bevy sorts roots by `(GlobalZIndex,
+  ZIndex)`), `pointer-events: none` (`Pickable::IGNORE`), `border-image`
+  (`ImageNode`) as components. `CssRoot` keeps the app's `Node` (`base`) and
+  what was declared; each application first restores the previously declared
+  fields from `base` (`LayoutDecl::restore_from`, `restore_sides`), takes the
+  result as the new `base`, then applies the new declarations — so undeclared
+  fields the app changes (per-frame positioning) are never touched. Components
+  go through `claim`: the app's value is saved the first time CSS sets one and
+  given back (or removed) when CSS stops. Nested containers' default `gap` is
+  the root's effective `row-gap`.
 - Demo locales: every locale needs the same message ids; item names arrive as
   English data (`$item`) and non-English bundles map them with an `item-name`
   message. Every visible string in `l10n.html` and the demo shell has a key.
@@ -905,13 +918,13 @@ check its entries and drop workarounds upstream has made unnecessary.
 Known limits (each skipped/ignored value is logged at `debug`):
 
 - **Layout:** flex and grid layout, sizes, margins and `box-sizing` work on
-  blocks and containers (see the CSS subset), not on the `html` rule (the
-  `HtmlUi` node's `Node` stays the app's); `position: fixed`/`sticky`, `order`, named grid
+  blocks, containers and the root (see the CSS subset); `position: fixed`/`sticky`, `order`, named grid
   lines or `grid-template-areas`, `place-*` shorthands, `gap` in `%`, or
   font-relative lengths (`em`/`rem`) for layout. `absolute` resolves against
   the parent (Bevy has no containing-block search). The `HtmlUi` node's default `Node` is a
-  flex *row*, so apps must set `flex_direction: Column` themselves (as the
-  guide's example does), or blocks sit side by side.
+  flex *row*: set `flex_direction: Column` on it or `html { flex-direction:
+  column }` in CSS, or blocks sit side by side. The root rule has no
+  `:hover`/`:focus` states (always `Pseudo::default()`).
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
   hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
 - **Selectors:** compound only (type/`*` + `.class` + `#id`, plus the

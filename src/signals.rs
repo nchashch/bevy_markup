@@ -387,7 +387,9 @@ pub(crate) fn update_pseudo_states(
             ..current
         };
         if state.copied() != Some(desired) {
-            commands.entity(entity).insert(desired);
+            // `try_`: an app system may despawn the UI this frame, its
+            // commands applied before these (bug_0021).
+            commands.entity(entity).try_insert(desired);
         }
     }
 }
@@ -396,6 +398,26 @@ pub(crate) fn update_pseudo_states(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// bug_0021: an app system despawning a UI in the same frame (its
+    /// command buffer applied first) must not make the queued `PseudoState`
+    /// insert panic.
+    #[test]
+    fn pseudo_states_tolerate_a_same_frame_despawn() {
+        let mut app = App::new();
+        app.init_resource::<HoverMap>();
+        let element = app.world_mut().spawn(HtmlElement::default()).id();
+        app.add_systems(
+            Update,
+            (
+                move |mut commands: Commands| commands.entity(element).despawn(),
+                update_pseudo_states,
+            )
+                .chain_ignore_deferred(),
+        );
+        app.update();
+        assert!(app.world().get_entity(element).is_err());
+    }
     use tl::parse;
 
     fn bindings(html: &str) -> Vec<SignalBinding> {

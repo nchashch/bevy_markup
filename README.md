@@ -121,7 +121,9 @@ bevy_markup implements a useful subset of the web, not all of it:
   `grid-template-columns`, `grid-column`, …); sizes, margins, padding,
   `box-sizing`; `position` with `top`/`left`/…, `z-index`; borders with
   colors and rounded corners, background colors; 9-slice frames through
-  `border-image`; `outline`; `pointer-events: none`. Combinators (`.panel p`) and
+  `border-image`; `outline`; `pointer-events: none`. A template styles its
+  own root with `<html class="…">` (placement, stacking, pickability);
+  whatever CSS doesn't declare stays as your code set it. Combinators (`.panel p`) and
   `calc()` aren't supported yet; unsupported CSS is skipped, never guessed.
 - **Focus:** browser-style focus for gamepad and keyboard UIs: `data-on-click`
   and `tabindex` elements are focusable, `autofocus`, `:focus` /

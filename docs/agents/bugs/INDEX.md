@@ -12,7 +12,7 @@ Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below
 (bug_0001–0005: property testing, stateful testing and fuzzing — the fuzzers
-immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s; bug_0020: the picking-driven signals tests).
+immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s; bug_0020: the picking-driven signals tests; bug_0021: prototype_19 integration).
 
 ## Bugs
 
@@ -38,6 +38,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0018](bug_0018.md) | An app `ImageNode` on a built element turned every restyle into a rebuild (rebuild every frame) | `src/build.rs` (`same_shape`) | high | fixed (`f99c6ec`) | prototype_19 integration (entity-id sampling over BRP) |
 | [bug_0019](bug_0019.md) | A value-less attribute (`autofocus`) ate the next attribute's first character | upstream `tl` 0.7.8 (UPSTREAM.md U11) | high | fixed (`f81acce`): dependency switched to `astral-tl` 0.8.0 | prototype_19 integration (gamepad smoke run) |
 | [bug_0020](bug_0020.md) | `pointer-events: none` didn't stop clicks on a block's text (spans carried no `Pickable`) | `src/build.rs` (text spans) | medium | fixed (`96f2cd3`) | new picking-driven signals tests (`tests/signals.rs`) |
+| [bug_0021](bug_0021.md) | Despawning a UI in the same frame panicked `update_pseudo_states` (plain insert on a despawned element) | `src/signals.rs`, `src/focus.rs` | high | fixed (uncommitted at filing) | prototype_19 integration (headless smoke run) |
 
 ## Discovery session metadata: bug_0001–0005
 

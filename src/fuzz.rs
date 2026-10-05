@@ -11,7 +11,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::prelude::*;
 
-use crate::build::{BoxStyle, Styler, root_style};
+use crate::build::{BoxStyle, Styler, element_tag, root_style};
 use crate::cascade::{HtmlStyles, Pseudo, image_urls};
 use crate::fonts::FontFamilies;
 use crate::html::HtmlElement;
@@ -73,7 +73,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
 
     let styles = HtmlStyles::from_sheet(&stylesheet.sheet);
     let fonts = FontFamilies::default();
-    let root = root_style(&styles, &fonts, &assets);
+    let root = root_style(&styles, &fonts, &assets, &element_tag("html"));
     let styler = Styler {
         styles: &styles,
         fonts: &fonts,

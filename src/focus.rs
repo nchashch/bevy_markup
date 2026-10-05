@@ -269,13 +269,14 @@ fn sync_navigation(
             None => roots_in_scope.contains(root) && visible(root),
         });
         if wanted && !navigable {
+            // `try_`: the app may despawn the UI in the same frame (bug_0021).
             commands
                 .entity(entity)
-                .insert(AutoDirectionalNavigation::default());
+                .try_insert(AutoDirectionalNavigation::default());
         } else if !wanted && navigable {
             commands
                 .entity(entity)
-                .remove::<AutoDirectionalNavigation>();
+                .try_remove::<AutoDirectionalNavigation>();
         }
     }
 }
