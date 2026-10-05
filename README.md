@@ -114,8 +114,9 @@ bevy_markup implements a useful subset of the web, not all of it:
 - **HTML:** headings, paragraphs, lists, `pre`, inline elements, and
   containers as nested flex nodes.
 - **CSS:** type, class, id and compound selectors (`p.note`, `h1#title`);
-  colors and fonts (inherited); flex layout (`display`, `flex-direction`,
-  `justify-content`, `align-items`, `gap`, …); sizes, margins, padding,
+  colors and fonts (inherited); flex and grid layout (`display`,
+  `flex-direction`, `justify-content`, `align-items`, `gap`,
+  `grid-template-columns`, `grid-column`, …); sizes, margins, padding,
   `box-sizing`; borders and background colors; 9-slice frames through
   `border-image`. Combinators (`.panel p`), pseudo-classes (`:hover`) and
   `calc()` aren't supported yet; unsupported CSS is skipped, never guessed.
@@ -154,6 +155,7 @@ It matters most if players can load their own translations or mods.
 
 ```sh
 cargo run --example quickstart   # the code above, plus a button and a language switch
+cargo run --example grid         # CSS grid: page layout, responsive slots, spans
 cargo run --example demo         # themes, languages, scrolling, 9-slice frames, DOM outlines
 ```
 
@@ -270,7 +272,7 @@ their time testing rather than compiling Bevy.
 
 ```
 src/            the library
-examples/       quickstart and demo
+examples/       quickstart, grid and demo
 tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in
                 honggfuzz/, fuzzcheck/, test-fuzz/)

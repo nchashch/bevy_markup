@@ -1,0 +1,118 @@
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 20px;
+}
+
+/* The page: one grid, two track templates. Banner and status bar span every
+   column (`1 / -1`); the three panels between them are auto-placed, so the
+   narrow template stacks them without moving a single item. */
+.page {
+  display: grid;
+  flex-grow: 1;
+  gap: 12px;
+}
+.page.wide {
+  grid-template-columns: 200px 1fr 260px;
+  grid-template-rows: auto 1fr auto;
+}
+.page.narrow {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto auto 1fr auto auto;
+}
+.banner, .status {
+  grid-column: 1 / -1;
+}
+
+.banner, .tabs, .details, .status {
+  background-color: #1c1c22;
+  padding: 10px 14px;
+}
+
+h1 {
+  color: #f0b429;
+  font-size: 36px;
+  font-weight: bold;
+}
+h2 {
+  color: #f0b429;
+  font-size: 24px;
+}
+.hint {
+  color: #9a9a9a;
+  font-size: 16px;
+  font-style: italic;
+}
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+/* auto-fit: one column in the wide sidebar, a row of tabs when narrow. */
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-content: start;
+  gap: 6px;
+}
+.tab {
+  background-color: #2a2a33;
+  padding: 6px 10px;
+}
+.tab:hover {
+  background-color: #3a3a46;
+}
+
+/* As many 120px+ columns as fit, stretched to fill the row; the featured
+   slot spans 2×2 and dense packing back-fills the holes it leaves. */
+.slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-auto-rows: 96px;
+  grid-auto-flow: row dense;
+  align-content: start;
+  gap: 8px;
+}
+.slot {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  justify-items: center;
+  align-items: center;
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 10px;
+  padding: 4px 8px;
+}
+.slot.featured {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+.name {
+  font-size: 18px;
+}
+.count {
+  justify-self: end;
+  color: #f0b429;
+  font-family: monospace;
+  font-size: 16px;
+}
+
+/* A two-column table: labels at the start, values at the end. */
+.stats {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 12px;
+  row-gap: 4px;
+  margin-top: 8px;
+}
+.label {
+  color: #9a9a9a;
+}
+.value {
+  justify-self: end;
+  font-family: monospace;
+}
+
+.status {
+  color: #9a9a9a;
+  font-size: 16px;
+}

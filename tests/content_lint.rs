@@ -111,6 +111,25 @@ fn quickstart_contexts() -> Vec<Value> {
         .collect()
 }
 
+/// `examples/grid.rs`: both page layouts (the status message selects on
+/// `layout`); items as in `ITEMS`.
+fn grid_contexts() -> Vec<Value> {
+    let items = json!([
+        { "id": "sword", "count": 1, "featured": false },
+        { "id": "map", "count": 1, "featured": true },
+        { "id": "shield", "count": 1, "featured": false },
+        { "id": "potion", "count": 5, "featured": false },
+        { "id": "herb", "count": 12, "featured": false },
+        { "id": "lantern", "count": 1, "featured": false },
+        { "id": "rope", "count": 2, "featured": false },
+        { "id": "gem", "count": 3, "featured": false },
+        { "id": "key", "count": 1, "featured": false },
+    ]);
+    ["wide", "narrow"]
+        .map(|layout| json!({ "layout": layout, "items": items, "weight": "18.5 kg", "gold": 240 }))
+        .to_vec()
+}
+
 /// Every template under `assets/` (`every_template_is_listed` keeps this
 /// complete).
 const PAGES: &[Page] = &[
@@ -147,6 +166,13 @@ const PAGES: &[Page] = &[
         contexts: quickstart_contexts,
         stylesheets: &["quickstart/style.css"],
         locales: "quickstart/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "grid/grid.html",
+        contexts: grid_contexts,
+        stylesheets: &["grid/style.css"],
+        locales: "grid/locales",
         unlocalized: None,
     },
 ];

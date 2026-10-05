@@ -1,0 +1,36 @@
+{# CSS grid layout (style.css): the page is a grid of panels, the slots a
+   responsive auto-fill grid, each slot and the stats table small grids.
+   {{ layout }} ("wide" or "narrow") picks the page's track template. #}
+<div class="page {{ layout }}">
+  <header class="banner">
+    <h1 data-l10n-id="grid-title">Grid layout</h1>
+    <p class="hint" data-l10n-id="grid-hint">Press <kbd>Space</kbd> to switch the layout, <kbd>L</kbd> to switch the language; resize the window to reflow the slots.</p>
+  </header>
+  <nav class="tabs">
+    <p class="tab" data-l10n-id="grid-tab-items">Items</p>
+    <p class="tab" data-l10n-id="grid-tab-gear">Gear</p>
+    <p class="tab" data-l10n-id="grid-tab-quests">Quests</p>
+  </nav>
+  <main class="slots">
+    {% for item in items %}
+    <div class="slot{% if item.featured %} featured{% endif %}">
+      <p class="name" data-l10n-id="grid-item-{{ item.id }}">{{ item.id }}</p>
+      <p class="count">× {{ item.count }}</p>
+    </div>
+    {% endfor %}
+  </main>
+  <aside class="details">
+    <h2 data-l10n-id="grid-details">Details</h2>
+    <div class="stats">
+      <p class="label" data-l10n-id="grid-stat-items">Item kinds</p>
+      <p class="value">{{ items | length }}</p>
+      <p class="label" data-l10n-id="grid-stat-weight">Weight</p>
+      <p class="value">{{ weight }}</p>
+      <p class="label" data-l10n-id="grid-stat-gold">Gold</p>
+      <p class="value">{{ gold }}</p>
+    </div>
+  </aside>
+  <footer class="status">
+    <p data-l10n-id="grid-status" data-l10n-args='{"layout": "{{ layout }}"}'>{{ layout }}</p>
+  </footer>
+</div>

@@ -5,6 +5,7 @@ use std::cell::RefCell;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::ui::{GridTrackRepetition, MaxTrackSizingFunction, MinTrackSizingFunction};
 use lightningcss::properties::Property;
 use lightningcss::properties::align::{
     self as css_align, BaselinePosition, ContentDistribution, ContentPosition, GapValue,
@@ -12,6 +13,9 @@ use lightningcss::properties::align::{
 };
 use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
 use lightningcss::properties::flex as css_flex;
+use lightningcss::properties::grid::{
+    self as css_grid, RepeatCount, TrackBreadth, TrackListItem, TrackSize, TrackSizing,
+};
 use lightningcss::properties::size::{self as css_size, MaxSize, Size};
 use lightningcss::properties::border::BorderSideWidth;
 use lightningcss::properties::border_image::{
@@ -73,8 +77,18 @@ pub(crate) struct BorderImageDecl {
     pub tile: Option<bool>,
 }
 
-/// Declared flex, size and margin properties of a container or block, as
-/// Bevy values (`None` = not declared).
+/// One side (start or end) of a declared `grid-row`/`grid-column`
+/// placement; named lines and areas are unsupported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GridLineDecl {
+    Auto,
+    /// A line number (negative counts from the end).
+    Line(i16),
+    Span(u16),
+}
+
+/// Declared flex, grid, size and margin properties of a container or block,
+/// as Bevy values (`None` = not declared).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LayoutDecl {
     pub display: Option<Display>,
@@ -84,6 +98,8 @@ pub(crate) struct LayoutDecl {
     pub align_items: Option<AlignItems>,
     pub align_content: Option<AlignContent>,
     pub align_self: Option<AlignSelf>,
+    pub justify_items: Option<JustifyItems>,
+    pub justify_self: Option<JustifySelf>,
     pub flex_grow: Option<f32>,
     pub flex_shrink: Option<f32>,
     pub flex_basis: Option<Val>,
@@ -99,6 +115,15 @@ pub(crate) struct LayoutDecl {
     pub column_gap: Option<f32>,
     /// `box-sizing` (bevy_markup's nodes default to CSS's `content-box`).
     pub box_sizing: Option<BoxSizing>,
+    pub grid_template_rows: Option<Vec<RepeatedGridTrack>>,
+    pub grid_template_columns: Option<Vec<RepeatedGridTrack>>,
+    pub grid_auto_rows: Option<Vec<GridTrack>>,
+    pub grid_auto_columns: Option<Vec<GridTrack>>,
+    pub grid_auto_flow: Option<GridAutoFlow>,
+    /// `[start, end]` of `grid-row`.
+    pub grid_row: [Option<GridLineDecl>; 2],
+    /// `[start, end]` of `grid-column`.
+    pub grid_column: [Option<GridLineDecl>; 2],
 }
 
 impl LayoutDecl {
@@ -116,6 +141,8 @@ impl LayoutDecl {
         set(&mut node.align_items, &self.align_items);
         set(&mut node.align_content, &self.align_content);
         set(&mut node.align_self, &self.align_self);
+        set(&mut node.justify_items, &self.justify_items);
+        set(&mut node.justify_self, &self.justify_self);
         set(&mut node.flex_grow, &self.flex_grow);
         set(&mut node.flex_shrink, &self.flex_shrink);
         set(&mut node.flex_basis, &self.flex_basis);
@@ -131,7 +158,34 @@ impl LayoutDecl {
         set(&mut node.margin.left, &self.margin[3]);
         set(&mut node.column_gap, &self.column_gap.map(Val::Px));
         set(&mut node.box_sizing, &self.box_sizing);
+        set(&mut node.grid_template_rows, &self.grid_template_rows);
+        set(&mut node.grid_template_columns, &self.grid_template_columns);
+        set(&mut node.grid_auto_rows, &self.grid_auto_rows);
+        set(&mut node.grid_auto_columns, &self.grid_auto_columns);
+        set(&mut node.grid_auto_flow, &self.grid_auto_flow);
+        set(&mut node.grid_row, &grid_placement(self.grid_row));
+        set(&mut node.grid_column, &grid_placement(self.grid_column));
     }
+}
+
+/// A declared `[start, end]` pair as a Bevy placement, resolved as CSS
+/// grid placement does: two spans keep the start's; a line with a span
+/// spans from (or back to) the line. `None` when neither side is declared.
+fn grid_placement(sides: [Option<GridLineDecl>; 2]) -> Option<GridPlacement> {
+    use GridLineDecl::{Auto, Line, Span};
+    if sides == [None, None] {
+        return None;
+    }
+    let [start, end] = sides.map(|side| side.unwrap_or(Auto));
+    Some(match (start, end) {
+        (Auto, Auto) => GridPlacement::auto(),
+        (Line(start), Auto) => GridPlacement::start(start),
+        (Auto, Line(end)) => GridPlacement::end(end),
+        (Line(start), Line(end)) => GridPlacement::start_end(start, end),
+        (Span(span), Auto | Span(_)) | (Auto, Span(span)) => GridPlacement::span(span),
+        (Line(start), Span(span)) => GridPlacement::start_span(start, span),
+        (Span(span), Line(end)) => GridPlacement::end_span(end, span),
+    })
 }
 
 /// Declared (not computed) style for one element type.
@@ -487,6 +541,46 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 css_size::BoxSizing::BorderBox => BoxSizing::BorderBox,
             });
         }
+        Property::JustifyItems(value) => style.layout.justify_items = justify_items(value),
+        Property::JustifySelf(value) => style.layout.justify_self = justify_self(value),
+        Property::GridTemplateRows(rows) => style.layout.grid_template_rows = track_sizing(rows),
+        Property::GridTemplateColumns(columns) => {
+            style.layout.grid_template_columns = track_sizing(columns);
+        }
+        Property::GridTemplate(template) => {
+            areas_unsupported(&template.areas);
+            style.layout.grid_template_rows = track_sizing(&template.rows);
+            style.layout.grid_template_columns = track_sizing(&template.columns);
+        }
+        Property::GridAutoRows(tracks) => style.layout.grid_auto_rows = track_size_list(tracks),
+        Property::GridAutoColumns(tracks) => {
+            style.layout.grid_auto_columns = track_size_list(tracks);
+        }
+        Property::GridAutoFlow(flow) => style.layout.grid_auto_flow = Some(grid_auto_flow(*flow)),
+        Property::Grid(grid) => {
+            areas_unsupported(&grid.areas);
+            style.layout.grid_template_rows = track_sizing(&grid.rows);
+            style.layout.grid_template_columns = track_sizing(&grid.columns);
+            style.layout.grid_auto_rows = track_size_list(&grid.auto_rows);
+            style.layout.grid_auto_columns = track_size_list(&grid.auto_columns);
+            style.layout.grid_auto_flow = Some(grid_auto_flow(grid.auto_flow));
+        }
+        Property::GridTemplateAreas(areas) => areas_unsupported(areas),
+        Property::GridRowStart(line) => style.layout.grid_row[0] = grid_line(line),
+        Property::GridRowEnd(line) => style.layout.grid_row[1] = grid_line(line),
+        Property::GridColumnStart(line) => style.layout.grid_column[0] = grid_line(line),
+        Property::GridColumnEnd(line) => style.layout.grid_column[1] = grid_line(line),
+        Property::GridRow(row) => {
+            style.layout.grid_row = [grid_line(&row.start), grid_line(&row.end)];
+        }
+        Property::GridColumn(column) => {
+            style.layout.grid_column = [grid_line(&column.start), grid_line(&column.end)];
+        }
+        Property::GridArea(area) => {
+            style.layout.grid_row = [grid_line(&area.row_start), grid_line(&area.row_end)];
+            style.layout.grid_column =
+                [grid_line(&area.column_start), grid_line(&area.column_end)];
+        }
         _ => {}
     }
 }
@@ -542,13 +636,15 @@ fn gap_px(gap: &GapValue) -> Option<f32> {
     }
 }
 
-/// `display`: `none`, block-level `flow`/`flow-root` (Bevy block layout) and
-/// `flex`; other values (inline, grid, table, …) are unsupported.
+/// `display`: `none`, block-level `flow`/`flow-root` (Bevy block layout),
+/// `flex` and `grid` (inline variants too); other values (inline, table, …)
+/// are unsupported.
 fn display(value: &css_display::Display) -> Option<Display> {
     match value {
         css_display::Display::Keyword(css_display::DisplayKeyword::None) => Some(Display::None),
         css_display::Display::Pair(pair) => match (&pair.outside, &pair.inside) {
             (_, DisplayInside::Flex(_)) => Some(Display::Flex),
+            (_, DisplayInside::Grid) => Some(Display::Grid),
             (DisplayOutside::Block, DisplayInside::Flow | DisplayInside::FlowRoot) => {
                 Some(Display::Block)
             }
@@ -654,6 +750,175 @@ fn align_self(value: &css_align::AlignSelf) -> Option<AlignSelf> {
             SelfPosition::FlexEnd => AlignSelf::FlexEnd,
         },
     })
+}
+
+fn justify_items(value: &css_align::JustifyItems) -> Option<JustifyItems> {
+    Some(match value {
+        css_align::JustifyItems::Normal => JustifyItems::Default,
+        css_align::JustifyItems::Stretch => JustifyItems::Stretch,
+        css_align::JustifyItems::BaselinePosition(BaselinePosition::First) => {
+            JustifyItems::Baseline
+        }
+        css_align::JustifyItems::SelfPosition { value, .. } => match value {
+            SelfPosition::Center => JustifyItems::Center,
+            SelfPosition::Start | SelfPosition::SelfStart | SelfPosition::FlexStart => {
+                JustifyItems::Start
+            }
+            SelfPosition::End | SelfPosition::SelfEnd | SelfPosition::FlexEnd => JustifyItems::End,
+        },
+        css_align::JustifyItems::BaselinePosition(BaselinePosition::Last)
+        | css_align::JustifyItems::Left { .. }
+        | css_align::JustifyItems::Right { .. }
+        | css_align::JustifyItems::Legacy(_) => {
+            return unsupported("justify-items last baseline/left/right/legacy");
+        }
+    })
+}
+
+fn justify_self(value: &css_align::JustifySelf) -> Option<JustifySelf> {
+    Some(match value {
+        css_align::JustifySelf::Auto => JustifySelf::Auto,
+        // `normal` behaves as `stretch` for grid items.
+        css_align::JustifySelf::Normal | css_align::JustifySelf::Stretch => JustifySelf::Stretch,
+        css_align::JustifySelf::BaselinePosition(BaselinePosition::First) => JustifySelf::Baseline,
+        css_align::JustifySelf::SelfPosition { value, .. } => match value {
+            SelfPosition::Center => JustifySelf::Center,
+            SelfPosition::Start | SelfPosition::SelfStart | SelfPosition::FlexStart => {
+                JustifySelf::Start
+            }
+            SelfPosition::End | SelfPosition::SelfEnd | SelfPosition::FlexEnd => JustifySelf::End,
+        },
+        css_align::JustifySelf::BaselinePosition(BaselinePosition::Last)
+        | css_align::JustifySelf::Left { .. }
+        | css_align::JustifySelf::Right { .. } => {
+            return unsupported("justify-self last baseline/left/right");
+        }
+    })
+}
+
+/// `grid-template-rows`/`-columns`: `none` (no explicit tracks) or a track
+/// list; line names are ignored (placements can't refer to them). One
+/// unsupported track drops the whole declaration, as an invalid value would.
+fn track_sizing(sizing: &TrackSizing) -> Option<Vec<RepeatedGridTrack>> {
+    let list = match sizing {
+        TrackSizing::None => return Some(Vec::new()),
+        TrackSizing::TrackList(list) => list,
+    };
+    if list.line_names.iter().any(|names| !names.is_empty()) {
+        debug!("html css: grid line names are ignored");
+    }
+    list.items
+        .iter()
+        .map(|item| match item {
+            TrackListItem::TrackSize(size) => grid_track(size).map(RepeatedGridTrack::from),
+            TrackListItem::TrackRepeat(repeat) => {
+                if repeat.line_names.iter().any(|names| !names.is_empty()) {
+                    debug!("html css: grid line names are ignored");
+                }
+                let count = match repeat.count {
+                    RepeatCount::Number(n) => GridTrackRepetition::Count(u16::try_from(n).ok()?),
+                    RepeatCount::AutoFill => GridTrackRepetition::AutoFill,
+                    RepeatCount::AutoFit => GridTrackRepetition::AutoFit,
+                };
+                let tracks: Option<Vec<GridTrack>> =
+                    repeat.track_sizes.iter().map(grid_track).collect();
+                Some(RepeatedGridTrack::repeat_many(count, tracks?))
+            }
+        })
+        .collect()
+}
+
+/// `grid-auto-rows`/`-columns`.
+fn track_size_list(list: &css_grid::TrackSizeList) -> Option<Vec<GridTrack>> {
+    list.0.iter().map(grid_track).collect()
+}
+
+/// One track size: a breadth (`<length>`, `%`, viewport units, `fr`,
+/// `auto`, `min-content`, `max-content`), `minmax()` or `fit-content()`.
+fn grid_track(size: &TrackSize) -> Option<GridTrack> {
+    match size {
+        // A bare `fr` track is `minmax(auto, <fr>)`.
+        TrackSize::TrackBreadth(TrackBreadth::Flex(fr)) => Some(GridTrack::fr(*fr)),
+        TrackSize::TrackBreadth(breadth) => {
+            Some(GridTrack::minmax(min_breadth(breadth)?, max_breadth(breadth)?))
+        }
+        TrackSize::MinMax { min, max } => {
+            Some(GridTrack::minmax(min_breadth(min)?, max_breadth(max)?))
+        }
+        TrackSize::FitContent(limit) => match length_percentage_val(limit)? {
+            Val::Px(px) => Some(GridTrack::fit_content_px(px)),
+            Val::Percent(percent) => Some(GridTrack::fit_content_percent(percent)),
+            _ => unsupported("fit-content() limit"),
+        },
+    }
+}
+
+/// A track's minimum: never `fr` (invalid CSS there).
+fn min_breadth(breadth: &TrackBreadth) -> Option<MinTrackSizingFunction> {
+    Some(match breadth {
+        TrackBreadth::Length(length) => match length_percentage_val(length)? {
+            Val::Px(v) => MinTrackSizingFunction::Px(v),
+            Val::Percent(v) => MinTrackSizingFunction::Percent(v),
+            Val::Vw(v) => MinTrackSizingFunction::Vw(v),
+            Val::Vh(v) => MinTrackSizingFunction::Vh(v),
+            Val::VMin(v) => MinTrackSizingFunction::VMin(v),
+            Val::VMax(v) => MinTrackSizingFunction::VMax(v),
+            Val::Auto => MinTrackSizingFunction::Auto,
+        },
+        TrackBreadth::Auto => MinTrackSizingFunction::Auto,
+        TrackBreadth::MinContent => MinTrackSizingFunction::MinContent,
+        TrackBreadth::MaxContent => MinTrackSizingFunction::MaxContent,
+        TrackBreadth::Flex(_) => return unsupported("fr as a track minimum"),
+    })
+}
+
+fn max_breadth(breadth: &TrackBreadth) -> Option<MaxTrackSizingFunction> {
+    Some(match breadth {
+        TrackBreadth::Length(length) => match length_percentage_val(length)? {
+            Val::Px(v) => MaxTrackSizingFunction::Px(v),
+            Val::Percent(v) => MaxTrackSizingFunction::Percent(v),
+            Val::Vw(v) => MaxTrackSizingFunction::Vw(v),
+            Val::Vh(v) => MaxTrackSizingFunction::Vh(v),
+            Val::VMin(v) => MaxTrackSizingFunction::VMin(v),
+            Val::VMax(v) => MaxTrackSizingFunction::VMax(v),
+            Val::Auto => MaxTrackSizingFunction::Auto,
+        },
+        TrackBreadth::Flex(fr) => MaxTrackSizingFunction::Fraction(*fr),
+        TrackBreadth::Auto => MaxTrackSizingFunction::Auto,
+        TrackBreadth::MinContent => MaxTrackSizingFunction::MinContent,
+        TrackBreadth::MaxContent => MaxTrackSizingFunction::MaxContent,
+    })
+}
+
+fn grid_auto_flow(flow: css_grid::GridAutoFlow) -> GridAutoFlow {
+    let column = flow.contains(css_grid::GridAutoFlow::Column);
+    match (column, flow.contains(css_grid::GridAutoFlow::Dense)) {
+        (false, false) => GridAutoFlow::Row,
+        (true, false) => GridAutoFlow::Column,
+        (false, true) => GridAutoFlow::RowDense,
+        (true, true) => GridAutoFlow::ColumnDense,
+    }
+}
+
+/// One placement side: `auto`, a line number or a span; named lines and
+/// areas are unsupported (Bevy places by number only).
+fn grid_line(line: &css_grid::GridLine) -> Option<GridLineDecl> {
+    match line {
+        css_grid::GridLine::Auto => Some(GridLineDecl::Auto),
+        css_grid::GridLine::Line { index, name: None } => {
+            i16::try_from(*index).ok().map(GridLineDecl::Line)
+        }
+        css_grid::GridLine::Span { index, name: None } => {
+            u16::try_from(*index).ok().map(GridLineDecl::Span)
+        }
+        _ => unsupported("named grid line or area"),
+    }
+}
+
+fn areas_unsupported(areas: &css_grid::GridTemplateAreas) {
+    if !matches!(areas, css_grid::GridTemplateAreas::None) {
+        debug!("html css: grid-template-areas unsupported");
+    }
 }
 
 /// `width`/`height`/`min-*`: `auto`, lengths, `%`.
@@ -983,6 +1248,175 @@ mod tests {
         assert_eq!(layout("margin-left: 10%").margin, [None, None, None, Some(Val::Percent(10.0))]);
         assert_eq!(layout("column-gap: 6px").column_gap, Some(6.0));
         assert_eq!(layout("box-sizing: border-box").box_sizing, Some(BoxSizing::BorderBox));
+    }
+
+    /// Grid containers: `display`, explicit and implicit tracks (every track
+    /// size form, `repeat()`, shorthands), auto flow and box alignment's
+    /// inline axis, mapped onto the Bevy value CSS means; unsupported parts
+    /// (font-relative tracks, areas, named lines) drop the declaration.
+    #[test]
+    fn grid_container_properties_map_to_bevy_values() {
+        use MaxTrackSizingFunction as Max;
+        use MinTrackSizingFunction as Min;
+        let layout = |css: &str| declared(css).layout;
+        assert_eq!(layout("display: grid").display, Some(Display::Grid));
+        assert_eq!(layout("display: inline-grid").display, Some(Display::Grid));
+
+        let columns = |css: &str| layout(&format!("grid-template-columns: {css}")).grid_template_columns;
+        assert_eq!(
+            columns("100px 1fr 20% 10vw"),
+            Some(vec![
+                GridTrack::px(100.0),
+                GridTrack::fr(1.0),
+                GridTrack::percent(20.0),
+                GridTrack::vw(10.0),
+            ])
+        );
+        assert_eq!(
+            columns("auto min-content max-content fit-content(40px) fit-content(50%)"),
+            Some(vec![
+                GridTrack::auto(),
+                GridTrack::min_content(),
+                GridTrack::max_content(),
+                GridTrack::fit_content_px(40.0),
+                GridTrack::fit_content_percent(50.0),
+            ])
+        );
+        assert_eq!(
+            columns("minmax(50px, 2fr) minmax(min-content, 25%)"),
+            Some(vec![
+                GridTrack::minmax(Min::Px(50.0), Max::Fraction(2.0)),
+                GridTrack::minmax(Min::MinContent, Max::Percent(25.0)),
+            ])
+        );
+        assert_eq!(
+            columns("20px repeat(3, 1fr 10px)"),
+            Some(vec![
+                GridTrack::px(20.0),
+                RepeatedGridTrack::repeat_many(3, vec![GridTrack::fr(1.0), GridTrack::px(10.0)]),
+            ])
+        );
+        assert_eq!(
+            columns("repeat(auto-fill, minmax(50px, 1fr))"),
+            Some(vec![RepeatedGridTrack::minmax(
+                GridTrackRepetition::AutoFill,
+                Min::Px(50.0),
+                Max::Fraction(1.0),
+            )])
+        );
+        assert_eq!(
+            columns("repeat(auto-fit, 40px)"),
+            Some(vec![RepeatedGridTrack::px(GridTrackRepetition::AutoFit, 40.0)])
+        );
+        assert_eq!(columns("[a] 1fr [b]"), Some(vec![GridTrack::fr(1.0)]), "names ignored");
+        assert_eq!(columns("1fr 2em"), None, "one unsupported track drops the list");
+        assert_eq!(layout("grid-template-rows: none").grid_template_rows, Some(Vec::new()));
+        assert_eq!(
+            layout("grid-template-rows: 30px auto").grid_template_rows,
+            Some(vec![GridTrack::px(30.0), GridTrack::auto()])
+        );
+
+        assert_eq!(layout("grid-auto-rows: 30px").grid_auto_rows, Some(vec![GridTrack::px(30.0)]));
+        assert_eq!(
+            layout("grid-auto-columns: minmax(10px, auto) 1fr").grid_auto_columns,
+            Some(vec![GridTrack::minmax(Min::Px(10.0), Max::Auto), GridTrack::fr(1.0)])
+        );
+        for (value, expected) in [
+            ("row", GridAutoFlow::Row),
+            ("column", GridAutoFlow::Column),
+            // Bare `dense` (= `row dense`) fails lightningcss's parser
+            // (UPSTREAM.md U3): the declaration is dropped before us.
+            ("dense row", GridAutoFlow::RowDense),
+            ("column dense", GridAutoFlow::ColumnDense),
+        ] {
+            let css = format!("grid-auto-flow: {value}");
+            assert_eq!(layout(&css).grid_auto_flow, Some(expected), "{css}");
+        }
+
+        let template = layout("grid-template: 30px auto / 1fr 2fr");
+        assert_eq!(template.grid_template_rows, Some(vec![GridTrack::px(30.0), GridTrack::auto()]));
+        assert_eq!(
+            template.grid_template_columns,
+            Some(vec![GridTrack::fr(1.0), GridTrack::fr(2.0)])
+        );
+        let grid = layout("grid: auto-flow dense 40px / repeat(2, 1fr)");
+        assert_eq!(grid.grid_auto_flow, Some(GridAutoFlow::RowDense));
+        assert_eq!(grid.grid_auto_rows, Some(vec![GridTrack::px(40.0)]));
+        assert_eq!(grid.grid_template_columns, Some(vec![RepeatedGridTrack::fr(2, 1.0)]));
+        assert_eq!(grid.grid_template_rows, Some(Vec::new()));
+        let areas = layout("grid-template-areas: \"a b\"");
+        assert_eq!(areas.grid_template_rows, None);
+        assert_eq!(areas.grid_template_columns, None);
+
+        for (value, expected) in [
+            ("normal", Some(JustifyItems::Default)),
+            ("stretch", Some(JustifyItems::Stretch)),
+            ("baseline", Some(JustifyItems::Baseline)),
+            ("center", Some(JustifyItems::Center)),
+            ("start", Some(JustifyItems::Start)),
+            ("flex-start", Some(JustifyItems::Start)),
+            ("end", Some(JustifyItems::End)),
+            ("self-end", Some(JustifyItems::End)),
+            ("left", None),
+            ("legacy", None),
+        ] {
+            let css = format!("justify-items: {value}");
+            assert_eq!(layout(&css).justify_items, expected, "{css}");
+        }
+        for (value, expected) in [
+            ("auto", Some(JustifySelf::Auto)),
+            ("normal", Some(JustifySelf::Stretch)),
+            ("stretch", Some(JustifySelf::Stretch)),
+            ("baseline", Some(JustifySelf::Baseline)),
+            ("center", Some(JustifySelf::Center)),
+            ("self-start", Some(JustifySelf::Start)),
+            ("flex-end", Some(JustifySelf::End)),
+            ("right", None),
+        ] {
+            let css = format!("justify-self: {value}");
+            assert_eq!(layout(&css).justify_self, expected, "{css}");
+        }
+    }
+
+    /// Grid item placement (`grid-row`/`-column`, their longhands and
+    /// `grid-area`) resolves onto Bevy's start/span/end the way CSS
+    /// placement does, with later longhands overriding one side.
+    #[test]
+    fn grid_placements_map_to_bevy_values() {
+        let node = |css: &str| {
+            let mut node = Node::default();
+            declared(css).layout.apply_to(&mut node);
+            node
+        };
+        let column = |css: &str| node(css).grid_column;
+        assert_eq!(column("grid-column: 1 / 3"), GridPlacement::start_end(1, 3));
+        assert_eq!(column("grid-column: 2"), GridPlacement::start(2));
+        assert_eq!(column("grid-column: span 2"), GridPlacement::span(2));
+        assert_eq!(column("grid-column: auto"), GridPlacement::auto());
+        assert_eq!(column("grid-column: 2 / span 3"), GridPlacement::start_span(2, 3));
+        assert_eq!(column("grid-column: span 2 / 4"), GridPlacement::end_span(4, 2));
+        assert_eq!(column("grid-column: auto / -1"), GridPlacement::end(-1));
+        assert_eq!(column("grid-column: span 2 / span 3"), GridPlacement::span(2), "end span dropped");
+        assert_eq!(column("grid-column-start: 2"), GridPlacement::start(2));
+        assert_eq!(column("grid-column-end: 3"), GridPlacement::end(3));
+        assert_eq!(
+            column("grid-column: 1 / 3; grid-column-end: span 2"),
+            GridPlacement::start_span(1, 2)
+        );
+        assert_eq!(column("grid-column: a / 3"), GridPlacement::end(3), "named line skipped");
+        assert_eq!(column("color: red"), GridPlacement::default(), "undeclared keeps the node's");
+
+        let row = |css: &str| node(css).grid_row;
+        assert_eq!(row("grid-row: 2 / span 3"), GridPlacement::start_span(2, 3));
+        assert_eq!(row("grid-row-start: span 2"), GridPlacement::span(2));
+        assert_eq!(row("grid-row-end: -2"), GridPlacement::end(-2));
+
+        let area = node("grid-area: 1 / 2 / 3 / 4");
+        assert_eq!(area.grid_row, GridPlacement::start_end(1, 3));
+        assert_eq!(area.grid_column, GridPlacement::start_end(2, 4));
+        let area = node("grid-area: 2 / 3");
+        assert_eq!(area.grid_row, GridPlacement::start(2));
+        assert_eq!(area.grid_column, GridPlacement::start(3));
     }
 
     /// Per-side border widths go to their own side; `border-image-width` and

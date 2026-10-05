@@ -23,6 +23,7 @@ the issue may already be fixed or reported.
 | U7 | cargo-mutants | `--re` / `--exclude-re` don't filter struct-field-deletion mutants | targeted reruns run unrelated mutants (~5× slower) | none (documented) | unreported |
 | U8 | cargo-fuzz | Prebuilt (musl) binary defaults `--target` to musl, which ASan rejects | CI fuzz jobs failed to build | `--target "$host"` in `scripts/fuzz-libfuzzer.sh` | unreported |
 | U9 | Bevy 0.19 | `UiPlugin`'s `viewport_picking` panics without the picking plugins | headless UI layout tests need extra plugins | add `DefaultPickingPlugins` in `tests/common` | discuss first |
+| U10 | lightningcss | Bare `grid-auto-flow: dense` fails to parse | the declaration is dropped (CSS means `row dense`) | none (documented; write `row dense`) | unreported |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -176,6 +177,24 @@ CI clippy command and workspace tests pass on both.
   conditional or the dependency explicit.
 - **Local workaround:** `tests/common/mod.rs` (`TestUi::with_layout`) adds
   `DefaultPickingPlugins` and `TextureAtlasPlugin`.
+
+## U10 — lightningcss: bare `grid-auto-flow: dense` doesn't parse
+
+- **Project:** [parcel-bundler/lightningcss](https://github.com/parcel-bundler/lightningcss),
+  1.0.0-alpha.72 (the version bevy_markup uses; re-check the latest).
+- **Problem:** `<GridAutoFlow as Parse>::parse` (`src/properties/grid.rs`),
+  on a leading `dense`, `try_parse`s a following `row`/`column` and
+  propagates its error with `?`, so `dense` alone (valid CSS: `[ row |
+  column ] || dense`, = `row dense`) is an invalid declaration. `dense row`,
+  `row dense`, `column dense` parse.
+- **Reproduction:** `StyleSheet::parse("p { grid-auto-flow: dense }", …)`
+  yields no `Property::GridAutoFlow` declaration.
+- **Local workaround:** none; documented in `src/style.rs` (write
+  `row dense`), the example uses `row dense`; `cascade::tests::
+  grid_container_properties_map_to_bevy_values` notes it at its `dense row`
+  case.
+- **Upstream fix sketch:** make the trailing direction optional (`.ok()`
+  instead of `?`) and keep `Row` as the default.
 
 ## Not upstream bugs (recorded so they aren't re-filed)
 

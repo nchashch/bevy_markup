@@ -1,0 +1,6 @@
+(
+    locale: "de",
+    resources: [
+        "grid.ftl",
+    ],
+)

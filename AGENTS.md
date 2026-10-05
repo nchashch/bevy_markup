@@ -4,6 +4,7 @@ Bevy 0.19 library: HTML templates (Tera) + Fluent + CSS → Bevy UI, with
 9-slice frames. Dependencies are limited to that; don't add unrelated crates.
 
 - `cargo run --example quickstart` — the API in one small app.
+- `cargo run --example grid` — CSS grid layout (page grid, responsive slots).
 - `cargo run --example demo` — everything: themes, languages, DOM outlines,
   scrolling, 9-slice frames.
 - `cargo doc --open` — the user-facing documentation (crate docs = guide).
@@ -64,6 +65,8 @@ src/
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
   quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, click wiring, Space = language
+  grid.rs          CSS grid: page track template switched via context (Space), auto-fill slots
+                   with a 2×2 span and dense packing, small grids in slots/stats; L = language
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    content slots, scroll wiring, contexts), controls.rs (language/theme
                    selection), consts.rs (fonts)
@@ -134,6 +137,7 @@ test-fuzz/
 examples/assets/   the examples' content (AssetPlugin file_path; no fonts: system fonts)
   src/             artwork sources (frame.kra) for the UI images
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
+  grid/            grid.html, style.css (all of the grid example's layout), locales/{en-US,de}
   ui/frame.png     256x256 frame; frame_transparent.png (clear center; the
                    parchment/terminal panels frame themselves with it)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;
@@ -253,12 +257,21 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   (style before weight): bold-italic → italic → bold → regular.
 - Layout properties (`LayoutDecl` in `cascade.rs`, applied by
   `LayoutDecl::apply_to` in `build.rs` over bevy_markup's defaults): `display`
-  (`none`/`block`/`flex`), `flex-*`, `justify-content`, `align-*`, sizes
-  (px/%/vw…/auto), margins (px/%/auto, over `li`'s 12px indent), `gap` both
-  axes, `box-sizing` — on containers and on a block's outer node (the text
-  node, or its box wrapper). Containers stay flex columns unless
-  `flex-direction`/`display: block` says otherwise; blocks and containers
-  keep `flex_shrink: 0`; nodes default to `BoxSizing::ContentBox`.
+  (`none`/`block`/`flex`/`grid`), `flex-*`, `justify-content`, `align-*`,
+  `justify-items`/`-self`, sizes (px/%/vw…/auto), margins (px/%/auto, over
+  `li`'s 12px indent), `gap` both axes, `box-sizing` — on containers and on a
+  block's outer node (the text node, or its box wrapper). Containers stay flex
+  columns unless `flex-direction`/`display: block`/`display: grid` says
+  otherwise; blocks and containers keep `flex_shrink: 0`; nodes default to
+  `BoxSizing::ContentBox`. Grid (onto Bevy's `Node` grid fields, laid out
+  by taffy): track lists (`grid-template-*`, `grid-template`, `grid`;
+  lengths/%/viewport units, `fr`, `auto`, `min-`/`max-content`, `minmax()`,
+  `fit-content()`, `repeat()` incl. `auto-fill`/`auto-fit`; one unsupported
+  track drops the declaration), `grid-auto-rows`/`-columns`/`-flow`, and
+  numeric line/`span` placement (`grid-row`/`-column` + longhands,
+  `grid-area`; `GridLineDecl` pairs → `GridPlacement`). Named lines and
+  `grid-template-areas` are skipped (Bevy places by number only). Bare
+  `grid-auto-flow: dense` fails lightningcss's parser (UPSTREAM.md U10).
 - Box properties (`cascade.rs` → `build.rs`): `border-image` (shorthand +
   `-source`/`-slice`/`-repeat`), `border-width`, `padding` (absolute lengths)
   on blocks, containers and the `html` rule; `background-color` on blocks and
@@ -555,6 +568,11 @@ known gaps:
     `layout_sizes` (match Chromium to the pixel); `BEVY_MARKUP_CSS` models bevy_markup's
     `flex-shrink: 0`; `tests/layout_properties.rs` checks flexbox invariants.
     The oracle found Bevy's border-box default (bevy_markup now uses content-box).
+  - [x] CSS grid: vector `layout_grid` (fixed/%/`fr`/content-sized tracks,
+    spans, explicit and swapped line placement, implicit rows, `auto-fill`
+    with `minmax()`, column dense flow, `grid-area`, item alignment, container
+    and boxed-block items) matches Chromium to the pixel; the mapping is
+    pinned per value by `cascade::tests::grid_*`.
 - [x] **4. Lint tests over real content** (`tests/content_lint.rs`, see
   Testing): locale parity, templates render with the examples' data and every
   `data-l10n-id` resolves, no hard-coded text, CSS `url()`s, pseudo-locale run.
@@ -780,9 +798,10 @@ check its entries and drop workarounds upstream has made unnecessary.
 
 Known limits (each skipped/ignored value is logged at `debug`):
 
-- **Layout:** flex layout, sizes, margins and `box-sizing` work on blocks and
-  containers (see the CSS subset), not on the `html` rule (the `HtmlUi` node's
-  `Node` stays the app's); no `position`, grid, `order`, `gap` in `%`, or
+- **Layout:** flex and grid layout, sizes, margins and `box-sizing` work on
+  blocks and containers (see the CSS subset), not on the `html` rule (the
+  `HtmlUi` node's `Node` stays the app's); no `position`, `order`, named grid
+  lines or `grid-template-areas`, `place-*` shorthands, `gap` in `%`, or
   font-relative lengths (`em`/`rem`) for layout. The `HtmlUi` node's default `Node` is a
   flex *row*, so apps must set `flex_direction: Column` themselves (as the
   guide's example does), or blocks sit side by side.

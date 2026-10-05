@@ -23,16 +23,26 @@
 //!   `border-width`, `padding` (absolute lengths); `background-color` on
 //!   blocks and containers; `gap` / `row-gap` / `column-gap` on containers
 //! - layout on blocks and containers (not the `html` rule: the `HtmlUi`
-//!   node's own `Node` stays the app's): `display` (`none`, `block`, `flex`),
-//!   `flex-direction`, `flex-wrap`, `flex-flow`, `justify-content`,
-//!   `align-items`, `align-content`, `align-self`, `flex-grow`,
-//!   `flex-shrink`, `flex-basis`, `flex`; `width`, `height`, `min-*`, `max-*`
-//!   (px, `%`, `vw`/`vh`/`vmin`/`vmax`, `auto`/`none`); `margin` (+ sides; px,
-//!   `%`, `auto`); `box-sizing`. As in CSS, sizes default to the content box.
+//!   node's own `Node` stays the app's): `display` (`none`, `block`, `flex`,
+//!   `grid`), `flex-direction`, `flex-wrap`, `flex-flow`, `justify-content`,
+//!   `align-items`, `align-content`, `align-self`, `justify-items`,
+//!   `justify-self`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex`;
+//!   `width`, `height`, `min-*`, `max-*` (px, `%`, `vw`/`vh`/`vmin`/`vmax`,
+//!   `auto`/`none`); `margin` (+ sides; px, `%`, `auto`); `box-sizing`. As
+//!   in CSS, sizes default to the content box.
 //!   Containers are flex columns unless `flex-direction` (or `display:
 //!   block`) says otherwise — `display: flex` alone keeps the column — and
 //!   neither containers nor blocks shrink by default (`flex-shrink: 0`).
 //!   Font-relative lengths (`em`, `rem`) and `calc()` are skipped here.
+//! - grid: `grid-template-rows`/`-columns` (`none` or track lists: lengths,
+//!   `%`, viewport units, `fr`, `auto`, `min-content`, `max-content`,
+//!   `minmax()`, `fit-content()`, `repeat()` with a count, `auto-fill` or
+//!   `auto-fit`), `grid-template`, `grid-auto-rows`/`-columns`,
+//!   `grid-auto-flow`, `grid`; placement by line number and `span`:
+//!   `grid-row`/`-column` (+ `-start`/`-end`), `grid-area`. Named lines
+//!   (names in track lists are ignored, placements by name skipped) and
+//!   `grid-template-areas` are unsupported. Bare `grid-auto-flow: dense`
+//!   doesn't parse (lightningcss); write `row dense`.
 //! - cascade: `!important` beats normal declarations, then higher specificity
 //!   (ids, classes, type) wins, then the later rule
 //! - an `html` rule sets the starting values, also for fragments without `<html>`
