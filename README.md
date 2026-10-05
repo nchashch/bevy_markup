@@ -132,6 +132,22 @@ The crate documentation (`cargo doc --open`) is the full guide.
 |---|---|---|
 | 0.1 (unreleased) | 0.19 | 0.15 |
 
+### Recommended: patched fluent-syntax
+
+The fluent-syntax version Bevy's Fluent integration uses (0.11) has two
+bugs that a malformed translation file can trigger: a panic on a broken
+unicode escape, and a stack overflow (process abort) on deeply nested
+expressions. Fixes are proposed upstream; until they're released, add this
+to your app's `Cargo.toml` (cargo applies `[patch]` only in the top-level
+project, so bevy_markup can't do it for you):
+
+```toml
+[patch.crates-io]
+fluent-syntax = { git = "https://github.com/nchashch/fluent-rs", branch = "fix/fuzzing-bugs-0.11" }
+```
+
+It matters most if players can load their own translations or mods.
+
 ## Running the examples
 
 ```sh
@@ -255,7 +271,6 @@ tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in
                 honggfuzz/, fuzzcheck/, test-fuzz/)
 scripts/        oracles, fuzzing, mutation testing, coverage, golden images
-vendor/         patched copies of dependencies (see docs/agents/bugs/UPSTREAM.md)
 docs/agents/    developer docs: testing guide, bug reports
 AGENTS.md       detailed project notes: architecture, conventions, gotchas
 ```

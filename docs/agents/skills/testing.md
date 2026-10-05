@@ -440,7 +440,7 @@ discovery order) and a row in `docs/agents/bugs/INDEX.md`. Include:
 - a minimal reproduction (minimized, not a raw fuzzer artifact)
 - root cause, fix (with commit), and the regression test that guards it
 - for upstream bugs: affected and pinned versions, and where the local patch
-  is wired (`[patch.crates-io]` + `vendor/`)
+  is wired (`[patch.crates-io]` + a fork branch or a vendored copy)
 
 Use the existing reports as templates.
 

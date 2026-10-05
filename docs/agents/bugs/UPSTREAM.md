@@ -14,8 +14,8 @@ the issue may already be fixed or reported.
 
 | # | Project | Issue | Impact on bevy_markup | Local workaround | Status |
 |---|---|---|---|---|---|
-| U1 | fluent-syntax (fluent-rs) | Slicing panics inside multi-byte characters ([bug_0005](bug_0005.md)) | panic from any FTL asset | vendored patch | unreported |
-| U2 | fluent-syntax (fluent-rs) | Unbounded placeable nesting overflows the stack ([bug_0015](bug_0015.md)) | stack overflow (abort) from a few KB of FTL | vendored patch | unreported |
+| U1 | fluent-syntax (fluent-rs) | Invalid unicode escape before a multi-byte character panics ([bug_0005](bug_0005.md)) | panic from any FTL asset | fork (git patch) | fix on fork; upstream PR pending |
+| U2 | fluent-syntax (fluent-rs) | Unbounded expression nesting overflows the stack ([bug_0015](bug_0015.md)) | stack overflow (abort) from a few KB of FTL | fork (git patch) | fix on fork; upstream PR pending |
 | U3 | honggfuzz-rs | Bundled honggfuzz doesn't build against current binutils | honggfuzz driver doesn't build | vendored patch | unreported |
 | U4 | fuzzcheck | Coverage sensor misreads LLVM 21+ `__llvm_prf_data` | fuzzcheck driver gets no usable coverage | vendored patch | unreported |
 | U5 | fuzzcheck | `observing_only_files_from_current_dir` drops absolute paths | fuzzcheck observes no project code | vendored patch | unreported |
@@ -24,55 +24,66 @@ the issue may already be fixed or reported.
 | U8 | cargo-fuzz | Prebuilt (musl) binary defaults `--target` to musl, which ASan rejects | CI fuzz jobs failed to build | `--target "$host"` in `scripts/fuzz-libfuzzer.sh` | unreported |
 | U9 | Bevy 0.19 | `UiPlugin`'s `viewport_picking` panics without the picking plugins | headless UI layout tests need extra plugins | add `DefaultPickingPlugins` in `tests/common` | discuss first |
 
-## U1 — fluent-syntax: slicing panics inside multi-byte characters
+Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
+branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
+`fix/fuzzing-bugs-0.11` (on tag `fluent-syntax@0.11.1`; what bevy_markup
+patches in, since bevy_fluent 0.15 needs `^0.11`). One commit on each, same
+diff: `fluent-syntax/src/parser/{core,errors,expression,helper}.rs` and the
+new test file `fluent-syntax/tests/robustness.rs`. Upstream's `cargo fmt`,
+CI clippy command and workspace tests pass on both.
+
+## U1 — fluent-syntax: invalid unicode escape before a multi-byte character panics
 
 - **Project:** [projectfluent/fluent-rs](https://github.com/projectfluent/fluent-rs),
   crate `fluent-syntax`. Affected: 0.11.1 (pinned by bevy_fluent 0.15 via
-  fluent 0.16 / fluent-bundle 0.15) and 0.12.0 (latest checked, 2026-10-04).
-- **Problem:** the parser computes some byte ranges by guessing (`ptr - 1`,
-  fixed windows like `[..100]` for error context), and `Slice::slice` for
-  `String`/`&str` applies them with `&self[range]`. A range that lands
-  inside a multi-byte character panics.
-- **Reproduction:** parse `u={"\U` followed by a multi-byte character
-  (e.g. U+FFFD): `FluentResource::try_new("u={\"\\U\u{fffd}".to_owned())`
-  panics with "byte index … is not a char boundary". A second variant: a
-  long error context of multi-byte characters
-  (`format!("x = {}{{{}", "é".repeat(48), "é")`).
-- **Local fix:** `vendor/fluent-syntax/src/parser/slice.rs` (`PATCH(bevy_markup)`)
-  rounds ranges up to the next char boundary, wired via `[patch.crates-io]`
-  in the root, `fuzz/`, `honggfuzz/` and `fuzzcheck/` manifests.
-  Regression tests: `src/fuzz.rs`
-  `broken_unicode_escape_after_multibyte_char_does_not_panic`,
-  `long_multibyte_error_context_does_not_panic`.
-- **Upstream PR sketch:** the clamp in `Slice::slice` is the minimal fix;
-  the better fix is to compute char-aligned ranges at the call sites. Add
-  the two inputs above as parser test fixtures.
+  fluent 0.16 / fluent-bundle 0.15) and 0.12.0 (latest checked, 2026-10-05).
+- **Problem:** `skip_unicode_escape_sequence` reports an invalid `\u`/`\U`
+  escape with the character that ended it, sliced as `ptr + 1`, one byte.
+  If that character is multi-byte, `Slice::slice` (`&self[range]`) panics.
+  It's the only unsafe slice: the parser's other `ptr - 1` slices follow an
+  ASCII byte, and replaying ~4,900 ftl fuzz inputs with a boundary clamp
+  removed found no other panic. (An earlier "second variant", a long
+  multi-byte error context, was wrong: that input parses to an ordinary
+  error.)
+- **Reproduction:** `FluentResource::try_new("u={\"\\U\u{fffd}".to_owned())`
+  panics with "byte index 7 is not a char boundary".
+- **Fix (fork):** take the whole offending character
+  (`chars().next().map(char::len_utf8)`) instead of one byte. The first
+  local fix (vendored, now removed) clamped every slice to a char boundary.
+- **Tests:** fork `robustness.rs` `invalid_unicode_escape_before_multibyte_char`
+  (includes the exact error text); bevy_markup `src/fuzz.rs`
+  `broken_unicode_escape_after_multibyte_char_does_not_panic`.
 
-## U2 — fluent-syntax: unbounded placeable nesting overflows the stack
+## U2 — fluent-syntax: unbounded expression nesting overflows the stack
 
 - **Project:** as U1. Affected: 0.11.1 and 0.12.0 (latest checked,
-  2026-10-04; `get_placeable` recurses without a depth check).
-- **Problem:** placeables nest recursively (placeable → expression → inline
-  expression or select variant → placeable) with no limit. Measured overflow
-  depths: debug 200–400 levels on a 2 MB stack (800–1600 on 8 MB), release
-  1600–3200 on 2 MB (6400–12800 on 8 MB). A few KB of `{{{…}}}` abort any
+  2026-10-05).
+- **Problem:** inline expressions nest recursively with no limit, along two
+  cycles: placeables (placeable → expression → inline expression or select
+  variant → placeable) and call arguments (inline expression → call
+  arguments → inline expression, `F(F(F(…)))`, no braces needed). Measured
+  overflow depths for placeables: debug 200–400 levels on a 2 MB stack
+  (800–1600 on 8 MB), release 1600–3200 on 2 MB (6400–12800 on 8 MB); calls
+  overflow at 100–400 levels in debug on 2 MB. A few KB of FTL abort any
   process that parses it, e.g. a Bevy app loading a translation on a worker
   thread.
 - **Reproduction:**
-  `FluentResource::try_new(format!("x = {}\"a\"{}\n", "{".repeat(100_000), "}".repeat(100_000)))`
-  aborts with a stack overflow.
-- **Local fix:** `vendor/fluent-syntax/src/parser/core.rs` (`PATCH(bevy_markup)`):
-  a depth counter in `get_placeable`, the single choke point for both
-  `parse` and `parse_runtime`, returns the new
-  `ErrorKind::PlaceableNestingTooDeep` past `MAX_PLACEABLE_DEPTH` = 100; the
-  entry becomes Junk. Regression tests: `src/fuzz.rs`
-  `deeply_nested_placeables_are_an_error_not_a_stack_overflow`,
+  `FluentResource::try_new(format!("x = {{ {}1{} }}\n", "F(".repeat(100_000), ")".repeat(100_000)))`
+  (or the same with `{`/`}` around `"a"`) aborts with a stack overflow.
+- **Fix (fork):** both cycles pass through `get_inline_expression` once per
+  level; a depth counter there returns the new `ErrorKind::NestingTooDeep`
+  past `MAX_NESTING_DEPTH` = 100, and the entry becomes Junk. The first
+  local fix (vendored, now removed) counted placeables only and missed the
+  call cycle.
+- **Tests:** fork `robustness.rs` (100,000 nested placeables and calls on a
+  2 MiB stack; the boundaries 100/101 braces and 99/100 calls, derived by
+  hand; a too-deep entry leaves the next message intact); bevy_markup
+  `src/fuzz.rs` `deeply_nested_expressions_are_an_error_not_a_stack_overflow`,
   `nesting_up_to_the_limit_still_works`.
-- **Upstream PR sketch:** the patch as is. Open questions for maintainers:
-  the limit (100) and whether a new `ErrorKind` variant is acceptable
-  (it's a public enum without `#[non_exhaustive]`, so adding a variant is
-  technically a breaking change for exhaustive matches). Also check whether
-  fluent-bundle's resolver needs its own limit for deep references.
+- **For the PR:** the limit (100) and the new `ErrorKind` variant (a public
+  enum without `#[non_exhaustive]`, so technically breaking for exhaustive
+  matches) are maintainer decisions. fluent-bundle's resolver already caps
+  placeables per message (`MAX_PLACEABLES`).
 
 ## U3 — honggfuzz-rs: bundled honggfuzz fails against current binutils
 

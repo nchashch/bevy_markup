@@ -12,4 +12,4 @@ serde = "1.0.229"
 test-fuzz = "8.1"
 
 [patch.crates-io]
-fluent-syntax = { path = "../vendor/fluent-syntax" }
+fluent-syntax = { git = "https://github.com/nchashch/fluent-rs", branch = "fix/fuzzing-bugs-0.11" }

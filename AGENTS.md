@@ -125,7 +125,6 @@ test-fuzz/
                      `#[test_fuzz]` (`cargo +nightly test-fuzz tests::fuzz_html`
                      from this directory; corpus seeds come from plain
                      `cargo test` runs)
-vendor/fluent-syntax/  vendored fluent-syntax 0.11.1 (patched: char boundaries, placeable nesting limit; see Gotchas)
 assets/            (gitignored — see Gotchas)
   fonts/           Regular/Bold/Italic/BoldItalic of IosevkaSlabMono, IosevkaSlabQP, Spectral
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
@@ -165,18 +164,21 @@ assets/            (gitignored — see Gotchas)
   counts) — otherwise it rebuilds. Restyles keep entities and app-attached
   components. `restyle_matches_a_fresh_build` (properties) guards that both
   paths agree; keyed reconciliation can later extend `NodeSpec` with keys.
-- `vendor/fluent-syntax` is a patched fork (wired via `[patch.crates-io]` in
-  the root, `fuzz/` and `honggfuzz/` manifests) carrying two fixes for bugs
-  reachable from any FTL asset, both marked `PATCH(bevy_markup)`:
-  - bug_0005: upstream panics slicing FTL source at byte ranges inside
-    multi-byte characters (broken `\U` escapes etc.); `Slice::slice` clamps
-    to char boundaries.
-  - bug_0015: placeable nesting recursed without a limit, so a few KB of
-    `{{{…}}}` overflowed the stack; `get_placeable` now fails past
-    `MAX_PLACEABLE_DEPTH` = 100 with `ErrorKind::PlaceableNestingTooDeep`
-    (the entry becomes Junk).
-  Upstream has fixed neither and the version is pinned by bevy_fluent's
-  fluent; re-check (and re-apply) when bumping bevy_fluent.
+- fluent-syntax comes from a fork, `nchashch/fluent-rs` branch
+  `fix/fuzzing-bugs-0.11` (upstream's 0.11.1 tag plus fixes; Cargo.lock pins
+  the commit), wired via `[patch.crates-io]` in the root and all four fuzz
+  manifests. It fixes two bugs reachable from any FTL asset:
+  - bug_0005: an invalid `\U` escape before a multi-byte character panicked
+    (the error quoted the escape plus one *byte* of the next character).
+  - bug_0015: expression nesting recursed without a limit (placeables *and*
+    call arguments), so a few KB of `{{{…}}}` or `F(F(…))` overflowed the
+    stack; `get_inline_expression` now fails past `MAX_NESTING_DEPTH` = 100
+    with `ErrorKind::NestingTooDeep` (the entry becomes Junk).
+  The same fixes are proposed upstream from branch `fix/fuzzing-bugs` (on
+  upstream `main`, 0.12). `[patch]` doesn't reach crates that depend on
+  bevy_markup: they need the same entry (README). Re-check when bumping
+  bevy_fluent; drop the patch once upstream releases the fixes in the
+  fluent-syntax version bevy_fluent uses (UPSTREAM.md U1/U2).
 - `vendor/honggfuzz` is a patched fork of the honggfuzz crate used only by
   `honggfuzz/` targets: its bundled C source fails against current binutils
   (`bfd.h` no longer defines `TRUE`).
@@ -579,9 +581,9 @@ known gaps:
     0.11.1 slices parser source at byte ranges that can land inside a
     multi-byte character (e.g. FTL `u={"\" + U-escape + replacement char`).
     Reachable from any FTL asset; not fixed upstream and the version is
-    pinned by bevy_fluent's fluent. Fixed by vendoring `vendor/fluent-syntax`
-    with a boundary-safe `Slice::slice` (`[patch.crates-io]` in all three
-    manifests); regression tests in `src/fuzz.rs`.
+    pinned by bevy_fluent's fluent. Fixed in the fluent-syntax fork (first
+    vendored as `vendor/fluent-syntax`; see Gotchas); regression tests in
+    `src/fuzz.rs`.
   - [x] The arbtest harness (`tests/arbtest.rs`) covers the pipeline end to
     end with arbitrary bytes; its first run found the failed-stylesheet hang
     (fixed in `build.rs`, see Gotchas).

@@ -58,13 +58,16 @@ quickcheck_macros = "1.2.0"
 # 0.4 requires proptest ≥1.6; 0.3.1 is the last line on ^1.1.
 test-strategy = "0.3.1"
 
-# Vendored with a bevy_markup patch: fluent-syntax slices source text at byte
-# ranges that can land inside a multi-byte character (panic on broken
-# unicode escapes and similar paths; reachable from any FTL asset). Not
-# fixed upstream as of 0.11.1, which is pinned by fluent(-bundle) 0.16/0.15
-# as required by bevy_fluent 0.15.
+# fluent-syntax from the fork with fixes for two bugs reachable from any FTL
+# asset (docs/agents/bugs/UPSTREAM.md U1, U2): a panic on an invalid unicode
+# escape before a multi-byte character, and a stack overflow on deeply nested
+# expressions. Branch fix/fuzzing-bugs-0.11 is upstream's fluent-syntax 0.11.1
+# tag plus the fixes; 0.11 is what bevy_fluent 0.15's fluent-bundle requires.
+# Cargo.lock pins the commit. Applies only inside this repository: crates
+# depending on bevy_markup need the same entry (see README). The fuzz
+# workspaces repeat it.
 [patch.crates-io]
-fluent-syntax = { path = "vendor/fluent-syntax" }
+fluent-syntax = { git = "https://github.com/nchashch/fluent-rs", branch = "fix/fuzzing-bugs-0.11" }
 
 # Mutation testing (scripts/mutants.sh, .github/workflows/mutants.yml).
 # Every mutant rebuilds bevy_markup and relinks its test binaries: no debug info

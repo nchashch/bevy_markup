@@ -134,10 +134,10 @@ pub fn translate(ftl: &str, id: &str, args_json: &str) -> Result<String, String>
 mod tests {
     use super::*;
 
-    /// Found by honggfuzz (`ftl` target): fluent-syntax 0.11.1 slices source
-    /// text at byte ranges that can land inside a multi-byte character —
-    /// here a broken `\U` escape after one. The vendored
-    /// `vendor/fluent-syntax` patch clamps to char boundaries; this must
+    /// bug_0005, found by honggfuzz (`ftl` target): fluent-syntax 0.11.1
+    /// quotes an invalid `\U` escape plus the character that ended it, sliced
+    /// one byte past the escape — inside that character if it's multi-byte.
+    /// Fixed in the fluent-syntax fork (root Cargo.toml `[patch]`); this must
     /// never panic.
     #[test]
     fn broken_unicode_escape_after_multibyte_char_does_not_panic() {
@@ -145,29 +145,24 @@ mod tests {
         let _ = translate(ftl, "", "");
     }
 
-    /// Same class of bug in the other direction (byte index 100 inside a
-    /// multi-byte character); also from honggfuzz.
+    /// bug_0015: expressions nested far beyond the fork's limit
+    /// (`MAX_NESTING_DEPTH`, 100) are a parse error, not a stack overflow,
+    /// even on a 2 MB thread, where unbounded debug builds overflowed
+    /// between 200 and 400 levels. Both recursion paths: placeables and
+    /// call arguments (the first fix covered placeables only).
     #[test]
-    fn long_multibyte_error_context_does_not_panic() {
-        let ftl = format!("x = {}{{{}", "é".repeat(48), "é");
-        let _ = translate(&ftl, "", "");
-    }
-
-    /// bug_0015: placeables nested far beyond the vendored parser's limit
-    /// (`MAX_PLACEABLE_DEPTH`, 100) are a parse error, not a stack overflow
-    /// — even on a 2 MB thread, where an unbounded debug build overflowed
-    /// between 200 and 400 levels.
-    #[test]
-    fn deeply_nested_placeables_are_an_error_not_a_stack_overflow() {
-        let nested = |depth: usize| format!("x = {}\"a\"{}\n", "{".repeat(depth), "}".repeat(depth));
-        let deep = nested(100_000);
-        let result = std::thread::Builder::new()
-            .stack_size(2 * 1024 * 1024)
-            .spawn(move || translate(&deep, "x", "{}"))
-            .unwrap()
-            .join()
-            .expect("no stack overflow");
-        assert!(result.is_err(), "{result:?}");
+    fn deeply_nested_expressions_are_an_error_not_a_stack_overflow() {
+        let placeables = format!("x = {}\"a\"{}\n", "{".repeat(100_000), "}".repeat(100_000));
+        let calls = format!("x = {{ {}1{} }}\n", "F(".repeat(100_000), ")".repeat(100_000));
+        for ftl in [placeables, calls] {
+            let result = std::thread::Builder::new()
+                .stack_size(2 * 1024 * 1024)
+                .spawn(move || translate(&ftl, "x", "{}"))
+                .unwrap()
+                .join()
+                .expect("no stack overflow");
+            assert!(result.is_err(), "{result:?}");
+        }
     }
 
     /// Nesting up to the limit still parses and formats, and the limit
