@@ -90,7 +90,8 @@ tests/
   arbtest.rs       arbtest: arbitrary bytes through the pipeline (robustness) + structure-aware random documents
                    vs an HTML model (node tree, collapsed text, HtmlElements order)
   stateful.rs      proptest-stateful machine: random op sequences (default theme, own HtmlStylesheet set/remove,
-                   locale, context, outline toggle, FontFamilies swap) vs a reference model
+                   locale, context, outline toggle, FontFamilies swap, pointer moves/presses/releases) vs a
+                   reference model (dump + ElementSignals)
   layout_properties.rs  flexbox invariants on real headless layout (row-reverse mirror, auto margins,
                    grow shares, space-between, wrap without overlap)
   content_lint.rs  lint tests over the examples' content in examples/assets/: locale parity,
@@ -608,7 +609,16 @@ known gaps:
     idempotent (proxy for "no duplicate children").
   - [x] Stateful sequences (`tests/stateful.rs`, `proptest_stateful`): random
     op chains (theme × {framed, plain, broken}, locale, context, outline
-    toggle) against one long-lived `HtmlUi`, model-checked after every op.
+    toggle, `FontFamilies` swap, pointer moves/presses/releases over a bound
+    button — via `TestUi::with_pointer`, real `WindowEvent` input) against
+    one long-lived `HtmlUi`, model-checked after every op: dump *and*
+    `ElementSignal`s (`SignalLog`, a durable `Last`-schedule reader, since
+    buffered messages expire across a multi-frame `settle()`). The pointer
+    model covers rebuilds and restyles under a stationary cursor: content
+    changes replace every element, so a hovered button leaves (from the
+    enter snapshot) and its replacement enters; theme swaps shift the root
+    box and move the button out from under the pointer; the unstyled button
+    is 0×0 and unhittable.
     Found two real bugs the pairwise tests missed: outline *removal* never
     rebuilt (fixed via `RemovedComponents`), and a globally latched failed
     sheet swallowed a later re-select (since replaced by the pending-change

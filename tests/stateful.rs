@@ -3,8 +3,15 @@
 //! a reference model right after it settles.
 //!
 //! The modeled state — default theme, the entity's own `HtmlStylesheet`,
-//! locale, context value, outline marker, registered font faces — is exactly
-//! the state that decides the dump. The interesting invariants are the ones
+//! locale, context value, outline marker, registered font faces, and the
+//! pointer (position, hovered/entered button, held press) — is exactly the
+//! state that decides the dump and the `ElementSignal`s. Pointer ops run the
+//! real picking stack (`TestUi::with_pointer`, real `WindowEvent` input) and
+//! the model predicts what bevy_picking + bevy_markup emit: enter/leave for
+//! the hovered chain (including a leave from the enter snapshot when a
+//! rebuild or restyle drops the button out from under a stationary
+//! pointer), press/click/release with the press consumed per release. The
+//! interesting invariants are the ones
 //! pairwise tests can't reach: the `html` rule's box properties must survive
 //! *arbitrary* theme chains (framed → plain → broken → …) with the app's own
 //! `Node` restored whenever no CSS provides them; a broken stylesheet must
@@ -16,7 +23,7 @@
 //! `TestUi` (see `common`) is the harness; each test case runs its own app.
 
 mod common;
-use common::{MONO, SERIF, TestUi};
+use common::{SERIF, TestUi};
 
 use async_trait::async_trait;
 use bevy::prelude::*;
@@ -57,9 +64,30 @@ enum Locale {
     De,
 }
 
+const VIEWPORT: UVec2 = UVec2::new(640, 480);
+
+/// What a press is holding: nothing, the button, or some other (replaced or
+/// unbound) node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Pressed {
+    #[default]
+    None,
+    Btn,
+    Other,
+}
+
+/// An expected signal: the hook's name and its trigger, as a sortable key.
+type Expected = (String, usize);
+
+const CLICK: usize = 0;
+const PRESS: usize = 1;
+const RELEASE: usize = 2;
+const ENTER: usize = 3;
+const LEAVE: usize = 4;
+
 /// The modeled state of the `HtmlUi`. `Default` doubles as the state the
 /// harness initializes (default theme framed, no own sheet, no locale,
-/// `n = 0`, `Spectral` = the serif faces).
+/// `n = 0`, pointer untouched).
 #[derive(Clone, Debug, Default)]
 struct UiModel {
     theme: Theme,
@@ -68,8 +96,15 @@ struct UiModel {
     locale: Locale,
     n: i64,
     outline: bool,
-    /// `Spectral` re-registered with the mono face.
+    /// `Spectral` registered with the mono face.
     fonts_swapped: bool,
+    /// The pointer's absolute position, once it has moved.
+    pointer: Option<Vec2>,
+    /// The button's enter has fired; its leave is armed.
+    entered: bool,
+    pressed: Pressed,
+    /// The signals the applied op must emit (drained and compared after it).
+    pending: Vec<Expected>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +116,10 @@ enum Op {
     SetLocale(Locale),
     ToggleOutline,
     SwapFonts,
+    MoveOver,
+    MoveOutside,
+    Press,
+    Release,
 }
 
 impl UiModel {
@@ -111,8 +150,14 @@ impl UiModel {
             Locale::En => format!("{} items", self.n),
             Locale::De => format!("{} Dinge", self.n),
         };
-        // Both real themes ask for `Spectral`.
-        let face = if self.fonts_swapped { "mono" } else { "serif" };
+        // Real glyphs: `Spectral` is unregistered in the layout harness until
+        // `SwapFonts` points it at the mono face (the fake serif faces can't
+        // measure), so the cascade falls back to Bevy's default font.
+        let face = if self.fonts_swapped {
+            "serif"
+        } else {
+            "default"
+        };
         let style = match self.effective() {
             Theme::Framed => format!("{face} 20px #ffffff"),
             Theme::Plain => format!("{face} 12px #00ff00"),
@@ -120,6 +165,39 @@ impl UiModel {
         };
         let run = (!self.outline).then(|| format!("{text:?} {style}"));
         (root.to_owned(), run)
+    }
+
+    /// Whether the button is hit-testable: the outline replaces it with text,
+    /// and the unstyled (broken-sheet) button has no size, which picking
+    /// skips.
+    fn button_live(&self) -> bool {
+        !self.outline && self.effective() != Theme::Broken
+    }
+
+    /// The button's border box, derived from the effective theme: the root's
+    /// border + padding shifts the content, the `p` line above it is one
+    /// line of text (Bevy ceils text nodes to whole pixels), and the button
+    /// is 100×20 at the content's left edge.
+    fn button_rect(&self) -> Option<Rect> {
+        let (offset, font): ((f32, f32), f32) = match self.effective() {
+            Theme::Framed => ((26.0, 26.0), 20.0), // border 16 + padding 10
+            Theme::Plain => ((4.0, 4.0), 12.0),    // padding 4
+            Theme::Broken => ((3.0, 3.0), 16.0),   // the app's own padding
+        };
+        if !self.button_live() {
+            return None;
+        }
+        let line = (font * 1.2).ceil();
+        Some(Rect::from_center_size(
+            vec2(offset.0 + 50.0, offset.1 + line + 10.0),
+            vec2(100.0, 20.0),
+        ))
+    }
+
+    /// Whether the stationary pointer is over the live button.
+    fn over_button(&self) -> bool {
+        self.button_rect()
+            .is_some_and(|rect| self.pointer.is_some_and(|p| rect.contains(p)))
     }
 
     /// Whether `op` must rebuild. Only a default-sheet swap under a working
@@ -147,12 +225,18 @@ impl ModelState for UiModel {
                 .boxed(),
             Just(Op::ToggleOutline).boxed(),
             Just(Op::SwapFonts).boxed(),
+            Just(Op::MoveOver).boxed(),
+            Just(Op::MoveOutside).boxed(),
+            Just(Op::Press).boxed(),
+            Just(Op::Release).boxed(),
         ]
     }
 
     /// Only state-*changing* ops are valid: a same-value re-insert (e.g.
     /// `ActiveLocale(None)` while already unlocalized) legitimately triggers
     /// no rebuild, and `settle()` demands observable activity per op.
+    /// Pointer ops always run (they need no rebuild; idempotent moves emit
+    /// nothing, which the model predicts).
     fn preconditions_met(&self, op: &Op) -> bool {
         match *op {
             Op::SetN(n) => n != self.n,
@@ -160,11 +244,14 @@ impl ModelState for UiModel {
             Op::SetOwnSheet(theme) => self.own != Some(theme),
             Op::RemoveOwnSheet => self.own.is_some(),
             Op::SetLocale(locale) => locale != self.locale,
-            Op::ToggleOutline | Op::SwapFonts => true,
+            Op::ToggleOutline => true,
+            Op::SwapFonts => !self.fonts_swapped,
+            Op::MoveOver | Op::MoveOutside | Op::Press | Op::Release => true,
         }
     }
 
     fn next_state(&mut self, op: &Op) {
+        let was_live = self.button_live();
         match *op {
             Op::SetN(n) => self.n = n,
             Op::SetTheme(theme) => self.theme = theme,
@@ -172,23 +259,110 @@ impl ModelState for UiModel {
             Op::RemoveOwnSheet => self.own = None,
             Op::SetLocale(locale) => self.locale = locale,
             Op::ToggleOutline => self.outline = !self.outline,
-            Op::SwapFonts => self.fonts_swapped = !self.fonts_swapped,
+            Op::SwapFonts => self.fonts_swapped = true,
+            Op::MoveOver => {
+                self.pointer = Some(match self.button_rect() {
+                    Some(rect) => rect.center(),
+                    None => vec2(320.0, 240.0),
+                });
+            }
+            Op::MoveOutside => self.pointer = Some(vec2(4000.0, 4000.0)),
+            Op::Press | Op::Release => {}
         }
+        // What the op must emit. Content changes (context, locale, outline)
+        // rebuild the whole subtree: every element under the pointer is
+        // replaced, so a hovered button leaves (from the enter snapshot) and
+        // its replacement enters afresh, and any held press now points at a
+        // despawned entity. Style changes restyle in place — entities and
+        // presses survive — but the root box moves the button, so a
+        // stationary pointer can drop out of it (or into it). Releases emit
+        // their hooks over the hovered chain, click only while it is the
+        // pressed node, and consume the press.
+        self.pending = match *op {
+            Op::MoveOver => {
+                let mut out = vec![];
+                if self.button_live() && !self.entered {
+                    self.entered = true;
+                    out.push(("enter".to_owned(), ENTER));
+                }
+                out
+            }
+            Op::MoveOutside => {
+                let mut out = vec![];
+                if self.entered {
+                    self.entered = false;
+                    out.push(("leave".to_owned(), LEAVE));
+                }
+                out
+            }
+            Op::Press => {
+                let mut out = vec![];
+                if self.over_button() {
+                    self.pressed = Pressed::Btn;
+                    out.push(("press".to_owned(), PRESS));
+                } else if self.pointer.is_some() {
+                    // Over something unbound (or the outline text).
+                    self.pressed = Pressed::Other;
+                }
+                out
+            }
+            Op::Release => {
+                let mut out = vec![];
+                if self.over_button() {
+                    out.push(("release".to_owned(), RELEASE));
+                    if self.pressed == Pressed::Btn {
+                        out.push(("click".to_owned(), CLICK));
+                    }
+                }
+                self.pressed = Pressed::None;
+                out
+            }
+            Op::SetN(_) | Op::SetLocale(_) | Op::ToggleOutline => {
+                let mut out = vec![];
+                if self.entered {
+                    self.entered = false;
+                    out.push(("leave".to_owned(), LEAVE));
+                }
+                if self.over_button() {
+                    self.entered = true;
+                    out.push(("enter".to_owned(), ENTER));
+                }
+                if self.pressed != Pressed::None {
+                    self.pressed = Pressed::Other;
+                }
+                out
+            }
+            Op::SetTheme(_) | Op::SetOwnSheet(_) | Op::RemoveOwnSheet | Op::SwapFonts => {
+                let mut out = vec![];
+                if was_live && !self.over_button() && self.entered {
+                    self.entered = false;
+                    out.push(("leave".to_owned(), LEAVE));
+                }
+                if !was_live && self.over_button() {
+                    self.entered = true;
+                    out.push(("enter".to_owned(), ENTER));
+                }
+                out
+            }
+        };
     }
 
     async fn init_test_run(&self) -> TestUi {
         let files = [
             (
                 "page.html",
-                r#"<p data-l10n-id="count" data-l10n-args='{"n": {{ n }}}'>{{ n }}</p>"#,
+                r#"<p data-l10n-id="count" data-l10n-args='{"n": {{ n }}}'>{{ n }}</p>
+<div id="btn" data-on-click="click" data-on-press="press" data-on-release="release"
+     data-on-enter="enter" data-on-leave="leave"></div>"#,
             ),
             (
                 "framed.css",
-                r#"html { color: #ffffff; font-family: Spectral; font-size: 20px; border-image: url("frame.png") 4 fill stretch; border-width: 16px; padding: 10px }"#,
+                r#"html { color: #ffffff; font-family: Spectral; font-size: 20px; border-image: url("frame.png") 4 fill stretch; border-width: 16px; padding: 10px }
+#btn { width: 100px; height: 20px }"#,
             ),
             (
                 "plain.css",
-                "html { color: #00ff00; font-family: Spectral; font-size: 12px; padding: 4px }",
+                "html { color: #00ff00; font-family: Spectral; font-size: 12px; padding: 4px }\n#btn { width: 100px; height: 20px }",
             ),
             ("broken.css", "{ not css"),
             (
@@ -202,14 +376,17 @@ impl ModelState for UiModel {
             ),
             ("locales/de/ui.ftl", "count = { $n } Dinge"),
         ];
-        let mut ui = TestUi::new("stateful-ui", &files)
+        let mut ui = TestUi::with_pointer("stateful-ui", &files, VIEWPORT)
             .stylesheet("framed.css")
             .spawn(
                 "page.html",
                 TemplateContext::new().with("n", &self.n),
-                // The app's own padding, restored whenever CSS drops it.
+                // The app's own padding, restored whenever CSS drops it; the
+                // column direction apps use (blocks stack vertically, so the
+                // pointer geometry is text-width independent).
                 Node {
                     padding: UiRect::all(Val::Px(3.0)),
+                    flex_direction: FlexDirection::Column,
                     ..default()
                 },
             );
@@ -263,24 +440,52 @@ impl ModelState for UiModel {
                 }
             }
             Op::SwapFonts => {
-                // `self` is the state before the op.
-                let faces = if self.fonts_swapped {
-                    FontFaces::new(SERIF[0].clone())
-                        .with_bold(SERIF[1].clone())
-                        .with_italic(SERIF[2].clone())
-                        .with_bold_italic(SERIF[3].clone())
-                } else {
-                    FontFaces::new(MONO.clone())
-                };
+                // `self` is the state before the op: `Spectral` is
+                // unregistered (the cascade falls back to the default font);
+                // the swap points it at the serif face — a real, loadable
+                // font (see the harness setup), so text keeps its metrics.
+                let faces = FontFaces::new(SERIF[0].clone());
                 ctxt.world_mut()
                     .resource_mut::<FontFamilies>()
                     .insert("Spectral", faces);
             }
+            Op::MoveOver => {
+                // The same point the model computes, so model and reality
+                // can't drift: the live button's center, or anywhere when the
+                // outline replaced it.
+                let p = match self.button_rect() {
+                    Some(rect) => rect.center(),
+                    None => Vec2::new(320.0, 240.0),
+                };
+                ctxt.move_pointer(p);
+                ctxt.update(1);
+            }
+            Op::MoveOutside => {
+                // Beyond the viewport: the UI picking backend skips the
+                // pointer, so nothing is hovered but the window itself.
+                ctxt.move_pointer(Vec2::new(4000.0, 4000.0));
+                ctxt.update(1);
+            }
+            Op::Press => {
+                ctxt.press_pointer();
+                ctxt.update(1);
+            }
+            Op::Release => {
+                ctxt.release_pointer();
+                ctxt.update(1);
+            }
         }
-        if self.rebuilds(op) {
-            ctxt.settle();
-        } else {
-            ctxt.settle_quiet();
+        match op {
+            Op::MoveOver | Op::MoveOutside | Op::Press | Op::Release => {
+                // A frame each, no rebuild to wait for.
+            }
+            _ => {
+                if self.rebuilds(op) {
+                    ctxt.settle();
+                } else {
+                    ctxt.settle_quiet();
+                }
+            }
         }
     }
 
@@ -310,6 +515,29 @@ impl ModelState for UiModel {
                 "outline missing {marker:?} (model {self:?})\n--- dump ---\n{dump}"
             );
         }
+        // The op's signals: everything recorded since the previous check is
+        // exactly what the just-applied op was predicted to emit.
+        let mut actual: Vec<Expected> = ctxt
+            .drain_log()
+            .into_iter()
+            .map(|signal| {
+                let trigger = match signal.trigger {
+                    SignalTrigger::Click => CLICK,
+                    SignalTrigger::Press => PRESS,
+                    SignalTrigger::Release => RELEASE,
+                    SignalTrigger::Enter => ENTER,
+                    SignalTrigger::Leave => LEAVE,
+                };
+                (signal.name.to_string(), trigger)
+            })
+            .collect();
+        actual.sort();
+        let mut expected = self.pending.clone();
+        expected.sort();
+        assert_eq!(
+            actual, expected,
+            "signals mismatch (model {self:?})\n--- dump ---\n{dump}"
+        );
     }
 
     async fn clean_up_test_run(&self, _ctxt: &mut TestUi) {

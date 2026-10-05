@@ -48,6 +48,13 @@ pub fn face_label(source: &FontSource) -> String {
 #[derive(Resource, Default)]
 pub struct Builds(pub usize);
 
+/// Every [`ElementSignal`] written since the last
+/// [`TestUi::drain_log`](TestUi::drain_log). Written by a `Last`-schedule
+/// reader, so nothing expires while a multi-frame `settle()` runs (buffered
+/// messages only live two cycles).
+#[derive(Resource, Default)]
+pub struct SignalLog(pub Vec<ElementSignal>);
+
 /// `tests/vectors/`.
 #[allow(dead_code)] // not every test binary exercises every helper
 pub fn vectors_dir() -> PathBuf {
@@ -88,7 +95,9 @@ impl TestUi {
     /// Like [`new`](Self::new), plus Bevy UI layout and text measurement
     /// against a `viewport`-sized camera — still no window or renderer. Text
     /// uses Bevy's embedded default font (FiraMono, printable ASCII only): no
-    /// fake font families are registered, since layout needs real glyphs.
+    /// font families are registered, since layout needs real glyphs — but the
+    /// fake face ids (`SERIF`, …) are served from the embedded font, so
+    /// suites can register them as families without breaking measurement.
     #[allow(dead_code)] // not every test binary exercises every helper
     pub fn with_layout(name: &str, files: &[(&str, &str)], viewport: UVec2) -> Self {
         Self::build(name, files, Some(viewport))
@@ -121,6 +130,13 @@ impl TestUi {
             .single_mut(world)
             .expect("with_layout camera");
         *target = RenderTarget::Window(WindowRef::Primary);
+        ui.app.world_mut().insert_resource(SignalLog::default());
+        ui.app.add_systems(
+            Last,
+            |mut signals: MessageReader<ElementSignal>, mut log: ResMut<SignalLog>| {
+                log.0.extend(signals.read().cloned());
+            },
+        );
         ui
     }
 
@@ -178,7 +194,28 @@ impl TestUi {
                 // `InheritedVisibility` without the render-side visibility
                 // plugin: directional navigation skips nodes that aren't
                 // visible in the hierarchy.
-                .add_systems(PostUpdate, propagate_visibility);
+                .add_systems(PostUpdate, propagate_visibility)
+                // Bevy gates message-buffer updates on fixed ticks (64 Hz);
+                // at ~1 ms test frames those are rare, so messages would pile
+                // up for many frames and older ones drop mid-`settle()`.
+                // Real apps run fixed ticks nearly every frame — force
+                // per-frame updates to match.
+                .add_systems(
+                    First,
+                    always_update_messages.before(bevy::ecs::message::message_update_system),
+                );
+                // The layout harness measures text with real glyphs: serve
+                // the fake face ids from the embedded FiraMono, so suites can
+                // register `Spectral` with them and keep predictable geometry
+                // (a face that fails to load collapses text to zero height).
+                {
+                    let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
+                    for handle in SERIF {
+                        let font =
+                            bevy::text::Font::from_bytes(bevy::text::DEFAULT_FONT_DATA.to_vec());
+                        fonts.insert(handle.id(), font).expect("fresh id");
+                    }
+                }
                 app.world_mut().spawn((
                     Camera2d,
                     Camera {
@@ -452,6 +489,13 @@ impl TestUi {
             signals.extend(self.take_signals());
         }
         signals
+    }
+
+    /// Drains the recorded [`ElementSignal`] log (see [`SignalLog`]): the
+    /// durable way to read signals across a multi-frame [`settle`](Self::settle).
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn drain_log(&mut self) -> Vec<ElementSignal> {
+        std::mem::take(&mut self.app.world_mut().resource_mut::<SignalLog>().0)
     }
 
     pub fn dump(&mut self) -> String {
@@ -791,5 +835,12 @@ fn propagate_visibility(
             InheritedVisibility::HIDDEN
         };
         inherited.set_if_neq(value);
+    }
+}
+
+/// Keeps Bevy's message buffers updating every frame (see the harness setup).
+fn always_update_messages(mut registry: Option<ResMut<bevy::ecs::message::MessageRegistry>>) {
+    if let Some(registry) = registry.as_mut() {
+        registry.should_update = bevy::ecs::message::ShouldUpdateMessages::Always;
     }
 }
