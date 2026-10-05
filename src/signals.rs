@@ -332,14 +332,17 @@ pub(crate) struct Hovering {
     leaves: Vec<SignalBinding>,
 }
 
-/// The interaction pseudo-state of an element: `:hover` / `:active` for the
-/// cascade. Maintained from the picking hover map for every element; a
-/// change restyles the element's UI (in place). Apps may also set it to
+/// The interaction pseudo-state of an element: `:hover` / `:active` /
+/// `:focus` / `:focus-visible` for the cascade. Hover and active are
+/// maintained from picking, focus from `InputFocus` (see [`crate::focus`]);
+/// a change restyles the element's UI (in place). Apps may also set it to
 /// force the styles.
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PseudoState {
     pub hovered: bool,
     pub active: bool,
+    pub focused: bool,
+    pub focus_visible: bool,
 }
 
 /// Maintains [`PseudoState`] on every element from the picking hover map
@@ -377,9 +380,11 @@ pub(crate) fn update_pseudo_states(
         }
     }
     for (entity, _, state) in &elements {
+        let current = state.copied().unwrap_or_default();
         let desired = PseudoState {
             hovered: hovered.contains(&entity),
             active: active.contains(&entity),
+            ..current
         };
         if state.copied() != Some(desired) {
             commands.entity(entity).insert(desired);

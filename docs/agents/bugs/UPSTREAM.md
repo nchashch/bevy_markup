@@ -24,6 +24,7 @@ the issue may already be fixed or reported.
 | U8 | cargo-fuzz | Prebuilt (musl) binary defaults `--target` to musl, which ASan rejects | CI fuzz jobs failed to build | `--target "$host"` in `scripts/fuzz-libfuzzer.sh` | unreported |
 | U9 | Bevy 0.19 | `UiPlugin`'s `viewport_picking` panics without the picking plugins | headless UI layout tests need extra plugins | add `DefaultPickingPlugins` in `tests/common` | discuss first |
 | U10 | lightningcss | Bare `grid-auto-flow: dense` fails to parse | the declaration is dropped (CSS means `row dense`) | none (documented; write `row dense`) | unreported |
+| U11 | tl | A value-less attribute eats the next attribute's first character ([bug_0019](bug_0019.md)) | `autofocus data-on-click` lost the click hook and focusability | switched to `astral-tl` 0.8.0 (astral-sh's maintained fork, fixed there) | fixed in astral-tl; y21/tl 0.7.8 affected |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -195,6 +196,22 @@ CI clippy command and workspace tests pass on both.
   case.
 - **Upstream fix sketch:** make the trailing direction optional (`.ok()`
   instead of `?`) and keep `Row` as the default.
+
+## U11 — tl: a value-less attribute eats the next attribute's first character
+
+- **Project:** [y21/tl](https://github.com/y21/tl) 0.7.8 (latest release,
+  checked 2026-10-05). Fixed in [astral-sh/astral-tl](https://github.com/astral-sh/astral-tl)
+  0.8.0 (crates.io `astral-tl`, library name `tl`).
+- **Defect:** `parser::base::parse_attributes` advances one byte after every
+  attribute (to step over a quoted value's closing quote), but for a
+  value-less attribute `parse_attribute` has already skipped the whitespace
+  and stands on the next attribute's first byte: `<div autofocus
+  data-on-click="x">` parses as `autofocus` + `ata-on-click="x"`.
+- **Workaround:** bevy_markup depends on `astral-tl` (`tl = { package =
+  "astral-tl", … }` in `Cargo.toml`); API-compatible, full suite passes.
+  Regression test: `focus_navigation_scope_and_styles` (`autofocus` first).
+- **Status:** not reported to y21/tl (fixed in the maintained fork; y21/tl
+  has had no release since 0.7.8).
 
 ## Not upstream bugs (recorded so they aren't re-filed)
 

@@ -38,7 +38,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # HTML: Tera templating, then tl parsing.
 tera = { version = "2.4.0", features = ["fast"] }
-tl = "0.7.8"
+# astral-tl: astral-sh's maintained tl fork (same `tl` crate name). tl 0.7.8 drops the first
+# character of the attribute after a value-less one (`autofocus data-on-click` →
+# `ata-on-click`); see docs/agents/bugs/bug_0019.md and UPSTREAM.md.
+tl = { package = "astral-tl", version = "0.8.0" }
 # Localization; `fluent` must match bevy_fluent's version.
 bevy_fluent = "0.15"
 fluent = "0.16.0"

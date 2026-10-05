@@ -38,9 +38,14 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
 | `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger` | Message, Component | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click/press/release/enter/leave); deepest bound element wins |
-| `PseudoState { hovered, active }` | Component | `:hover`/`:active` state per element, maintained from picking; a change restyles in place; apps may set it |
+| `PseudoState { hovered, active, focused, focus_visible }` | Component | `:hover`/`:active` (from picking) and `:focus`/`:focus-visible` (from `InputFocus`/`InputFocusVisible`) per element; a change restyles in place; apps may set it |
+| `Focusable { autofocus }` | Component | on focusable elements (`data-on-click` or `tabindex >= 0`, not `tabindex="-1"`) |
+| `HtmlFocus` | SystemParam | `navigate(CompassOctant)` (shows focus; `FocusEdge` at an edge), `activate()`, `focused()` — the app binds its own input |
+| `HtmlModal`, `HtmlNoFocus` | Component | on an `HtmlUi` root: confine focus to it while visible / never take focus |
+| `FocusEdge { entity, direction }`, `ActivateElement { entity }` | EntityEvent | no neighbour in that direction / emit the element's click signals |
 
-Re-exported crates (their types appear in the API): `tera`, `tl`,
+Re-exported crates (their types appear in the API): `tera`, `tl` (the
+`astral-tl` fork, bug_0019 / UPSTREAM.md U11),
 `bevy_fluent`, `lightningcss`. Cargo feature `system_fonts` enables Bevy's
 `system_font_discovery`.
 
@@ -62,6 +67,8 @@ src/
   build.rs         (internal) DOM + styles → Bevy UI children; HtmlUiBuilt trigger
   rebuild.rs       (internal) pure rebuild decision: Frame (load phases + change signals) → Build/Skip/Wait
   signals.rs       `data-on-*`/`data-with` → ElementSignal messages (picking observers, hover tracking)
+  focus.rs         Focusable/HtmlFocus/HtmlModal/HtmlNoFocus: focus scope sync, repair (id restore,
+                   autofocus), focus pseudo-state, press-to-focus, activation (InputFocus-based)
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
   quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, click wiring, Space = language
@@ -245,7 +252,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   HTML-escaped, fluent-rs number formatting (no grouping). CJK paragraphs go
   on one line (a wrapped line becomes a stray space).
 - CSS subset (`style.rs` docs): compound selectors (type or `*` + `.class` /
-  `#id` parts, comma lists, plus `:hover`/`:active`; combinators/attributes/
+  `#id` parts, comma lists, plus `:hover`/`:active`/`:focus`/`:focus-visible`; combinators/attributes/
   other pseudo-classes skipped at `debug`), matched per element (`HtmlElement`
   tag/id/classes + `PseudoState`, cached per combination) with CSS
   precedence: `!important`, then specificity (ids,
@@ -589,6 +596,12 @@ known gaps:
     with `minmax()`, column dense flow, `grid-area`, item alignment, container
     and boxed-block items) matches Chromium to the pixel; the mapping is
     pinned per value by `cascade::tests::grid_*`.
+  - [x] Focus: `focus_navigation_scope_and_styles` (focusability incl.
+    `tabindex`, `autofocus`, `:focus`/`:focus-visible` + `outline` restyles,
+    activation, restore by `id` across a rebuild, modal confinement,
+    `HtmlNoFocus`; restore and modal spot-checked by ablation) and
+    `html_focus_navigates_by_layout_and_reports_edges` (layout harness; it
+    propagates `InheritedVisibility` itself, which Bevy's navigator needs).
   - [x] Positioning: vector `layout_position` (`absolute` by `top`/`left` and
     by `right: %`/`bottom`, `relative` offset, `static` ignoring insets, plus
     `z-index`/`border-radius`/`border-color` that must not move anything)
@@ -852,7 +865,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
   deepest bound element wins, so buttons can nest). What signals *mean* is
   app code reading the queue (the demo's `controls::read_signals`). No
   built-in reactions, no forms/inputs. `:hover`/`:active` styling works
-  (see the Selectors limit); no `:focus` (no focus tracking).
+  (see the Selectors limit); focus and directional navigation are
+  library-side (`focus.rs`), input bindings are the app's. No
+  `:focus-within`, no Tab order (directional navigation only).
 - **Rebuilds:** content changes (template, context, locale) rebuild the
   whole `HtmlUi` subtree (no diffing); style changes restyle in place unless
   the node structure changes. A run merge (e.g. `b` restyled to its parent's
@@ -877,8 +892,8 @@ Next steps (roughly in order of value):
    ancestor chain during matching; specificity sums.
 3. ~~`:hover` / `:active` via `Interaction` or picking, re-styling without a
    full rebuild~~ (done: `PseudoState` from the picking hover map +
-   pressed entities; a state change is a `Restyle` — in place; `:focus` is
-   still open, there's no focus tracking).
+   pressed entities; a state change is a `Restyle` — in place; `:focus` /
+   `:focus-visible` from `InputFocus` since, see `focus.rs`).
 4. Lists done properly: `list-style-type`, `ol` numbering, CSS-driven indent.
 5. Text properties: `text-align` (`Justify`), `line-height` (`LineHeight`).
 6. Keyed reconciliation for content changes: keep entities for unchanged

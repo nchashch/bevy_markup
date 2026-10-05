@@ -248,8 +248,25 @@ pub(crate) struct ElementStyle {
     pub z_index: Option<Option<i32>>,
     /// `pointer-events` (inherited): `true` for `auto`, `false` for `none`.
     pub pointer_events: Option<bool>,
+    /// `outline` (shorthand and longhands, `outline-offset`).
+    pub outline: OutlineDecl,
     /// Flex, size and margin properties (containers and blocks).
     pub layout: LayoutDecl,
+}
+
+/// Declared `outline` parts (each optional so longhands override parts of
+/// an earlier shorthand). Drawn only when the style is a visible one, as in
+/// CSS (the initial style is `none`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct OutlineDecl {
+    /// `true` for a drawn style (`solid`, `auto`, …), `false` for `none`.
+    pub visible: Option<bool>,
+    /// In px; CSS's initial `medium` is 3px.
+    pub width: Option<f32>,
+    /// `Some(None)` = `currentColor` (the element's text color).
+    pub color: Option<Option<Color>>,
+    /// `outline-offset` in px.
+    pub offset: Option<f32>,
 }
 
 /// Every `border-image-source` URL in `sheet`, as written.
@@ -287,11 +304,17 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
 pub(crate) struct Pseudo {
     pub hover: bool,
     pub active: bool,
+    /// `:focus`: the element holds `InputFocus`.
+    pub focus: bool,
+    /// `:focus-visible`: focused, and the focus should be shown
+    /// (`InputFocusVisible`: set by keyboard/gamepad navigation, cleared by
+    /// a pointer press — the browser heuristic).
+    pub focus_visible: bool,
 }
 
 /// A compound selector: optional type (or `*`), then any number of `.class`
 /// and `#id` parts, e.g. `p.note`, `.a.b`, `#title`; optionally qualified
-/// by `:hover` / `:active`.
+/// by `:hover` / `:active` / `:focus` / `:focus-visible`.
 #[derive(Clone, Debug)]
 struct Compound {
     /// Lowercase; `None` for `*` or no type.
@@ -333,6 +356,8 @@ impl Compound {
                     match &body[..end] {
                         "hover" => pseudo.hover = true,
                         "active" => pseudo.active = true,
+                        "focus" => pseudo.focus = true,
+                        "focus-visible" => pseudo.focus_visible = true,
                         _ => return None,
                     }
                     rest = &body[end..];
@@ -367,7 +392,9 @@ impl Compound {
     fn specificity(&self) -> (u32, u32, u32) {
         let classes = self.classes.len()
             + usize::from(self.pseudo.hover)
-            + usize::from(self.pseudo.active);
+            + usize::from(self.pseudo.active)
+            + usize::from(self.pseudo.focus)
+            + usize::from(self.pseudo.focus_visible);
         (
             self.ids.len() as u32,
             classes as u32,
@@ -378,6 +405,8 @@ impl Compound {
     fn matches(&self, element: &HtmlElement, pseudo: Pseudo) -> bool {
         (!self.pseudo.hover || pseudo.hover)
             && (!self.pseudo.active || pseudo.active)
+            && (!self.pseudo.focus || pseudo.focus)
+            && (!self.pseudo.focus_visible || pseudo.focus_visible)
             && self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
             && self.ids.iter().all(|id| element.id.as_ref() == Some(id))
             && self.classes.iter().all(|class| element.has_class(class))
@@ -676,6 +705,32 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         Property::BorderBottomLeftRadius(radius, _) => {
             style.layout.border_radius[3] = corner_radius(radius);
+        }
+        Property::Outline(outline) => {
+            style.outline = OutlineDecl {
+                visible: Some(outline_visible(&outline.style)),
+                width: side_width(&outline.width),
+                color: Some(to_color(&outline.color)),
+                offset: style.outline.offset,
+            };
+        }
+        Property::OutlineStyle(outline_style) => {
+            style.outline.visible = Some(outline_visible(outline_style));
+        }
+        Property::OutlineWidth(width) => style.outline.width = side_width(width),
+        Property::OutlineColor(color) => style.outline.color = Some(to_color(color)),
+        // lightningcss has no typed `outline-offset` either.
+        Property::Custom(custom)
+            if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "outline-offset") =>
+        {
+            let value = declaration
+                .value_to_css_string(PrinterOptions::default())
+                .unwrap_or_default();
+            style.outline.offset = match value.trim().strip_suffix("px").map(str::parse::<f32>) {
+                Some(Ok(px)) => Some(px),
+                _ if value.trim() == "0" => Some(0.0),
+                _ => unsupported("outline-offset value (px only)"),
+            };
         }
         // lightningcss has no typed `pointer-events` (it's SVG/UI-only): it
         // arrives as an unknown property with its raw value.
@@ -1078,6 +1133,14 @@ fn unsupported<T>(what: &str) -> Option<T> {
     None
 }
 
+/// Whether an `outline-style` draws anything (`none` doesn't; every other
+/// style draws Bevy's solid outline).
+fn outline_visible(style: &lightningcss::properties::outline::OutlineStyle) -> bool {
+    use lightningcss::properties::border::LineStyle;
+    use lightningcss::properties::outline::OutlineStyle;
+    !matches!(style, OutlineStyle::LineStyle(LineStyle::None | LineStyle::Hidden))
+}
+
 /// One `border-*-radius` corner: Bevy has one radius per corner, so an
 /// elliptical corner (different horizontal and vertical radii) is
 /// unsupported. `%` is Bevy's (of the node's smaller side), not CSS's
@@ -1218,7 +1281,7 @@ mod tests {
         let both = color_with(
             "p:hover { color: red } p:active { color: blue } p { color: green }",
             &p,
-            Pseudo { hover: true, active: true },
+            Pseudo { hover: true, active: true, ..Pseudo::default() },
         );
         assert_eq!(both, Some(BLUE));
     }
@@ -1243,10 +1306,42 @@ mod tests {
     #[test]
     fn unsupported_pseudo_classes_are_skipped() {
         let p = element("p", None, &[]);
-        for state in [Pseudo::default(), Pseudo { hover: true, active: true }] {
-            assert_eq!(color("p:focus { color: green } p { color: red }", &p), Some(RED));
-            assert_eq!(color_with("p:focus { color: green } p { color: red }", &p, state), Some(RED));
+        let every = Pseudo { hover: true, active: true, focus: true, focus_visible: true };
+        for state in [Pseudo::default(), every] {
+            assert_eq!(color("p:visited { color: green } p { color: red }", &p), Some(RED));
+            assert_eq!(color_with("p:focus-within { color: green } p { color: red }", &p, state), Some(RED));
         }
+    }
+
+    /// `:focus` matches the focused element, `:focus-visible` only while
+    /// focus is shown; each adds class-level specificity.
+    #[test]
+    fn focus_pseudo_classes_match_and_add_specificity() {
+        let p = element("p", None, &["note"]);
+        let focused = Pseudo { focus: true, ..Pseudo::default() };
+        let shown = Pseudo { focus: true, focus_visible: true, ..Pseudo::default() };
+        let css = "p:focus { color: red } p:focus-visible { color: green } p { color: blue }";
+        assert_eq!(color_with(css, &p, Pseudo::default()), Some(Color::srgb_u8(0, 0, 255)));
+        assert_eq!(color_with(css, &p, focused), Some(RED));
+        assert_eq!(color_with(css, &p, shown), Some(GREEN));
+        // `p:focus` (0,1,1) beats `.note` (0,1,0) regardless of order.
+        assert_eq!(color_with("p:focus { color: red } .note { color: green }", &p, focused), Some(RED));
+    }
+
+    /// `outline` shorthand and longhands; `none` and an absent style draw
+    /// nothing; `outline-offset` is px.
+    #[test]
+    fn outline_declarations() {
+        let outline = |css: &str| declared(css).outline;
+        assert_eq!(
+            outline("outline: 2px solid #ff0000; outline-offset: 3px"),
+            OutlineDecl { visible: Some(true), width: Some(2.0), color: Some(Some(RED)), offset: Some(3.0) }
+        );
+        assert_eq!(outline("outline: none").visible, Some(false));
+        assert_eq!(outline("outline-width: 4px").visible, None);
+        let longhands = outline("outline-style: dashed; outline-color: currentColor; outline-width: thin");
+        assert_eq!((longhands.visible, longhands.width, longhands.color), (Some(true), Some(1.0), Some(None)));
+        assert_eq!(outline("outline-offset: 1em").offset, None);
     }
 
     #[test]

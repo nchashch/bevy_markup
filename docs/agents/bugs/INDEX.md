@@ -36,6 +36,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0016](bug_0016.md) | Rebuilding an `HtmlUi` under a rebuilding ancestor `HtmlUi` panics (commands on despawned entities) | `src/build.rs` | high | fixed (`9d21b17`) | user report (demo locale click), minimized to a vector |
 | [bug_0017](bug_0017.md) | Restyle fallback rebuild despawned app-nested `HtmlUi`s (same_shape counted them as shape mismatches) | `src/build.rs` (`same_shape`) | high | fixed (`d079b08`) | startup crash of the demo, traced via `bevy/debug` |
 | [bug_0018](bug_0018.md) | An app `ImageNode` on a built element turned every restyle into a rebuild (rebuild every frame) | `src/build.rs` (`same_shape`) | high | fixed (`f99c6ec`) | prototype_19 integration (entity-id sampling over BRP) |
+| [bug_0019](bug_0019.md) | A value-less attribute (`autofocus`) ate the next attribute's first character | upstream `tl` 0.7.8 (UPSTREAM.md U11) | high | fixed (uncommitted at filing): dependency switched to `astral-tl` 0.8.0 | prototype_19 integration (gamepad smoke run) |
 
 ## Discovery session metadata: bug_0001–0005
 

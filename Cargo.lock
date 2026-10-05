@@ -277,6 +277,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "astral-tl"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d4bb5df351abb6758a04240b0193794ddaf34a7c0b9452fab3c25dcce39e88"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1167,6 +1176,7 @@ name = "bevy_markup"
 version = "0.2.0"
 dependencies = [
  "arbtest",
+ "astral-tl",
  "async-trait",
  "bevy",
  "bevy_fluent",
@@ -1182,7 +1192,6 @@ dependencies = [
  "serde_json",
  "tera",
  "test-strategy",
- "tl",
  "unic-langid",
  "wgpu-types",
 ]
@@ -5971,12 +5980,6 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
-
-[[package]]
-name = "tl"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b130bd8a58c163224b44e217b4239ca7b927d82bf6cc2fea1fc561d15056e3f7"
 
 [[package]]
 name = "tokio"

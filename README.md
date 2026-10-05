@@ -114,13 +114,17 @@ bevy_markup implements a useful subset of the web, not all of it:
 - **HTML:** headings, paragraphs, lists, `pre`, inline elements, and
   containers as nested flex nodes.
 - **CSS:** type, class, id and compound selectors (`p.note`, `h1#title`),
-  `:hover`/`:active`; colors and fonts (inherited); flex and grid layout
+  `:hover`/`:active`/`:focus`/`:focus-visible`; colors and fonts (inherited); flex and grid layout
   (`display`, `flex-direction`, `justify-content`, `align-items`, `gap`,
   `grid-template-columns`, `grid-column`, …); sizes, margins, padding,
   `box-sizing`; `position` with `top`/`left`/…, `z-index`; borders with
   colors and rounded corners, background colors; 9-slice frames through
-  `border-image`; `pointer-events: none`. Combinators (`.panel p`) and
+  `border-image`; `outline`; `pointer-events: none`. Combinators (`.panel p`) and
   `calc()` aren't supported yet; unsupported CSS is skipped, never guessed.
+- **Focus:** browser-style focus for gamepad and keyboard UIs: `data-on-click`
+  and `tabindex` elements are focusable, `autofocus`, `:focus` /
+  `:focus-visible` with `outline`, modal roots, and focus kept across
+  rebuilds. You bind the input; bevy_markup moves focus and activates.
 - **Fluent:** messages, arguments, plurals and selectors, inline markup.
 - **Fonts:** you register font files under CSS family names
   (`FontFamilies`), including bold and italic faces and the generic
@@ -285,7 +289,7 @@ AGENTS.md       detailed project notes: architecture, conventions, gotchas
 ## Status
 
 An early prototype on Bevy 0.19. The API may still change. Things not
-built yet include CSS combinators, `:focus`, keyed
+built yet include CSS combinators, keyed
 updates that keep entities across content changes, and forms or inputs.
 
 ## License

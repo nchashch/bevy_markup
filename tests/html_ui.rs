@@ -731,6 +731,184 @@ html-ui
     );
 }
 
+/// The element with this `id` below `root`.
+fn element_by_id(world: &mut World, root: Entity, id: &str) -> Entity {
+    let mut elements = world.query::<(Entity, &HtmlElement)>();
+    let candidates: Vec<Entity> = elements
+        .iter(world)
+        .filter(|(_, element)| element.id.as_deref() == Some(id))
+        .map(|(entity, _)| entity)
+        .collect();
+    candidates
+        .into_iter()
+        .find(|&entity| {
+            std::iter::successors(Some(entity), |&current| world.get::<ChildOf>(current).map(ChildOf::parent))
+                .any(|ancestor| ancestor == root)
+        })
+        .unwrap_or_else(|| panic!("no #{id} below {root}"))
+}
+
+fn focused(world: &World) -> Option<Entity> {
+    world.resource::<bevy::input_focus::InputFocus>().get()
+}
+
+fn navigable(world: &World, entity: Entity) -> bool {
+    world
+        .entity(entity)
+        .contains::<bevy::ui::auto_directional_navigation::AutoDirectionalNavigation>()
+}
+
+/// Browser-style focus: `data-on-click` and `tabindex >= 0` elements are
+/// focusable (`tabindex="-1"` opts out), `autofocus` takes the initial
+/// focus, `:focus-visible` (with `outline`) applies only while focus is
+/// shown, activation emits the click signal, a rebuild keeps focus on the
+/// same `id`, a modal root confines focus and an `HtmlNoFocus` root never
+/// takes it. `autofocus` comes first on `#b`: a value-less attribute must
+/// not eat the next attribute's first character (bug_0019).
+#[test]
+fn focus_navigation_scope_and_styles() {
+    let page = r#"<div id="a" data-on-click="pick-a"><p>A {{ n }}</p></div>
+        <div id="b" autofocus data-on-click="pick-b" data-with='{"n": {{ n }}}'><p>B</p></div>
+        <div id="c" tabindex="0"><p>C</p></div>
+        <div id="d" data-on-click="pick-d" tabindex="-1"><p>D</p></div>"#;
+    let css = "div:focus-visible { outline: 2px solid #ff0000; outline-offset: 3px } \
+               #c:focus { background-color: #00ff00 }";
+    let modal = r#"<div id="ok" data-on-click="ok"><p>OK</p></div>"#;
+    let mut ui = TestUi::new("focus", &[("page.html", page), ("style.css", css), ("modal.html", modal)])
+        .stylesheet("style.css");
+    let modal_template = ui.load::<HtmlTemplate>("modal.html");
+    let mut ui = ui.spawn("page.html", TemplateContext::new().with("n", &1), Node::default());
+    ui.settle();
+    ui.update(3);
+    let root = ui.root();
+    let world = ui.world_mut();
+    let [a, b, c, d] = ["a", "b", "c", "d"].map(|id| element_by_id(world, root, id));
+    assert_eq!(focused(world), Some(b), "autofocus");
+    assert_eq!([a, b, c, d].map(|entity| navigable(world, entity)), [true, true, true, false]);
+    assert!(world.get::<Outline>(b).is_none(), "focus not shown yet");
+
+    // Shown focus: `:focus-visible` restyles in place.
+    world.resource_mut::<bevy::input_focus::InputFocusVisible>().0 = true;
+    ui.update(3);
+    let world = ui.world_mut();
+    let outline = world.get::<Outline>(b).expect(":focus-visible outline");
+    assert_eq!((outline.width, outline.offset), (Val::Px(2.0), Val::Px(3.0)));
+
+    // Moving focus moves the styles (`:focus` alone styles `#c`).
+    world
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(c, bevy::input_focus::FocusCause::Navigated);
+    ui.update(3);
+    let world = ui.world_mut();
+    assert!(world.get::<Outline>(b).is_none(), "outline left b");
+    assert_eq!(world.get::<BackgroundColor>(c).map(|bg| hex(bg.0)), Some("#00ff00".to_owned()));
+
+    // Activation emits the element's click signal with its payload.
+    world.trigger(ActivateElement { entity: b });
+    let signals: Vec<ElementSignal> =
+        world.resource::<Messages<ElementSignal>>().iter_current_update_messages().cloned().collect();
+    assert_eq!(signals.len(), 1);
+    assert_eq!((signals[0].name.as_ref(), signals[0].payload["n"].as_i64(), signals[0].position), ("pick-b", Some(1), None));
+
+    // A rebuild replaces every element; focus follows the `id`.
+    world
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(a, bevy::input_focus::FocusCause::Navigated);
+    ui.update(2);
+    let world = ui.world_mut();
+    world.get_mut::<TemplateContext>(root).unwrap().insert("n", &2);
+    ui.settle();
+    ui.update(3);
+    let world = ui.world_mut();
+    let new_a = element_by_id(world, root, "a");
+    assert_ne!(new_a, a, "rebuilt");
+    assert_eq!(focused(world), Some(new_a), "focus restored by id");
+
+    // A modal root takes focus and confines navigation.
+    let dialog = world.spawn((HtmlUi::new(modal_template.clone()), HtmlModal)).id();
+    ui.settle_quiet();
+    ui.update(5);
+    let world = ui.world_mut();
+    let ok = element_by_id(world, dialog, "ok");
+    assert_eq!(focused(world), Some(ok), "modal takes focus");
+    assert!(navigable(world, ok));
+    let page_b = element_by_id(world, root, "b");
+    assert!(!navigable(world, page_b), "page outside the modal");
+
+    // Closing it hands focus back to the page (its autofocus element).
+    world.entity_mut(dialog).despawn();
+    ui.update(3);
+    let world = ui.world_mut();
+    let new_b = element_by_id(world, root, "b");
+    assert_eq!(focused(world), Some(new_b));
+    assert!(navigable(world, new_b));
+
+    // An `HtmlNoFocus` root's elements never take part.
+    let panel = world.spawn((HtmlUi::new(modal_template), HtmlNoFocus)).id();
+    ui.settle_quiet();
+    ui.update(5);
+    let world = ui.world_mut();
+    let panel_ok = element_by_id(world, panel, "ok");
+    assert!(!navigable(world, panel_ok));
+    assert_eq!(focused(world), Some(new_b));
+}
+
+/// `HtmlFocus::navigate` moves focus by layout position and shows it; at an
+/// edge it triggers `FocusEdge` instead. `HtmlFocus::activate` emits the
+/// focused element's click signal.
+#[test]
+fn html_focus_navigates_by_layout_and_reports_edges() {
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::math::CompassOctant;
+
+    #[derive(Resource, Default)]
+    struct Edges(Vec<CompassOctant>);
+
+    let page = r#"<div id="top" data-on-click="top" autofocus><p>Top</p></div>
+        <div id="bottom" data-on-click="bottom"><p>Bottom</p></div>"#;
+    let mut ui = TestUi::with_layout("navigate", &[("page.html", page)], UVec2::new(320, 240)).spawn(
+        "page.html",
+        TemplateContext::new(),
+        Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+    );
+    ui.settle();
+    ui.update(3);
+    let root = ui.root();
+    let world = ui.world_mut();
+    world.init_resource::<Edges>();
+    world.add_observer(|edge: On<FocusEdge>, mut edges: ResMut<Edges>| edges.0.push(edge.direction));
+    let [top, bottom] = ["top", "bottom"].map(|id| element_by_id(world, root, id));
+    assert_eq!(focused(world), Some(top));
+
+    let moved = world
+        .run_system_once(|mut focus: HtmlFocus| focus.navigate(CompassOctant::South))
+        .unwrap();
+    assert_eq!(moved, Some(bottom));
+    assert_eq!(focused(world), Some(bottom));
+    assert!(world.resource::<bevy::input_focus::InputFocusVisible>().0, "navigation shows focus");
+
+    let moved = world
+        .run_system_once(|mut focus: HtmlFocus| focus.navigate(CompassOctant::South))
+        .unwrap();
+    world.flush();
+    assert_eq!(moved, None);
+    assert_eq!(world.resource::<Edges>().0, [CompassOctant::South]);
+    assert_eq!(focused(world), Some(bottom));
+
+    world.run_system_once(|mut focus: HtmlFocus| focus.activate()).unwrap();
+    world.flush();
+    let names: Vec<String> = world
+        .resource::<Messages<ElementSignal>>()
+        .iter_current_update_messages()
+        .map(|signal| signal.name.to_string())
+        .collect();
+    assert_eq!(names, ["bottom"]);
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]
@@ -1526,7 +1704,7 @@ html { color: #ffffff; font-size: 20px }
     // Hover: the state change restyles the card in place.
     ui.world_mut()
         .entity_mut(box_entity)
-        .insert(PseudoState { hovered: true, active: false });
+        .insert(PseudoState { hovered: true, ..default() });
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -1609,7 +1787,7 @@ html { color: #ffffff; font-size: 20px }
     for entity in cards {
         ui.world_mut()
             .entity_mut(entity)
-            .insert(PseudoState { hovered: true, active: false });
+            .insert(PseudoState { hovered: true, ..default() });
     }
     ui.settle().assert_dump(
         r#"

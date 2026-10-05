@@ -102,6 +102,15 @@
 //!   ```
 //!
 //!   Nested hooks: the deepest bound element under the pointer wins.
+//! - **Focus and navigation** ([`focus`]): `data-on-click` and
+//!   `tabindex="0"` elements are focusable (`tabindex="-1"` opts out),
+//!   `autofocus` takes the initial focus, focus survives rebuilds by `id`,
+//!   `:focus` / `:focus-visible` and `outline` style it, and an
+//!   [`HtmlModal`](focus::HtmlModal) root confines it. Focus is Bevy's
+//!   `InputFocus`; bind your own gamepad/keyboard input and call
+//!   [`HtmlFocus::navigate`](focus::HtmlFocus::navigate) /
+//!   [`activate`](focus::HtmlFocus::activate) (activation emits the same
+//!   `ElementSignal` as a click).
 //! - **9-slice frames**: in CSS via `border-image` (see [`style`]), or for
 //!   nodes outside HTML via `*.slice.ron` assets and
 //!   [`NineSliceFrame`](nine_slice::NineSliceFrame) ([`nine_slice`]).
@@ -122,6 +131,7 @@ pub mod fuzz;
 
 mod build;
 mod cascade;
+pub mod focus;
 pub mod fonts;
 pub mod html;
 pub mod l10n;
@@ -136,6 +146,7 @@ pub use {bevy_fluent, lightningcss, tera, tl};
 
 /// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {
+    pub use crate::focus::{ActivateElement, FocusEdge, Focusable, HtmlFocus, HtmlModal, HtmlNoFocus};
     pub use crate::fonts::{FontFaces, FontFamilies, GenericFamily};
     pub use crate::html::{
         HtmlDebugOutline, HtmlElement, HtmlElements, HtmlUi, HtmlUiBuilt, HtmlUiRestyled,
@@ -215,5 +226,6 @@ impl Plugin for BevyMarkupPlugin {
                     nine_slice::apply_nine_slices.before(UiSystems::Prepare),
                 ),
             );
+        focus::plugin(app);
     }
 }

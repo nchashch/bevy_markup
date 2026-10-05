@@ -9,8 +9,9 @@
 //! Supported CSS (parsed with lightningcss; a syntax error fails the load):
 //! - selectors: compound selectors — a type (or `*`) plus any `.class` /
 //!   `#id` parts: `p`, `.note`, `#title`, `p.note`, `.a.b`, `h1#x.big` — incl.
-//!   comma lists, plus the interaction pseudo-classes `:hover` and `:active`
-//!   (each adds class-level specificity; the rule applies while the element's
+//!   comma lists, plus the pseudo-classes `:hover`, `:active`, `:focus` and
+//!   `:focus-visible` (see [`crate::focus`]) (each adds class-level
+//!   specificity; the rule applies while the element's
 //!   [`PseudoState`](crate::signals::PseudoState) has the bit set, which the
 //!   library maintains from picking — a change restyles in place). Matched
 //!   against each element's tag, `id` and `class` attributes. Combinators,
@@ -23,7 +24,9 @@
 //!   node itself): `border-image` (+ `-source`, `-slice`, `-repeat`),
 //!   `border-width`, `padding` (absolute lengths); `background-color` on
 //!   blocks and containers; `gap` / `row-gap` / `column-gap` on containers
-//! - on blocks and containers: `border-color` (+ `-top`/… sides; Bevy's
+//! - on blocks and containers: `outline` (+ `-style`, `-width`, `-color`;
+//!   `outline-offset` in px; drawn only with a visible style, `currentColor`
+//!   = the text color) → Bevy's `Outline`; `border-color` (+ `-top`/… sides; Bevy's
 //!   `BorderColor`, undeclared sides transparent — needs a `border-width`),
 //!   `border-radius` (+ the four corner longhands; circular corners only,
 //!   `%` of the node's smaller side as Bevy does), `z-index` (an integer →

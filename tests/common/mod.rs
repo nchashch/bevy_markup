@@ -139,7 +139,11 @@ impl TestUi {
                     bevy::ui::UiPlugin::default(),
                     bevy::picking::DefaultPickingPlugins,
                     bevy::image::TextureAtlasPlugin,
-                ));
+                ))
+                // `InheritedVisibility` without the render-side visibility
+                // plugin: directional navigation skips nodes that aren't
+                // visible in the hierarchy.
+                .add_systems(PostUpdate, propagate_visibility);
                 app.world_mut().spawn((
                     Camera2d,
                     Camera {
@@ -524,6 +528,16 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
     {
         write!(line, " z={}", z.0).unwrap();
     }
+    if let Some(outline) = entity_ref.get::<Outline>() {
+        write!(
+            line,
+            " outline={},{},{}",
+            val(outline.width),
+            val(outline.offset),
+            hex(outline.color)
+        )
+        .unwrap();
+    }
     if entity_ref.get::<Pickable>().is_some_and(|pickable| !pickable.is_hoverable) {
         write!(line, " pick=none").unwrap();
     }
@@ -581,5 +595,30 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
             continue;
         }
         dump_entity(world, child, depth + 1, out);
+    }
+}
+
+/// Test stand-in for Bevy's visibility propagation: an entity is visible
+/// unless it or an ancestor (up to the first non-`Inherited` value) is
+/// `Visibility::Hidden`.
+fn propagate_visibility(
+    mut nodes: Query<(Entity, &mut InheritedVisibility)>,
+    visibility: Query<&Visibility>,
+    parents: Query<&ChildOf>,
+) {
+    for (entity, mut inherited) in &mut nodes {
+        let mut visible = true;
+        for ancestor in std::iter::once(entity).chain(parents.iter_ancestors(entity)) {
+            match visibility.get(ancestor) {
+                Ok(Visibility::Hidden) => {
+                    visible = false;
+                    break;
+                }
+                Ok(Visibility::Visible) => break,
+                _ => {}
+            }
+        }
+        let value = if visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
+        inherited.set_if_neq(value);
     }
 }

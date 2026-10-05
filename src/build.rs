@@ -6,13 +6,14 @@ use bevy::asset::{AssetEvent, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
-use crate::cascade::{HtmlStyles, LayoutDecl, Pseudo, SliceValue};
+use crate::cascade::{HtmlStyles, LayoutDecl, OutlineDecl, Pseudo, SliceValue};
 use crate::fonts::FontFamilies;
 use crate::html::{
     HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, HtmlUiRestyled, RenderedHtml,
 };
 use crate::l10n::LocalizedText;
 use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
+use crate::focus::{self, Focusable};
 use crate::signals::{self, ElementSignals, PseudoState, SignalBinding};
 use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
 use crate::template::decode_entities;
@@ -54,6 +55,8 @@ struct Block {
     element: Option<HtmlElement>,
     /// The element's `data-on-*` hooks.
     signals: Vec<SignalBinding>,
+    /// Focusability from `tabindex` / `data-on-click` / `autofocus`.
+    focus: Option<Focusable>,
     /// The DOM node, for `:hover`/`:active` restyles.
     handle: Option<tl::NodeHandle>,
     /// The block element's own computed style (bullet; root `Text` font).
@@ -88,6 +91,8 @@ enum Item {
         element: HtmlElement,
         handle: Option<tl::NodeHandle>,
         signals: Vec<SignalBinding>,
+        /// Focusability from `tabindex` / `data-on-click` / `autofocus`.
+        focus: Option<Focusable>,
         /// Box properties, computed with the element's interaction state.
         boxed: BoxStyle,
         /// The element's computed `pointer-events` (inherited).
@@ -109,6 +114,12 @@ pub(crate) struct BoxStyle {
     pub(crate) row_gap: Option<f32>,
     /// `z-index` (`None` for `auto`/undeclared).
     pub(crate) z_index: Option<i32>,
+    /// Declared `outline`; resolved against the text color by
+    /// [`BoxStyle::outline`].
+    pub(crate) outline: OutlineDecl,
+    /// The `outline` to draw, resolved with the element's text color while
+    /// collecting (`collect_node`).
+    pub(crate) drawn_outline: Option<Outline>,
     /// Not part of `is_empty`: a `Text` node takes these itself.
     pub(crate) layout: LayoutDecl,
 }
@@ -126,6 +137,21 @@ impl BoxStyle {
         Some(ImageNode {
             visual_box: VisualBox::BorderBox,
             ..ImageNode::new(image.clone()).with_mode(NodeImageMode::Sliced(slicer.clone()))
+        })
+    }
+
+    /// The `outline` to draw, if its style is a visible one. `currentColor`
+    /// (and an undeclared color) is the element's text `color`.
+    fn outline(&self, text_color: Color) -> Option<Outline> {
+        let decl = self.outline;
+        if decl.visible != Some(true) {
+            return None;
+        }
+        let width = decl.width.unwrap_or(3.0);
+        (width > 0.0).then(|| Outline {
+            width: Val::Px(width),
+            offset: Val::Px(decl.offset.unwrap_or(0.0)),
+            color: decl.color.flatten().unwrap_or(text_color),
         })
     }
 
@@ -274,6 +300,8 @@ impl Styler<'_> {
             image,
             row_gap: declared.row_gap,
             z_index: declared.z_index.flatten(),
+            outline: declared.outline,
+            drawn_outline: None,
             layout: declared.layout.clone(),
         }
     }
@@ -464,6 +492,8 @@ pub(crate) fn build_html_ui(
                     state.copied().map_or(Pseudo::default(), |state| Pseudo {
                         hover: state.hovered,
                         active: state.active,
+                        focus: state.focused,
+                        focus_visible: state.focus_visible,
                     }),
                 );
             }
@@ -492,6 +522,7 @@ pub(crate) fn build_html_ui(
                 element: None,
                 handle: None,
                 signals: Vec::new(),
+                focus: None,
                 style,
                 boxed: BoxStyle::default(),
                 runs: vec![Run { text, style }],
@@ -513,6 +544,7 @@ pub(crate) fn build_html_ui(
                     element: None,
                     handle: None,
                     signals: Vec::new(),
+                    focus: None,
                     style: root,
                     boxed: BoxStyle::default(),
                     runs: vec![Run {
@@ -567,12 +599,15 @@ struct NodeSpec {
     element: Option<HtmlElement>,
     /// The element's `data-on-*` hooks.
     signals: Vec<SignalBinding>,
+    /// Focusability from `tabindex` / `data-on-click` / `autofocus`.
+    focus: Option<Focusable>,
     /// The DOM node, for `:hover`/`:active` restyles.
     handle: Option<tl::NodeHandle>,
     background: Option<Color>,
     image: Option<ImageNode>,
     border_color: Option<BorderColor>,
     z_index: Option<ZIndex>,
+    outline: Option<Outline>,
     /// `false` for `pointer-events: none` (`Pickable::IGNORE`).
     pickable: bool,
     /// `Text` nodes hold spans, never child nodes.
@@ -595,11 +630,13 @@ impl NodeSpec {
             node,
             element: None,
             signals: Vec::new(),
+            focus: None,
             handle: None,
             background: None,
             image: None,
             border_color: None,
             z_index: None,
+            outline: None,
             pickable: true,
             text: None,
             children: Vec::new(),
@@ -608,7 +645,7 @@ impl NodeSpec {
 }
 
 /// Which of an element's components its stylesheet set (and may therefore
-/// take back on a restyle): `BorderColor`, `ZIndex` and `Pickable` are also
+/// take back on a restyle): `BorderColor`, `ZIndex`, `Outline` and `Pickable` are also
 /// things an app sets itself, so a restyle without the declaration resets
 /// only what CSS set. `BorderColor`/`ZIndex` are `Node`'s required
 /// components: taking them back means resetting them to their defaults.
@@ -616,6 +653,7 @@ impl NodeSpec {
 pub(crate) struct CssOwned {
     border_color: bool,
     z_index: bool,
+    outline: bool,
     pickable: bool,
 }
 
@@ -625,11 +663,13 @@ fn apply_css_owned(
     target: &mut EntityCommands,
     border_color: Option<BorderColor>,
     z_index: Option<ZIndex>,
+    outline: Option<Outline>,
     pickable: bool,
 ) {
     let owned = CssOwned {
         border_color: border_color.is_some(),
         z_index: z_index.is_some(),
+        outline: outline.is_some(),
         pickable: !pickable,
     };
     target.queue(move |mut entity: EntityWorldMut| {
@@ -649,6 +689,15 @@ fn apply_css_owned(
             }
             None if before.z_index => {
                 entity.insert(ZIndex::default());
+            }
+            None => {}
+        }
+        match outline {
+            Some(outline) => {
+                entity.insert(outline);
+            }
+            None if before.outline => {
+                entity.remove::<Outline>();
             }
             None => {}
         }
@@ -688,16 +737,17 @@ type Tree<'w, 's> = Query<
 >;
 
 fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
-    let (element, handle, signals, boxed, pointer_events, children) = match item {
+    let (element, handle, signals, focus, boxed, pointer_events, children) = match item {
         Item::Block(block) => return block_spec(styler, block),
         Item::Container {
             element,
             handle,
             signals,
+            focus,
             boxed,
             pointer_events,
             children,
-        } => (element, handle, signals, boxed, pointer_events, children),
+        } => (element, handle, signals, focus, boxed, pointer_events, children),
     };
     let mut node = Node {
         flex_direction: FlexDirection::Column,
@@ -713,10 +763,12 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
     NodeSpec {
         element: Some(element),
         signals,
+        focus,
         handle,
         background: boxed.background,
         image: boxed.sliced_image(),
         border_color: boxed.border_color(),
+        outline: boxed.drawn_outline,
         z_index: boxed.z_index.map(ZIndex),
         pickable: pointer_events,
         children: children
@@ -777,8 +829,10 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         return NodeSpec {
             element: block.element,
             signals: block.signals,
+            focus: block.focus,
             handle: block.handle,
             border_color: boxed.border_color(),
+            outline: boxed.drawn_outline,
             z_index: boxed.z_index.map(ZIndex),
             pickable: block.style.pointer_events,
             text: Some(text),
@@ -803,10 +857,12 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
     NodeSpec {
         element: block.element,
         signals: block.signals,
+        focus: block.focus,
         handle: block.handle,
         background: boxed.background,
         image: boxed.sliced_image(),
         border_color: boxed.border_color(),
+        outline: boxed.drawn_outline,
         z_index: boxed.z_index.map(ZIndex),
         pickable: block.style.pointer_events,
         children: vec![NodeSpec {
@@ -831,6 +887,9 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
     if let Some(handle) = spec.handle {
         entity.insert(DomNode(handle));
     }
+    if let Some(focusable) = spec.focus {
+        entity.insert(focusable);
+    }
     if !spec.signals.is_empty() {
         let signals = ElementSignals(spec.signals);
         signals::attach_pointer_signals(&mut entity, &signals);
@@ -842,7 +901,7 @@ fn spawn_spec(parent: &mut ChildSpawnerCommands, spec: NodeSpec) {
     if let Some(image) = spec.image {
         entity.insert((image, CssFrame));
     }
-    apply_css_owned(&mut entity, spec.border_color, spec.z_index, spec.pickable);
+    apply_css_owned(&mut entity, spec.border_color, spec.z_index, spec.outline, spec.pickable);
     match spec.text {
         Some(text) => {
             entity.insert((Text::new(text.prefix), text.font, TextColor(text.color)));
@@ -923,7 +982,7 @@ fn apply_spec(commands: &mut Commands, entity: Entity, spec: NodeSpec, tree: &Tr
     if let Some(image) = spec.image {
         target.insert((image, CssFrame));
     }
-    apply_css_owned(&mut target, spec.border_color, spec.z_index, spec.pickable);
+    apply_css_owned(&mut target, spec.border_color, spec.z_index, spec.outline, spec.pickable);
     match spec.text {
         Some(text) => {
             // `TextLayout` is required by `Text`: replace, never remove.
@@ -1115,6 +1174,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                     element: None,
                     handle: None,
                     signals: Vec::new(),
+                    focus: None,
                     style: inherited,
                     boxed: BoxStyle::default(),
                     runs,
@@ -1126,6 +1186,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
     };
 
     let signals = signals::signal_bindings(tag);
+    let focus = focus::focusable(tag, &signals);
     let state = ctx.states.and_then(|states| states.get(&handle)).copied().unwrap_or_default();
     let Some(element) = ctx.element(tag) else {
         // Unmatched `data-l10n-name` in a translation: content only.
@@ -1135,7 +1196,8 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         return;
     };
     let style = ctx.styler.style_of(&element, inherited, state);
-    let boxed = ctx.styler.box_of(&element, state);
+    let mut boxed = ctx.styler.box_of(&element, state);
+    boxed.drawn_outline = boxed.outline(style.color);
     let kind = match element.tag.as_str() {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
         "p" => BlockKind::Paragraph,
@@ -1170,6 +1232,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                     element,
                     handle: Some(handle),
                     signals,
+                    focus,
                     boxed,
                     pointer_events: style.pointer_events,
                     children,
@@ -1187,6 +1250,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         element: Some(element),
         handle: Some(handle),
         signals,
+        focus,
         style,
         boxed,
         runs: finish_runs(runs, preformatted),
