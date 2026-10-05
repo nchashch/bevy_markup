@@ -126,6 +126,12 @@ bevy_markup implements a useful subset of the web, not all of it:
 
 The crate documentation (`cargo doc --open`) is the full guide.
 
+## Bevy compatibility
+
+| bevy_markup | Bevy | bevy_fluent |
+|---|---|---|
+| 0.1 (unreleased) | 0.19 | 0.15 |
+
 ## Running the examples
 
 ```sh

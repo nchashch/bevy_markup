@@ -42,7 +42,8 @@ Re-exported crates (their types appear in the API): `tera`, `tl`,
 ## Layout
 
 ```
-README.md        human-facing overview: what bevy_markup is, how it works, testing strategy (keep in sync)
+README.md        human-facing overview: what bevy_markup is, how it works, testing strategy, Bevy
+                 compatibility table (add a row on every release or Bevy/bevy_fluent bump; keep in sync)
 LICENSE-MIT, LICENSE-APACHE  dual license (MIT OR Apache-2.0, Cargo.toml `license`)
 src/
   lib.rs           crate docs (guide), HtmlUiPlugin, HtmlUiSystems, prelude, re-exports
