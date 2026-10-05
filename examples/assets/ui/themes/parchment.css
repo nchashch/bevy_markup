@@ -107,6 +107,7 @@ em {
 .viewport {
   flex-grow: 1;
   min-height: 0;
+  overflow-y: scroll;
 }
 
 .row {

@@ -2,14 +2,14 @@
    columns, left to right — the rendered inventory, the about/language/theme
    column, then one column per DOM outline — so everything fits the window
    height and scrolls inside its panel. The content documents are separate
-   documents the app spawns into the `viewport` slots; the app wires
-   behaviour onto these elements after each build (clicks, scrolling, content
-   slots); the layout and the looks are all CSS. Tera fills the button rows
+   documents the app spawns into the `is="content-slot"` viewports (once per
+   slot element; updates keep the slots and their documents); clicks are
+   `data-on-click` signals; the layout, scrolling and looks are all CSS. Tera fills the button rows
    and the active options; Fluent localizes the fixed strings. #}
 <section class="columns">
   <section class="column">
     <section class="panel fill">
-      <div id="slot-inventory" class="viewport"></div>
+      <div id="slot-inventory" class="viewport" is="content-slot"></div>
     </section>
   </section>
   <section class="column">
@@ -39,7 +39,7 @@
   {% for slot in outline_slots %}
   <section class="column">
     <section class="panel fill">
-      <div class="viewport" id="{{ slot }}"></div>
+      <div class="viewport" id="{{ slot }}" is="content-slot"></div>
     </section>
   </section>
   {% endfor %}

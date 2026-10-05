@@ -2,15 +2,14 @@
 //! panel (see `assets/ui/content/shell.html`; the looks are the themes'
 //! `Demo chrome` rules). Nothing about the layout is hand-built here.
 //!
-//! Two things are wired onto the HTML after each shell build:
-//! - `.viewport` elements become scroll areas. bevy_markup's CSS subset has
-//!   no `overflow`, so scrollability — like any behaviour — is attached by
-//!   the app.
-//! - The content documents (the rendered inventory and the three DOM
-//!   outlines) are spawned into their `#slot-*` elements. They live inside
-//!   the shell's tree, so a shell rebuild replaces them with fresh
-//!   documents; in exchange they inherit the HTML layout instead of being
-//!   positioned by the app.
+//! The content documents (the rendered inventory and the three DOM outlines)
+//! go into the shell's `<div is="content-slot">` viewports: the
+//! `content-slot` definition ([`fill_content_slot`]) runs once per spawned
+//! slot, adds wheel/trackpad scrolling (`ScrollArea`; the viewports'
+//! `overflow-y: scroll` is CSS) and spawns the slot's document. Shell updates
+//! (language, active option) keep the slots — and the documents in them;
+//! the documents inherit the HTML layout instead of being positioned by the
+//! app.
 
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
@@ -123,9 +122,8 @@ pub fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
         shell_context(0, 0),
         Shell,
         Node {
-            // The `HtmlUi` node itself is the app's (the `html` rule cannot
-            // set layout): one full-window column; the document's `.top` and
-            // `.bottom` sections do the rest.
+            // The `HtmlUi` node itself: one full-window column; the
+            // document's `.top` and `.bottom` sections do the rest.
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
             flex_direction: FlexDirection::Column,
@@ -134,35 +132,25 @@ pub fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 }
 
-/// On every shell build: make the `.viewport` elements scrollable and spawn
-/// the content documents into their slots.
-pub fn wire_shell_build(
-    built: On<HtmlUiBuilt>,
-    shell: Query<(), With<Shell>>,
-    mut viewports: Query<&mut Node>,
-    elements: HtmlElements,
-    mut commands: Commands,
+/// `<div is="content-slot">`: scrolling plus the slot's content document
+/// (looked up by the slot's `id` in [`CONTENT`]). Runs once per spawned slot.
+pub fn fill_content_slot(
+    slot: In<ElementConnected>,
+    elements: Query<&HtmlElement>,
     asset_server: Res<AssetServer>,
+    mut commands: Commands,
 ) {
-    if shell.get(built.entity).is_err() {
+    let id = elements
+        .get(slot.entity)
+        .ok()
+        .and_then(|element| element.id.as_deref());
+    let Some(content) = CONTENT.iter().find(|content| Some(content.slot) == id) else {
         return;
-    }
-
-    // The CSS subset has no `overflow`; `ScrollArea` adds wheel/trackpad
-    // input. (The `.viewport` rule already grows into its panel and allows
-    // shrinking via `min-height: 0`.)
-    for entity in elements.by_class(built.entity, "viewport") {
-        if let Ok(mut node) = viewports.get_mut(entity) {
-            node.overflow = Overflow::scroll_y();
-        }
-        commands.entity(entity).insert(ScrollArea);
-    }
-
-    for content in CONTENT {
-        let Some(slot) = elements.by_id(built.entity, content.slot) else {
-            continue;
-        };
-        commands.entity(slot).with_children(|slot| {
+    };
+    commands
+        .entity(slot.entity)
+        .insert(ScrollArea)
+        .with_children(|slot| {
             let mut document = slot.spawn((
                 HtmlUi::new(asset_server.load(content.template)),
                 demo_context(),
@@ -177,5 +165,4 @@ pub fn wire_shell_build(
                 document.insert(HtmlDebugOutline);
             }
         });
-    }
 }

@@ -28,7 +28,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlDebugOutline` | Component | show the DOM outline (styled like `pre`) instead of the UI |
 | `RenderedHtml` | Component | `Pending` / `Ready(HtmlDocument)` / `Failed(msg)` (read-only) |
 | `HtmlElement { tag, id, classes }` | Component | on each spawned block and container node |
-| `HtmlUiBuilt { entity }` | EntityEvent | after a content update (or a restyle that spawned nodes); kept elements keep their entities, new ones may need wiring |
+| `HtmlUiBuilt { entity }` | EntityEvent | after a content update (or a restyle that spawned nodes); kept elements keep their entities *and what was attached*, so handlers must be idempotent (no `observe` here: it stacks per update — use `data-on-*` or `is=`) |
 | `HtmlUiRestyled { entity }` | EntityEvent | after a style-only change applied in place (entities and attached components kept) |
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
@@ -77,7 +77,7 @@ src/
                    autofocus), focus pseudo-state, press-to-focus, activation (InputFocus-based)
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
-  quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, click wiring, Space = language
+  quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, a `data-on-click` button, Space = language
   grid.rs          CSS grid: page track template switched via context (Space), auto-fill slots
                    with a 2×2 span and dense packing, small grids in slots/stats; L = language
   menu.rs          focus/navigation (autofocus, arrows/D-pad → HtmlFocus, Enter/A activate,
@@ -88,8 +88,8 @@ examples/
                    (`id="unit-<name>"`; N adds at the top, K fades out the last via `opacity`),
                    `style` health bars, `is="badge"` spawn counter vs update counter; L = language
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
-                   content slots, scroll wiring, contexts), controls.rs (language/theme
-                   selection), consts.rs (fonts)
+                   `is="content-slot"` viewports filled once per slot, contexts),
+                   controls.rs (language/theme selection), consts.rs (fonts)
 tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
   signals.rs       picking-driven signal tests: real WindowEvent input → Bevy picking → ElementSignal/PseudoState
@@ -379,11 +379,12 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 
 - Bevy `ImageNode` defaults to `VisualBox::ContentBox` (draws inside padding);
   frames need `BorderBox` (`NineSliceFrame` sets it).
-- Scrollable panels (demo `shell.rs`): a `.viewport` element gets `ScrollArea` +
-  `overflow: scroll_y` wired on each build (bevy_markup's CSS subset has no
-  `overflow`, so scrollability is app behaviour, like clicks); its CSS gives it
-  `flex-grow: 1` and `min-height: 0` — else its content sizes it and nothing
-  scrolls. Viewport children need `flex_shrink: 0.0` (`HtmlUi` blocks set it).
+- Scrollable panels (demo `shell.rs`): a `.viewport` element is `overflow-y:
+  scroll` in CSS (an app write to `Node.overflow` would be undone by the next
+  update, which re-inserts the spec's `Node`) and gets `ScrollArea` (wheel
+  input) once per element from its `is="content-slot"` definition; its CSS
+  also gives it `flex-grow: 1` and `min-height: 0` — else its content sizes
+  it and nothing scrolls. Viewport children need `flex_shrink: 0.0` (`HtmlUi` blocks set it).
   For hand-built scrollbars, the `Scrollbar` must be a *sibling* of the
   viewport. A framed node that scrolls itself needs `overflow_clip_margin:
   OverflowClipMargin::content_box()`.
@@ -965,8 +966,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
   (`div p`, `>`), attribute selectors, other pseudo-classes or
   pseudo-elements.
 - **Properties:** no `text-align`, `line-height`, `letter-spacing`,
-  `text-decoration`, `opacity`, elliptical `border-radius`, border styles
-  (every border is solid), `overflow`. Lengths: px/em/rem/% for `font-size`, absolute only
+  `text-decoration`, elliptical `border-radius`, border styles (every
+  border is solid); `overflow: auto` scrolls always (Bevy has no
+  scroll-if-needed). Lengths: px/em/rem/% for `font-size`, absolute only
   for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins.
 - **border-image:** center always drawn, `-width`/`-outset` ignored, one
   repeat mode for all sides (Bevy `TextureSlicer` limits).

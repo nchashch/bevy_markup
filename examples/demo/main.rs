@@ -34,7 +34,7 @@ fn main() {
         ))
         .insert_resource(ClearColor(Color::srgb_u8(20, 24, 32)))
         .add_systems(Startup, (setup, controls::spawn, shell::spawn))
-        .add_observer(shell::wire_shell_build)
+        .define_html_element("content-slot", shell::fill_content_slot)
         .add_systems(
             Update,
             (

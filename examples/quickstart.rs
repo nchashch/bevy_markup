@@ -1,6 +1,7 @@
 //! The whole API in one small app: an HTML template with Tera variables,
-//! Fluent translations and a CSS stylesheet; a clickable element wired up via
-//! `HtmlUiBuilt` + `HtmlElements`; runtime language switching.
+//! Fluent translations and a CSS stylesheet; a clickable element
+//! (`data-on-click`, read as `ElementSignal` messages); runtime language
+//! switching.
 //!
 //! `cargo run --example quickstart` — click "add a coin", press Space to switch
 //! between English and German.
@@ -19,8 +20,7 @@ fn main() {
             BevyMarkupPlugin,
         ))
         .add_systems(Startup, setup)
-        .add_systems(Update, switch_language)
-        .add_observer(wire_coin_button)
+        .add_systems(Update, (add_coin, switch_language))
         .run();
 }
 
@@ -65,22 +65,21 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
     ));
 }
 
-/// Children are rebuilt on every change, so wire behaviour on each build.
-fn wire_coin_button(built: On<HtmlUiBuilt>, elements: HtmlElements, mut commands: Commands) {
-    let Some(button) = elements.by_id(built.entity, "add-coin") else {
-        return;
-    };
-    let ui = built.entity;
-    commands.entity(button).insert(Button).observe(
-        move |_: On<Pointer<Click>>, mut contexts: Query<&mut TemplateContext>| {
-            let Ok(mut context) = contexts.get_mut(ui) else {
-                return;
-            };
+/// `data-on-click="add-coin"` arrives as an `ElementSignal` message. Wiring
+/// it in the template (rather than attaching an observer after a build)
+/// keeps working when updates keep the element: the binding is part of it.
+fn add_coin(mut signals: MessageReader<ElementSignal>, mut contexts: Query<&mut TemplateContext>) {
+    for signal in signals.read() {
+        if signal.name != "add-coin" || signal.trigger != SignalTrigger::Click {
+            continue;
+        }
+        for mut context in &mut contexts {
             let coins = context.get("coins").and_then(|v| v.as_i64()).unwrap_or(0);
-            // Mutating the context re-renders the template.
+            // Mutating the context re-renders the template (and updates the
+            // UI in place).
             context.insert("coins", &(coins + 1));
-        },
-    );
+        }
+    }
 }
 
 fn switch_language(

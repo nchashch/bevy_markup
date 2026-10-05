@@ -58,10 +58,13 @@
 //! (`style="width: {{ hp }}%"`) are fine; swapping
 //! [`ActiveLocale`](l10n::ActiveLocale) re-localizes; swapping
 //! [`DefaultStylesheet`](style::DefaultStylesheet) restyles — all at runtime.
-//! After every (re)build an [`HtmlUiBuilt`](html::HtmlUiBuilt) event fires on
-//! the `HtmlUi` entity; use [`HtmlElements`](html::HtmlElements) to find
-//! elements by `id`/`class` and attach behaviour, or declare it per element
-//! with [custom elements](custom_elements). Style-only changes
+//! After every content update an [`HtmlUiBuilt`](html::HtmlUiBuilt) event
+//! fires on the `HtmlUi` entity, and [`HtmlElements`](html::HtmlElements)
+//! finds elements by `id`/`class`. Kept elements keep what was attached to
+//! them, so declare behaviour in the template rather than attaching it per
+//! build: `data-on-click` signals for interactions, and
+//! [custom elements](custom_elements) for components and observers (run
+//! once per element). Style-only changes
 //! (stylesheets, fonts) restyle the existing children in place and fire
 //! [`HtmlUiRestyled`](html::HtmlUiRestyled) instead, keeping what you attached.
 //!

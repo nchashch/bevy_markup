@@ -1519,7 +1519,7 @@ html-ui
 /// A templated inline value updates the same entity in place.
 #[test]
 fn style_attribute_and_opacity() {
-    let page = r#"<div id="box" style="width: {{ w }}%; background-color: #ff0000"><p>x</p></div>
+    let page = r#"<div id="box" style="width: {{ w }}%; background-color: #ff0000; overflow-y: scroll"><p>x</p></div>
 <div id="half" class="half"><p id="green" style="color: #00ff00">y</p><div id="quarter" style="opacity: 0.5"><p id="inner">z</p></div></div>
 <p id="rule" class="imp" style="color: #0000ff">a</p>
 <p id="inline" class="imp" style="color: #0000ff !important">b</p>"#;
@@ -1580,7 +1580,13 @@ fn style_attribute_and_opacity() {
     ui.settle();
     let world = ui.world_mut();
     assert_eq!(get(world, "box"), boxed, "updated in place");
-    assert_eq!(world.get::<Node>(boxed).unwrap().width, Val::Percent(75.0));
+    let node = world.get::<Node>(boxed).unwrap();
+    assert_eq!(node.width, Val::Percent(75.0));
+    assert_eq!(
+        node.overflow.y,
+        OverflowAxis::Scroll,
+        "CSS overflow survives updates"
+    );
 }
 
 /// Focus on something that isn't UI — Bevy's input dispatch focuses the

@@ -138,23 +138,28 @@ impl HtmlElement {
 
 /// Fired on an [`HtmlUi`] entity after its children were built or updated
 /// for new content (template, context, locale or outline), or after a
-/// restyle that had to spawn elements. Elements still in the document keep
-/// their entities, but new ones may have appeared, so attach behaviour
-/// (observers, components) here rather than once at spawn — or declare it
-/// with [custom elements](crate::custom_elements), which run only for new
-/// elements.
+/// restyle that had to spawn elements.
+///
+/// Elements still in the document keep their entities — and whatever was
+/// attached to them — so this fires again for elements already wired:
+/// anything done here must be idempotent. Inserting a component is;
+/// adding an observer is not (each update would add one more, and one click
+/// would run them all). Declare behaviour in the template instead:
+/// `data-on-click` and friends for interactions ([`signals`](crate::signals)),
+/// `is="…"` for components or observers attached once per element
+/// ([custom elements](crate::custom_elements)).
 ///
 /// ```no_run
 /// # use bevy::prelude::*;
 /// # use bevy_markup::prelude::*;
-/// fn wire_buttons(built: On<HtmlUiBuilt>, elements: HtmlElements, mut commands: Commands) {
-///     if let Some(save) = elements.by_id(built.entity, "save") {
-///         commands.entity(save).insert(Button).observe(|_: On<Pointer<Click>>| {
-///             info!("save clicked");
-///         });
+/// # #[derive(Component)] struct Highlighted;
+/// // Idempotent: re-inserting the marker on a kept element changes nothing.
+/// fn mark_current(built: On<HtmlUiBuilt>, elements: HtmlElements, mut commands: Commands) {
+///     for current in elements.by_class(built.entity, "current") {
+///         commands.entity(current).insert(Highlighted);
 ///     }
 /// }
-/// # App::new().add_observer(wire_buttons);
+/// # App::new().add_observer(mark_current);
 /// ```
 #[derive(EntityEvent, Clone, Copy, Debug)]
 pub struct HtmlUiBuilt {

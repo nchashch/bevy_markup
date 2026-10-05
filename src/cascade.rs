@@ -26,6 +26,7 @@ use lightningcss::properties::font::{
 use lightningcss::properties::grid::{
     self as css_grid, RepeatCount, TrackBreadth, TrackListItem, TrackSize, TrackSizing,
 };
+use lightningcss::properties::overflow::OverflowKeyword;
 use lightningcss::properties::position as css_position;
 use lightningcss::properties::size::{self as css_size, MaxSize, Size};
 use lightningcss::rules::CssRule;
@@ -136,6 +137,8 @@ pub(crate) struct LayoutDecl {
     pub inset: [Option<Val>; 4],
     /// `[top-left, top-right, bottom-right, bottom-left]` radii.
     pub border_radius: [Option<Val>; 4],
+    /// `overflow-x`, `overflow-y` (and the `overflow` shorthand).
+    pub overflow: [Option<OverflowAxis>; 2],
 }
 
 /// A declared `position`. `static` is CSS's initial value: Bevy's
@@ -191,6 +194,8 @@ impl LayoutDecl {
         set(&mut corners.top_right, &self.border_radius[1]);
         set(&mut corners.bottom_right, &self.border_radius[2]);
         set(&mut corners.bottom_left, &self.border_radius[3]);
+        set(&mut node.overflow.x, &self.overflow[0]);
+        set(&mut node.overflow.y, &self.overflow[1]);
         let position_type = match self.position {
             Some(CssPosition::Absolute) => PositionType::Absolute,
             Some(CssPosition::Relative) => PositionType::Relative,
@@ -316,6 +321,8 @@ impl LayoutDecl {
             &base_corners.bottom_left,
             &self.border_radius[3],
         );
+        put(&mut node.overflow.x, &base.overflow.x, &self.overflow[0]);
+        put(&mut node.overflow.y, &base.overflow.y, &self.overflow[1]);
         // `apply_to` sets the position and insets only for `relative`/`absolute`.
         if matches!(
             self.position,
@@ -687,6 +694,16 @@ impl<'a> HtmlStyles<'a> {
     }
 }
 
+/// CSS `overflow` per axis; `auto` scrolls (Bevy has no "only if needed").
+fn overflow_axis(keyword: &OverflowKeyword) -> OverflowAxis {
+    match keyword {
+        OverflowKeyword::Visible => OverflowAxis::Visible,
+        OverflowKeyword::Hidden => OverflowAxis::Hidden,
+        OverflowKeyword::Clip => OverflowAxis::Clip,
+        OverflowKeyword::Scroll | OverflowKeyword::Auto => OverflowAxis::Scroll,
+    }
+}
+
 fn apply(style: &mut ElementStyle, declaration: &Property) {
     match declaration {
         Property::Opacity(alpha) => {
@@ -770,6 +787,14 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             style.layout.flex_direction = Some(flex_direction(direction));
         }
         Property::FlexWrap(wrap, _) => style.layout.flex_wrap = Some(flex_wrap(wrap)),
+        Property::Overflow(overflow) => {
+            style.layout.overflow = [
+                Some(overflow_axis(&overflow.x)),
+                Some(overflow_axis(&overflow.y)),
+            ];
+        }
+        Property::OverflowX(x) => style.layout.overflow[0] = Some(overflow_axis(x)),
+        Property::OverflowY(y) => style.layout.overflow[1] = Some(overflow_axis(y)),
         Property::FlexFlow(flow, _) => {
             style.layout.flex_direction = Some(flex_direction(&flow.direction));
             style.layout.flex_wrap = Some(flex_wrap(&flow.wrap));
@@ -1715,6 +1740,23 @@ mod tests {
         assert_eq!(layout("display: flex").display, Some(Display::Flex));
         assert_eq!(layout("display: inline-flex").display, Some(Display::Flex));
         assert_eq!(layout("display: inline").display, None);
+
+        assert_eq!(
+            layout("overflow: hidden scroll").overflow,
+            [Some(OverflowAxis::Hidden), Some(OverflowAxis::Scroll)]
+        );
+        assert_eq!(
+            layout("overflow: clip").overflow,
+            [Some(OverflowAxis::Clip), Some(OverflowAxis::Clip)]
+        );
+        assert_eq!(
+            layout("overflow-y: auto").overflow,
+            [None, Some(OverflowAxis::Scroll)]
+        );
+        assert_eq!(
+            layout("overflow-x: visible").overflow,
+            [Some(OverflowAxis::Visible), None]
+        );
 
         let flow = layout("flex-flow: column-reverse wrap");
         assert_eq!(flow.flex_direction, Some(FlexDirection::ColumnReverse));

@@ -15,7 +15,7 @@ out with Bevy's own flexbox and renders like everything else in your game.
 <p data-l10n-id="hello-greeting" data-l10n-args='{"name": "{{ player }}"}'>Welcome, {{ player }}.</p>
 <div class="wallet">
   <p data-l10n-id="hello-coins" data-l10n-args='{"coins": {{ coins }}}'>You have {{ coins }} coins.</p>
-  <p id="add-coin" class="action" data-l10n-id="hello-add-coin">+ Add a coin</p>
+  <p id="add-coin" class="action" data-on-click="add-coin" data-l10n-id="hello-add-coin">+ Add a coin</p>
 </div>
 ```
 
@@ -101,10 +101,11 @@ flowchart LR
    nodes with one `TextSpan` per styled run of text; containers (`div`,
    `section`, `ul`, …) become flex nodes. Each carries an `HtmlElement`
    component (tag, id, classes), so your code can find them with the
-   `HtmlElements` system parameter and attach behaviour after every build
-   (the `HtmlUiBuilt` event) — or declare it in the template: an element
-   with `is="health-bar"` runs the system you registered under that name
-   each time it's spawned, like a browser's customized built-in elements.
+   `HtmlElements` system parameter. Behaviour is declared in the template:
+   `data-on-click="buy"` sends a `buy` message when the element is clicked
+   (or activated by keyboard/gamepad), and an element with
+   `is="health-bar"` runs the system you registered under that name each
+   time it's spawned, like a browser's customized built-in elements.
 
 Updates are in place: when the context or locale changes, the new document is
 reconciled with the existing entities (matched by `id`, else by position), so

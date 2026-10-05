@@ -42,7 +42,9 @@
 //!   `align-items`, `align-content`, `align-self`, `justify-items`,
 //!   `justify-self`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex`;
 //!   `width`, `height`, `min-*`, `max-*` (px, `%`, `vw`/`vh`/`vmin`/`vmax`,
-//!   `auto`/`none`); `margin` (+ sides; px, `%`, `auto`); `box-sizing`. As
+//!   `auto`/`none`); `margin` (+ sides; px, `%`, `auto`); `box-sizing`;
+//!   `overflow` (+ `-x`/`-y`: `visible`, `hidden`, `clip`, `scroll`; `auto`
+//!   scrolls — Bevy has no scroll-if-needed). As
 //!   in CSS, sizes default to the content box. `position` (`static`,
 //!   `relative`, `absolute`; `absolute` is placed in its parent's padding
 //!   box, Bevy's rule, i.e. as if every parent were positioned) with `top` /
