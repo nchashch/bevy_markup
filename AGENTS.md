@@ -265,6 +265,15 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 
 ## Conventions
 
+- **CHANGELOG.md** ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/)):
+  every user-visible change (public API, CSS/HTML/Fluent support, behavior,
+  user-facing fixes) gets a line under `## [Unreleased]` in the same change,
+  under Added / Changed / Deprecated / Removed / Fixed / Security, written for
+  users (what they can do or must change; not internal refactors, tests or
+  agent docs). Mark breaking changes. A release renames `[Unreleased]` to
+  `[x.y.z] - YYYY-MM-DD`, adds a fresh empty `[Unreleased]`, and updates the
+  compare links at the bottom.
+
 - Library = HTML/CSS/Fluent/Tera → Bevy UI only. Panels, layouts, selectors,
   scrollbars, cameras, `ClearColor`, font files and asset paths belong to apps
   (the examples). Global config is resources; per-entity config is components.

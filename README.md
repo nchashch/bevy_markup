@@ -5,6 +5,12 @@
 Write game UI the way you'd write a web page, and get native
 [Bevy](https://bevyengine.org) UI out of it.
 
+> **Early development.** bevy_markup is young and its API is unstable:
+> expect breaking changes in most releases (0.3 → 0.4 → …) as features land
+> and designs settle. Cargo won't move you to a new 0.x minor version on its
+> own; read [CHANGELOG.md](CHANGELOG.md) before you do. Bug reports and
+> feedback are very welcome.
+
 bevy_markup is a Bevy 0.19 library. You describe a piece of UI as an HTML template,
 style it with CSS, and translate it with [Fluent](https://projectfluent.org);
 bevy_markup turns that into ordinary Bevy UI entities (`Node`, `Text`, `TextSpan`,
@@ -17,7 +23,10 @@ out with Bevy's own flexbox and renders like everything else in your game.
 <p data-l10n-id="hello-greeting" data-l10n-args='{"name": "{{ player }}"}'>Welcome, {{ player }}.</p>
 <div class="wallet">
   <p data-l10n-id="hello-coins" data-l10n-args='{"coins": {{ coins }}}'>You have {{ coins }} coins.</p>
-  <p id="add-coin" class="action" data-on-click="add-coin" data-l10n-id="hello-add-coin">+ Add a coin</p>
+  <div class="actions">
+    <p id="add-coin" class="action" autofocus data-on-click="add-coin" data-l10n-id="hello-add-coin">+ Add a coin</p>
+    <p id="language" class="action" data-on-click="switch-language" data-l10n-id="hello-language">Language</p>
+  </div>
 </div>
 ```
 
@@ -67,7 +76,9 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
 }
 ```
 
-Change `coins` in the entity's `TemplateContext` and the UI updates. Swap
+Clicks (or Enter / gamepad A on the focused button) arrive as `ElementSignal`
+messages named after `data-on-click`. Change `coins` in the entity's
+`TemplateContext` and the UI updates in place. Swap
 `DefaultStylesheet` and you have a new theme; swap `ActiveLocale` and the
 whole UI switches language. Changed or reloaded templates, stylesheets and
 translations are picked up too, so with Bevy's asset hot-reloading
@@ -132,10 +143,13 @@ bevy_markup implements a useful subset of the web, not all of it:
   own root with `<html class="…">` (placement, stacking, pickability);
   whatever CSS doesn't declare stays as your code set it. Combinators (`.panel p`) and
   `calc()` aren't supported yet; unsupported CSS is skipped, never guessed.
+  One deliberate difference from browsers: elements don't shrink below their
+  content unless a rule says `flex-shrink: 1` (a scrolling panel needs it on
+  every level down to the panel).
 - **Focus:** browser-style focus for gamepad and keyboard UIs: `data-on-click`
   and `tabindex` elements are focusable, `autofocus`, `:focus` /
   `:focus-visible` with `outline`, modal roots, and focus kept across
-  rebuilds. You bind the input; bevy_markup moves focus and activates.
+  updates. You bind the input; bevy_markup moves focus and activates.
 - **Interaction signals:** `app.on_html_click("buy", system)` runs a system
   per click on `data-on-click="buy"` elements (or read the messages).
   `data-on-click` (primary button, or activation by
@@ -167,6 +181,7 @@ The crate documentation (`cargo doc --open`) is the full guide.
 
 | bevy_markup | Bevy | bevy_fluent |
 |---|---|---|
+| 0.3 | 0.19 | 0.15 |
 | 0.2 | 0.19 | 0.15 |
 | 0.1 | 0.19 | 0.15 |
 
@@ -271,15 +286,15 @@ enough:
   really checks. Every survivor gets a new test or a written explanation of
   why the change can't affect behaviour.
 - *Coverage* measures which lines of the library each testing layer
-  actually runs, and which lines nothing runs at all. Currently about 98%
-  of the library's lines run under at least one layer.
+  actually runs, and which lines nothing runs at all (`scripts/coverage.py`;
+  CI publishes a report every night).
 
 Coverage shows that code ran; mutation testing shows that its result was
 checked. Together they point at gaps the other layers leave.
 
 **Bugs found so far.** Every real defect found this way is written up in
 `docs/agents/bugs/` (reproduction, cause, fix and the regression test that
-now guards it). Fifteen so far, from wrong cascade order and layout
+now guards it). 28 reports so far, from wrong cascade order and layout
 differences against the browser to crashes deep inside dependencies. Bugs
 in third-party crates are fixed locally where possible and tracked in
 `docs/agents/bugs/UPSTREAM.md` so they can be reported upstream.
@@ -323,15 +338,24 @@ tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in
                 honggfuzz/, fuzzcheck/, test-fuzz/)
 scripts/        oracles, fuzzing, mutation testing, coverage, golden images
-docs/agents/    developer docs: testing guide, bug reports
+docs/agents/    developer docs: design decisions (ADRs), testing guide, bug reports
+CHANGELOG.md    what changed in each release
 AGENTS.md       detailed project notes: architecture, conventions, gotchas
 ```
 
 ## Status
 
-An early prototype on Bevy 0.19. The API may still change. Things not
-built yet include CSS combinators, keyed
-updates that keep entities across content changes, and forms or inputs.
+Early development, on Bevy 0.19. The API is unstable and changes often (see
+the warning at the top and [CHANGELOG.md](CHANGELOG.md)). What exists is
+tested heavily (above), but large areas aren't built yet, among them:
+
+- CSS combinators (`.panel p`, `>`), `calc()`, named grid lines and areas;
+- text input and other form controls;
+- scrollbars as a built-in widget (the demo builds its own from HTML and
+  CSS);
+- performance work for large documents: any change re-renders and re-styles
+  the whole template (unchanged elements are not rewritten, but the work to
+  find them grows with the document).
 
 ## License
 
