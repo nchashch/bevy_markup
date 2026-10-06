@@ -91,9 +91,12 @@ src/
                    autofocus), focus pseudo-state, press-to-focus, activation (InputFocus-based)
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
-                   Every example works with mouse, keyboard and gamepad: focusable controls
-                   (`data-on-click`, `tabindex`), a `:focus-visible` ring, and each hotkey on a
-                   gamepad button too.
+                   One directory per example (`<name>/main.rs`, which cargo finds as the
+                   example `<name>`), each with a README.md: what it shows, controls, files.
+                   Their assets stay under `examples/assets/<name>/` (one `AssetPlugin` root,
+                   shared `ui/` frames). Every example works with mouse, keyboard and gamepad:
+                   focusable controls (`data-on-click`, `tabindex`), a `:focus-visible` ring,
+                   and each hotkey on a gamepad button too.
   shared/input.rs  (not an example; `#[path]`-included) ExampleInputPlugin: arrows / D-pad /
                    left stick → HtmlFocus::navigate with hold-to-repeat, Enter / A → activate;
                    left/right on a focused `data-setting` element → `SettingStep` message
@@ -102,10 +105,10 @@ examples/
                    sets `InputFocus` + `InputFocusVisible` — and ↑ ↓ are left to the app);
                    `Arrows` SystemParam (held axes from arrows / D-pad / left stick); `Hotkeys`
                    SystemParam (`just_pressed(key, gamepad_button)`)
-  quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, two `data-on-click`
+  quickstart/      fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, two `data-on-click`
                    buttons (add a coin, language) in a column, with an inline minimal `navigate` (arrows / D-pad, all four directions,
                    Enter / A; kept self-contained); Space / Y = language
-  grid.rs          CSS grid: page track template switched via context (Layout button, Space / X);
+  grid/            CSS grid: page track template switched via context (Layout button, Space / X);
                    tabs (`data-tab` → `signal.data`, Q / E, LB / RB) pick one of three screens
                    (`active_tab`), each a grid technique — Items: auto-fill slots with a 2×2
                    span and dense packing; Gear: a fixed 3×4 paper doll, slots placed by line
@@ -115,7 +118,7 @@ examples/
                    each grid, the details panel follows the focused cell (`selected` = its
                    id: `slot-`/`gear-`/`quest-`); small grids in slots/stats; Language
                    button, L / Y
-  menu.rs          focus/navigation (shared/input.rs; autofocus, :focus-visible ring), a volume slider (focusable
+  menu/            focus/navigation (shared/input.rs; autofocus, :focus-visible ring), a volume slider (focusable
                    `tabindex="0"` bar: ← → step it while focused; `is="slider"` observes picking
                    press/drag to set it at the pointer; ◀ ▶ mouse-only `tabindex="-1"` step
                    buttons; fill = templated `style` width), a difficulty stepper (◀ focusable
@@ -127,12 +130,12 @@ examples/
                    (dialog answer via `data-answer` → `signal.data`), a MessageReader beside
                    them (last input), roots styled by `<html class>` (backdrop, z-index,
                    pointer-events), `is="icon"`; L = language, Esc = cancel
-  live.rs          a keyed party list rendered from data every frame and updated in place
+  live/            a keyed party list rendered from data every frame and updated in place
                    (`id="unit-<name>"`, rows `tabindex="0"`: a focused row keeps focus while
                    members join above it), Recruit / Knock out / Language buttons (N / X, K / B —
                    the focused member else the last, fading via `opacity` —, L / Y), `style`
                    health bars, `is="badge"` spawn counter vs update counter
-  world.rs         nameplates over walking 3D units with HtmlWorldAnchor (orbiting camera: plates
+  world/           nameplates over walking 3D units with HtmlWorldAnchor (orbiting camera: plates
                    hide behind it/off screen, with a blinking unit, and go with a knocked-out
                    unit), distance fade from HtmlWorldAnchorView, `hidden` class toggle, HUD
                    counting on-screen plates; plates are styled HTML (faction card: 9-slice

@@ -118,7 +118,7 @@ fn shell_contexts() -> Vec<Value> {
     vec![base, other]
 }
 
-/// `examples/quickstart.rs`: starts at 0 coins, each click adds one (so the
+/// `examples/quickstart/main.rs`: starts at 0 coins, each click adds one (so the
 /// zero, one and other plural forms all show).
 fn quickstart_contexts() -> Vec<Value> {
     (0..3)
@@ -126,7 +126,7 @@ fn quickstart_contexts() -> Vec<Value> {
         .collect()
 }
 
-/// `examples/grid.rs`: both page layouts (the status message selects on
+/// `examples/grid/main.rs`: both page layouts (the status message selects on
 /// `layout`); items as in `ITEMS`.
 fn grid_contexts() -> Vec<Value> {
     let items = json!([
@@ -140,7 +140,7 @@ fn grid_contexts() -> Vec<Value> {
         { "id": "gem", "count": 3, "featured": false },
         { "id": "key", "count": 1, "featured": false },
     ]);
-    // `examples/grid.rs` `GEAR` / `QUESTS`.
+    // `examples/grid/main.rs` `GEAR` / `QUESTS`.
     let gear = json!([
         { "slot": "neck", "item": "amulet" },
         { "slot": "head", "item": "helm" },
@@ -177,7 +177,7 @@ fn grid_contexts() -> Vec<Value> {
     .to_vec()
 }
 
-/// `examples/menu.rs` `show_settings()`: every volume step's ends, every
+/// `examples/menu/main.rs` `show_settings()`: every volume step's ends, every
 /// difficulty and every `input_name()` (the Fluent selectors' branches).
 fn menu_contexts() -> Vec<Value> {
     let inputs = [
@@ -199,12 +199,12 @@ fn menu_contexts() -> Vec<Value> {
         .collect()
 }
 
-/// `examples/menu.rs`: the dialog takes no variables.
+/// `examples/menu/main.rs`: the dialog takes no variables.
 fn dialog_contexts() -> Vec<Value> {
     vec![json!({})]
 }
 
-/// `HtmlTooltips` in `examples/menu.rs`: one tooltip per button's
+/// `HtmlTooltips` in `examples/menu/main.rs`: one tooltip per button's
 /// `data-tooltip` key (`args` empty, default placement).
 fn menu_tooltip_contexts() -> Vec<Value> {
     ["menu-volume-tip", "menu-difficulty-tip", "menu-reset-tip"]
@@ -212,7 +212,7 @@ fn menu_tooltip_contexts() -> Vec<Value> {
         .to_vec()
 }
 
-/// `examples/world.rs` `plate_context()`: every faction, epithet, health
+/// `examples/world/main.rs` `plate_context()`: every faction, epithet, health
 /// class and `world-status` hits branch (0, one, other); fading and hidden.
 fn plate_contexts() -> Vec<Value> {
     let plate = |name: &str,
@@ -237,7 +237,7 @@ fn plate_contexts() -> Vec<Value> {
     ]
 }
 
-/// `examples/world.rs` `show_hud()`.
+/// `examples/world/main.rs` `show_hud()`.
 fn world_hud_contexts() -> Vec<Value> {
     vec![
         json!({ "on_screen": 0, "total": 0 }),
@@ -245,7 +245,7 @@ fn world_hud_contexts() -> Vec<Value> {
     ]
 }
 
-/// `examples/live.rs` `show_party()`: a mixed party (a low, fading member)
+/// `examples/live/main.rs` `show_party()`: a mixed party (a low, fading member)
 /// and the empty one.
 fn party_contexts() -> Vec<Value> {
     vec![
@@ -257,7 +257,7 @@ fn party_contexts() -> Vec<Value> {
     ]
 }
 
-/// `examples/live.rs` `show_stats()`.
+/// `examples/live/main.rs` `show_stats()`.
 fn stats_contexts() -> Vec<Value> {
     vec![json!({ "updates": 12, "spawned": 5, "frames": 600 })]
 }

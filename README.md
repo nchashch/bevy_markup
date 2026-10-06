@@ -201,8 +201,9 @@ left stick move focus, Enter / A press, and each shortcut has a gamepad button
 (shown on screen). bevy_markup owns focus and activation; the examples bind
 the input (`examples/shared/input.rs`).
 
-Their templates, stylesheets, translations and images are in
-`examples/assets/`. Text uses the fonts installed on your system (CSS
+Each example lives in its own directory with a README explaining what it
+shows and how to drive it (`examples/<name>/README.md`). Their templates,
+stylesheets, translations and images are in `examples/assets/`. Text uses the fonts installed on your system (CSS
 `serif`, `sans-serif` and `monospace`, via Bevy's `system_font_discovery`),
 so no font files ship with the repository.
 
@@ -314,7 +315,8 @@ their time testing rather than compiling Bevy.
 
 ```
 src/            the library
-examples/       quickstart, grid, menu, live, world and demo (+ shared/input.rs)
+examples/       quickstart, grid, menu, live, world and demo, one directory and
+                README each (+ shared/input.rs)
 tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in
                 honggfuzz/, fuzzcheck/, test-fuzz/)

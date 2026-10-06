@@ -27,7 +27,7 @@ use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 
-#[path = "shared/input.rs"]
+#[path = "../shared/input.rs"]
 mod input;
 use input::{ExampleInputPlugin, Hotkeys};
 
