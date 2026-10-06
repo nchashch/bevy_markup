@@ -8,6 +8,10 @@ Bevy 0.19 library: HTML templates (Tera) + Fluent + CSS → Bevy UI, with
 - `cargo run --example demo` — everything: themes, languages, DOM outlines,
   scrolling, 9-slice frames.
 - `cargo doc --open` — the user-facing documentation (crate docs = guide).
+- `docs/agents/adr/` — Architecture Decision Records: *why* the code is the
+  way it is (this file says *what* it is). Read the relevant record before
+  reversing a design decision; write a new one (`docs/agents/skills/adr.md`)
+  when you make one.
 
 The library depends on `bevy` with `default-features = false` and only the
 features its code uses (`ui_api`, `default_font`, `bevy_log`, `bevy_picking`
@@ -918,6 +922,15 @@ known gaps:
     first on every run.
 - [x] **7. Golden images, sparingly** (fixes the rest of weakness 3 and part of weakness 4: real font rasterization, wrapping and 9-slice drawing; CJK fallback is still untested, since only committed fonts are used). `tests/golden.rs` + `scripts/golden.sh` on Mesa lavapipe; three scenes (`text`, `frame`, `l10n`); see Testing. Brittle across drivers and font versions: a smoke check, not a spec.
   - [ ] A CJK/fallback scene would need a committed CJK font (or `system_fonts`, which isn't reproducible).
+
+## Decision records
+
+Significant design decisions — picking one approach over real alternatives,
+changing a contract users rely on, reversing an earlier decision — get an
+ADR in `docs/agents/adr/` (index: `README.md`, format and rules:
+`docs/agents/skills/adr.md`). 0001–0012 were written retrospectively from the
+git history up to `d2c9b63`. ADRs are snapshots: once accepted they're not
+edited to match later code; a new ADR supersedes them.
 
 ## Bug reports
 
