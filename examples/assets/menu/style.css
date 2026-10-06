@@ -62,15 +62,69 @@ h1 {
   height: 24px;
 }
 
-.meter {
-  height: 8px;
+/* A label row (icon + text) that isn't a button. */
+.setting {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 0px 12px;
+}
+
+.slider-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The ◀ / ▶ step buttons. */
+.arrow {
+  padding: 2px 8px;
+  font-size: 14px;
+  color: #c9ccd6;
+}
+
+/* The bar: a focusable track; press or drag anywhere on it. */
+.slider {
+  flex-grow: 1;
+  height: 14px;
   background-color: #2b2f3a;
+  border-width: 1px;
+  border-color: #464b59;
+  border-radius: 7px;
+}
+
+.slider:hover {
+  border-color: #6b7183;
+}
+
+.slider:focus-visible {
+  outline: 2px solid #f9c74f;
+  outline-offset: 2px;
+}
+
+/* The middle of a stepper: a focusable label, not a button. */
+.stepper {
+  flex-grow: 1;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-width: 1px;
+  border-color: #464b59;
+  border-radius: 4px;
+}
+
+.stepper:focus-visible {
+  outline: 2px solid #f9c74f;
+  outline-offset: 2px;
 }
 
 /* Width from the template: `style="width: {{ volume }}%"`. */
-.meter-fill {
+.slider-fill {
   height: 100%;
   background-color: #6cc56c;
+  border-radius: 6px;
 }
 
 .hint {
@@ -112,8 +166,13 @@ h1 {
   z-index: 20;
   pointer-events: none;
   padding: 6px 10px;
-  max-width: 300px;
   background-color: rgba(10, 12, 16, 0.95);
   border-radius: 4px;
   font-size: 16px;
+}
+
+/* Blocks don't shrink (`flex-shrink: 0`), so the width that makes long
+ * tips wrap goes on the text itself. */
+.tooltip-text {
+  max-width: 300px;
 }

@@ -21,13 +21,22 @@
 //!   ([`record_last_input`]).
 //! - Each root's placement, stacking (`z-index`), dimming background and
 //!   pickability are its `<html class>` rule in `menu/style.css`.
-//! - `<div is="icon" data-src="…">` runs [`icon`], which inserts the image;
-//!   the volume meter is `style="width: {{ volume }}%"`. Changing a setting
-//!   updates the menu in place: focus and hover stay where they are.
+//! - `<div is="icon" data-src="…">` runs [`icon`], which inserts the image.
+//! - Volume is a slider. The bar is focusable (`tabindex="0"`): while it has
+//!   focus, ← → / D-pad / left stick step it (held: repeating), up and down
+//!   still move focus. `<div is="slider">` runs [`slider`], which observes
+//!   picking presses and drags on the bar to set the value where the pointer
+//!   is. The ◀ ▶ buttons step it with the mouse (`tabindex="-1"`: focus
+//!   skips them). The fill is `style="width: {{ volume }}%"`. Changing a
+//!   setting updates the menu in place: focus and hover stay where they are.
+//! - Difficulty is ordinal, so it's a stepper: ◀ [focusable label] ▶. The
+//!   label isn't a button (`tabindex="0"`, no `data-on-click`); ← → / D-pad
+//!   / left stick step it while focused, stopping at Easy and Hard. Both
+//!   controls carry `data-setting`, which is how [`navigate`] knows a focused
+//!   element takes left/right itself.
 //! - Every signal says what produced it (`ElementSignal::source`): a pointer
-//!   and button, or the key / gamepad button the app passed to `activate`.
-//!   Right- or middle-clicking Volume (`data-on-auxclick`) lowers it; the
-//!   menu shows what produced the last click.
+//!   and button, or the key / gamepad button the app passed to `activate`;
+//!   the menu shows what produced the last click.
 //!
 //! `cargo run --example menu` — L switches the language (English/German),
 //! Esc closes the dialog.
@@ -36,6 +45,7 @@ use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::math::CompassOctant;
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
+use bevy::ui::UiGlobalTransform;
 use bevy_markup::prelude::*;
 
 fn main() {
@@ -57,9 +67,31 @@ fn main() {
             BevyMarkupPlugin,
         ))
         .define_html_element("icon", icon)
-        .on_html_click("volume", volume_up)
-        .on_html_signal("volume-down", volume_down)
-        .on_html_click("difficulty", next_difficulty)
+        .define_html_element("slider", slider)
+        .on_html_click(
+            "volume-up",
+            |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
+                settings.step_volume(1);
+            },
+        )
+        .on_html_click(
+            "volume-down",
+            |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
+                settings.step_volume(-1);
+            },
+        )
+        .on_html_click(
+            "difficulty-up",
+            |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
+                settings.step("difficulty", 1);
+            },
+        )
+        .on_html_click(
+            "difficulty-down",
+            |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
+                settings.step("difficulty", -1);
+            },
+        )
         .on_html_click("reset", open_dialog)
         .on_html_click("dialog", answer_dialog)
         .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
@@ -80,12 +112,35 @@ fn main() {
 
 const DIFFICULTIES: [&str; 3] = ["easy", "normal", "hard"];
 
+/// One slider step (arrows, keys, D-pad, stick), in percent.
+const VOLUME_STEP: i32 = 5;
+
 #[derive(Resource)]
 struct Settings {
     volume: u32,
     difficulty: usize,
     /// What produced the last click (a `menu-last-input` variant).
     last_input: &'static str,
+}
+
+impl Settings {
+    /// `steps` slider steps up (+) or down (-), clamped to 0–100.
+    fn step_volume(&mut self, steps: i32) {
+        self.volume = (self.volume as i32 + steps * VOLUME_STEP).clamp(0, 100) as u32;
+    }
+
+    /// Steps the setting a focused control's `data-setting` names. Difficulty
+    /// is ordinal: it stops at Easy and Hard rather than wrapping.
+    fn step(&mut self, setting: &str, steps: i32) {
+        match setting {
+            "volume" => self.step_volume(steps),
+            "difficulty" => {
+                let last = DIFFICULTIES.len() as i32 - 1;
+                self.difficulty = (self.difficulty as i32 + steps).clamp(0, last) as usize;
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Default for Settings {
@@ -141,6 +196,58 @@ fn icon(icon: In<ElementConnected>, asset_server: Res<AssetServer>, mut commands
     }
 }
 
+/// `<div is="slider">`: pressing or dragging on the bar sets the volume to
+/// the pointer's position along it. Observers attached once per spawned
+/// element; updates keep the element, so they stay.
+fn slider(slider: In<ElementConnected>, mut commands: Commands) {
+    let bar = slider.entity;
+    commands
+        .entity(bar)
+        .observe(
+            move |press: On<Pointer<Press>>,
+                  bars: Query<(&ComputedNode, &UiGlobalTransform)>,
+                  mut settings: ResMut<Settings>| {
+                if press.button == PointerButton::Primary {
+                    settings.last_input = match press.pointer_id {
+                        PointerId::Touch(_) => "touch",
+                        _ => "mouse-primary",
+                    };
+                    set_volume_at(bar, press.pointer_location.position, &bars, &mut settings);
+                }
+            },
+        )
+        .observe(
+            move |drag: On<Pointer<Drag>>,
+                  bars: Query<(&ComputedNode, &UiGlobalTransform)>,
+                  mut settings: ResMut<Settings>| {
+                if drag.button == PointerButton::Primary {
+                    set_volume_at(bar, drag.pointer_location.position, &bars, &mut settings);
+                }
+            },
+        );
+}
+
+/// The volume at `position` (viewport px) along `bar`, in whole steps.
+fn set_volume_at(
+    bar: Entity,
+    position: Vec2,
+    bars: &Query<(&ComputedNode, &UiGlobalTransform)>,
+    settings: &mut Settings,
+) {
+    let Ok((node, transform)) = bars.get(bar) else {
+        return;
+    };
+    // Layout is in physical px; pointers report logical px.
+    let width = node.size.x * node.inverse_scale_factor;
+    let left = transform.translation.x * node.inverse_scale_factor - width / 2.0;
+    if width <= 0.0 {
+        return;
+    }
+    let fraction = ((position.x - left) / width).clamp(0.0, 1.0);
+    let steps = (fraction * 100.0 / VOLUME_STEP as f32).round() as u32;
+    settings.volume = steps * VOLUME_STEP as u32;
+}
+
 /// Writes the settings into the menu every frame: bevy_markup only updates
 /// it when the rendered output changes, and then in place.
 fn show_settings(settings: Res<Settings>, mut menus: Query<&mut TemplateContext, With<Menu>>) {
@@ -151,45 +258,109 @@ fn show_settings(settings: Res<Settings>, mut menus: Query<&mut TemplateContext,
     }
 }
 
+/// Hold-to-repeat for one axis of directional input: fires on press, then
+/// after [`Self::DELAY`] every [`Self::INTERVAL`] while held.
+#[derive(Default)]
+struct Repeat {
+    held: i32,
+    next: f32,
+}
+
+impl Repeat {
+    const DELAY: f32 = 0.35;
+    const INTERVAL: f32 = 0.08;
+
+    /// `direction` is -1, 0 or 1 this frame; returns the direction to act on.
+    fn update(&mut self, direction: i32, now: f32) -> i32 {
+        if direction == 0 {
+            self.held = 0;
+            return 0;
+        }
+        if direction != self.held {
+            self.held = direction;
+            self.next = now + Self::DELAY;
+            return direction;
+        }
+        if now >= self.next {
+            self.next = now + Self::INTERVAL;
+            return direction;
+        }
+        0
+    }
+}
+
 /// Keyboard and gamepad drive bevy_markup's focus; the mouse needs nothing.
-/// Activation reports which input did it.
+/// Arrows / D-pad / left stick move focus — except left and right on the
+/// focused volume slider, which step it. Activation reports which input did
+/// it.
+#[allow(clippy::too_many_arguments)]
 fn navigate(
+    time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(Entity, &Gamepad)>,
+    elements: Query<&HtmlElement>,
+    mut settings: ResMut<Settings>,
+    mut repeat: Local<(Repeat, Repeat)>,
     mut focus: HtmlFocus,
 ) {
+    // -1/0/1 per axis from keys, D-pad and left stick (any gamepad).
+    let axis = |negative: KeyCode,
+                positive: KeyCode,
+                pad_negative,
+                pad_positive,
+                stick: fn(&Gamepad) -> f32| {
+        let pad = |button| gamepads.iter().any(|(_, pad)| pad.pressed(button));
+        let stick = gamepads
+            .iter()
+            .map(|(_, pad)| stick(pad))
+            .find(|value| value.abs() > 0.5);
+        let positive =
+            keys.pressed(positive) || pad(pad_positive) || stick.is_some_and(|v| v > 0.0);
+        let negative =
+            keys.pressed(negative) || pad(pad_negative) || stick.is_some_and(|v| v < 0.0);
+        positive as i32 - negative as i32
+    };
+    let horizontal = axis(
+        KeyCode::ArrowLeft,
+        KeyCode::ArrowRight,
+        GamepadButton::DPadLeft,
+        GamepadButton::DPadRight,
+        |pad| pad.left_stick().x,
+    );
+    // Up is positive on the stick.
+    let vertical = axis(
+        KeyCode::ArrowDown,
+        KeyCode::ArrowUp,
+        GamepadButton::DPadDown,
+        GamepadButton::DPadUp,
+        |pad| pad.left_stick().y,
+    );
+    let now = time.elapsed_secs();
+    let (horizontal_repeat, vertical_repeat) = &mut *repeat;
+    match vertical_repeat.update(vertical, now) {
+        1 => drop(focus.navigate(CompassOctant::North)),
+        -1 => drop(focus.navigate(CompassOctant::South)),
+        _ => {}
+    }
+    // A focused control with `data-setting` (the volume slider, the
+    // difficulty stepper) takes left/right itself.
+    let setting = focus
+        .focused()
+        .and_then(|entity| elements.get(entity).ok())
+        .and_then(|element| element.data("setting").map(str::to_owned));
+    match (horizontal_repeat.update(horizontal, now), setting) {
+        (0, _) => {}
+        (direction, Some(setting)) => settings.step(&setting, direction),
+        (1, None) => drop(focus.navigate(CompassOctant::East)),
+        (_, None) => drop(focus.navigate(CompassOctant::West)),
+    }
+
     let pad = |button: GamepadButton| {
         gamepads
             .iter()
             .find(|(_, pad)| pad.just_pressed(button))
             .map(|(gamepad, _)| ActivationInput::GamepadButton { gamepad, button })
     };
-    for (key, button, direction) in [
-        (
-            KeyCode::ArrowUp,
-            GamepadButton::DPadUp,
-            CompassOctant::North,
-        ),
-        (
-            KeyCode::ArrowDown,
-            GamepadButton::DPadDown,
-            CompassOctant::South,
-        ),
-        (
-            KeyCode::ArrowLeft,
-            GamepadButton::DPadLeft,
-            CompassOctant::West,
-        ),
-        (
-            KeyCode::ArrowRight,
-            GamepadButton::DPadRight,
-            CompassOctant::East,
-        ),
-    ] {
-        if keys.just_pressed(key) || pad(button).is_some() {
-            focus.navigate(direction);
-        }
-    }
     let activation = if keys.just_pressed(KeyCode::Enter) {
         Some(ActivationInput::Key(KeyCode::Enter))
     } else {
@@ -230,20 +401,6 @@ fn record_last_input(mut signals: MessageReader<ElementSignal>, mut settings: Re
             settings.last_input = input_name(&signal.source);
         }
     }
-}
-
-/// `data-on-click="volume"`: primary click, Enter or A.
-fn volume_up(_: In<ElementSignal>, mut settings: ResMut<Settings>) {
-    settings.volume = (settings.volume + 25) % 125;
-}
-
-/// `data-on-auxclick="volume-down"`: right or middle click.
-fn volume_down(_: In<ElementSignal>, mut settings: ResMut<Settings>) {
-    settings.volume = (settings.volume + 100) % 125;
-}
-
-fn next_difficulty(_: In<ElementSignal>, mut settings: ResMut<Settings>) {
-    settings.difficulty = (settings.difficulty + 1) % DIFFICULTIES.len();
 }
 
 /// Opens the confirm dialog; `HtmlModal` keeps focus inside it.

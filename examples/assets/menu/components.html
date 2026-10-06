@@ -6,9 +6,11 @@
 {# A focusable button. `signal` is its `data-on-click`; optional `aux` its
    `data-on-auxclick` (right/middle button), `tooltip` a Fluent key shown by
    `HtmlTooltips` (`data-tooltip`), `answer` a `data-answer` the handler reads
-   with `ElementSignal::data("answer")`. #}
-{% component ui.button(id: string, signal: string, aux: string = "", tooltip: string = "", answer: string = "", autofocus: bool = false) %}
-<div class="button" id="{{ id }}"{% if autofocus %} autofocus{% endif %} data-on-click="{{ signal }}"
+   with `ElementSignal::data("answer")`; `class` adds classes, and
+   `focusable={false}` (`tabindex="-1"`) keeps it out of keyboard/gamepad
+   focus (mouse only). #}
+{% component ui.button(id: string, signal: string, aux: string = "", tooltip: string = "", answer: string = "", class: string = "", autofocus: bool = false, focusable: bool = true) %}
+<div class="button{% if class %} {{ class }}{% endif %}" id="{{ id }}"{% if autofocus %} autofocus{% endif %}{% if not focusable %} tabindex="-1"{% endif %} data-on-click="{{ signal }}"
      {%- if aux %} data-on-auxclick="{{ aux }}"{% endif %}
      {%- if tooltip %} data-tooltip="{{ tooltip }}"{% endif %}
      {%- if answer %} data-answer="{{ answer }}"{% endif %}>

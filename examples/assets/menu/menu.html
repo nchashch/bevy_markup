@@ -3,22 +3,37 @@
 <div class="menu">
   <h1 data-l10n-id="menu-title">Settings</h1>
 
-  {% <ui.button id="volume" signal="volume" aux="volume-down" tooltip="menu-volume-tip" autofocus={true}> %}
+  <div class="setting">
     <div class="icon" is="icon" data-src="ui/frame.png"></div>
     <p data-l10n-id="menu-volume" data-l10n-args='{"volume": {{ volume }}}'>Volume: {{ volume }}%</p>
-  {% </ui.button> %}
-  <div class="meter"><div class="meter-fill" style="width: {{ volume }}%"></div></div>
+  </div>
+  {# A slider: the bar is focusable (`tabindex="0"`; ← → change it while
+     focused) and `is="slider"` (press or drag sets the value); the arrows
+     are mouse-only buttons. #}
+  <div class="slider-row" data-tooltip="menu-volume-tip">
+    {% <ui.button id="volume-down" signal="volume-down" class="arrow" focusable={false}> %}<p>◀</p>{% </ui.button> %}
+    <div class="slider" id="volume" is="slider" tabindex="0" autofocus data-setting="volume">
+      <div class="slider-fill" style="width: {{ volume }}%"></div>
+    </div>
+    {% <ui.button id="volume-up" signal="volume-up" class="arrow" focusable={false}> %}<p>▶</p>{% </ui.button> %}
+  </div>
 
-  {% <ui.button id="difficulty" signal="difficulty" tooltip="menu-difficulty-tip"> %}
-    <div class="icon" is="icon" data-src="ui/frame_transparent.png"></div>
-    <p data-l10n-id="menu-difficulty" data-l10n-args='{"difficulty": "{{ difficulty }}"}'>Difficulty: {{ difficulty }}</p>
-  {% </ui.button> %}
+  {# A stepper for an ordinal setting: the middle is a focusable label, not a
+     button (← → step it while focused); the arrows are mouse-only buttons. #}
+  <div class="slider-row" data-tooltip="menu-difficulty-tip">
+    {% <ui.button id="difficulty-down" signal="difficulty-down" class="arrow" focusable={false}> %}<p>◀</p>{% </ui.button> %}
+    <div class="stepper" id="difficulty" tabindex="0" data-setting="difficulty">
+      <div class="icon" is="icon" data-src="ui/frame_transparent.png"></div>
+      <p data-l10n-id="menu-difficulty" data-l10n-args='{"difficulty": "{{ difficulty }}"}'>Difficulty: {{ difficulty }}</p>
+    </div>
+    {% <ui.button id="difficulty-up" signal="difficulty-up" class="arrow" focusable={false}> %}<p>▶</p>{% </ui.button> %}
+  </div>
 
   {% <ui.button id="reset" signal="reset" tooltip="menu-reset-tip"> %}
     <p data-l10n-id="menu-reset">Reset to defaults</p>
   {% </ui.button> %}
 
   <p class="hint" data-l10n-id="menu-last-input" data-l10n-args='{"input": "{{ last_input }}"}'>Last click: {{ last_input }}</p>
-  <p class="hint" data-l10n-id="menu-hint">Arrows or D-pad: move · Enter or A: choose · Esc: cancel · L: language</p>
+  <p class="hint" data-l10n-id="menu-hint">Arrows, D-pad or left stick: move (← → on a setting: change it) · Enter or A: choose · Esc: cancel · L: language</p>
 </div>
 </html>

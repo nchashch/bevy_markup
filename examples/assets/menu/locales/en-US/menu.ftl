@@ -1,12 +1,12 @@
 menu-title = Settings
 menu-volume = Volume: { $volume }%
-menu-volume-tip = Click (or press Enter) to raise the volume by 25%, right-click to lower it.
+menu-volume-tip = Click or drag the bar, step with ◀ ▶ — or use ← → / D-pad / left stick while it's focused.
 menu-difficulty = Difficulty: { $difficulty ->
     [easy] Easy
     [hard] Hard
    *[normal] Normal
 }
-menu-difficulty-tip = Cycles through Easy, Normal and Hard.
+menu-difficulty-tip = Easy, Normal or Hard: step with ◀ ▶ — or use ← → / D-pad / left stick while it's focused.
 menu-reset = Reset to defaults
 menu-reset-tip = Asks first: a modal dialog keeps focus until you answer.
 menu-last-input = Last click: { $input ->
@@ -19,7 +19,7 @@ menu-last-input = Last click: { $input ->
     [synthetic] synthetic
    *[none] none yet
 }
-menu-hint = Arrows or D-pad: move · Enter or A: choose · Esc: cancel · L: language
+menu-hint = Arrows, D-pad or left stick: move (← → on a setting: change it) · Enter or A: choose · Esc: cancel · L: language
 dialog-reset = Reset all settings?
 dialog-yes = Reset
 dialog-no = Cancel

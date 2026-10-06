@@ -94,14 +94,19 @@ examples/
   quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, a `data-on-click` button, Space = language
   grid.rs          CSS grid: page track template switched via context (Space), auto-fill slots
                    with a 2×2 span and dense packing, small grids in slots/stats; L = language
-  menu.rs          focus/navigation (autofocus, arrows/D-pad → HtmlFocus, Enter/A activate,
-                   :focus-visible ring), HtmlModal confirm dialog, `data-tooltip` + HtmlTooltips,
-                   buttons as a Tera 2 component (`menu/components.html`, included by menu and
-                   dialog, content as the body), handlers routed with on_html_click /
-                   on_html_signal (dialog answer via `data-answer` → `signal.data`), a
-                   MessageReader beside them (last input), roots styled by `<html class>`
-                   (backdrop, z-index, pointer-events), `is="icon"`, templated `style` meter;
-                   L = language, Esc = cancel
+  menu.rs          focus/navigation (autofocus, arrows/D-pad/left stick with hold-to-repeat →
+                   HtmlFocus, Enter/A activate, :focus-visible ring), a volume slider (focusable
+                   `tabindex="0"` bar: ← → step it while focused; `is="slider"` observes picking
+                   press/drag to set it at the pointer; ◀ ▶ mouse-only `tabindex="-1"` step
+                   buttons; fill = templated `style` width), a difficulty stepper (◀ focusable
+                   `tabindex="0"` label ▶, clamped at Easy/Hard; both controls carry
+                   `data-setting`, which routes ← → to them), HtmlModal confirm dialog,
+                   `data-tooltip` + HtmlTooltips (on the slider row: nearest ancestor wins),
+                   buttons as a Tera 2 component (`menu/components.html`: body, `class`,
+                   `focusable`; included by menu and dialog), handlers routed with on_html_click
+                   (dialog answer via `data-answer` → `signal.data`), a MessageReader beside
+                   them (last input), roots styled by `<html class>` (backdrop, z-index,
+                   pointer-events), `is="icon"`; L = language, Esc = cancel
   live.rs          a keyed party list rendered from data every frame and updated in place
                    (`id="unit-<name>"`; N adds at the top, K fades out the last via `opacity`),
                    `style` health bars, `is="badge"` spawn counter vs update counter; L = language
