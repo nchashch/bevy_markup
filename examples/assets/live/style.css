@@ -76,6 +76,28 @@ h1 {
   background-color: #e05a47;
 }
 
+.actions {
+  flex-direction: row;
+  gap: 8px;
+}
+
+.button {
+  padding: 4px 10px;
+  background-color: #2b2f3a;
+  border-radius: 4px;
+  font-size: 16px;
+}
+
+.button:hover {
+  background-color: #3a4050;
+}
+
+/* Keyboard/gamepad focus (buttons and rows); a mouse press hides it. */
+.button:focus-visible, .unit:focus-visible {
+  outline: 2px solid #f9c74f;
+  outline-offset: 2px;
+}
+
 .empty {
   color: #8a8d99;
 }

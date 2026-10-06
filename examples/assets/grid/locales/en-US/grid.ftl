@@ -1,5 +1,7 @@
 grid-title = Grid layout
-grid-hint = Press <kbd>Space</kbd> to switch the layout, <kbd>L</kbd> to switch the language; resize the window to reflow the slots.
+grid-hint = Arrows, D-pad or left stick: move through the slots · <kbd>Enter</kbd> / A: press · <kbd>Space</kbd> / X: layout · <kbd>L</kbd> / Y: language; resize the window to reflow the slots.
+grid-layout = Layout
+grid-language = Language: English
 grid-tab-items = Items
 grid-tab-gear = Gear
 grid-tab-quests = Quests

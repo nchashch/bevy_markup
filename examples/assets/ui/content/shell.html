@@ -4,42 +4,76 @@
    height and scrolls inside its panel. The content documents are separate
    documents the app spawns into the `is="content-slot"` viewports (once per
    slot element; updates keep the slots and their documents); clicks are
-   `data-on-click` signals; the layout, scrolling and looks are all CSS. Tera fills the button rows
-   and the active options; Fluent localizes the fixed strings. #}
+   `data-on-click` signals (focusable: ← → / D-pad / left stick step through them and
+   the `tabindex="0"` viewports in document order, Enter / A press; ↑ ↓ scroll the
+   focused viewport or the middle column); the layout, scrolling and looks are all CSS. Tera fills the button rows
+   and the active options; Fluent localizes the fixed strings.
+   Scrollbars: `<div class="scrollbar" is="scrollbar" data-target="<id>">`
+   beside each scrolling area, with a `.thumb` child. The theme's CSS styles
+   both; `scrollbars[<id>]` (written by the app from the target's scroll
+   state) places the thumb (`style` top/height in %) and hides the track
+   (`.hidden`) while the target doesn't overflow; the app handles drag and
+   track presses. #}
 <section class="columns">
   <section class="column">
     <section class="panel fill">
-      <div id="slot-inventory" class="viewport" is="content-slot"></div>
+      <div id="slot-inventory" class="viewport" is="content-slot" tabindex="0"></div>
+      {% set sb = scrollbars["slot-inventory"] %}
+      <div class="scrollbar{% if not sb.show or not scrollbars_on %} hidden{% endif %}" is="scrollbar" data-target="slot-inventory">
+        <div class="thumb{% if sb.dragging %} dragging{% endif %}" style="top: {{ sb.top }}%; height: {{ sb.height }}%"></div>
+      </div>
     </section>
   </section>
-  <section class="column">
-    <section class="panel">
-      <h2 data-l10n-id="demo-title">bevy_markup demo</h2>
-      <p data-l10n-id="demo-about">Everything on screen is HTML + CSS: the panels, the buttons and their 9-slice frames. Switch the theme and language below; scroll the framed panels with the mouse wheel.</p>
+  {# The middle column: its panels scroll as a whole (`.side-scroll`,
+     `is="scroll-column"`: wheel; focus moves scroll the focused option into
+     view) when they're taller than the window, with a scrollbar beside. #}
+  <section class="column side">
+    <section class="side-scroll" id="side-column" is="scroll-column">
+      <section class="panel">
+        <h2 data-l10n-id="demo-title">bevy_markup demo</h2>
+        <p data-l10n-id="demo-about">Everything on screen is HTML + CSS: the panels, the buttons and their 9-slice frames. Switch the theme and language below; scroll the framed panels with the mouse wheel.</p>
+      </section>
+      <section class="panel">
+        <h2 data-l10n-id="demo-language">Language</h2>
+        <div class="row" id="lang-row">
+          {% for lang in langs %}
+          <div class="opt{% if loop.index0 == lang_active %} active{% endif %}" id="lang-{{ loop.index0 }}"{% if loop.first %} autofocus{% endif %}
+               data-on-click="select-language" data-with='{"index": {{ loop.index0 }}}'>{{ lang }}</div>
+          {% endfor %}
+        </div>
+      </section>
+      <section class="panel">
+        <h2 data-l10n-id="demo-theme">Theme</h2>
+        <div class="row" id="theme-row">
+          {% for theme in themes %}
+          <div class="opt{% if loop.index0 == theme_active %} active{% endif %}" id="theme-{{ loop.index0 }}"
+               data-on-click="select-theme" data-with='{"index": {{ loop.index0 }}}'>{{ theme }}</div>
+          {% endfor %}
+        </div>
+      </section>
+      <section class="panel">
+        <h2 data-l10n-id="demo-scrollbars">Scrollbars</h2>
+        <div class="row" id="scrollbars-row">
+          <div class="opt{% if scrollbars_on %} active{% endif %}" id="scrollbars-on"
+               data-on-click="set-scrollbars" data-with='{"on": true}' data-l10n-id="demo-scrollbars-on">On</div>
+          <div class="opt{% if not scrollbars_on %} active{% endif %}" id="scrollbars-off"
+               data-on-click="set-scrollbars" data-with='{"on": false}' data-l10n-id="demo-scrollbars-off">Off</div>
+        </div>
+      </section>
     </section>
-    <section class="panel">
-      <h2 data-l10n-id="demo-language">Language</h2>
-      <div class="row" id="lang-row">
-        {% for lang in langs %}
-        <div class="opt{% if loop.index0 == lang_active %} active{% endif %}"
-             data-on-click="select-language" data-with='{"index": {{ loop.index0 }}}'>{{ lang }}</div>
-        {% endfor %}
-      </div>
-    </section>
-    <section class="panel">
-      <h2 data-l10n-id="demo-theme">Theme</h2>
-      <div class="row" id="theme-row">
-        {% for theme in themes %}
-        <div class="opt{% if loop.index0 == theme_active %} active{% endif %}"
-             data-on-click="select-theme" data-with='{"index": {{ loop.index0 }}}'>{{ theme }}</div>
-        {% endfor %}
-      </div>
-    </section>
+    {% set sb = scrollbars["side-column"] %}
+    <div class="scrollbar{% if not sb.show or not scrollbars_on %} hidden{% endif %}" is="scrollbar" data-target="side-column">
+      <div class="thumb{% if sb.dragging %} dragging{% endif %}" style="top: {{ sb.top }}%; height: {{ sb.height }}%"></div>
+    </div>
   </section>
   {% for slot in outline_slots %}
   <section class="column">
     <section class="panel fill">
-      <div class="viewport" id="{{ slot }}" is="content-slot"></div>
+      <div class="viewport" id="{{ slot }}" is="content-slot" tabindex="0"></div>
+      {% set sb = scrollbars[slot] %}
+      <div class="scrollbar{% if not sb.show or not scrollbars_on %} hidden{% endif %}" is="scrollbar" data-target="{{ slot }}">
+        <div class="thumb{% if sb.dragging %} dragging{% endif %}" style="top: {{ sb.top }}%; height: {{ sb.height }}%"></div>
+      </div>
     </section>
   </section>
   {% endfor %}

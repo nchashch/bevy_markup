@@ -32,9 +32,15 @@ demo-title = bevy_markup-Demo
 demo-about =
     Alles auf dem Bildschirm ist HTML und CSS: die Paneele, die Schaltflächen und
     ihre 9-Slice-Rahmen. Unten lassen sich Thema und Sprache wechseln; die
-    gerahmten Paneele scrollen mit dem Mausrad.
+    gerahmten Paneele scrollen mit dem Mausrad. Tastatur und Gamepad gehen auch:
+    ← → / Steuerkreuz / linker Stick wechseln zwischen Paneelen und Knöpfen,
+    ↑ ↓ scrollen das fokussierte Paneel (auch der rechte Stick, Bild↑ / Bild↓),
+    Enter / A drückt, L / Y und T / X wechseln Sprache und Thema.
 demo-language = Sprache
 demo-theme = Thema
+demo-scrollbars = Bildlaufleisten
+demo-scrollbars-on = An
+demo-scrollbars-off = Aus
 field-notes-torches =
     Die Fackeln knistern in der feuchten Luft der unteren Galerien. { $name } zählt,
     was übrig ist, und beschließt, dass <i>drei</i> für den Abstieg reichen müssen,
@@ -51,3 +57,21 @@ field-notes-health =
     Die Gesundheit hält bei { $hp } von { $max }. Nicht gut, nicht schlecht. Der
     nächste Rastplatz ist auf der Karte mit einem kleinen <code>★</code> markiert,
     zwei Ebenen tiefer und unbekannt weit östlich.
+log-title = Expeditionstagebuch
+log-entry =
+    <b>Tag { $day }</b> · { $place ->
+        [cistern] Die Zisterne
+        [chasm] Die östliche Schlucht
+        [stair] Die eingestürzte Treppe
+       *[galleries] Die unteren Galerien
+    } — { $event ->
+        [rest] An einer trockenen Wand gerastet und die Fackeln noch einmal gezählt.
+        [found] { $count ->
+            [one] <em>Eine</em> Münze
+           *[other] <em>{ $count }</em> Münzen
+        } im Schlamm gefunden, sonst nichts, was sich zu tragen lohnt.
+        [storm] Wasser stieg durch die Bodengitter; wir warteten es auf der Treppe ab.
+        [map] Karte berichtigt: Der als offen markierte Gang ist verschüttet.
+        [camp] Lager aufgeschlagen. Das Seil wurde geflickt, während die anderen schliefen.
+       *[march] Vier Stunden durch stehendes Wasser marschiert; die Laterne hielt.
+    }

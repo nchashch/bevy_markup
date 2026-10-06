@@ -25,9 +25,15 @@ demo-title = bevy_markup demo
 demo-about =
     Everything on screen is HTML + CSS: the panels, the buttons and their 9-slice
     frames. Switch the theme and language below; scroll the framed panels with the
-    mouse wheel.
+    mouse wheel. Keyboard and gamepad work too: ← → / D-pad / left stick move
+    between panels and buttons, ↑ ↓ scroll the focused panel (also the right
+    stick, PageUp / PageDown), Enter / A press, L / Y and T / X switch the
+    language and the theme.
 demo-language = Language
 demo-theme = Theme
+demo-scrollbars = Scrollbars
+demo-scrollbars-on = On
+demo-scrollbars-off = Off
 field-notes-torches =
     The torches sputter in the damp air of the lower galleries. { $name } counts what
     is left and decides that <i>three</i> will have to be enough for the descent,
@@ -44,3 +50,21 @@ field-notes-health =
     Health holds at { $hp } of { $max }. Not great, not terrible. The next rest point
     is marked on the map with a small <code>★</code>, two levels down and an unknown
     distance east.
+log-title = Expedition log
+log-entry =
+    <b>Day { $day }</b> · { $place ->
+        [cistern] The cistern
+        [chasm] The eastern chasm
+        [stair] The collapsed stair
+       *[galleries] The lower galleries
+    } — { $event ->
+        [rest] Rested by a dry wall and counted the torches again.
+        [found] Found { $count ->
+            [one] <em>one</em> coin
+           *[other] <em>{ $count }</em> coins
+        } in the silt, and nothing else worth carrying.
+        [storm] Water rose through the floor grates; we waited it out on the stairs.
+        [map] Corrected the map: the passage marked as open is blocked by rubble.
+        [camp] Made camp. The rope was mended while the others slept.
+       *[march] Marched four hours through standing water; the lantern held.
+    }

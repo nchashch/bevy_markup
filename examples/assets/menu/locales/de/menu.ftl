@@ -19,7 +19,7 @@ menu-last-input = Letzter Klick: { $input ->
     [synthetic] synthetisch
    *[none] noch keiner
 }
-menu-hint = Pfeile, Steuerkreuz oder linker Stick: bewegen (← → auf einer Einstellung: ändern) · Enter oder A: wählen · Esc: abbrechen · L: Sprache
+menu-hint = Pfeile, Steuerkreuz oder linker Stick: bewegen (← → auf einer Einstellung: ändern) · Enter oder A: wählen · Esc oder B: abbrechen · L oder Y: Sprache
 dialog-reset = Alle Einstellungen zurücksetzen?
 dialog-yes = Zurücksetzen
 dialog-no = Abbrechen

@@ -1,5 +1,7 @@
 grid-title = Grid-Layout
-grid-hint = <kbd>Leertaste</kbd> wechselt das Layout, <kbd>L</kbd> die Sprache; ändere die Fenstergröße, um die Felder neu anzuordnen.
+grid-hint = Pfeile, Steuerkreuz oder linker Stick: durch die Felder · <kbd>Enter</kbd> / A: drücken · <kbd>Leertaste</kbd> / X: Layout · <kbd>L</kbd> / Y: Sprache; ändere die Fenstergröße, um die Felder neu anzuordnen.
+grid-layout = Layout
+grid-language = Sprache: Deutsch
 grid-tab-items = Gegenstände
 grid-tab-gear = Ausrüstung
 grid-tab-quests = Aufträge

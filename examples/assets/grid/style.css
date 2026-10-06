@@ -62,6 +62,31 @@ kbd {
 .tab:hover {
   background-color: #3a3a46;
 }
+.tab.active {
+  color: #f0b429;
+  background-color: #34343f;
+}
+
+/* Keyboard/gamepad focus: a ring, hidden again by a mouse press. */
+.tab:focus-visible, .slot:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
+.controls {
+  flex-direction: row;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.selected {
+  color: #f0b429;
+  font-size: 22px;
+  margin-top: 6px;
+}
+.selected-count {
+  font-family: monospace;
+}
 
 /* As many 120px+ columns as fit, stretched to fill the row; the featured
    slot spans 2×2 and dense packing back-fills the holes it leaves. */

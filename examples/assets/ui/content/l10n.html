@@ -32,4 +32,14 @@ fn main() {
   <p data-l10n-id="field-notes-health" data-l10n-args='{"hp": {{ hp }}, "max": {{ max_hp }}}'>Health holds at
     {{ hp }} of {{ max_hp }}. Not great, not terrible. The next rest point is marked on the map with a small
     <code>★</code>, two levels down and an unknown distance east.</p>
+  {# A long expedition log, so this panel overflows (and shows its
+     scrollbar) even on a 4K screen: 60 entries from one Fluent message,
+     selecting the place, the event and a coin plural from Tera-computed
+     arguments. #}
+  <h2 data-l10n-id="log-title">Expedition log</h2>
+  {% set places = ["galleries", "cistern", "chasm", "stair"] %}
+  {% set events = ["march", "rest", "found", "storm", "map", "camp"] %}
+  {% for day in range(start=1, end=61) %}
+  <p class="log-entry" data-l10n-id="log-entry" data-l10n-args='{"day": {{ day }}, "place": "{{ places[day % 4] }}", "event": "{{ events[(day * 5) % 6] }}", "count": {{ day % 4 + 1 }}}'>Day {{ day }}</p>
+  {% endfor %}
 </section>

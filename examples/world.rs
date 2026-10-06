@@ -24,11 +24,21 @@
 //! - Name, health, hits and fade are template values written every frame;
 //!   a plate only updates when the rendered output changes.
 //!
-//! `cargo run --example world` — K knocks out the nearest unit, R brings
-//! everyone back, Space toggles the plates, L switches the language.
+//! - Keyboard and gamepad (`examples/shared/input.rs`): the HUD's buttons
+//!   are `data-on-click` (focusable); its root is `pointer-events: none` so
+//!   it never blocks the scene, and the button row takes the pointer back
+//!   with `pointer-events: auto`. Every action also has a hotkey on both.
+//!
+//! `cargo run --example world` — Hit nearest (K / B) knocks out the nearest
+//! unit, Everyone back (R / X), Plates on/off (Space / Select), Language
+//! (L / Y); ← → / D-pad / left stick choose a button, Enter / A press it.
 
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
+
+#[path = "shared/input.rs"]
+mod input;
+use input::{ExampleInputPlugin, Hotkeys};
 
 fn main() {
     App::new()
@@ -47,7 +57,9 @@ fn main() {
                     ..default()
                 }),
             BevyMarkupPlugin,
+            ExampleInputPlugin,
         ))
+        .add_message::<Action>()
         .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
         .insert_resource(PlatesShown(true))
         .add_systems(Startup, (setup, spawn_units).chain())
@@ -57,11 +69,9 @@ fn main() {
                 orbit_camera,
                 walk,
                 blink,
-                knock_out_and_respawn,
-                toggle_plates,
+                (hotkeys, buttons, act).chain(),
                 show_plates,
                 show_hud,
-                switch_language,
             ),
         )
         .run();
@@ -251,39 +261,85 @@ fn blink(time: Res<Time>, mut units: Query<&mut Visibility, With<Blinking>>) {
     }
 }
 
-/// K: hits the unit nearest the camera for 35; at 0 it's despawned, and its
-/// plate with it. R: everyone back.
-fn knock_out_and_respawn(
-    keys: Res<ButtonInput<KeyCode>>,
-    cameras: Query<&Transform, With<Camera3d>>,
-    mut units: Query<(Entity, &mut Unit, &Transform)>,
-    mut commands: Commands,
-) {
-    if keys.just_pressed(KeyCode::KeyR) {
-        commands.run_system_cached(spawn_units);
-    }
-    if !keys.just_pressed(KeyCode::KeyK) {
-        return;
-    }
-    let Ok(camera) = cameras.single() else {
-        return;
-    };
-    let nearest = units.iter_mut().min_by(|(_, _, a), (_, _, b)| {
-        let distance = |t: &Transform| t.translation.distance(camera.translation);
-        distance(a).total_cmp(&distance(b))
-    });
-    if let Some((entity, mut unit, _)) = nearest {
-        unit.hp = unit.hp.saturating_sub(35);
-        unit.hits += 1;
-        if unit.hp == 0 {
-            commands.entity(entity).despawn();
+/// What the HUD buttons and hotkeys ask for.
+#[derive(Message, Clone, Copy)]
+enum Action {
+    Hit,
+    Respawn,
+    TogglePlates,
+    Language,
+}
+
+/// K / B, R / X, Space / Select, L / Y.
+fn hotkeys(hotkeys: Hotkeys, mut actions: MessageWriter<Action>) {
+    for (key, button, action) in [
+        (KeyCode::KeyK, GamepadButton::East, Action::Hit),
+        (KeyCode::KeyR, GamepadButton::West, Action::Respawn),
+        (KeyCode::Space, GamepadButton::Select, Action::TogglePlates),
+        (KeyCode::KeyL, GamepadButton::North, Action::Language),
+    ] {
+        if hotkeys.just_pressed(key, button) {
+            actions.write(action);
         }
     }
 }
 
-fn toggle_plates(keys: Res<ButtonInput<KeyCode>>, mut shown: ResMut<PlatesShown>) {
-    if keys.just_pressed(KeyCode::Space) {
-        shown.0 = !shown.0;
+/// The HUD buttons: clicked, or focused with ← → / D-pad and pressed with
+/// Enter / A.
+fn buttons(mut signals: MessageReader<ElementSignal>, mut actions: MessageWriter<Action>) {
+    for signal in signals.read().filter(|s| s.trigger == SignalTrigger::Click) {
+        let action = match signal.name.as_ref() {
+            "hit" => Action::Hit,
+            "respawn" => Action::Respawn,
+            "plates" => Action::TogglePlates,
+            "language" => Action::Language,
+            _ => continue,
+        };
+        actions.write(action);
+    }
+}
+
+/// Hit: the unit nearest the camera loses 35; at 0 it's despawned, and its
+/// plate with it. Respawn: everyone back. Plates: on/off. Language: next.
+#[allow(clippy::too_many_arguments)]
+fn act(
+    mut actions: MessageReader<Action>,
+    cameras: Query<&Transform, With<Camera3d>>,
+    mut units: Query<(Entity, &mut Unit, &Transform)>,
+    mut shown: ResMut<PlatesShown>,
+    languages: Res<Languages>,
+    mut active: ResMut<ActiveLocale>,
+    mut commands: Commands,
+) {
+    for action in actions.read() {
+        match action {
+            Action::Respawn => commands.run_system_cached(spawn_units),
+            Action::TogglePlates => shown.0 = !shown.0,
+            Action::Language => {
+                let current = languages
+                    .0
+                    .iter()
+                    .position(|bundle| active.0.as_ref() == Some(bundle))
+                    .unwrap_or(0);
+                active.set(languages.0[(current + 1) % languages.0.len()].clone());
+            }
+            Action::Hit => {
+                let Ok(camera) = cameras.single() else {
+                    continue;
+                };
+                let nearest = units.iter_mut().min_by(|(_, _, a), (_, _, b)| {
+                    let distance = |t: &Transform| t.translation.distance(camera.translation);
+                    distance(a).total_cmp(&distance(b))
+                });
+                if let Some((entity, mut unit, _)) = nearest {
+                    unit.hp = unit.hp.saturating_sub(35);
+                    unit.hits += 1;
+                    if unit.hp == 0 {
+                        commands.entity(entity).despawn();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -338,21 +394,4 @@ fn show_hud(
         context.insert("on_screen", &on_screen);
         context.insert("total", &plates.iter().count());
     }
-}
-
-/// L: next language.
-fn switch_language(
-    keys: Res<ButtonInput<KeyCode>>,
-    languages: Res<Languages>,
-    mut active: ResMut<ActiveLocale>,
-) {
-    if !keys.just_pressed(KeyCode::KeyL) {
-        return;
-    }
-    let current = languages
-        .0
-        .iter()
-        .position(|bundle| active.0.as_ref() == Some(bundle))
-        .unwrap_or(0);
-    active.set(languages.0[(current + 1) % languages.0.len()].clone());
 }

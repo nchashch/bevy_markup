@@ -91,15 +91,30 @@ fn shell_contexts() -> Vec<Value> {
         "lang_active": 0,
         "themes": ["Crimson", "Parchment", "Terminal", "Large print"],
         "theme_active": 0,
+        "scrollbars_on": true,
         "outline_slots": [
             "slot-outline-plain",
             "slot-outline-template",
             "slot-outline-l10n",
         ],
+        // `update_scrollbars`: every area starts hidden; the second context
+        // shows some (one scrolled).
+        "scrollbars": {
+            "slot-inventory": { "show": false, "top": 0.0, "height": 0.0, "dragging": false },
+            "side-column": { "show": false, "top": 0.0, "height": 0.0, "dragging": false },
+            "slot-outline-plain": { "show": false, "top": 0.0, "height": 0.0, "dragging": false },
+            "slot-outline-template": { "show": false, "top": 0.0, "height": 0.0, "dragging": false },
+            "slot-outline-l10n": { "show": false, "top": 0.0, "height": 0.0, "dragging": false },
+        },
     });
     let mut other = base.clone();
     other["lang_active"] = json!(2);
     other["theme_active"] = json!(1);
+    other["scrollbars_on"] = json!(false);
+    other["scrollbars"]["slot-inventory"] =
+        json!({ "show": true, "top": 40.5, "height": 33.3, "dragging": true });
+    other["scrollbars"]["slot-outline-l10n"] =
+        json!({ "show": true, "top": 0.0, "height": 17.6, "dragging": false });
     vec![base, other]
 }
 
@@ -126,7 +141,10 @@ fn grid_contexts() -> Vec<Value> {
         { "id": "key", "count": 1, "featured": false },
     ]);
     ["wide", "narrow"]
-        .map(|layout| json!({ "layout": layout, "items": items, "weight": "18.5 kg", "gold": 240 }))
+        .map(|layout| {
+            json!({ "layout": layout, "items": items, "weight": "18.5 kg", "gold": 240,
+                    "active_tab": "gear", "selected": "map" })
+        })
         .to_vec()
 }
 

@@ -188,13 +188,18 @@ It matters most if players can load their own translations or mods.
 ## Running the examples
 
 ```sh
-cargo run --example quickstart   # the code above, plus a button and a language switch
+cargo run --example quickstart   # the code above, plus buttons that the keyboard and a gamepad reach too
 cargo run --example grid         # CSS grid: page layout, responsive slots, spans
 cargo run --example menu         # focus, a slider and a stepper, modal dialog, data-tooltip, a component library, routed signals
 cargo run --example live         # data rendered every frame, updated in place; inline styles, opacity
 cargo run --example world        # styled, localized nameplates over 3D units (HtmlWorldAnchor)
 cargo run --example demo         # themes, languages, scrolling, 9-slice frames, DOM outlines
 ```
+
+Every example works with mouse, keyboard and gamepad alike: arrows / D-pad /
+left stick move focus, Enter / A press, and each shortcut has a gamepad button
+(shown on screen). bevy_markup owns focus and activation; the examples bind
+the input (`examples/shared/input.rs`).
 
 Their templates, stylesheets, translations and images are in
 `examples/assets/`. Text uses the fonts installed on your system (CSS
@@ -309,7 +314,7 @@ their time testing rather than compiling Bevy.
 
 ```
 src/            the library
-examples/       quickstart, grid, menu, live and demo
+examples/       quickstart, grid, menu, live, world and demo (+ shared/input.rs)
 tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in
                 honggfuzz/, fuzzcheck/, test-fuzz/)

@@ -3,9 +3,10 @@
 //! library, signals routed to systems, custom elements and templated inline
 //! styles.
 //!
-//! - `autofocus` picks the first focused button; arrows / D-pad move focus
-//!   (`HtmlFocus::navigate`), Enter / A activates it (`HtmlFocus::activate`,
-//!   the same `ElementSignal` a click sends). `.button:focus-visible` draws
+//! - `autofocus` picks the first focused control; arrows / D-pad / left
+//!   stick move focus and Enter / A activates it (`examples/shared/input.rs`
+//!   over `HtmlFocus::navigate` / `activate`: the same `ElementSignal` a click
+//!   sends). `.button:focus-visible` draws
 //!   the focus ring, which a mouse press hides again.
 //! - "Reset" opens `menu/dialog.html` with `HtmlModal`: focus moves to its
 //!   `autofocus` button and can't leave it until the dialog closes.
@@ -32,21 +33,24 @@
 //! - Difficulty is ordinal, so it's a stepper: ◀ [focusable label] ▶. The
 //!   label isn't a button (`tabindex="0"`, no `data-on-click`); ← → / D-pad
 //!   / left stick step it while focused, stopping at Easy and Hard. Both
-//!   controls carry `data-setting`, which is how [`navigate`] knows a focused
+//!   controls carry `data-setting`, which is how the shared input module knows a focused
 //!   element takes left/right itself.
 //! - Every signal says what produced it (`ElementSignal::source`): a pointer
 //!   and button, or the key / gamepad button the app passed to `activate`;
 //!   the menu shows what produced the last click.
 //!
-//! `cargo run --example menu` — L switches the language (English/German),
-//! Esc closes the dialog.
+//! `cargo run --example menu` — L / gamepad Y switches the language
+//! (English/German), Esc / B closes the dialog.
 
 use bevy::input_focus::{FocusCause, InputFocus};
-use bevy::math::CompassOctant;
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use bevy_markup::prelude::*;
+
+#[path = "shared/input.rs"]
+mod input;
+use input::{ExampleInputPlugin, Hotkeys, SettingStep};
 
 fn main() {
     App::new()
@@ -65,6 +69,7 @@ fn main() {
                     ..default()
                 }),
             BevyMarkupPlugin,
+            ExampleInputPlugin,
         ))
         .define_html_element("icon", icon)
         .define_html_element("slider", slider)
@@ -100,7 +105,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                navigate,
+                apply_setting_steps,
                 record_last_input,
                 close_dialog_on_escape,
                 switch_language,
@@ -258,116 +263,11 @@ fn show_settings(settings: Res<Settings>, mut menus: Query<&mut TemplateContext,
     }
 }
 
-/// Hold-to-repeat for one axis of directional input: fires on press, then
-/// after [`Self::DELAY`] every [`Self::INTERVAL`] while held.
-#[derive(Default)]
-struct Repeat {
-    held: i32,
-    next: f32,
-}
-
-impl Repeat {
-    const DELAY: f32 = 0.35;
-    const INTERVAL: f32 = 0.08;
-
-    /// `direction` is -1, 0 or 1 this frame; returns the direction to act on.
-    fn update(&mut self, direction: i32, now: f32) -> i32 {
-        if direction == 0 {
-            self.held = 0;
-            return 0;
-        }
-        if direction != self.held {
-            self.held = direction;
-            self.next = now + Self::DELAY;
-            return direction;
-        }
-        if now >= self.next {
-            self.next = now + Self::INTERVAL;
-            return direction;
-        }
-        0
-    }
-}
-
-/// Keyboard and gamepad drive bevy_markup's focus; the mouse needs nothing.
-/// Arrows / D-pad / left stick move focus — except left and right on the
-/// focused volume slider, which step it. Activation reports which input did
-/// it.
-#[allow(clippy::too_many_arguments)]
-fn navigate(
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<(Entity, &Gamepad)>,
-    elements: Query<&HtmlElement>,
-    mut settings: ResMut<Settings>,
-    mut repeat: Local<(Repeat, Repeat)>,
-    mut focus: HtmlFocus,
-) {
-    // -1/0/1 per axis from keys, D-pad and left stick (any gamepad).
-    let axis = |negative: KeyCode,
-                positive: KeyCode,
-                pad_negative,
-                pad_positive,
-                stick: fn(&Gamepad) -> f32| {
-        let pad = |button| gamepads.iter().any(|(_, pad)| pad.pressed(button));
-        let stick = gamepads
-            .iter()
-            .map(|(_, pad)| stick(pad))
-            .find(|value| value.abs() > 0.5);
-        let positive =
-            keys.pressed(positive) || pad(pad_positive) || stick.is_some_and(|v| v > 0.0);
-        let negative =
-            keys.pressed(negative) || pad(pad_negative) || stick.is_some_and(|v| v < 0.0);
-        positive as i32 - negative as i32
-    };
-    let horizontal = axis(
-        KeyCode::ArrowLeft,
-        KeyCode::ArrowRight,
-        GamepadButton::DPadLeft,
-        GamepadButton::DPadRight,
-        |pad| pad.left_stick().x,
-    );
-    // Up is positive on the stick.
-    let vertical = axis(
-        KeyCode::ArrowDown,
-        KeyCode::ArrowUp,
-        GamepadButton::DPadDown,
-        GamepadButton::DPadUp,
-        |pad| pad.left_stick().y,
-    );
-    let now = time.elapsed_secs();
-    let (horizontal_repeat, vertical_repeat) = &mut *repeat;
-    match vertical_repeat.update(vertical, now) {
-        1 => drop(focus.navigate(CompassOctant::North)),
-        -1 => drop(focus.navigate(CompassOctant::South)),
-        _ => {}
-    }
-    // A focused control with `data-setting` (the volume slider, the
-    // difficulty stepper) takes left/right itself.
-    let setting = focus
-        .focused()
-        .and_then(|entity| elements.get(entity).ok())
-        .and_then(|element| element.data("setting").map(str::to_owned));
-    match (horizontal_repeat.update(horizontal, now), setting) {
-        (0, _) => {}
-        (direction, Some(setting)) => settings.step(&setting, direction),
-        (1, None) => drop(focus.navigate(CompassOctant::East)),
-        (_, None) => drop(focus.navigate(CompassOctant::West)),
-    }
-
-    let pad = |button: GamepadButton| {
-        gamepads
-            .iter()
-            .find(|(_, pad)| pad.just_pressed(button))
-            .map(|(gamepad, _)| ActivationInput::GamepadButton { gamepad, button })
-    };
-    let activation = if keys.just_pressed(KeyCode::Enter) {
-        Some(ActivationInput::Key(KeyCode::Enter))
-    } else {
-        pad(GamepadButton::South)
-    };
-    if let Some(input) = activation {
-        focus.activate(input);
+/// Left/right on a focused `data-setting` control (from the shared input
+/// module) steps that setting.
+fn apply_setting_steps(mut steps: MessageReader<SettingStep>, mut settings: ResMut<Settings>) {
+    for step in steps.read() {
+        settings.step(&step.setting, step.steps);
     }
 }
 
@@ -446,16 +346,11 @@ fn answer_dialog(
 
 /// Esc / B: cancel the dialog (focus returns to the menu by itself).
 fn close_dialog_on_escape(
-    keys: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<&Gamepad>,
+    hotkeys: Hotkeys,
     dialogs: Query<Entity, With<Dialog>>,
     mut commands: Commands,
 ) {
-    let cancel = keys.just_pressed(KeyCode::Escape)
-        || gamepads
-            .iter()
-            .any(|pad| pad.just_pressed(GamepadButton::East));
-    if cancel {
+    if hotkeys.just_pressed(KeyCode::Escape, GamepadButton::East) {
         for dialog in &dialogs {
             commands.entity(dialog).despawn();
         }
@@ -463,12 +358,8 @@ fn close_dialog_on_escape(
 }
 
 /// L: next language.
-fn switch_language(
-    keys: Res<ButtonInput<KeyCode>>,
-    languages: Res<Languages>,
-    mut active: ResMut<ActiveLocale>,
-) {
-    if !keys.just_pressed(KeyCode::KeyL) {
+fn switch_language(hotkeys: Hotkeys, languages: Res<Languages>, mut active: ResMut<ActiveLocale>) {
+    if !hotkeys.just_pressed(KeyCode::KeyL, GamepadButton::North) {
         return;
     }
     let current = languages

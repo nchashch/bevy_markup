@@ -7,4 +7,5 @@ hello-coins =
        *[other] You have <em>{ $coins }</em> coins.
     }
 hello-add-coin = + Add a coin
-hello-hint = Press <kbd>Space</kbd> to switch language.
+hello-language = Language: English
+hello-hint = Click, or <kbd>↑</kbd> <kbd>↓</kbd> / D-pad to choose and <kbd>Enter</kbd> / A to press. <kbd>Space</kbd> / Y also switches the language.

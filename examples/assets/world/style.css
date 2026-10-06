@@ -179,3 +179,28 @@ span.neutral {
   color: #9aa0aa;
   font-size: 15px;
 }
+
+/* The HUD root ignores the pointer (so it never blocks the scene); its
+ * buttons take it back. */
+.hud-buttons {
+  flex-direction: row;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.button {
+  padding: 4px 10px;
+  font-size: 15px;
+  background-color: rgba(43, 47, 58, 0.9);
+  border-radius: 4px;
+}
+
+.button:hover {
+  background-color: rgba(58, 64, 80, 0.95);
+}
+
+/* Keyboard/gamepad focus; a mouse press hides it. */
+.button:focus-visible {
+  outline: 2px solid #f9c74f;
+  outline-offset: 2px;
+}

@@ -91,11 +91,26 @@ src/
                    autofocus), focus pseudo-state, press-to-focus, activation (InputFocus-based)
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
-  quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, a `data-on-click` button, Space = language
-  grid.rs          CSS grid: page track template switched via context (Space), auto-fill slots
-                   with a 2×2 span and dense packing, small grids in slots/stats; L = language
-  menu.rs          focus/navigation (autofocus, arrows/D-pad/left stick with hold-to-repeat →
-                   HtmlFocus, Enter/A activate, :focus-visible ring), a volume slider (focusable
+                   Every example works with mouse, keyboard and gamepad: focusable controls
+                   (`data-on-click`, `tabindex`), a `:focus-visible` ring, and each hotkey on a
+                   gamepad button too.
+  shared/input.rs  (not an example; `#[path]`-included) ExampleInputPlugin: arrows / D-pad /
+                   left stick → HtmlFocus::navigate with hold-to-repeat, Enter / A → activate;
+                   left/right on a focused `data-setting` element → `SettingStep` message
+                   instead; `ArrowMode` resource (`Directional` default; `Linear`: ← → step
+                   through `Focusable`s in document order — DFS of top-level `HtmlUi` roots,
+                   sets `InputFocus` + `InputFocusVisible` — and ↑ ↓ are left to the app);
+                   `Arrows` SystemParam (held axes from arrows / D-pad / left stick); `Hotkeys`
+                   SystemParam (`just_pressed(key, gamepad_button)`)
+  quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, two `data-on-click`
+                   buttons (add a coin, language) in a column, with an inline minimal `navigate` (arrows / D-pad, all four directions,
+                   Enter / A; kept self-contained); Space / Y = language
+  grid.rs          CSS grid: page track template switched via context (Layout button, Space / X),
+                   auto-fill slots with a 2×2 span and dense packing — slots `tabindex="0"` so
+                   directional focus walks the 2D grid, details panel follows the focused slot —,
+                   working tabs (`data-tab` → `signal.data`), small grids in slots/stats;
+                   Language button, L / Y
+  menu.rs          focus/navigation (shared/input.rs; autofocus, :focus-visible ring), a volume slider (focusable
                    `tabindex="0"` bar: ← → step it while focused; `is="slider"` observes picking
                    press/drag to set it at the pointer; ◀ ▶ mouse-only `tabindex="-1"` step
                    buttons; fill = templated `style` width), a difficulty stepper (◀ focusable
@@ -108,19 +123,46 @@ examples/
                    them (last input), roots styled by `<html class>` (backdrop, z-index,
                    pointer-events), `is="icon"`; L = language, Esc = cancel
   live.rs          a keyed party list rendered from data every frame and updated in place
-                   (`id="unit-<name>"`; N adds at the top, K fades out the last via `opacity`),
-                   `style` health bars, `is="badge"` spawn counter vs update counter; L = language
+                   (`id="unit-<name>"`, rows `tabindex="0"`: a focused row keeps focus while
+                   members join above it), Recruit / Knock out / Language buttons (N / X, K / B —
+                   the focused member else the last, fading via `opacity` —, L / Y), `style`
+                   health bars, `is="badge"` spawn counter vs update counter
   world.rs         nameplates over walking 3D units with HtmlWorldAnchor (orbiting camera: plates
                    hide behind it/off screen, with a blinking unit, and go with a knocked-out
                    unit), distance fade from HtmlWorldAnchorView, `hidden` class toggle, HUD
                    counting on-screen plates; plates are styled HTML (faction card: 9-slice
                    `border-image` / rounded border / `outline`; monospace level badge, sans name,
                    italic title, three-color bar; inline `z-index` by distance) with Fluent lines
-                   (markup, plurals, `<span class="{ $faction }">`); K = hit nearest, R =
-                   respawn, Space, L
+                   (markup, plurals, `<span class="{ $faction }">`); HUD buttons (root
+                   `pointer-events: none`, button row `auto`): Hit nearest (K / B), Everyone
+                   back (R / X), Plates (Space / Select), Language (L / Y)
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    `is="content-slot"` viewports filled once per slot, contexts),
-                   controls.rs (language/theme selection), consts.rs (fonts)
+                   controls.rs (language/theme selection; L / Y, T / X hotkeys), consts.rs (fonts);
+                   options have ids (`lang-N`, `theme-N`), viewports are `tabindex="0"`;
+                   `ArrowMode::Linear`: ← → step through panels and buttons, ↑ ↓ (tap = 60 px
+                   step, hold = smooth; also right stick, PageUp/PageDown) scroll the nearest
+                   `ScrollArea` at or above the focus — the viewport, or the middle column for
+                   its buttons (`scroll_focused`, clamped to content), every theme's chrome has `.opt/.viewport:focus-visible`;
+                   the middle column (`.column.side`, a row) holds `.side-scroll`, which is
+                   `is="scroll-column"` (`ScrollArea`, wheel) with `overflow-y: scroll`;
+                   styled scrollbars: `<div class="scrollbar" is="scrollbar"
+                   data-target="<id>"><div class="thumb">` beside each scrolling area
+                   (`.fill` panels are rows: viewport + track), themed in CSS (track/thumb
+                   colors per theme, `.thumb:hover/:active/.dragging`); `update_scrollbars`
+                   writes the shell context's `scrollbars[<id>]` (show, thumb top/height %,
+                   dragging; rounded to 0.1%), which the template turns into `.hidden` and
+                   the thumb's inline `style` — template values, not `Node` writes (see
+                   Gotchas); `drag_thumb` / `press_track` observers scroll by pointer,
+                   `DraggedThumb` (DragStart/DragEnd) keeps `.dragging` while the pointer is
+                   off the thumb (a Bevy `ScrollbarThumb` must have no `Node`, so it couldn't
+                   be themed by CSS); the selection handlers insert only
+                   `lang_active`/`theme_active`, keeping the scrollbar state; a Scrollbars
+                   On/Off toggle panel (`set-scrollbars`, `data-with` `{"on": …}` →
+                   `Selection.scrollbars` → `scrollbars_on`; off adds `.hidden` to every
+                   track, wheel/keys still scroll), and `scroll_focus_into_view`
+                   triggers Bevy's `ScrollIntoView` on navigated focus (only while
+                   `InputFocusVisible`: startup autofocus fires before layout settles)
 tests/
   html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
   signals.rs       picking-driven signal tests: real WindowEvent input → Bevy picking → ElementSignal/PseudoState
@@ -202,7 +244,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
                    parchment/terminal panels frame themselves with it)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;
                    each carries the identical `Demo chrome` block styling the shell's panels/buttons/viewports
-  ui/content/      test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent),
+  ui/content/      test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent; ends
+                   with a 60-entry "Expedition log" — one `log-entry` message selecting
+                   place/event/coin plural from `range` loop args — so the inventory panel
+                   overflows even on a 4K screen),
                    shell.html (the demo app itself: panels, buttons, slots), test.css
   locales/<id>/    demo bundles (main.ftl.ron + ui.ftl) for en-US, ru, de, ja
 ```
@@ -409,6 +454,24 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   message. Every visible string in `l10n.html` and the demo shell has a key.
 
 ## Gotchas (verified)
+
+- **App-written `Node` fields don't survive on elements, only on the root.**
+  An in-place restyle or update writes an element's whole `Node` from its
+  CSS spec (`build.rs` `update_spec`), so a field the app set (`top`,
+  `height`, `display`, …) is reset whenever that element's UI restyles —
+  including on a `:hover`/`:active` change. Writing per-frame geometry on an
+  element that has a `:hover` rule loops: hover → restyle resets the field
+  (e.g. height 0) → un-hover → the app writes it back → hover … (the demo's
+  first scrollbar thumbs flickered "behind" their track and lost hits). Only
+  the root keeps app values for fields CSS doesn't declare (`CssRoot`). For
+  per-frame visuals on elements, use template values (`style="…"`, classes).
+- **A scroll panel needs every flex level on its path allowed to shrink.**
+  Containers default to `flex-shrink: 0` (browsers: 1), so the browser recipe
+  `flex-grow: 1; min-height: 0; overflow-y: scroll` alone does nothing: the
+  panel keeps its content height, nothing overflows it (`ScrollArea` has zero
+  range) and the root clips the overflow instead. Give the panel *and each
+  ancestor between it and the sized root* `flex-shrink: 1; flex-basis: 0;
+  min-height: 0` (the demo themes' "Demo chrome" block; bug_0028).
 
 - Bevy `ImageNode` defaults to `VisualBox::ContentBox` (draws inside padding);
   frames need `BorderBox` (`NineSliceFrame` sets it).
@@ -1001,6 +1064,20 @@ Known limits (each skipped/ignored value is logged at `debug`):
   flex *row*: set `flex_direction: Column` on it or `html { flex-direction:
   column }` in CSS, or blocks sit side by side. The root rule has no
   `:hover`/`:focus` states (always `Pseudo::default()`).
+- **`flex-shrink` defaults to 0, not 1 (deviation from CSS, open design
+  question).** Blocks and containers never shrink below their content unless
+  a rule says `flex-shrink: 1`. Copied browser CSS therefore misbehaves
+  silently where it relies on shrinking: a scroll panel (`flex-grow: 1;
+  min-height: 0; overflow-y: scroll`) never overflows — the tallest content
+  sizes the whole chain and the root clips it (bug_0028; recipe in Gotchas) —
+  and flex rows overflow instead of squeezing their items. Set in
+  `build.rs` (containers, blocks, `li`; its stated reason: a scrolling parent
+  overflows instead of squashing its blocks) and mirrored by the layout
+  oracle's model CSS (`scripts/browser_oracle.py`, `flex-shrink: 0` on the
+  container and block tags), so the oracle vectors assume it too. Kept for
+  now because changing it alters every existing layout (examples, p19's
+  templates) and those vectors; revisit as a deliberate change, re-deriving
+  the vectors against plain browser defaults.
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
   hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
 - **Selectors:** compound only (type/`*` + `.class` + `#id`, plus the

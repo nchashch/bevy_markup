@@ -19,7 +19,7 @@ menu-last-input = Last click: { $input ->
     [synthetic] synthetic
    *[none] none yet
 }
-menu-hint = Arrows, D-pad or left stick: move (← → on a setting: change it) · Enter or A: choose · Esc: cancel · L: language
+menu-hint = Arrows, D-pad or left stick: move (← → on a setting: change it) · Enter or A: choose · Esc or B: cancel · L or Y: language
 dialog-reset = Reset all settings?
 dialog-yes = Reset
 dialog-no = Cancel

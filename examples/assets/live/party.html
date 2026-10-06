@@ -1,8 +1,15 @@
 <html class="screen">
 <div class="panel">
   <h1 data-l10n-id="live-title">Party</h1>
+  <div class="actions">
+    <p class="button" id="recruit" autofocus data-on-click="recruit" data-l10n-id="live-recruit">Recruit</p>
+    <p class="button" id="knock-out" data-on-click="knock-out" data-l10n-id="live-knock-out">Knock out</p>
+    <p class="button" id="language" data-on-click="language" data-l10n-id="live-language">Language</p>
+  </div>
+  {# Rows are focusable (`tabindex="0"`) and keyed by `id`: focus stays on
+     its row while members join above it (updates keep the row's entity). #}
   {% for unit in units %}
-  <div class="unit{% if unit.low %} low{% endif %}" id="unit-{{ unit.name }}" style="opacity: {{ unit.opacity }}">
+  <div class="unit{% if unit.low %} low{% endif %}" id="unit-{{ unit.name }}" tabindex="0" style="opacity: {{ unit.opacity }}">
     <div class="badge" is="badge"></div>
     <div class="unit-body">
       <p data-l10n-id="live-unit" data-l10n-args='{"name": "{{ unit.name }}", "hp": {{ unit.hp }}}'>{{ unit.name }}: {{ unit.hp }} HP</p>
@@ -11,7 +18,7 @@
   </div>
   {% endfor %}
   {% if units | length == 0 %}
-  <p class="empty" data-l10n-id="live-empty">Nobody left. Press N.</p>
+  <p class="empty" data-l10n-id="live-empty">Nobody left. Recruit someone.</p>
   {% endif %}
 </div>
 </html>

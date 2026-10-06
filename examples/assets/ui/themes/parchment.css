@@ -73,11 +73,18 @@ em {
    document — this block is its layout. The rules are the same in every
    theme; only the accents below differ. */
 
+/* The scroll chain, root to viewport: every level must be allowed to
+   shrink below its content (bevy_markup containers default to
+   `flex-shrink: 0`, unlike browsers) and start from a zero basis, or the
+   tallest panel's content sets the height of everything and the window
+   clips it instead of the viewports scrolling. */
 .columns {
   flex-direction: row;
   gap: 16px;
   padding: 16px;
   flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
   min-height: 0;
 }
 
@@ -93,6 +100,25 @@ em {
   min-height: 0;
 }
 
+/* The middle column: a row of its scrolling panel stack and a scrollbar.
+   The stack's panels keep their height (no shrinking) and it scrolls them
+   when the window is too short. */
+.column.side {
+  flex-direction: row;
+  gap: 6px;
+}
+
+.side-scroll {
+  flex-direction: column;
+  gap: 16px;
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: scroll;
+}
+
 .panel {
   border-image: url("../frame_transparent.png") 6.25% fill / 12px repeat;
   border-width: 12px;
@@ -100,12 +126,21 @@ em {
   row-gap: 10px;
 }
 
+/* A framed scrolling panel: its viewport and, beside it, the scrollbar. */
 .fill {
+  flex-direction: row;
+  column-gap: 6px;
   flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-height: 0;
 }
 
 .viewport {
   flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-width: 0;
   min-height: 0;
   overflow-y: scroll;
 }
@@ -133,4 +168,37 @@ em {
 .opt.active {
   background-color: #d4a73a;
   color: #2b2418;
+}
+
+/* Keyboard/gamepad focus (option buttons and the focusable scroll panels):
+   a ring in the text color; a mouse press hides it. */
+.opt:focus-visible, .viewport:focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* Scrollbars (`is="scrollbar"`): a rounded track in the panel's tone and an
+   accent thumb. The thumb's `top` / `height` come from the template's
+   inline style; `.hidden` while the area doesn't overflow. */
+.scrollbar {
+  width: 10px;
+  flex-shrink: 0;
+  background-color: #3a2f1c;
+  border-radius: 5px;
+}
+
+.thumb {
+  position: absolute;
+  left: 0px;
+  width: 10px;
+  background-color: #d4a73a;
+  border-radius: 5px;
+}
+
+.thumb:hover, .thumb:active, .thumb.dragging {
+  background-color: #f0c75a;
+}
+
+.scrollbar.hidden {
+  display: none;
 }

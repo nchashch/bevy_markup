@@ -5,6 +5,10 @@
 <p data-l10n-id="hello-greeting" data-l10n-args='{"name": "{{ player }}"}'>Welcome, {{ player }}.</p>
 <div class="wallet">
   <p data-l10n-id="hello-coins" data-l10n-args='{"coins": {{ coins }}}'>You have {{ coins }} coins.</p>
-  <p id="add-coin" class="action" data-on-click="add-coin" data-l10n-id="hello-add-coin">+ Add a coin</p>
+  <div class="actions">
+    {# data-on-click makes them focusable; autofocus takes the first focus. #}
+    <p id="add-coin" class="action" autofocus data-on-click="add-coin" data-l10n-id="hello-add-coin">+ Add a coin</p>
+    <p id="language" class="action" data-on-click="switch-language" data-l10n-id="hello-language">Language</p>
+  </div>
 </div>
-<p class="hint" data-l10n-id="hello-hint">Press <kbd>Space</kbd> to switch language.</p>
+<p class="hint" data-l10n-id="hello-hint">Click, or ↑ ↓ / D-pad to choose and <kbd>Enter</kbd> / A to press. <kbd>Space</kbd> / Y also switches the language.</p>

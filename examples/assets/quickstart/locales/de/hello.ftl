@@ -7,4 +7,5 @@ hello-coins =
        *[other] Du hast <em>{ $coins }</em> Münzen.
     }
 hello-add-coin = + Münze hinzufügen
-hello-hint = Drücke <kbd>Leertaste</kbd>, um die Sprache zu wechseln.
+hello-language = Sprache: Deutsch
+hello-hint = Klicken, oder mit <kbd>↑</kbd> <kbd>↓</kbd> / Steuerkreuz wählen und mit <kbd>Enter</kbd> / A drücken. <kbd>Leertaste</kbd> / Y wechselt auch die Sprache.

@@ -1,5 +1,9 @@
 world-on-screen = Plates on screen: { $count } of { $total }
-world-hint = K: hit the nearest unit · R: everyone back · Space: plates on/off · L: language
+world-hint = ← → / D-pad / left stick: choose · Enter / A: press · K / B: hit · R / X: everyone back · Space / Select: plates · L / Y: language
+world-hit = Hit nearest
+world-respawn = Everyone back
+world-plates = Plates on/off
+world-language = Language: English
 
 # Nameplates. Translations are markup: <b>, <i> and <span class> are styled
 # by world/style.css.

@@ -17,11 +17,22 @@
 //!   instead of updated would jump back — and counts the spawns, shown
 //!   bottom-left next to the number of party updates and frames.
 //!
-//! `cargo run --example live` — N adds a member at the top, K knocks out the
-//! last one, L switches the language (English/German).
+//! - Keyboard and gamepad (`examples/shared/input.rs`): the buttons are
+//!   `data-on-click` and the rows `tabindex="0"`, so arrows / D-pad / left
+//!   stick reach both. Rows are keyed, so a focused row keeps focus while
+//!   members join above it; Knock out acts on the focused member.
+//!
+//! `cargo run --example live` — Recruit (N / X) adds a member at the top,
+//! Knock out (K / B) knocks out the focused member (else the last), Language
+//! (L / Y) switches between English and German.
 
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
+
+#[path = "shared/input.rs"]
+mod input;
+use input::{ExampleInputPlugin, Hotkeys};
 
 fn main() {
     App::new()
@@ -40,8 +51,10 @@ fn main() {
                     ..default()
                 }),
             BevyMarkupPlugin,
+            ExampleInputPlugin,
         ))
         .define_html_element("badge", badge)
+        .add_message::<Action>()
         .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
         .insert_resource(Party::new())
         .init_resource::<Stats>()
@@ -49,9 +62,8 @@ fn main() {
         .add_systems(
             Update,
             (
-                (recruit_and_knock_out, simulate, show_party, show_stats).chain(),
+                ((hotkeys, buttons), act, simulate, show_party, show_stats).chain(),
                 spin_badges,
-                switch_language,
             ),
         )
         .add_observer(count_party_updates)
@@ -138,23 +150,87 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
     commands.spawn((StatsUi, HtmlUi::new(asset_server.load("live/stats.html"))));
 }
 
-/// N: a member joins at the top. K: the last standing member is knocked out.
-fn recruit_and_knock_out(keys: Res<ButtonInput<KeyCode>>, mut party: ResMut<Party>) {
-    if keys.just_pressed(KeyCode::KeyN)
-        && let Some(&name) = NAMES
-            .iter()
-            .find(|name| party.0.iter().all(|member| member.name != **name))
-    {
-        party.0.insert(0, member(name));
+/// What the buttons and hotkeys ask for.
+#[derive(Message, Clone, Copy, PartialEq)]
+enum Action {
+    Recruit,
+    KnockOut,
+    Language,
+}
+
+/// N / X, K / B, L / Y.
+fn hotkeys(hotkeys: Hotkeys, mut actions: MessageWriter<Action>) {
+    for (key, button, action) in [
+        (KeyCode::KeyN, GamepadButton::West, Action::Recruit),
+        (KeyCode::KeyK, GamepadButton::East, Action::KnockOut),
+        (KeyCode::KeyL, GamepadButton::North, Action::Language),
+    ] {
+        if hotkeys.just_pressed(key, button) {
+            actions.write(action);
+        }
     }
-    if keys.just_pressed(KeyCode::KeyK)
-        && let Some(last) = party
-            .0
-            .iter_mut()
-            .rev()
-            .find(|member| member.fading.is_none())
-    {
-        last.fading = Some(1.0);
+}
+
+/// The buttons: clicked, or activated with Enter / A.
+fn buttons(mut signals: MessageReader<ElementSignal>, mut actions: MessageWriter<Action>) {
+    for signal in signals.read().filter(|s| s.trigger == SignalTrigger::Click) {
+        let action = match signal.name.as_ref() {
+            "recruit" => Action::Recruit,
+            "knock-out" => Action::KnockOut,
+            "language" => Action::Language,
+            _ => continue,
+        };
+        actions.write(action);
+    }
+}
+
+/// Recruit: a member joins at the top. Knock out: the focused member (a
+/// focused `unit-<name>` row), else the last standing one. Language: next.
+fn act(
+    mut actions: MessageReader<Action>,
+    mut party: ResMut<Party>,
+    focus: Res<InputFocus>,
+    elements: Query<&HtmlElement>,
+    languages: Res<Languages>,
+    mut active: ResMut<ActiveLocale>,
+) {
+    let focused = focus
+        .get()
+        .and_then(|entity| elements.get(entity).ok())
+        .and_then(|element| element.id.as_deref()?.strip_prefix("unit-"));
+    for action in actions.read() {
+        match action {
+            Action::Recruit => {
+                if let Some(&name) = NAMES
+                    .iter()
+                    .find(|name| party.0.iter().all(|member| member.name != **name))
+                {
+                    party.0.insert(0, member(name));
+                }
+            }
+            Action::KnockOut => {
+                let standing = |member: &&mut Member| member.fading.is_none();
+                let target = match focused {
+                    Some(name) => party
+                        .0
+                        .iter_mut()
+                        .filter(standing)
+                        .find(|member| member.name == name),
+                    None => party.0.iter_mut().rev().find(standing),
+                };
+                if let Some(member) = target {
+                    member.fading = Some(1.0);
+                }
+            }
+            Action::Language => {
+                let current = languages
+                    .0
+                    .iter()
+                    .position(|bundle| active.0.as_ref() == Some(bundle))
+                    .unwrap_or(0);
+                active.set(languages.0[(current + 1) % languages.0.len()].clone());
+            }
+        }
     }
 }
 
@@ -236,21 +312,4 @@ fn spin_badges(time: Res<Time>, mut badges: Query<(&Badge, &mut UiTransform)>) {
     for (badge, mut transform) in &mut badges {
         transform.rotation = Rot2::radians((time.elapsed_secs() - badge.since) * 3.0);
     }
-}
-
-/// L: next language.
-fn switch_language(
-    keys: Res<ButtonInput<KeyCode>>,
-    languages: Res<Languages>,
-    mut active: ResMut<ActiveLocale>,
-) {
-    if !keys.just_pressed(KeyCode::KeyL) {
-        return;
-    }
-    let current = languages
-        .0
-        .iter()
-        .position(|bundle| active.0.as_ref() == Some(bundle))
-        .unwrap_or(0);
-    active.set(languages.0[(current + 1) % languages.0.len()].clone());
 }

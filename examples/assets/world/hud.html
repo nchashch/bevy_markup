@@ -1,4 +1,10 @@
 <html class="hud">
 <p data-l10n-id="world-on-screen" data-l10n-args='{"count": {{ on_screen }}, "total": {{ total }}}'>Plates on screen: {{ on_screen }} of {{ total }}</p>
-<p class="hint" data-l10n-id="world-hint">K: hit the nearest unit · R: everyone back · Space: plates on/off · L: language</p>
+<div class="hud-buttons">
+  <p class="button" id="hit" autofocus data-on-click="hit" data-l10n-id="world-hit">Hit nearest</p>
+  <p class="button" id="respawn" data-on-click="respawn" data-l10n-id="world-respawn">Everyone back</p>
+  <p class="button" id="plates" data-on-click="plates" data-l10n-id="world-plates">Plates on/off</p>
+  <p class="button" id="language" data-on-click="language" data-l10n-id="world-language">Language</p>
+</div>
+<p class="hint" data-l10n-id="world-hint">← → / D-pad / left stick: choose · Enter / A: press · K / B: hit · R / X: everyone back · Space / Select: plates · L / Y: language</p>
 </html>

@@ -1,5 +1,9 @@
 world-on-screen = Namensschilder im Bild: { $count } von { $total }
-world-hint = K: nächste Einheit treffen · R: alle zurück · Leertaste: Schilder an/aus · L: Sprache
+world-hint = ← → / Steuerkreuz / linker Stick: wählen · Enter / A: drücken · K / B: treffen · R / X: alle zurück · Leertaste / Select: Schilder · L / Y: Sprache
+world-hit = Nächste treffen
+world-respawn = Alle zurück
+world-plates = Schilder an/aus
+world-language = Sprache: Deutsch
 
 # Namensschilder. Übersetzungen sind Markup: <b>, <i> und <span class> sind in
 # world/style.css gestaltet.

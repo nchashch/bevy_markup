@@ -2,14 +2,26 @@
 //! runtime, a responsive `repeat(auto-fill, minmax(…))` slot grid with a
 //! spanning item and dense packing, and small grids inside slots and the
 //! stats table. All layout is in `grid/style.css`; the app only spawns one
-//! `HtmlUi` and toggles a context variable.
+//! `HtmlUi` and toggles context variables.
 //!
-//! `cargo run --example grid` — press Space to switch between the wide and
-//! the narrow layout, L to switch the language (English/German); resize the
-//! window to watch the slots reflow.
+//! Keyboard and gamepad (`examples/shared/input.rs`): the slots are
+//! `tabindex="0"`, so arrows / D-pad / left stick walk the 2D grid —
+//! `HtmlFocus` picks the nearest slot in that direction, whatever the
+//! current column count or the 2×2 featured slot — and the details panel
+//! shows the focused slot. Tabs and the Layout / Language buttons are
+//! `data-on-click`: click them, or focus them and press Enter / A.
+//!
+//! `cargo run --example grid` — Space / X switches between the wide and the
+//! narrow layout, L / Y the language (English/German); resize the window to
+//! watch the slots reflow.
 
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
+
+#[path = "shared/input.rs"]
+mod input;
+use input::{ExampleInputPlugin, Hotkeys};
 
 fn main() {
     App::new()
@@ -28,10 +40,15 @@ fn main() {
                     ..default()
                 }),
             BevyMarkupPlugin,
+            ExampleInputPlugin,
         ))
+        .add_message::<SwitchLanguage>()
         .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
         .add_systems(Startup, setup)
-        .add_systems(Update, (toggle_layout, switch_language))
+        .add_systems(
+            Update,
+            (hotkeys, handle_signals, show_focused_slot, switch_language),
+        )
         .run();
 }
 
@@ -80,6 +97,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
         HtmlUi::new(asset_server.load("grid/grid.html")),
         TemplateContext::new()
             .with("layout", "wide")
+            .with("active_tab", "items")
+            .with("selected", ITEMS[0].0)
             .with("items", &items)
             .with("weight", "18.5 kg")
             .with("gold", &240),
@@ -95,25 +114,85 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
     ));
 }
 
-/// Space: swap the page's track template. The context change re-renders;
-/// the template puts `layout` into `.page`'s classes.
-fn toggle_layout(keys: Res<ButtonInput<KeyCode>>, mut contexts: Query<&mut TemplateContext>) {
-    if !keys.just_pressed(KeyCode::Space) {
-        return;
-    }
-    for mut context in &mut contexts {
-        let wide = context.get("layout").and_then(|v| v.as_str()) == Some("wide");
-        context.insert("layout", if wide { "narrow" } else { "wide" });
+/// The Layout / Language buttons and the tabs (clicked, or activated with
+/// Enter / A). The template puts `layout` into `.page`'s classes and marks
+/// the `active_tab`.
+fn handle_signals(
+    mut signals: MessageReader<ElementSignal>,
+    mut contexts: Query<&mut TemplateContext>,
+    mut switch: MessageWriter<SwitchLanguage>,
+) {
+    for signal in signals.read().filter(|s| s.trigger == SignalTrigger::Click) {
+        for mut context in &mut contexts {
+            match signal.name.as_ref() {
+                "layout" => toggle_layout(&mut context),
+                "tab" => {
+                    if let Some(tab) = signal.data("tab") {
+                        context.insert("active_tab", tab);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if signal.name == "language" {
+            switch.write(SwitchLanguage);
+        }
     }
 }
 
-/// L: next language.
+/// Space / X: layout; L / Y: language.
+fn hotkeys(
+    hotkeys: Hotkeys,
+    mut contexts: Query<&mut TemplateContext>,
+    mut switch: MessageWriter<SwitchLanguage>,
+) {
+    if hotkeys.just_pressed(KeyCode::Space, GamepadButton::West) {
+        for mut context in &mut contexts {
+            toggle_layout(&mut context);
+        }
+    }
+    if hotkeys.just_pressed(KeyCode::KeyL, GamepadButton::North) {
+        switch.write(SwitchLanguage);
+    }
+}
+
+/// Swaps the page's track template.
+fn toggle_layout(context: &mut TemplateContext) {
+    let wide = context.get("layout").and_then(|v| v.as_str()) == Some("wide");
+    context.insert("layout", if wide { "narrow" } else { "wide" });
+}
+
+/// The details panel follows focus: a focused `slot-<id>` becomes `selected`.
+fn show_focused_slot(
+    focus: Res<InputFocus>,
+    elements: Query<&HtmlElement>,
+    mut contexts: Query<&mut TemplateContext>,
+) {
+    let Some(id) = focus
+        .get()
+        .and_then(|entity| elements.get(entity).ok())
+        .and_then(|element| element.id.as_deref()?.strip_prefix("slot-"))
+    else {
+        return;
+    };
+    for mut context in &mut contexts {
+        if context.get("selected").and_then(|v| v.as_str()) != Some(id) {
+            context.insert("selected", id);
+        }
+    }
+}
+
+/// A request for the next language.
+#[derive(Message)]
+struct SwitchLanguage;
+
+/// Next language, once per request.
 fn switch_language(
-    keys: Res<ButtonInput<KeyCode>>,
+    mut requests: MessageReader<SwitchLanguage>,
     languages: Res<Languages>,
     mut active: ResMut<ActiveLocale>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyL) {
+    if requests.read().count() == 0 {
         return;
     }
     let current = languages

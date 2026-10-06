@@ -37,6 +37,19 @@ kbd {
   padding: 4px 16px;
 }
 
+/* Keyboard/gamepad focus shows a ring; a mouse press hides it again. */
+.action:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
+/* One full-width button per line: the same layout in every language (side
+ * by side, the longer German labels wouldn't fit the box), and aligned
+ * centers, so only ↑ ↓ move between them. */
+.actions {
+  gap: 8px;
+}
+
 p.hint {
   color: #9a9a9a;
   font-size: 0.75em;
