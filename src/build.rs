@@ -754,43 +754,29 @@ fn apply_css_owned(
     };
     target.queue(move |mut entity: EntityWorldMut| {
         let before = entity.get::<CssOwned>().copied().unwrap_or_default();
+        // Written only when different (see `put`): unchanged values keep
+        // their change ticks.
         match border_color {
-            Some(color) => {
-                entity.insert(color);
-            }
-            None if before.border_color => {
-                entity.insert(BorderColor::DEFAULT);
-            }
+            Some(color) => put(&mut entity, Some(color)),
+            None if before.border_color => put(&mut entity, Some(BorderColor::DEFAULT)),
             None => {}
         }
         match z_index {
-            Some(z) => {
-                entity.insert(z);
-            }
-            None if before.z_index => {
-                entity.insert(ZIndex::default());
-            }
+            Some(z) => put(&mut entity, Some(z)),
+            None if before.z_index => put(&mut entity, Some(ZIndex::default())),
             None => {}
         }
         match outline {
-            Some(outline) => {
-                entity.insert(outline);
-            }
-            None if before.outline => {
-                entity.remove::<Outline>();
-            }
+            Some(outline) => put(&mut entity, Some(outline)),
+            None if before.outline => put::<Outline>(&mut entity, None),
             None => {}
         }
         if owned.pickable {
-            entity.insert(Pickable::IGNORE);
+            put(&mut entity, Some(Pickable::IGNORE));
         } else if before.pickable {
-            entity.remove::<Pickable>();
+            put::<Pickable>(&mut entity, None);
         }
-        if owned == CssOwned::default() {
-            entity.remove::<CssOwned>();
-        } else {
-            entity.insert(owned);
-        }
+        put(&mut entity, (owned != CssOwned::default()).then_some(owned));
     });
 }
 
@@ -799,7 +785,7 @@ fn apply_css_owned(
 /// carries this marker, so an `ImageNode` the app inserted on a built
 /// element (an icon, say) is app state like any other component: updates
 /// keep it.
-#[derive(Component)]
+#[derive(Component, PartialEq)]
 pub(crate) struct CssFrame;
 
 /// The existing children's structure and identity, for [`update_children`].
@@ -973,7 +959,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
 
 /// The entity's DOM node: lets a restyle look up the element's
 /// `:hover`/`:active` state.
-#[derive(Component, Clone, Copy, Debug, Deref)]
+#[derive(Component, Clone, Copy, Debug, Deref, PartialEq)]
 pub(crate) struct DomNode(pub tl::NodeHandle);
 
 /// Spawns `spec` under `parent`, collecting its custom elements (in
@@ -1178,37 +1164,44 @@ fn update_spec(
         })
         .unwrap_or_default();
     let mut target = commands.entity(entity);
-    target.insert(spec.node);
-    if let Some(element) = spec.element {
-        target.insert(element);
-    }
-    match spec.handle {
-        Some(handle) => target.insert(DomNode(handle)),
-        None => target.remove::<DomNode>(),
-    };
-    match spec.focus {
-        Some(focusable) => target.insert(focusable),
-        None => target.remove::<Focusable>(),
-    };
-    if spec.signals.is_empty() {
-        target.remove::<ElementSignals>();
-    } else {
+    // Only what differs is written: an unchanged component keeps its change
+    // tick, so layout, text and style systems skip unchanged elements.
+    let NodeSpec {
+        node,
+        element,
+        handle,
+        focus,
+        signals: bindings,
+        background,
+        image,
+        ..
+    } = spec;
+    if !bindings.is_empty() {
         signals::observe_pointer_signals(&mut target);
-        target.insert(ElementSignals(spec.signals));
     }
-    match spec.background {
-        Some(background) => target.insert(BackgroundColor(background)),
-        None => target.remove::<BackgroundColor>(),
-    };
-    match spec.image {
-        Some(image) => {
-            target.insert((image, CssFrame));
+    target.queue(move |mut entity: EntityWorldMut| {
+        put(&mut entity, Some(node));
+        if element.is_some() {
+            put(&mut entity, element);
         }
-        None if has_frame => {
-            target.remove::<(ImageNode, CssFrame)>();
+        put(&mut entity, handle.map(DomNode));
+        put(&mut entity, focus);
+        put(
+            &mut entity,
+            (!bindings.is_empty()).then_some(ElementSignals(bindings)),
+        );
+        put(&mut entity, background.map(BackgroundColor));
+        match image {
+            // `ImageNode` has no `PartialEq`; frames are rare.
+            Some(image) => {
+                entity.insert((image, CssFrame));
+            }
+            None if has_frame => {
+                entity.remove::<(ImageNode, CssFrame)>();
+            }
+            None => {}
         }
-        None => {}
-    }
+    });
     apply_css_owned(
         &mut target,
         spec.border_color,
@@ -1224,23 +1217,38 @@ fn update_spec(
             } else {
                 TextLayout::default()
             };
-            target.insert((
-                Text::new(text.prefix),
-                text.font,
-                TextColor(text.color),
-                layout,
-            ));
+            let (prefix, font, color) = (text.prefix, text.font, text.color);
+            target.queue(move |mut entity: EntityWorldMut| {
+                put(&mut entity, Some(Text::new(prefix)));
+                put(&mut entity, Some(font));
+                put(&mut entity, Some(TextColor(color)));
+                // `TextLayout` has no `PartialEq`: compare its fields.
+                let same = entity.get::<TextLayout>().is_some_and(|current| {
+                    current.justify == layout.justify && current.linebreak == layout.linebreak
+                });
+                if !same {
+                    entity.insert(layout);
+                }
+            });
             // Spans carry the block's `pointer-events: none` (see
             // `spawn_spec`); an update without it takes it back.
             if children.len() == text.spans.len() {
+                let pickable = spec.pickable;
                 for (span, (content, font, color)) in children.into_iter().zip(text.spans) {
-                    let mut span = commands.entity(span);
-                    span.insert((TextSpan::new(content), font, TextColor(color)));
-                    if !spec.pickable {
-                        span.insert(Pickable::IGNORE);
-                    } else {
-                        span.remove::<Pickable>();
-                    }
+                    commands
+                        .entity(span)
+                        .queue(move |mut span: EntityWorldMut| {
+                            // `TextSpan` has no `PartialEq`: compare the text.
+                            if span
+                                .get::<TextSpan>()
+                                .is_none_or(|current| **current != content)
+                            {
+                                span.insert(TextSpan::new(content));
+                            }
+                            put(&mut span, Some(font));
+                            put(&mut span, Some(TextColor(color)));
+                            put(&mut span, (!pickable).then_some(Pickable::IGNORE));
+                        });
                 }
             } else {
                 for span in children {
@@ -1259,6 +1267,27 @@ fn update_spec(
             false
         }
         None => update_children(commands, entity, spec.children, tree, root, connected),
+    }
+}
+
+/// Sets `value` on `entity` if it differs from what's there (inserting it if
+/// absent), or removes the component for `None`: an unchanged component
+/// keeps its change tick.
+fn put<C: Component<Mutability = bevy::ecs::component::Mutable> + PartialEq>(
+    entity: &mut EntityWorldMut,
+    value: Option<C>,
+) {
+    match (value, entity.get_mut::<C>()) {
+        (Some(value), Some(mut current)) => {
+            current.set_if_neq(value);
+        }
+        (Some(value), None) => {
+            entity.insert(value);
+        }
+        (None, Some(_)) => {
+            entity.remove::<C>();
+        }
+        (None, None) => {}
     }
 }
 
@@ -1614,6 +1643,7 @@ fn element_of(tag: &tl::HTMLTag) -> HtmlElement {
         classes: attribute("class")
             .map(|classes| classes.split_whitespace().map(str::to_owned).collect())
             .unwrap_or_default(),
+        dataset: custom_elements::dataset(tag),
     }
 }
 

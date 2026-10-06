@@ -82,18 +82,24 @@ pub(crate) fn custom_element(tag: &tl::HTMLTag) -> Option<CustomElement> {
     if name.is_empty() {
         return None;
     }
-    let dataset = attributes
+    let dataset = dataset(tag).into_iter().collect();
+    Some(CustomElement {
+        name: name.to_owned(),
+        dataset,
+    })
+}
+
+/// `tag`'s `data-*` attributes, prefix stripped, keys lowercased, values
+/// entity-decoded (`""` for a value-less attribute).
+pub(crate) fn dataset(tag: &tl::HTMLTag) -> std::collections::BTreeMap<String, String> {
+    tag.attributes()
         .iter()
         .filter_map(|(key, value)| {
             let key = key.strip_prefix("data-")?;
             let value = value.map_or_else(String::new, |value| decode_entities(&value));
             Some((key.to_ascii_lowercase(), value))
         })
-        .collect();
-    Some(CustomElement {
-        name: name.to_owned(),
-        dataset,
-    })
+        .collect()
 }
 
 /// The defined element names and their systems.

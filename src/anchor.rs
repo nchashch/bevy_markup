@@ -26,6 +26,9 @@
 //! - It renders on the element's UI camera (`UiTargetCamera`), so it works
 //!   for UIs on render-to-texture cameras too.
 //! - It's despawned with its element.
+//!
+//! [`HtmlWorldAnchor`] is the same for a point in the 3D world (an entity
+//! plus an offset), projected through a camera.
 
 use bevy::camera::Camera;
 use bevy::prelude::*;
@@ -175,5 +178,138 @@ pub(crate) fn place_anchored(
             node.right = right;
             node.bottom = bottom;
         }
+    }
+}
+
+/// Keeps a UI root over a point in the 3D world: `target`'s position plus
+/// `offset`, projected through a camera every frame — nameplates, markers,
+/// damage numbers.
+///
+/// - The root's `left`/`top` put its `pivot` (a fraction of its own size:
+///   `(0.5, 1.0)` = bottom center, the default) on the projected point; make
+///   it `position: absolute` (its `<html class>` rule).
+/// - The camera is `camera`, else the root's `UiTargetCamera`, else the
+///   default UI camera (`IsDefaultUiCamera`).
+/// - It owns the root's `Visibility`: hidden while the point is behind the
+///   camera or outside the viewport, or `target` is invisible
+///   (`InheritedVisibility`); hide it for app reasons with CSS instead
+///   (a root class with `display: none`).
+/// - [`HtmlWorldAnchorView`] reports the distance to the camera and whether
+///   the point is on screen, e.g. for a distance fade (`opacity`).
+/// - It's despawned with `target`.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
+#[require(HtmlWorldAnchorView)]
+pub struct HtmlWorldAnchor {
+    pub target: Entity,
+    /// Added to the target's translation, in world units.
+    pub offset: Vec3,
+    /// The point of the root placed on the projection, as a fraction of its
+    /// size.
+    pub pivot: Vec2,
+    /// The camera to project with (see the type docs for the default).
+    pub camera: Option<Entity>,
+}
+
+impl HtmlWorldAnchor {
+    pub fn new(target: Entity) -> Self {
+        Self {
+            target,
+            offset: Vec3::ZERO,
+            pivot: Vec2::new(0.5, 1.0),
+            camera: None,
+        }
+    }
+
+    pub fn with_offset(mut self, offset: Vec3) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn with_pivot(mut self, pivot: Vec2) -> Self {
+        self.pivot = pivot;
+        self
+    }
+
+    pub fn with_camera(mut self, camera: Entity) -> Self {
+        self.camera = Some(camera);
+        self
+    }
+}
+
+/// What [`HtmlWorldAnchor`] measured this frame.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct HtmlWorldAnchorView {
+    /// From the camera to the anchored point, in world units.
+    pub distance: f32,
+    /// The point projects into the camera's viewport (not behind it).
+    pub on_screen: bool,
+}
+
+/// A world-anchored root: its anchor, measurements, insets, visibility,
+/// measured size and UI camera.
+type WorldOverlay = (
+    Entity,
+    &'static HtmlWorldAnchor,
+    &'static mut HtmlWorldAnchorView,
+    &'static mut Node,
+    &'static mut Visibility,
+    Option<&'static ComputedNode>,
+    Option<&'static UiTargetCamera>,
+);
+
+/// Places every [`HtmlWorldAnchor`]ed root over its target, or despawns it
+/// with its target.
+pub(crate) fn place_world_anchored(
+    mut overlays: Query<WorldOverlay>,
+    targets: Query<(&GlobalTransform, Option<&InheritedVisibility>)>,
+    cameras: Query<(&Camera, &GlobalTransform)>,
+    default_camera: Query<Entity, With<IsDefaultUiCamera>>,
+    mut commands: Commands,
+) {
+    for (overlay, anchor, mut view, mut node, mut visibility, own, ui_camera) in &mut overlays {
+        let Ok((target, target_visibility)) = targets.get(anchor.target) else {
+            commands.entity(overlay).try_despawn();
+            continue;
+        };
+        let camera = anchor
+            .camera
+            .or(ui_camera.map(UiTargetCamera::entity))
+            .or_else(|| default_camera.iter().next());
+        let Some((camera, camera_transform)) = camera.and_then(|camera| cameras.get(camera).ok())
+        else {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        let point = target.translation() + anchor.offset;
+        let projected = camera
+            .world_to_viewport(camera_transform, point)
+            .ok()
+            .filter(|position| {
+                camera.logical_viewport_size().is_some_and(|size| {
+                    position.cmpge(Vec2::ZERO).all() && position.cmple(size).all()
+                })
+            });
+        let measured = HtmlWorldAnchorView {
+            distance: camera_transform.translation().distance(point),
+            on_screen: projected.is_some(),
+        };
+        if *view != measured {
+            *view = measured;
+        }
+        let shown = target_visibility.is_none_or(|visible| visible.get());
+        let Some(position) = projected.filter(|_| shown) else {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        let size = own.map_or(Vec2::ZERO, |own| own.size() * own.inverse_scale_factor);
+        let top_left = position - size * anchor.pivot;
+        let (left, top) = (Val::Px(top_left.x), Val::Px(top_left.y));
+        if node.left != left || node.top != top {
+            node.left = left;
+            node.top = top;
+        }
+        visibility.set_if_neq(Visibility::Inherited);
     }
 }

@@ -128,11 +128,22 @@ pub struct HtmlElement {
     pub id: Option<String>,
     /// The `class` attribute, split on whitespace.
     pub classes: Vec<String>,
+    /// The `data-*` attributes without the `data-` prefix (`data-tooltip-key`
+    /// → `tooltip-key`), entities decoded, like a browser's
+    /// `element.dataset` (keys stay kebab-case); a value-less attribute maps
+    /// to `""`. Hooks' own attributes (`data-on-click`, `data-with`,
+    /// `data-l10n-id`, …) are included.
+    pub dataset: std::collections::BTreeMap<String, String>,
 }
 
 impl HtmlElement {
     pub fn has_class(&self, class: &str) -> bool {
         self.classes.iter().any(|c| c == class)
+    }
+
+    /// The `data-<key>` attribute's value.
+    pub fn data(&self, key: &str) -> Option<&str> {
+        self.dataset.get(key).map(String::as_str)
     }
 }
 
@@ -289,6 +300,7 @@ mod tests {
             tag: tag.to_owned(),
             id: id.map(str::to_owned),
             classes: classes.iter().map(|c| (*c).to_owned()).collect(),
+            ..Default::default()
         }
     }
 

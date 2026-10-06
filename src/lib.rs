@@ -91,7 +91,11 @@
 //!   `data-l10n-name` (fluent-dom convention) on any element; translations
 //!   may contain inline markup.
 //! - **Tera** ([`template`](mod@template)): full Tera 2 syntax in `.html` files, rendered with
-//!   the entity's [`TemplateContext`](html::TemplateContext).
+//!   the entity's [`TemplateContext`](html::TemplateContext). Templates
+//!   compose: `{% extends %}` and `{% include %}` take paths relative to the
+//!   template's file, and an included file's `{% component %}`s are usable
+//!   in the whole template (`{{ <ui.button … /> }}`) — include a component
+//!   library to share widgets.
 //! - **Interaction signals** ([`signals`]): elements declare hooks with
 //!   `data-on-click`/`-auxclick`/`-press`/`-release`/`-enter`/`-leave`
 //!   naming an app-side signal (`click` is the primary button, `auxclick`
@@ -100,8 +104,11 @@
 //!   [`SignalSource`](signals::SignalSource): pointer and button (mouse,
 //!   touch, custom pointers such as VR lasers) with its position, the
 //!   hovering pointer, or the input that activated the focused element. Interactions arrive as one buffered
-//!   [`ElementSignal`](signals::ElementSignal) message; drain it with
-//!   `MessageReader`:
+//!   [`ElementSignal`](signals::ElementSignal) message. Route them by name
+//!   to systems with
+//!   [`on_html_click`](signals::HtmlSignalsExt::on_html_click) /
+//!   [`on_html_signal`](signals::HtmlSignalsExt::on_html_signal), or drain
+//!   the message with `MessageReader`:
 //!
 //!   ```no_run
 //!   # use bevy::prelude::*;
@@ -124,7 +131,12 @@
 //! - **Anchored overlays** ([`anchor`]): [`HtmlAnchor`](anchor::HtmlAnchor)
 //!   keeps a tooltip or popover root beside an element (right, left, above,
 //!   below), inside the viewport, on the element's UI camera, and despawns
-//!   it with the element.
+//!   it with the element; [`HtmlWorldAnchor`](anchor::HtmlWorldAnchor)
+//!   keeps one over a 3D entity (nameplates, markers).
+//! - **Tooltips** ([`tooltips`]): `data-tooltip="key"` (plus optional
+//!   `data-tooltip-args` / `data-tooltip-placement`) shows the app's
+//!   [`HtmlTooltips`](tooltips::HtmlTooltips) template beside the hovered
+//!   element, like a browser's `title`.
 //! - **Focus and navigation** ([`focus`]): `data-on-click` and
 //!   `tabindex="0"` elements are focusable (`tabindex="-1"` opts out),
 //!   `autofocus` takes the initial focus, focus survives rebuilds by `id`,
@@ -166,13 +178,14 @@ mod rebuild;
 pub mod signals;
 pub mod style;
 pub mod template;
+pub mod tooltips;
 
 /// Dependencies whose types appear in this crate's API.
 pub use {bevy_fluent, lightningcss, tera, tl};
 
 /// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {
-    pub use crate::anchor::{AnchorPlacement, HtmlAnchor};
+    pub use crate::anchor::{AnchorPlacement, HtmlAnchor, HtmlWorldAnchor, HtmlWorldAnchorView};
     pub use crate::custom_elements::{ElementConnected, HtmlCustomElementsExt};
     pub use crate::focus::{
         ActivateElement, FocusEdge, Focusable, HtmlFocus, HtmlModal, HtmlNoFocus,
@@ -185,11 +198,12 @@ pub mod prelude {
     pub use crate::l10n::ActiveLocale;
     pub use crate::nine_slice::{NineSlice, NineSliceFrame};
     pub use crate::signals::{
-        ActivationInput, ElementSignal, ElementSignals, PseudoState, SignalBinding, SignalSource,
-        SignalTrigger,
+        ActivationInput, ElementSignal, ElementSignals, HtmlSignalsExt, PseudoState, SignalBinding,
+        SignalSource, SignalTrigger,
     };
     pub use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
     pub use crate::template::HtmlTemplate;
+    pub use crate::tooltips::{HtmlTooltip, HtmlTooltips};
     pub use crate::{BevyMarkupPlugin, HtmlUiSystems};
     pub use bevy_fluent::BundleAsset;
 }
@@ -237,7 +251,11 @@ impl Plugin for BevyMarkupPlugin {
             .add_message::<signals::ElementSignal>()
             .add_systems(
                 Update,
-                (signals::hover_signals, signals::update_pseudo_states),
+                (
+                    signals::hover_signals,
+                    signals::update_pseudo_states,
+                    tooltips::show_tooltips,
+                ),
             )
             .configure_sets(
                 PostUpdate,
@@ -256,6 +274,8 @@ impl Plugin for BevyMarkupPlugin {
                     l10n::localize.in_set(HtmlUiSystems::Localize),
                     build::build_html_ui.in_set(HtmlUiSystems::Build),
                     nine_slice::apply_nine_slices.before(UiSystems::Prepare),
+                    signals::dispatch_signals.before(HtmlUiSystems::Render),
+                    anchor::place_world_anchored.before(UiSystems::Prepare),
                     anchor::place_anchored
                         .after(HtmlUiSystems::Build)
                         .before(UiSystems::Prepare),

@@ -134,17 +134,26 @@ bevy_markup implements a useful subset of the web, not all of it:
   and `tabindex` elements are focusable, `autofocus`, `:focus` /
   `:focus-visible` with `outline`, modal roots, and focus kept across
   rebuilds. You bind the input; bevy_markup moves focus and activates.
-- **Interaction signals:** `data-on-click` (primary button, or activation by
+- **Interaction signals:** `app.on_html_click("buy", system)` runs a system
+  per click on `data-on-click="buy"` elements (or read the messages).
+  `data-on-click` (primary button, or activation by
   keyboard/gamepad), `data-on-auxclick` (middle/right), `-press`,
   `-release`, `-enter`, `-leave`. Each message says what produced it: the
   pointer (mouse, touch, a VR laser…) and button with the position, or the
   key or gamepad button that activated the element.
+- **Tooltips:** `data-tooltip="shop-buy-tooltip"` on any element shows your
+  tooltip template beside it while it's hovered (with `data-tooltip-args`
+  and `data-tooltip-placement`), like a browser's `title`.
 - **Custom elements:** `<div is="gcd-ring" data-slot="2">` runs your
   `define_html_element("gcd-ring", system)` with the element and its `data-*`
   attributes whenever it's built — attach materials, images or markers
   without looking elements up by id.
 - **Anchored overlays:** `HtmlAnchor` keeps a tooltip or popover beside an
-  element — following it, kept on screen, gone when the element goes.
+  element — following it, kept on screen, gone when the element goes — and
+  `HtmlWorldAnchor` keeps one over a 3D entity (nameplates, markers).
+- **Template composition:** `{% extends %}`, `{% include %}` and Tera 2
+  `{% component %}`s across files, by relative paths — keep your buttons and
+  panels in one component library and call `{{ <ui.button … /> }}`.
 - **Fluent:** messages, arguments, plurals and selectors, inline markup.
 - **Fonts:** you register font files under CSS family names
   (`FontFamilies`), including bold and italic faces and the generic

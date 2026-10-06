@@ -27,7 +27,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlStylesheet(Handle<Stylesheet>)` | Component | per-entity stylesheet override |
 | `HtmlDebugOutline` | Component | show the DOM outline (styled like `pre`) instead of the UI |
 | `RenderedHtml` | Component | `Pending` / `Ready(HtmlDocument)` / `Failed(msg)` (read-only) |
-| `HtmlElement { tag, id, classes }` | Component | on each spawned block and container node |
+| `HtmlElement { tag, id, classes, dataset }` | Component | on each spawned block and container node; `dataset` = `data-*` attributes (prefix stripped), `data(key)`; signals expose it as `ElementSignal::data` |
 | `HtmlUiBuilt { entity }` | EntityEvent | after a content update (or a restyle that spawned nodes); kept elements keep their entities *and what was attached*, so handlers must be idempotent (no `observe` here: it stacks per update — use `data-on-*` or `is=`) |
 | `HtmlUiRestyled { entity }` | EntityEvent | after a style-only change applied in place (entities and attached components kept) |
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
@@ -38,7 +38,10 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
 | `HtmlCustomElementsExt::define_html_element(name, system)`, `ElementConnected { entity, root, name, dataset }` | App ext, system input | `is="<name>"` customized built-ins: the system (`In<ElementConnected>`, `data-*` attributes as `dataset`) runs on every spawn of the element, in document order, before `HtmlUiBuilt`; not on restyles |
+| `HtmlWorldAnchor { target, offset, pivot, camera }`, `HtmlWorldAnchorView { distance, on_screen }` | Component | keeps a UI root's `pivot` (fraction of its size, default bottom center) over `target`'s translation + `offset` projected through `camera` / its `UiTargetCamera` / the default UI camera; owns its `Visibility` (hidden behind the camera, off screen, or over an invisible target); despawned with `target`; `place_world_anchored`, `PostUpdate` before `UiSystems::Prepare` (last frame's transforms) |
 | `HtmlAnchor { element, placement, gap }`, `AnchorPlacement::{Right, Left, Above, Below}` | Component | keeps an (absolute) overlay node beside `element` each frame: insets from its rect, clamped to the viewport by the overlay's size, `UiTargetCamera` copied, despawned with the element |
+| `HtmlSignalsExt::on_html_click(name, system)` / `on_html_signal(name, system)` | App ext | route `ElementSignal`s by name to systems taking `In<ElementSignal>` (`on_html_click`: `Click` only); run by `dispatch_signals` (exclusive, `PostUpdate` before `Render`, own message cursor); messages still sent |
+| `HtmlTooltips { template, gap }`, `HtmlTooltip { element }` | Resource, Component | `data-tooltip="key"` (+ `data-tooltip-args` JSON, `data-tooltip-placement` right/left/above/below): while a pointer hovers the element or a descendant (nearest wins), an `HtmlUi` of `template` with `key`/`args`/`placement` is anchored beside it; refreshed by updates, despawned on leave |
 | `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger`, `SignalSource`, `ActivationInput` | Message, Component, enums | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click = primary button or activation, auxclick = other buttons, press/release = any button, enter/leave); `source`: `Pointer { pointer, button, position, count }` / `Hover { pointer }` / `Activation(input)`; deepest bound element wins |
 | `PseudoState { hovered, active, focused, focus_visible }` | Component | `:hover`/`:active` (from picking) and `:focus`/`:focus-visible` (from `InputFocus`/`InputFocusVisible`) per element; a change restyles in place; apps may set it |
 | `Focusable { autofocus }` | Component | on focusable elements (`data-on-click` or `tabindex >= 0`, not `tabindex="-1"`) |
@@ -61,7 +64,10 @@ src/
   lib.rs           crate docs (guide), BevyMarkupPlugin, HtmlUiSystems, prelude, re-exports
   html.rs          HtmlUi, TemplateContext, RenderedHtml, HtmlDebugOutline, HtmlElement,
                    HtmlUiBuilt, HtmlElements; render system (Tera + tl)
-  template.rs      HtmlTemplate asset + loader, HtmlDocument (+ outline), decode_entities
+  template.rs      HtmlTemplate asset + loader (resolve_references: `{% include/extends "…" %}`
+                   paths resolved relative to the file, rewritten, loaded with read_asset_bytes
+                   → one Tera set per template, components shared), HtmlDocument (+ outline),
+                   decode_entities
   l10n.rs          ActiveLocale, LocalizedText; localize system (data-l10n-id/-args)
   style.rs         Stylesheet asset + loader, DefaultStylesheet, HtmlStylesheet; CSS subset docs
   cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
@@ -69,6 +75,8 @@ src/
   build.rs         (internal) DOM + styles → Bevy UI children; HtmlUiBuilt trigger
   rebuild.rs       (internal) pure rebuild decision: Frame (load phases + change signals) → Build/Skip/Wait
   signals.rs       `data-on-*`/`data-with` → ElementSignal messages (picking observers, hover tracking)
+  tooltips.rs      HtmlTooltips/HtmlTooltip: show_tooltips (Update; HoverMap → nearest `data-tooltip`
+                   ancestor per hovered node → anchored tooltip HtmlUi, refreshed, despawned on leave)
   anchor.rs        HtmlAnchor/AnchorPlacement: place_anchored (PostUpdate, after Build, before
                    UiSystems::Prepare; reads the previous frame's layout)
   custom_elements.rs  `is="…"` + `data-*` dataset → app-defined systems run on spawn
@@ -993,8 +1001,13 @@ Known limits (each skipped/ignored value is logged at `debug`):
   moves of id-less elements (inserting one before others replaces those after
   it, like keyless React lists); an identical render is skipped. A changed
   span count (e.g. a run merge) respawns the block's spans, not the block.
-  Every update re-inserts each kept element's components (change detection
-  fires for all of them). Nested `HtmlUi`s go with a replaced slot; re-nest
+  Updates write a kept element's components only where they differ
+  (`build.rs` `put`, `set_if_neq`; `ImageNode` frames are re-inserted, it has
+  no `PartialEq`), so unchanged elements keep their change ticks — measured
+  (throwaway release bench, 1200 frames, one templated value changing per
+  frame): 600 elements 9.85 → 4.06 ms/frame, 120 elements 2.09 → 0.97
+  (idle 0.44 / 0.19). What's left is re-rendering, re-parsing and
+  re-styling the whole document on any change (O(document)). Nested `HtmlUi`s go with a replaced slot; re-nest
   them on `HtmlUiBuilt`.
 - **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
   CJK (wrapped CJK source lines become spaces); `decode_entities` handles only

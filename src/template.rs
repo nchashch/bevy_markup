@@ -4,10 +4,21 @@
 //! load. The template's name is its asset path, so `.html` files get Tera's
 //! HTML autoescaping of `{{ }}` values. A plain `.html` file with no Tera
 //! syntax is a template that renders to itself.
+//!
+//! Templates compose. `{% extends "base.html" %}` and `{% include
+//! "part.html" %}` name other templates by path relative to the template's
+//! own file (like a URL: `../lib/ui.html`, `/ui/lib.html` from the asset
+//! root; `embedded://` templates resolve within their source). The loader
+//! loads them with it — editing one reloads every template using it — and
+//! renders them as one Tera set, so `{% component %}`s defined in any of
+//! them (Tera 2's macros) can be called from all: include a component
+//! library (it renders nothing) and use `{{ <ui.button label="Go" /> }}`.
+//! A template that extends another may only hold blocks at its top level,
+//! so include libraries inside a block there.
 
 use std::fmt::Write;
 
-use bevy::asset::{AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{AssetLoader, AssetPath, LoadContext, io::Reader};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
@@ -163,6 +174,56 @@ fn write_node(
     }
 }
 
+/// The keywords of the tags naming another template.
+const REFERENCE_TAGS: [&str; 2] = ["include", "extends"];
+
+/// Finds the templates `source` (the template at `path`) includes or extends
+/// — `{% include "x.html" %}`, `{% extends "base.html" %}`, with either
+/// quote — resolves each
+/// relative to `path`'s directory (like a URL; `/x` is from the asset root,
+/// `embedded://…` keeps its source), and rewrites the reference to the
+/// resolved path, which is the name it's registered under. Returns the
+/// rewritten source and the resolved paths.
+pub(crate) fn resolve_references(
+    path: &AssetPath<'static>,
+    source: &str,
+) -> Result<(String, Vec<AssetPath<'static>>), BevyError> {
+    let mut out = String::with_capacity(source.len());
+    let mut references = Vec::new();
+    let mut rest = source;
+    while let Some(start) = rest.find("{%") {
+        let (before, tag) = rest.split_at(start);
+        out.push_str(before);
+        let body = tag[2..].trim_start_matches('-').trim_start();
+        let keyword = REFERENCE_TAGS.into_iter().find(|keyword| {
+            body.strip_prefix(keyword)
+                .is_some_and(|after| after.starts_with(char::is_whitespace))
+        });
+        let literal = keyword.and_then(|keyword| {
+            let after = body[keyword.len()..].trim_start();
+            let quote = after.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+            let end = after[1..].find(quote)?;
+            Some((after, &after[1..1 + end], quote))
+        });
+        let Some((after, literal, quote)) = literal else {
+            out.push_str("{%");
+            rest = &tag[2..];
+            continue;
+        };
+        let resolved = path.resolve_embed_str(literal)?;
+        // Everything up to the literal, the resolved path, then on.
+        let literal_offset = tag.len() - after.len();
+        out.push_str(&tag[..literal_offset]);
+        out.push(quote);
+        out.push_str(&resolved.to_string());
+        out.push(quote);
+        rest = &after[literal.len() + 2..];
+        references.push(resolved);
+    }
+    out.push_str(rest);
+    Ok((out, references))
+}
+
 #[derive(Default, TypePath)]
 pub(crate) struct HtmlTemplateLoader;
 
@@ -181,9 +242,30 @@ impl AssetLoader for HtmlTemplateLoader {
         reader.read_to_end(&mut bytes).await?;
         let source = String::from_utf8(bytes)?;
 
-        let name = load_context.path().to_string();
+        // The template and everything it includes, extends or imports, by
+        // resolved asset path: one Tera instance renders them together.
+        // Reading them through the load context makes them dependencies:
+        // editing one reloads every template that uses it.
+        let root = load_context.path().clone_owned();
+        let name = root.to_string();
+        let mut templates: Vec<(String, String)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut pending = vec![(root, source)];
+        while let Some((path, source)) = pending.pop() {
+            if !seen.insert(path.to_string()) {
+                continue;
+            }
+            let (source, references) = resolve_references(&path, &source)?;
+            for reference in references {
+                if !seen.contains(&reference.to_string()) {
+                    let bytes = load_context.read_asset_bytes(reference.clone()).await?;
+                    pending.push((reference, String::from_utf8(bytes)?));
+                }
+            }
+            templates.push((path.to_string(), source));
+        }
         let mut tera = tera::Tera::new();
-        tera.add_raw_template(&name, &source)?;
+        tera.add_raw_templates(templates)?;
         Ok(HtmlTemplate { tera, name })
     }
 
@@ -200,6 +282,32 @@ mod tests {
     /// Text dense in markup characters and entity look-alikes (`&lt;`
     /// typed as text), plus arbitrary characters.
     const MARKUP_TEXT: &str = "(?s)(&lt;|&gt;|&amp;|&quot;|&#39;|[<>&\"';# a-z]|.){0,24}";
+
+    /// References resolve like URLs from the template's directory and are
+    /// rewritten to the resolved path; other tags and text stay as written.
+    #[test]
+    fn references_resolve_relative_to_the_template() {
+        let path = AssetPath::parse("ui/pages/main.html").clone_owned();
+        let source = r#"{% extends "base.html" %}{%- include '../lib/ui.html' -%}
+{% include "/shared/foot.html" %}{% if include %}{{ "include" }}{% endif %}{% block x %}{% endblock %}"#;
+        let (out, references) = resolve_references(&path, source).unwrap();
+        assert_eq!(
+            references
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["ui/pages/base.html", "ui/lib/ui.html", "shared/foot.html"]
+        );
+        assert_eq!(
+            out,
+            r#"{% extends "ui/pages/base.html" %}{%- include 'ui/lib/ui.html' -%}
+{% include "shared/foot.html" %}{% if include %}{{ "include" }}{% endif %}{% block x %}{% endblock %}"#
+        );
+        let embedded = AssetPath::parse("embedded://app/ui/main.html").clone_owned();
+        let (_, references) =
+            resolve_references(&embedded, r#"{% include "part.html" %}"#).unwrap();
+        assert_eq!(references[0].to_string(), "embedded://app/ui/part.html");
+    }
 
     /// Each of the five references Tera's autoescaping emits decodes to its
     /// character. Catches a dropped or misspelled entry (e.g. `&#x27;`

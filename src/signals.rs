@@ -21,6 +21,11 @@
 //!   context, like `data-l10n-args`: a snapshot of the data at render time.
 //!   Numbers stay numbers; invalid JSON becomes `null` (logged at `debug`).
 //!   It applies to all of the element's hooks; absent means [`Value::Null`].
+//! - **`data-*`**: every signal also carries its element, with the element's
+//!   `data-*` attributes as [`HtmlElement::dataset`] — read them with
+//!   [`ElementSignal::data`]. Prefer one attribute per feature
+//!   (`data-tooltip="…" data-selector="…"`) to packing several features'
+//!   keys into one `data-with` object.
 //!
 //! Signals arrive as one buffered message type; drain it with
 //! `MessageReader<ElementSignal>` wherever the app likes (usually an
@@ -32,6 +37,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
+use bevy::ecs::system::SystemId;
 use bevy::picking::events::{Click, Pointer, Press, Release};
 use bevy::picking::hover::{HoverMap, PickingInteraction};
 use bevy::picking::pointer::{PointerButton, PointerId};
@@ -81,6 +87,15 @@ pub struct ElementSignal {
     pub payload: Value,
     /// What produced the signal.
     pub source: SignalSource,
+}
+
+impl ElementSignal {
+    /// The bound element's `data-<key>` attribute (its
+    /// [`dataset`](HtmlElement::dataset) as rendered when it was last
+    /// updated): per-feature data for a hook, e.g. `data-tooltip="…"`.
+    pub fn data(&self, key: &str) -> Option<&str> {
+        self.element.data(key)
+    }
 }
 
 /// What produced an [`ElementSignal`].
@@ -302,7 +317,116 @@ fn covered_by_deeper(
     }
 }
 
-/// Tracks pointers over `data-on-enter`/`-leave` elements and emits their
+/// Signal handlers registered with [`HtmlSignalsExt`], by signal name and
+/// (for [`on_html_click`](HtmlSignalsExt::on_html_click)) trigger.
+#[derive(Resource, Default)]
+pub(crate) struct SignalHandlers(HashMap<String, Vec<Handler>>);
+
+/// A handler: its trigger filter (`None` = every trigger) and system.
+type Handler = (Option<SignalTrigger>, SystemId<In<ElementSignal>>);
+
+/// Routes [`ElementSignal`]s to systems by name, instead of one
+/// `MessageReader` matching names: each handler is an ordinary system taking
+/// the signal as `In<ElementSignal>`.
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use bevy_markup::prelude::*;
+/// # #[derive(Event)] struct Play;
+/// fn play(signal: In<ElementSignal>, mut commands: Commands) {
+///     info!("play, via {:?}", signal.source);
+///     commands.trigger(Play);
+/// }
+/// # let mut app = App::new();
+/// app.on_html_click("lobby.play", play);
+/// ```
+///
+/// Handlers run in `PostUpdate` before [`HtmlUiSystems::Render`](crate::HtmlUiSystems),
+/// so what they change shows the same frame. The message is still sent;
+/// readers and handlers can be mixed.
+pub trait HtmlSignalsExt {
+    /// Runs `system` for every signal named `name`, whatever its trigger.
+    fn on_html_signal<M>(
+        &mut self,
+        name: impl Into<String>,
+        system: impl IntoSystem<In<ElementSignal>, (), M> + 'static,
+    ) -> &mut Self;
+
+    /// Runs `system` for `name`'s [`SignalTrigger::Click`]s: primary-button
+    /// clicks and activations.
+    fn on_html_click<M>(
+        &mut self,
+        name: impl Into<String>,
+        system: impl IntoSystem<In<ElementSignal>, (), M> + 'static,
+    ) -> &mut Self;
+}
+
+fn add_handler<M>(
+    app: &mut App,
+    name: String,
+    trigger: Option<SignalTrigger>,
+    system: impl IntoSystem<In<ElementSignal>, (), M> + 'static,
+) {
+    let world = app.world_mut();
+    let id = world.register_system(system);
+    world
+        .get_resource_or_init::<SignalHandlers>()
+        .0
+        .entry(name)
+        .or_default()
+        .push((trigger, id));
+}
+
+impl HtmlSignalsExt for App {
+    fn on_html_signal<M>(
+        &mut self,
+        name: impl Into<String>,
+        system: impl IntoSystem<In<ElementSignal>, (), M> + 'static,
+    ) -> &mut Self {
+        add_handler(self, name.into(), None, system);
+        self
+    }
+
+    fn on_html_click<M>(
+        &mut self,
+        name: impl Into<String>,
+        system: impl IntoSystem<In<ElementSignal>, (), M> + 'static,
+    ) -> &mut Self {
+        add_handler(self, name.into(), Some(SignalTrigger::Click), system);
+        self
+    }
+}
+
+/// Runs the registered handlers for the signals sent since the last run.
+pub(crate) fn dispatch_signals(
+    world: &mut World,
+    mut cursor: Local<bevy::ecs::message::MessageCursor<ElementSignal>>,
+) {
+    let Some(handlers) = world.get_resource::<SignalHandlers>() else {
+        return;
+    };
+    let messages = world.resource::<Messages<ElementSignal>>();
+    let runs: Vec<(SystemId<In<ElementSignal>>, ElementSignal)> = cursor
+        .read(messages)
+        .flat_map(|signal| {
+            handlers
+                .0
+                .get(signal.name.as_ref())
+                .into_iter()
+                .flatten()
+                .filter(|(trigger, _)| trigger.is_none_or(|trigger| trigger == signal.trigger))
+                .map(|&(_, id)| (id, signal.clone()))
+        })
+        .collect();
+    for (id, signal) in runs {
+        let name = signal.name.clone();
+        if let Err(error) = world.run_system_with(id, signal) {
+            warn!("html signals: handler for {name:?}: {error}");
+        }
+    }
+}
+
+/// Tracks pointers over `data-on-enter`/`-leave` elements and emits their/// Tracks pointers over `data-on-enter`/`-leave` elements and emits their
 /// signals. An element counts as hovered while the pointer is over it *or
 /// any descendant* (like CSS `:hover`): the hover map only holds the
 /// deepest picked node, so ancestors are matched by hand.

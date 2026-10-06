@@ -131,6 +131,226 @@ fn click_fires_press_release_and_click_with_payload_position_and_element() {
     ));
 }
 
+/// `on_html_click` runs its system for the name's clicks (pointer and
+/// activation) only; `on_html_signal` for every trigger; each signal once.
+#[test]
+fn signals_route_to_registered_systems() {
+    #[derive(Resource, Default)]
+    struct Log(Vec<(&'static str, SignalTrigger, bool)>);
+
+    let page = r#"<div id="btn" data-on-click="buy" data-on-press="buy"><p>Buy</p></div>"#;
+    let mut ui = page_ui("signals-route", page, "", TemplateContext::new());
+    ui.app_mut()
+        .init_resource::<Log>()
+        .on_html_click("buy", |signal: In<ElementSignal>, mut log: ResMut<Log>| {
+            let activated = matches!(signal.source, SignalSource::Activation(_));
+            log.0.push(("click", signal.trigger, activated));
+        })
+        .on_html_signal("buy", |signal: In<ElementSignal>, mut log: ResMut<Log>| {
+            log.0.push(("any", signal.trigger, false));
+        });
+    ui.settle();
+    ui.update(1);
+    let root = ui.root();
+    let (btn, at) = center(ui.world_mut(), root, "btn");
+    let take = |ui: &mut TestUi| std::mem::take(&mut ui.world_mut().resource_mut::<Log>().0);
+
+    ui.click_at(at).update(2);
+    let mut log = take(&mut ui);
+    log.sort_by_key(|entry| format!("{entry:?}"));
+    assert_eq!(
+        log,
+        [
+            ("any", SignalTrigger::Click, false),
+            ("any", SignalTrigger::Press, false),
+            ("click", SignalTrigger::Click, false),
+        ]
+    );
+
+    ui.world_mut().trigger(ActivateElement {
+        entity: btn,
+        input: ActivationInput::Synthetic,
+    });
+    ui.update(2);
+    let log = take(&mut ui);
+    assert!(
+        log.contains(&("click", SignalTrigger::Click, true)),
+        "{log:?}"
+    );
+    assert_eq!(log.len(), 2, "click + any, once each: {log:?}");
+
+    ui.update(3);
+    assert!(take(&mut ui).is_empty(), "nothing re-delivered");
+}
+
+/// `data-tooltip` shows an `HtmlTooltips` template beside the hovered
+/// element: the nearest element with the attribute wins, `key`/`args`/
+/// `placement` reach the template, an update refreshes the open tooltip in
+/// place, and leaving despawns it.
+#[test]
+fn data_tooltip_shows_the_nearest_tooltip() {
+    let page = r#"<div id="outer" data-tooltip="outer-tip" data-tooltip-placement="above"><p>Outer</p>
+  <div id="inner" data-tooltip="inner-tip" data-tooltip-args='{"n": {{ n }}}'><p>Inner</p></div>
+</div>
+<div id="plain"><p>Plain</p></div>"#;
+    let mut ui = TestUi::with_pointer(
+        "tooltips",
+        &[
+            ("page.html", page),
+            (
+                "tooltip.html",
+                "<p>{{ key }} {{ args.n | default(value=0) }}</p>",
+            ),
+        ],
+        VIEWPORT,
+    )
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("n", &1),
+        Node {
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+    );
+    let template = ui.load::<HtmlTemplate>("tooltip.html");
+    ui.world_mut().insert_resource(HtmlTooltips::new(template));
+    ui.settle();
+    ui.update(1);
+    let root = ui.root();
+    let tooltips = |ui: &mut TestUi| {
+        let world = ui.world_mut();
+        let mut query = world.query::<(Entity, &HtmlTooltip, &TemplateContext, &HtmlAnchor)>();
+        query
+            .iter(world)
+            .map(|(entity, tooltip, context, anchor)| {
+                (
+                    entity,
+                    tooltip.element,
+                    context
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_owned(),
+                    context.get("args").cloned(),
+                    anchor.placement,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let world = ui.world_mut();
+    let outer = element_by_id(world, root, "outer");
+    let inner = element_by_id(world, root, "inner");
+    let outer_text = node_rect(world, world.get::<Children>(outer).unwrap()[0])
+        .unwrap()
+        .center();
+    let (_, inner_at) = center(world, root, "inner");
+    let (_, plain_at) = center(world, root, "plain");
+
+    ui.move_pointer(outer_text).update(2);
+    let shown = tooltips(&mut ui);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(
+        (shown[0].1, shown[0].2.as_str(), shown[0].4),
+        (outer, "outer-tip", AnchorPlacement::Above)
+    );
+
+    ui.move_pointer(inner_at).update(2);
+    let shown = tooltips(&mut ui);
+    assert_eq!(shown.len(), 1, "the nearest data-tooltip wins");
+    assert_eq!(
+        (shown[0].1, shown[0].2.as_str(), shown[0].4),
+        (inner, "inner-tip", AnchorPlacement::Right)
+    );
+    assert_eq!(
+        shown[0]
+            .3
+            .as_ref()
+            .map(|args| serde_json::to_value(args).unwrap()["n"].clone()),
+        Some(1.into())
+    );
+    let tooltip = shown[0].0;
+
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &2);
+    ui.settle();
+    ui.update(2);
+    let shown = tooltips(&mut ui);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].0, tooltip, "updated in place");
+    assert_eq!(
+        shown[0]
+            .3
+            .as_ref()
+            .map(|args| serde_json::to_value(args).unwrap()["n"].clone()),
+        Some(2.into())
+    );
+
+    ui.move_pointer(plain_at).update(2);
+    assert!(
+        tooltips(&mut ui).is_empty(),
+        "no data-tooltip: nothing shown"
+    );
+    assert!(ui.world_mut().get_entity(tooltip).is_err());
+}
+
+/// A signal exposes its element's `data-*` attributes (`signal.data(…)`),
+/// so each feature can keep its own attribute instead of sharing one
+/// `data-with` blob; they follow in-place updates.
+#[test]
+fn signals_carry_the_element_dataset() {
+    let page =
+        r#"<div id="btn" data-on-click="pick" data-kind="{{ kind }}" data-flag><p>Pick</p></div>"#;
+    let mut ui = page_ui(
+        "signals-dataset",
+        page,
+        "",
+        TemplateContext::new().with("kind", "sword"),
+    );
+    ui.settle();
+    ui.update(1);
+    let root = ui.root();
+    let (btn, at) = center(ui.world_mut(), root, "btn");
+    ui.click_at(at);
+    let clicks: Vec<ElementSignal> = ui
+        .take_signals()
+        .into_iter()
+        .filter(|s| s.trigger == SignalTrigger::Click)
+        .collect();
+    assert_eq!(clicks.len(), 1);
+    assert_eq!(clicks[0].data("kind"), Some("sword"));
+    assert_eq!(clicks[0].data("flag"), Some(""), "value-less attribute");
+    assert_eq!(
+        clicks[0].data("on-click"),
+        Some("pick"),
+        "hooks are data-* too"
+    );
+    assert_eq!(clicks[0].data("missing"), None);
+
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("kind", "shield");
+    ui.settle();
+    ui.update(1);
+    assert_eq!(
+        center(ui.world_mut(), root, "btn").0,
+        btn,
+        "updated in place"
+    );
+    ui.release_pointer();
+    ui.take_signals();
+    ui.click_at(at);
+    let kinds: Vec<Option<String>> = ui
+        .take_signals()
+        .into_iter()
+        .filter(|s| s.trigger == SignalTrigger::Click)
+        .map(|s| s.data("kind").map(str::to_owned))
+        .collect();
+    assert_eq!(kinds, [Some("shield".to_owned())]);
+}
+
 /// As in browsers: `click` is the primary button only; middle and right
 /// clicks fire `auxclick`, with the button in the source. `press`/`release`
 /// fire for every button.

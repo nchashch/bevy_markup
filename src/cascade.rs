@@ -1469,6 +1469,7 @@ mod tests {
             tag: tag.to_owned(),
             id: id.map(str::to_owned),
             classes: classes.iter().map(|class| (*class).to_owned()).collect(),
+            ..Default::default()
         }
     }
 

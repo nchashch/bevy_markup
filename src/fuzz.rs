@@ -87,31 +87,37 @@ pub fn cascade(css: &str) -> Result<String, String> {
             tag: "html".into(),
             id: None,
             classes: vec![],
+            ..Default::default()
         },
         HtmlElement {
             tag: "p".into(),
             id: None,
             classes: vec![],
+            ..Default::default()
         },
         HtmlElement {
             tag: "p".into(),
             id: Some("lead".into()),
             classes: vec!["note".into()],
+            ..Default::default()
         },
         HtmlElement {
             tag: "div".into(),
             id: None,
             classes: vec!["panel".into(), "wide".into()],
+            ..Default::default()
         },
         HtmlElement {
             tag: "li".into(),
             id: None,
             classes: vec![],
+            ..Default::default()
         },
         HtmlElement {
             tag: "pre".into(),
             id: None,
             classes: vec![],
+            ..Default::default()
         },
     ];
     let mut out = String::new();

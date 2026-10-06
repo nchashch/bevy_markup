@@ -1707,6 +1707,178 @@ fn focus_on_the_window_yields_to_autofocus() {
     );
 }
 
+/// Templates compose: a page extends a base template, uses a component from a
+/// library it includes (Tera 2 components are shared by every template in
+/// the set; including a definitions-only file renders nothing), and includes
+/// a part — all by paths relative to its own file.
+#[test]
+fn templates_extend_import_and_include() {
+    let mut ui = TestUi::new(
+        "template-refs",
+        &[
+            (
+                "pages/page.html",
+                r#"{% extends "base.html" %}
+{% block body %}{% include "../lib/ui.html" %}{{ <ui.button id="go" label={label} /> }}{% include "part.html" %}{% endblock %}"#,
+            ),
+            (
+                "pages/base.html",
+                r#"<div id="frame">{% block body %}{% endblock %}</div>"#,
+            ),
+            (
+                "pages/part.html",
+                r#"<p id="part">{{ label }} part</p>"#,
+            ),
+            (
+                "lib/ui.html",
+                r#"{% component ui.button(id, label) %}<div id="{{ id }}" class="button"><p>{{ label }}</p></div>{% endcomponent ui.button %}"#,
+            ),
+        ],
+    )
+    .spawn(
+        "pages/page.html",
+        TemplateContext::new().with("label", "Go"),
+        Node::default(),
+    );
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div#frame
+    div#go.button
+      p
+        "Go" default 16px #ffffff
+    p#part
+      "Go part" default 16px #ffffff
+"#,
+    );
+}
+
+/// `HtmlWorldAnchor` puts its root's pivot on the target's projection,
+/// hides it behind the camera, off screen or with an invisible target,
+/// reports distance and visibility, and goes with its target. (The harness
+/// camera keeps an identity projection at the origin: world (x, y) maps to
+/// viewport ((x + 1) / 2 × 320, (1 − y) / 2 × 240).)
+#[test]
+fn world_anchor_projects_hides_and_despawns() {
+    let mut ui = TestUi::with_layout("world-anchor", &[], UVec2::new(320, 240));
+    let world = ui.world_mut();
+    let place = |world: &mut World, target: Entity, at: Vec3| {
+        world.entity_mut(target).insert((
+            Transform::from_translation(at),
+            GlobalTransform::from_translation(at),
+        ));
+    };
+    let target = world.spawn(Visibility::Inherited).id();
+    place(world, target, Vec3::new(0.25, 0.5, 0.0));
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(20.0),
+                height: Val::Px(10.0),
+                ..default()
+            },
+            HtmlWorldAnchor::new(target).with_offset(Vec3::new(0.25, 0.0, 0.0)),
+        ))
+        .id();
+    let state = |ui: &mut TestUi| {
+        ui.update(3);
+        let world = ui.world_mut();
+        let node = world.get::<Node>(overlay).unwrap();
+        (
+            (node.left, node.top),
+            *world.get::<Visibility>(overlay).unwrap(),
+            *world.get::<HtmlWorldAnchorView>(overlay).unwrap(),
+        )
+    };
+    let (position, visibility, view) = state(&mut ui);
+    assert_eq!(
+        position,
+        (Val::Px(230.0), Val::Px(50.0)),
+        "(240, 60) minus the bottom-center pivot of 20×10"
+    );
+    assert_eq!(visibility, Visibility::Inherited);
+    assert!(view.on_screen);
+    assert!((view.distance - (0.5f32.powi(2) * 2.0).sqrt()).abs() < 1e-5);
+
+    for (at, why) in [
+        (Vec3::new(2.0, 0.0, 0.0), "off screen"),
+        (Vec3::new(0.0, 0.0, -0.5), "behind the camera"),
+    ] {
+        place(ui.world_mut(), target, at);
+        let (_, visibility, view) = state(&mut ui);
+        assert_eq!(visibility, Visibility::Hidden, "{why}");
+        assert!(!view.on_screen, "{why}");
+    }
+
+    let world = ui.world_mut();
+    place(world, target, Vec3::ZERO);
+    world.entity_mut(target).insert(Visibility::Hidden);
+    let (_, visibility, view) = state(&mut ui);
+    assert_eq!(visibility, Visibility::Hidden, "invisible target");
+    assert!(view.on_screen);
+
+    ui.world_mut().entity_mut(target).despawn();
+    ui.update(2);
+    assert!(
+        ui.world_mut().get_entity(overlay).is_err(),
+        "despawned with its target"
+    );
+}
+
+/// An in-place update writes only what differs: the element whose value
+/// changed gets a new `Node`, the others keep theirs untouched (no change
+/// detection), so layout and text systems skip them.
+#[test]
+fn updates_touch_only_changed_components() {
+    #[derive(Resource, Default)]
+    struct Changed(Vec<String>);
+
+    let page = r#"<div id="a" style="width: {{ w }}px"><p>A</p></div><div id="b" style="width: 10px"><p>B {{ t }}</p></div>"#;
+    let mut ui = TestUi::new("touch-changed", &[("page.html", page)]).spawn(
+        "page.html",
+        TemplateContext::new().with("w", &10).with("t", "x"),
+        Node::default(),
+    );
+    ui.app_mut().init_resource::<Changed>().add_systems(
+        Last,
+        |nodes: Query<(&HtmlElement, Ref<Node>)>,
+         texts: Query<(&ChildOf, Ref<TextSpan>)>,
+         elements: Query<&HtmlElement>,
+         mut changed: ResMut<Changed>| {
+            for (element, node) in &nodes {
+                if node.is_changed() && !node.is_added() {
+                    changed.0.push(format!(
+                        "node {}",
+                        element.id.as_deref().unwrap_or(&element.tag)
+                    ));
+                }
+            }
+            for (parent, span) in &texts {
+                if span.is_changed() && !span.is_added() {
+                    let owner = elements
+                        .get(parent.parent())
+                        .map(|e| e.tag.clone())
+                        .unwrap_or_default();
+                    changed.0.push(format!("span in {owner}"));
+                }
+            }
+        },
+    );
+    ui.settle();
+    ui.update(2);
+    ui.world_mut().resource_mut::<Changed>().0.clear();
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("w", &20);
+    ui.settle();
+    ui.update(1);
+    let changed = std::mem::take(&mut ui.world_mut().resource_mut::<Changed>().0);
+    assert_eq!(changed, ["node a"], "only a's Node is written");
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]
