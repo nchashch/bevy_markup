@@ -657,3 +657,61 @@ fn hooks_on_elements_without_entities_stay_dead() {
     ui.click_at(at);
     assert!(ui.take_signals().is_empty(), "no entity, no signal");
 }
+
+/// Registered handlers route by signal name: `on_html_signal` runs for
+/// every trigger of the name, `on_html_click` only for clicks, and
+/// unregistered names run nothing. The message still reaches readers.
+#[test]
+fn handlers_route_by_name_and_trigger() {
+    #[derive(Resource, Default)]
+    struct Routed(Vec<(&'static str, SignalTrigger)>);
+
+    let page = r#"<div id="btn" data-on-click="buy" data-on-press="buy"><p>Buy</p></div>"#;
+    let mut ui = page_ui("signals-router", page, "", TemplateContext::new());
+    ui.settle();
+    ui.update(1);
+    let (btn, at) = {
+        let root = ui.root();
+        let world = ui.world_mut();
+        center(world, root, "btn")
+    };
+    ui.world_mut().insert_resource(Routed::default());
+    ui.app_mut()
+        .on_html_signal(
+            "buy",
+            |In(signal): In<ElementSignal>, mut log: ResMut<Routed>| {
+                log.0.push(("any", signal.trigger));
+            },
+        )
+        .on_html_click(
+            "buy",
+            |In(_): In<ElementSignal>, mut log: ResMut<Routed>| {
+                log.0.push(("click-only", SignalTrigger::Click));
+            },
+        )
+        .on_html_signal(
+            "other",
+            |In(_): In<ElementSignal>, mut log: ResMut<Routed>| {
+                log.0.push(("other", SignalTrigger::Click));
+            },
+        );
+
+    // Handlers of one name run in registration order.
+    let routed = |ui: &mut TestUi| std::mem::take(&mut ui.world_mut().resource_mut::<Routed>().0);
+
+    // Pressing runs the any-trigger handler only.
+    ui.move_pointer(at);
+    ui.press_pointer();
+    assert_eq!(routed(&mut ui), [("any", SignalTrigger::Press)]);
+
+    // Releasing runs both: it's a click.
+    ui.release_pointer();
+    assert_eq!(
+        routed(&mut ui),
+        [
+            ("any", SignalTrigger::Click),
+            ("click-only", SignalTrigger::Click)
+        ]
+    );
+    assert_eq!(btn, btn, "target unchanged");
+}

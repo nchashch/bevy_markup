@@ -1501,6 +1501,74 @@ fn anchored_overlay_without_a_viewport_uses_the_measured_size() {
     );
 }
 
+/// Template dependencies: `{% include %}`s load with their template
+/// (duplicate references load once, and a duplicate include still renders
+/// twice), a dependency's reload re-renders the whole set, and a missing or
+/// circular dependency fails the template's load.
+#[test]
+fn template_dependencies_load_reload_and_fail() {
+    let mut ui = TestUi::new(
+        "template-deps",
+        &[
+            (
+                "pages/page.html",
+                r#"{% extends "base.html" %}
+{% block body %}{% include "part.html" %}{% include "part.html" %}{% endblock %}"#,
+            ),
+            (
+                "pages/base.html",
+                r#"<div id="frame">{% include "part.html" %}{% block body %}{% endblock %}</div>"#,
+            ),
+            ("pages/part.html", r#"<p id="part">{{ n }}</p>"#),
+            ("cyclic.html", r#"{% include "cyclic.html" %}cycle"#),
+            ("pages/broken.html", r#"{% include "missing.html" %}"#),
+        ],
+    )
+    .spawn(
+        "pages/page.html",
+        TemplateContext::new().with("n", &1),
+        Node::default(),
+    );
+    let cyclic = ui.load::<HtmlTemplate>("cyclic.html");
+    let broken = ui.load::<HtmlTemplate>("pages/broken.html");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div#frame
+    p#part
+      "1" default 16px #ffffff
+    p#part
+      "1" default 16px #ffffff
+    p#part
+      "1" default 16px #ffffff
+"#,
+    );
+
+    // The cyclic include loaded (terminating on the seen set); the missing
+    // dependency failed its template's load.
+    let server = ui.world_mut().resource::<AssetServer>().clone();
+    // A circular include fails its load (`CircularInclude`), like the
+    // missing one.
+    assert!(server.load_state(cyclic.id()).is_failed());
+    assert!(server.load_state(broken.id()).is_failed());
+
+    // Rewriting a dependency and reloading it re-renders the whole set.
+    ui.write("pages/part.html", r#"<p id="part">{{ n }}!</p>"#);
+    server.reload("pages/page.html");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div#frame
+    p#part
+      "1!" default 16px #ffffff
+    p#part
+      "1!" default 16px #ffffff
+    p#part
+      "1!" default 16px #ffffff
+"#,
+    );
+}
+
 /// A content update reconciles instead of rebuilding: elements matched by
 /// `id` (anywhere among their siblings) or by position (id-less ones) keep
 /// their entities and what the app attached, with new text; an inserted
@@ -1823,6 +1891,79 @@ fn world_anchor_projects_hides_and_despawns() {
     assert!(
         ui.world_mut().get_entity(overlay).is_err(),
         "despawned with its target"
+    );
+}
+
+/// `HtmlWorldAnchor::with_pivot` offsets the overlay by a fraction of its
+/// own size, `with_camera` projects through that camera instead of the
+/// default, and with no camera to project through the overlay hides.
+#[test]
+fn world_anchor_pivot_camera_override_and_no_camera_hides() {
+    let mut ui = TestUi::with_layout("world-anchor-pivot", &[], UVec2::new(320, 240));
+    let world = ui.world_mut();
+    let target = world.spawn(Visibility::Inherited).id();
+    world.entity_mut(target).insert((
+        Transform::from_translation(Vec3::new(0.25, 0.5, 0.0)),
+        GlobalTransform::from_translation(Vec3::new(0.25, 0.5, 0.0)),
+    ));
+    // A second camera, translated: projecting through it moves the overlay.
+    let other = world
+        .spawn((
+            Camera2d,
+            Camera {
+                computed: bevy::camera::ComputedCameraValues {
+                    target_info: Some(bevy::camera::RenderTargetInfo {
+                        physical_size: UVec2::new(320, 240),
+                        scale_factor: 1.0,
+                    }),
+                    ..default()
+                },
+                ..default()
+            },
+            bevy::camera::RenderTarget::None {
+                size: UVec2::new(320, 240),
+            },
+            GlobalTransform::from_translation(Vec3::new(0.5, 0.0, 0.0)),
+        ))
+        .id();
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(20.0),
+                height: Val::Px(10.0),
+                ..default()
+            },
+            HtmlWorldAnchor::new(target)
+                .with_pivot(Vec2::new(0.5, 1.0))
+                .with_camera(other),
+        ))
+        .id();
+    let placed = |ui: &mut TestUi| {
+        ui.update(3);
+        let world = ui.world_mut();
+        let node = world.get::<Node>(overlay).unwrap();
+        (
+            node.left,
+            node.top,
+            *world.get::<Visibility>(overlay).unwrap(),
+        )
+    };
+
+    // Through `other` at (0.5, 0, 0), world (0.25, 0.5) lands on viewport
+    // (120, 60); the pivot (0.5, 1) shifts by a tenth and a half of the
+    // overlay's 20×10.
+    assert_eq!(
+        placed(&mut ui),
+        (Val::Px(110.0), Val::Px(50.0), Visibility::Inherited)
+    );
+
+    // Despawning the anchor's camera leaves nothing to project through.
+    ui.world_mut().despawn(other);
+    ui.update(3);
+    assert_eq!(
+        placed(&mut ui),
+        (Val::Px(110.0), Val::Px(50.0), Visibility::Hidden)
     );
 }
 

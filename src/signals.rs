@@ -600,6 +600,8 @@ pub(crate) fn update_pseudo_states(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::picking::backend::HitData;
+    use std::time::Duration;
 
     /// bug_0021: an app system despawning a UI in the same frame (its
     /// command buffer applied first) must not make the queued `PseudoState`
@@ -716,5 +718,48 @@ mod tests {
         assert!(click);
         assert!(!enter);
         assert!(!outside);
+    }
+
+    /// Primary clicks fire `Click` (with the click count); every other
+    /// button fires `AuxClick`; presses and releases keep their triggers and
+    /// button, with a count of 1.
+    #[test]
+    fn click_triggers_follow_the_button() {
+        let hit = || HitData::new(Entity::PLACEHOLDER, 0.0, None, None);
+        for button in [
+            PointerButton::Primary,
+            PointerButton::Secondary,
+            PointerButton::Middle,
+        ] {
+            let click = Click {
+                button,
+                hit: hit(),
+                duration: Duration::ZERO,
+                count: 2,
+            };
+            let (trigger, event_button) = click.trigger();
+            assert_eq!(event_button, button);
+            assert_eq!(
+                trigger,
+                if button == PointerButton::Primary {
+                    SignalTrigger::Click
+                } else {
+                    SignalTrigger::AuxClick
+                }
+            );
+            assert_eq!(click.count(), 2);
+
+            let press = Press {
+                button,
+                hit: hit(),
+                count: 1,
+            };
+            assert_eq!(press.trigger(), (SignalTrigger::Press, button));
+            assert_eq!(press.count(), 1);
+
+            let release = Release { button, hit: hit() };
+            assert_eq!(release.trigger(), (SignalTrigger::Release, button));
+            assert_eq!(release.count(), 1);
+        }
     }
 }

@@ -43,6 +43,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0023](bug_0023.md) | Wiring on `HtmlUiBuilt` stacked up once updates kept elements (quickstart clicks added 1, 2, 3 coins; demo documents duplicated) | examples + `HtmlUiBuilt` docs | high | fixed (`c8ab00f`) | user report |
 | [bug_0024](bug_0024.md) | Right and middle clicks fired `data-on-click` (no button check) | `src/signals.rs` | medium | fixed (`4cef523`) | code reading (signal sources design) |
 | [bug_0025](bug_0025.md) | `ui_state_machine_matches_model` fails ~1 in 10 runs (signals mismatch) | `tests/stateful.rs` / `src/signals.rs` | low | **open** | repeated full-suite runs |
+| [bug_0026](bug_0026.md) | Editing an included template never updates its users (loader dependencies don't invalidate) | `src/template.rs` (`HtmlTemplateLoader`) | medium | **open** (workaround: reload the using template) | the template-dependency vector |
 
 ## Discovery session metadata: bug_0001–0005
 

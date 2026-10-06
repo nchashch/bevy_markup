@@ -317,6 +317,13 @@ impl TestUi {
         handle
     }
 
+    /// Writes a file into the asset root (for tests that change content at
+    /// runtime and reload it, e.g. template dependencies).
+    #[allow(dead_code)] // not every test binary exercises every helper
+    pub fn write(&self, path: &str, contents: &str) {
+        std::fs::write(self.dir.join(path), contents).unwrap();
+    }
+
     pub fn stylesheet(mut self, path: &str) -> Self {
         let sheet = self.load(path);
         self.app.insert_resource(DefaultStylesheet::new(sheet));
