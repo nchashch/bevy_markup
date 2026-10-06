@@ -189,7 +189,7 @@ It matters most if players can load their own translations or mods.
 
 ```sh
 cargo run --example quickstart   # the code above, plus buttons that the keyboard and a gamepad reach too
-cargo run --example grid         # CSS grid: page layout, responsive slots, spans
+cargo run --example grid         # CSS grid: three screens (auto-fill slots, a paper doll, a quest board)
 cargo run --example menu         # focus, a slider and a stepper, modal dialog, data-tooltip, a component library, routed signals
 cargo run --example live         # data rendered every frame, updated in place; inline styles, opacity
 cargo run --example world        # styled, localized nameplates over 3D units (HtmlWorldAnchor)

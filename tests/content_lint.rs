@@ -140,12 +140,41 @@ fn grid_contexts() -> Vec<Value> {
         { "id": "gem", "count": 3, "featured": false },
         { "id": "key", "count": 1, "featured": false },
     ]);
-    ["wide", "narrow"]
-        .map(|layout| {
-            json!({ "layout": layout, "items": items, "weight": "18.5 kg", "gold": 240,
-                    "active_tab": "gear", "selected": "map" })
-        })
-        .to_vec()
+    // `examples/grid.rs` `GEAR` / `QUESTS`.
+    let gear = json!([
+        { "slot": "neck", "item": "amulet" },
+        { "slot": "head", "item": "helm" },
+        { "slot": "back", "item": "" },
+        { "slot": "main-hand", "item": "sword" },
+        { "slot": "off-hand", "item": "shield" },
+        { "slot": "ring", "item": "signet" },
+        { "slot": "trinket", "item": "" },
+        { "slot": "feet", "item": "boots" },
+    ]);
+    let quests = json!([
+        { "id": "descend", "status": "main", "progress": 35, "reward": 500 },
+        { "id": "torches", "status": "active", "progress": 60, "reward": 50 },
+        { "id": "map", "status": "active", "progress": 20, "reward": 80 },
+        { "id": "key", "status": "active", "progress": 0, "reward": 120 },
+        { "id": "rope", "status": "done", "progress": 100, "reward": 30 },
+        { "id": "rats", "status": "done", "progress": 100, "reward": 25 },
+        { "id": "bridge", "status": "failed", "progress": 40, "reward": 0 },
+    ]);
+    // Every screen with a selection on it (the gear one empty, the quests
+    // one failed: their own detail lines), in both page layouts.
+    [
+        ("wide", "items", "slot-map"),
+        ("narrow", "items", "slot-herb"),
+        ("wide", "gear", "gear-back"),
+        ("narrow", "gear", "gear-main-hand"),
+        ("wide", "quests", "quest-bridge"),
+        ("narrow", "quests", "quest-rope"),
+    ]
+    .map(|(layout, tab, selected)| {
+        json!({ "layout": layout, "items": items, "weight": "18.5 kg", "gold": 240,
+                    "gear": gear, "quests": quests, "active_tab": tab, "selected": selected })
+    })
+    .to_vec()
 }
 
 /// `examples/menu.rs` `show_settings()`: every volume step's ends, every

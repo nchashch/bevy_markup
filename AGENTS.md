@@ -105,11 +105,16 @@ examples/
   quickstart.rs    fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, two `data-on-click`
                    buttons (add a coin, language) in a column, with an inline minimal `navigate` (arrows / D-pad, all four directions,
                    Enter / A; kept self-contained); Space / Y = language
-  grid.rs          CSS grid: page track template switched via context (Layout button, Space / X),
-                   auto-fill slots with a 2×2 span and dense packing — slots `tabindex="0"` so
-                   directional focus walks the 2D grid, details panel follows the focused slot —,
-                   working tabs (`data-tab` → `signal.data`), small grids in slots/stats;
-                   Language button, L / Y
+  grid.rs          CSS grid: page track template switched via context (Layout button, Space / X);
+                   tabs (`data-tab` → `signal.data`, Q / E, LB / RB) pick one of three screens
+                   (`active_tab`), each a grid technique — Items: auto-fill slots with a 2×2
+                   span and dense packing; Gear: a fixed 3×4 paper doll, slots placed by line
+                   numbers (`.gear-<slot>`), the figure spanning two rows, empty cells; Quests:
+                   three `minmax(0, 1fr)` columns of nested card grids under a main quest
+                   spanning `1 / -1` —; every cell `tabindex="0"` so directional focus walks
+                   each grid, the details panel follows the focused cell (`selected` = its
+                   id: `slot-`/`gear-`/`quest-`); small grids in slots/stats; Language
+                   button, L / Y
   menu.rs          focus/navigation (shared/input.rs; autofocus, :focus-visible ring), a volume slider (focusable
                    `tabindex="0"` bar: ← → step it while focused; `is="slider"` observes picking
                    press/drag to set it at the pointer; ◀ ▶ mouse-only `tabindex="-1"` step

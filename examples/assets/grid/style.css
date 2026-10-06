@@ -68,7 +68,7 @@ kbd {
 }
 
 /* Keyboard/gamepad focus: a ring, hidden again by a mouse press. */
-.tab:focus-visible, .slot:focus-visible {
+.tab:focus-visible, .slot:focus-visible, .gear-slot:focus-visible, .quest:focus-visible {
   outline: 3px solid #7fdbff;
   outline-offset: 2px;
 }
@@ -119,6 +119,127 @@ kbd {
   color: #f0b429;
   font-family: monospace;
   font-size: 16px;
+}
+
+/* Gear: a fixed "paper doll". Three columns, four rows; every slot is placed
+   by line numbers (Bevy has no named areas), the figure spans the middle two
+   rows, and the cells nobody is placed in stay empty. */
+.gear {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 1fr;
+  grid-template-rows: repeat(4, 96px);
+  gap: 10px;
+  align-content: start;
+}
+.figure {
+  grid-column: 2;
+  grid-row: 2 / 4;
+  display: grid;
+  grid-template-rows: 1fr auto auto 1fr;
+  justify-items: center;
+  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-width: 12px;
+}
+.figure-name {
+  grid-row: 2;
+  color: #f0b429;
+  font-size: 26px;
+  font-weight: bold;
+}
+.figure-title {
+  grid-row: 3;
+  color: #9a9a9a;
+  font-style: italic;
+}
+.gear-slot {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  justify-items: center;
+  align-items: center;
+  background-color: #1c1c22;
+  border-width: 2px;
+  border-color: #3a3a46;
+  border-radius: 6px;
+  padding: 6px;
+}
+.gear-slot.empty {
+  border-color: #2a2a33;
+  color: #6a6a72;
+}
+.gear-label {
+  color: #9a9a9a;
+  font-size: 14px;
+}
+.gear-neck { grid-column: 1; grid-row: 1; }
+.gear-head { grid-column: 2; grid-row: 1; }
+.gear-back { grid-column: 3; grid-row: 1; }
+.gear-main-hand { grid-column: 1; grid-row: 2; }
+.gear-off-hand { grid-column: 3; grid-row: 2; }
+.gear-ring { grid-column: 1; grid-row: 3; }
+.gear-trinket { grid-column: 3; grid-row: 3; }
+.gear-feet { grid-column: 2; grid-row: 4; }
+
+/* Quests: a board. Three equal columns (`minmax(0, 1fr)`: equal however
+   long the names), each a nested grid of cards; the main quest spans all
+   three (`1 / -1`). */
+.quests {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: min-content;
+  gap: 12px;
+  align-content: start;
+}
+.quest.main {
+  grid-column: 1 / -1;
+  border-color: #f0b429;
+}
+.quest-column {
+  display: grid;
+  grid-auto-rows: min-content;
+  gap: 8px;
+  align-content: start;
+}
+.quest {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 6px;
+  column-gap: 8px;
+  align-items: center;
+  background-color: #1c1c22;
+  border-width: 2px;
+  border-color: #3a3a46;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.quest-name {
+  grid-column: 1 / -1;
+}
+.quest-bar {
+  height: 6px;
+  background-color: #000000;
+  border-radius: 3px;
+}
+.quest-fill {
+  height: 100%;
+  background-color: #4caf50;
+  border-radius: 3px;
+}
+.quest-fill.failed {
+  background-color: #e05a47;
+}
+.quest.failed {
+  color: #9a9a9a;
+}
+.quest-reward {
+  color: #f0b429;
+  font-family: monospace;
+  font-size: 14px;
+}
+h2.done {
+  color: #4caf50;
+}
+h2.failed {
+  color: #e05a47;
 }
 
 /* A two-column table: labels at the start, values at the end. */

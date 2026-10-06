@@ -1,17 +1,25 @@
 //! CSS grid layout: a page grid of panels whose track template switches at
-//! runtime, a responsive `repeat(auto-fill, minmax(…))` slot grid with a
-//! spanning item and dense packing, and small grids inside slots and the
-//! stats table. All layout is in `grid/style.css`; the app only spawns one
-//! `HtmlUi` and toggles context variables.
+//! runtime, and three tabs, each a screen built on a different grid
+//! technique:
+//! - Items: a responsive `repeat(auto-fill, minmax(…))` slot grid with a 2×2
+//!   featured slot and dense packing;
+//! - Gear: a fixed 3×4 "paper doll", each slot placed by line numbers, the
+//!   figure spanning two rows, empty cells left empty;
+//! - Quests: a board of three equal `minmax(0, 1fr)` columns (nested grids of
+//!   cards) under a main quest spanning all of them (`1 / -1`).
 //!
-//! Keyboard and gamepad (`examples/shared/input.rs`): the slots are
-//! `tabindex="0"`, so arrows / D-pad / left stick walk the 2D grid —
-//! `HtmlFocus` picks the nearest slot in that direction, whatever the
-//! current column count or the 2×2 featured slot — and the details panel
-//! shows the focused slot. Tabs and the Layout / Language buttons are
-//! `data-on-click`: click them, or focus them and press Enter / A.
+//! All layout is in `grid/style.css`; the app only spawns one `HtmlUi` and
+//! sets context variables (`active_tab` picks the screen).
 //!
-//! `cargo run --example grid` — Space / X switches between the wide and the
+//! Keyboard and gamepad (`examples/shared/input.rs`): every cell is
+//! `tabindex="0"`, so arrows / D-pad / left stick walk each screen's 2D grid
+//! — `HtmlFocus` picks the nearest cell in that direction, whatever the
+//! column count, spans or empty cells — and the details panel shows the
+//! focused cell. Tabs and the Layout / Language buttons are `data-on-click`:
+//! click them, or focus them and press Enter / A; Q / E and the gamepad
+//! bumpers (LB / RB) step through the tabs.
+//!
+//! `cargo run --example grid` — Q / E or LB / RB switch tabs, Space / X between the wide and the
 //! narrow layout, L / Y the language (English/German); resize the window to
 //! watch the slots reflow.
 
@@ -66,6 +74,33 @@ const ITEMS: &[(&str, u32, bool)] = &[
     ("key", 1, false),
 ];
 
+/// The paper doll: (slot, equipped item). An empty item leaves the slot
+/// empty; the slot's grid position is its CSS class (`.gear-<slot>`).
+const GEAR: &[(&str, &str)] = &[
+    ("neck", "amulet"),
+    ("head", "helm"),
+    ("back", ""),
+    ("main-hand", "sword"),
+    ("off-hand", "shield"),
+    ("ring", "signet"),
+    ("trinket", ""),
+    ("feet", "boots"),
+];
+
+/// Quests: (id, status, progress %, reward gold). `main` spans the board.
+const QUESTS: &[(&str, &str, u32, u32)] = &[
+    ("descend", "main", 35, 500),
+    ("torches", "active", 60, 50),
+    ("map", "active", 20, 80),
+    ("key", "active", 0, 120),
+    ("rope", "done", 100, 30),
+    ("rats", "done", 100, 25),
+    ("bridge", "failed", 40, 0),
+];
+
+/// The tabs, in order (Q / E and the bumpers step through them).
+const TABS: [&str; 3] = ["items", "gear", "quests"];
+
 /// Both locales, preloaded so switching is immediate.
 #[derive(Resource)]
 struct Languages(Vec<Handle<BundleAsset>>);
@@ -98,8 +133,26 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
         TemplateContext::new()
             .with("layout", "wide")
             .with("active_tab", "items")
-            .with("selected", ITEMS[0].0)
+            .with("selected", &format!("slot-{}", ITEMS[0].0))
             .with("items", &items)
+            .with(
+                "gear",
+                &GEAR
+                    .iter()
+                    .map(|&(slot, item)| serde_json::json!({ "slot": slot, "item": item }))
+                    .collect::<Vec<_>>(),
+            )
+            .with(
+                "quests",
+                &QUESTS
+                    .iter()
+                    .map(|&(id, status, progress, reward)| {
+                        serde_json::json!({
+                            "id": id, "status": status, "progress": progress, "reward": reward,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
             .with("weight", "18.5 kg")
             .with("gold", &240),
         // The `HtmlUi` node is the app's: fill the window. `.page` grows to
@@ -140,12 +193,26 @@ fn handle_signals(
     }
 }
 
-/// Space / X: layout; L / Y: language.
+/// Space / X: layout; L / Y: language; Q / E and LB / RB: previous / next
+/// tab.
 fn hotkeys(
     hotkeys: Hotkeys,
     mut contexts: Query<&mut TemplateContext>,
     mut switch: MessageWriter<SwitchLanguage>,
 ) {
+    let step = hotkeys.just_pressed(KeyCode::KeyE, GamepadButton::RightTrigger) as i32
+        - hotkeys.just_pressed(KeyCode::KeyQ, GamepadButton::LeftTrigger) as i32;
+    if step != 0 {
+        for mut context in &mut contexts {
+            let current = context
+                .get("active_tab")
+                .and_then(|v| v.as_str())
+                .unwrap_or("items");
+            let index = TABS.iter().position(|tab| *tab == current).unwrap_or(0) as i32;
+            let next = TABS[(index + step).rem_euclid(TABS.len() as i32) as usize];
+            context.insert("active_tab", next);
+        }
+    }
     if hotkeys.just_pressed(KeyCode::Space, GamepadButton::West) {
         for mut context in &mut contexts {
             toggle_layout(&mut context);
@@ -162,7 +229,8 @@ fn toggle_layout(context: &mut TemplateContext) {
     context.insert("layout", if wide { "narrow" } else { "wide" });
 }
 
-/// The details panel follows focus: a focused `slot-<id>` becomes `selected`.
+/// The details panel follows focus: a focused cell (`slot-<id>`,
+/// `gear-<slot>`, `quest-<id>`) becomes `selected`.
 fn show_focused_slot(
     focus: Res<InputFocus>,
     elements: Query<&HtmlElement>,
@@ -171,7 +239,12 @@ fn show_focused_slot(
     let Some(id) = focus
         .get()
         .and_then(|entity| elements.get(entity).ok())
-        .and_then(|element| element.id.as_deref()?.strip_prefix("slot-"))
+        .and_then(|element| element.id.as_deref())
+        .filter(|id| {
+            ["slot-", "gear-", "quest-"]
+                .iter()
+                .any(|p| id.starts_with(p))
+        })
     else {
         return;
     };

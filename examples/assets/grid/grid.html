@@ -1,13 +1,18 @@
-{# CSS grid layout (style.css): the page is a grid of panels, the slots a
-   responsive auto-fill grid, each slot and the stats table small grids.
+{# CSS grid layout (style.css): the page is a grid of panels; the tabs switch
+   the main panel between three screens, each a different grid technique:
+   - items: a responsive auto-fill grid (a 2×2 featured slot, dense packing);
+   - gear: a fixed 3×4 "paper doll", every slot placed by line numbers, the
+     figure spanning two rows, empty cells left empty;
+   - quests: a board of three equal columns (nested grids of cards) under a
+     main quest spanning all of them (`1 / -1`).
    {{ layout }} ("wide" or "narrow") picks the page's track template.
    Keyboard/gamepad: tabs and buttons are `data-on-click` (focusable), the
-   slots `tabindex="0"`, so directional navigation walks the 2D grid; the
-   details panel shows the focused slot ({{ selected }}). #}
+   cells `tabindex="0"`, so directional navigation walks each 2D grid; the
+   details panel shows the focused cell ({{ selected }}: its element id). #}
 <div class="page {{ layout }}">
   <header class="banner">
     <h1 data-l10n-id="grid-title">Grid layout</h1>
-    <p class="hint" data-l10n-id="grid-hint">Arrows, D-pad or left stick: move through the slots · <kbd>Enter</kbd> / A: press · <kbd>Space</kbd> / X: layout · <kbd>L</kbd> / Y: language; resize the window to reflow the slots.</p>
+    <p class="hint" data-l10n-id="grid-hint">Arrows, D-pad or left stick: move through the grid · <kbd>Enter</kbd> / A: press · <kbd>Q</kbd> <kbd>E</kbd> / LB RB: tabs · <kbd>Space</kbd> / X: layout · <kbd>L</kbd> / Y: language; resize the window to reflow the slots.</p>
     <div class="controls">
       <p class="tab" id="layout" data-on-click="layout" data-l10n-id="grid-layout">Layout</p>
       <p class="tab" id="language" data-on-click="language" data-l10n-id="grid-language">Language</p>
@@ -18,6 +23,46 @@
     <p class="tab{% if tab == active_tab %} active{% endif %}" id="tab-{{ tab }}" data-on-click="tab" data-tab="{{ tab }}" data-l10n-id="grid-tab-{{ tab }}">{{ tab }}</p>
     {% endfor %}
   </nav>
+  {% if active_tab == "gear" %}
+  <main class="gear">
+    <div class="figure">
+      <p class="figure-name" data-l10n-id="grid-gear-hero">Ada</p>
+      <p class="figure-title" data-l10n-id="grid-gear-figure">the Brave</p>
+    </div>
+    {% for slot in gear %}
+    <div class="gear-slot gear-{{ slot.slot }}{% if not slot.item %} empty{% endif %}" id="gear-{{ slot.slot }}" tabindex="0"{% if loop.first %} autofocus{% endif %}>
+      <p class="gear-label" data-l10n-id="grid-gear-{{ slot.slot }}">{{ slot.slot }}</p>
+      {% if slot.item %}
+      <p class="name" data-l10n-id="grid-item-{{ slot.item }}">{{ slot.item }}</p>
+      {% else %}
+      <p class="name" data-l10n-id="grid-gear-empty">empty</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </main>
+  {% elif active_tab == "quests" %}
+  <main class="quests">
+    {% for quest in quests %}{% if quest.status == "main" %}
+    <div class="quest main" id="quest-{{ quest.id }}" tabindex="0" autofocus>
+      <p class="quest-name" data-l10n-id="grid-quest-{{ quest.id }}">{{ quest.id }}</p>
+      <div class="quest-bar"><div class="quest-fill {{ quest.status }}" style="width: {{ quest.progress }}%"></div></div>
+      <p class="quest-reward" data-l10n-id="grid-quest-reward" data-l10n-args='{"gold": {{ quest.reward }}}'>{{ quest.reward }}</p>
+    </div>
+    {% endif %}{% endfor %}
+    {% for status in ["active", "done", "failed"] %}
+    <section class="quest-column {{ status }}">
+      <h2 class="{{ status }}" data-l10n-id="grid-quests-{{ status }}">{{ status }}</h2>
+      {% for quest in quests %}{% if quest.status == status %}
+      <div class="quest {{ status }}" id="quest-{{ quest.id }}" tabindex="0">
+        <p class="quest-name" data-l10n-id="grid-quest-{{ quest.id }}">{{ quest.id }}</p>
+        <div class="quest-bar"><div class="quest-fill {{ quest.status }}" style="width: {{ quest.progress }}%"></div></div>
+        <p class="quest-reward" data-l10n-id="grid-quest-reward" data-l10n-args='{"gold": {{ quest.reward }}}'>{{ quest.reward }}</p>
+      </div>
+      {% endif %}{% endfor %}
+    </section>
+    {% endfor %}
+  </main>
+  {% else %}
   <main class="slots">
     {% for item in items %}
     <div class="slot{% if item.featured %} featured{% endif %}" id="slot-{{ item.id }}" tabindex="0"{% if loop.first %} autofocus{% endif %}>
@@ -26,11 +71,25 @@
     </div>
     {% endfor %}
   </main>
+  {% endif %}
   <aside class="details">
     <h2 data-l10n-id="grid-details">Details</h2>
-    {% for item in items %}{% if item.id == selected %}
+    {# The focused cell of the current screen. #}
+    {% for item in items %}{% if "slot-" ~ item.id == selected %}
     <p class="selected" data-l10n-id="grid-item-{{ item.id }}">{{ item.id }}</p>
     <p class="selected-count">× {{ item.count }}</p>
+    {% endif %}{% endfor %}
+    {% for slot in gear %}{% if "gear-" ~ slot.slot == selected %}
+    <p class="selected" data-l10n-id="grid-gear-{{ slot.slot }}">{{ slot.slot }}</p>
+    {% if slot.item %}
+    <p class="selected-count" data-l10n-id="grid-item-{{ slot.item }}">{{ slot.item }}</p>
+    {% else %}
+    <p class="selected-count" data-l10n-id="grid-gear-empty">empty</p>
+    {% endif %}
+    {% endif %}{% endfor %}
+    {% for quest in quests %}{% if "quest-" ~ quest.id == selected %}
+    <p class="selected" data-l10n-id="grid-quest-{{ quest.id }}">{{ quest.id }}</p>
+    <p class="selected-count" data-l10n-id="grid-quest-progress" data-l10n-args='{"progress": {{ quest.progress }}, "status": "{{ quest.status }}"}'>{{ quest.progress }}%</p>
     {% endif %}{% endfor %}
     <div class="stats">
       <p class="label" data-l10n-id="grid-stat-items">Item kinds</p>
@@ -43,5 +102,6 @@
   </aside>
   <footer class="status">
     <p data-l10n-id="grid-status" data-l10n-args='{"layout": "{{ layout }}"}'>{{ layout }}</p>
+    <p data-l10n-id="grid-screen" data-l10n-args='{"tab": "{{ active_tab }}"}'>{{ active_tab }}</p>
   </footer>
 </div>
