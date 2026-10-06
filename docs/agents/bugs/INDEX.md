@@ -12,7 +12,7 @@ Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below
 (bug_0001–0005: property testing, stateful testing and fuzzing — the fuzzers
-immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s; bug_0020: the picking-driven signals tests; bug_0021: prototype_19 integration; bug_0022: the `menu` example's smoke run; bug_0023: user report; bug_0024: code reading; bug_0025: repeated suite runs).
+immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s; bug_0020: the picking-driven signals tests; bug_0021: prototype_19 integration; bug_0022: the `menu` example's smoke run; bug_0023: user report; bug_0024: code reading; bug_0025: repeated suite runs; bug_0027: the `world` example's smoke run).
 
 ## Bugs
 
@@ -44,6 +44,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0024](bug_0024.md) | Right and middle clicks fired `data-on-click` (no button check) | `src/signals.rs` | medium | fixed (`4cef523`) | code reading (signal sources design) |
 | [bug_0025](bug_0025.md) | `ui_state_machine_matches_model` fails ~1 in 10 runs (signals mismatch) | `tests/stateful.rs` / `src/signals.rs` | low | **open** | repeated full-suite runs |
 | [bug_0026](bug_0026.md) | Editing an included template never updates its users (loader dependencies don't invalidate) | `src/template.rs` (`HtmlTemplateLoader`) | medium | **open** (workaround: reload the using template) | the template-dependency vector |
+| [bug_0027](bug_0027.md) | `HtmlWorldAnchor` never shows without an `IsDefaultUiCamera` marker | `src/anchor.rs` | high | fixed (uncommitted at filing) | `world` example smoke run |
 
 ## Discovery session metadata: bug_0001–0005
 

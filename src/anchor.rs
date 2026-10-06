@@ -189,7 +189,8 @@ pub(crate) fn place_anchored(
 ///   `(0.5, 1.0)` = bottom center, the default) on the projected point; make
 ///   it `position: absolute` (its `<html class>` rule).
 /// - The camera is `camera`, else the root's `UiTargetCamera`, else the
-///   default UI camera (`IsDefaultUiCamera`).
+///   default UI camera (the `IsDefaultUiCamera` one, else the window
+///   camera Bevy UI renders with).
 /// - It owns the root's `Visibility`: hidden while the point is behind the
 ///   camera or outside the viewport, or `target` is invisible
 ///   (`InheritedVisibility`); hide it for app reasons with CSS instead
@@ -265,7 +266,7 @@ pub(crate) fn place_world_anchored(
     mut overlays: Query<WorldOverlay>,
     targets: Query<(&GlobalTransform, Option<&InheritedVisibility>)>,
     cameras: Query<(&Camera, &GlobalTransform)>,
-    default_camera: Query<Entity, With<IsDefaultUiCamera>>,
+    default_camera: DefaultUiCamera,
     mut commands: Commands,
 ) {
     for (overlay, anchor, mut view, mut node, mut visibility, own, ui_camera) in &mut overlays {
@@ -276,7 +277,7 @@ pub(crate) fn place_world_anchored(
         let camera = anchor
             .camera
             .or(ui_camera.map(UiTargetCamera::entity))
-            .or_else(|| default_camera.iter().next());
+            .or_else(|| default_camera.get());
         let Some((camera, camera_transform)) = camera.and_then(|camera| cameras.get(camera).ok())
         else {
             visibility.set_if_neq(Visibility::Hidden);

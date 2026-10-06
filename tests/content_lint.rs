@@ -157,11 +157,29 @@ fn dialog_contexts() -> Vec<Value> {
     vec![json!({})]
 }
 
-/// `examples/menu.rs` `handle_signals()`: one tooltip per button's `tip` key.
+/// `HtmlTooltips` in `examples/menu.rs`: one tooltip per button's
+/// `data-tooltip` key (`args` empty, default placement).
 fn menu_tooltip_contexts() -> Vec<Value> {
     ["menu-volume-tip", "menu-difficulty-tip", "menu-reset-tip"]
-        .map(|key| json!({ "key": key }))
+        .map(|key| json!({ "key": key, "args": {}, "placement": "right" }))
         .to_vec()
+}
+
+/// `examples/world.rs` `show_plates()`: full, low, fading and hidden.
+fn plate_contexts() -> Vec<Value> {
+    vec![
+        json!({ "name": "Ada", "hp": 100, "alpha": 1.0, "hidden": false }),
+        json!({ "name": "Bo", "hp": 30, "alpha": 0.4, "hidden": false }),
+        json!({ "name": "Cy", "hp": 65, "alpha": 0.0, "hidden": true }),
+    ]
+}
+
+/// `examples/world.rs` `show_hud()`.
+fn world_hud_contexts() -> Vec<Value> {
+    vec![
+        json!({ "on_screen": 0, "total": 0 }),
+        json!({ "on_screen": 4, "total": 6 }),
+    ]
 }
 
 /// `examples/live.rs` `show_party()`: a mixed party (a low, fading member)
@@ -245,6 +263,20 @@ const PAGES: &[Page] = &[
         contexts: menu_tooltip_contexts,
         stylesheets: &["menu/style.css"],
         locales: "menu/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "world/plate.html",
+        contexts: plate_contexts,
+        stylesheets: &["world/style.css"],
+        locales: "world/locales",
+        unlocalized: Some("only data: a unit's name and health bar"),
+    },
+    Page {
+        template: "world/hud.html",
+        contexts: world_hud_contexts,
+        stylesheets: &["world/style.css"],
+        locales: "world/locales",
         unlocalized: None,
     },
     Page {
@@ -415,6 +447,14 @@ fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
 fn every_template_is_listed() {
     let assets = assets();
     let on_disk: BTreeSet<String> = content_files(&assets, "html").into_iter().collect();
+    // Component libraries are rendered as part of the pages including them.
+    let libraries: BTreeSet<String> = PAGES
+        .iter()
+        .flat_map(|page| template_set(&assets, page.template).unwrap_or_default())
+        .map(|(name, _)| name)
+        .filter(|name| !PAGES.iter().any(|page| page.template == name))
+        .collect();
+    let on_disk: BTreeSet<String> = on_disk.difference(&libraries).cloned().collect();
     let listed: BTreeSet<String> = PAGES.iter().map(|page| page.template.to_owned()).collect();
     let mut problems: Vec<String> = on_disk
         .difference(&listed)
@@ -711,13 +751,63 @@ fn locale_check_reports_missing_extra_and_mismatched_messages() {
 // 2. Templates compile and render; every data-l10n-id resolves
 // ---------------------------------------------------------------------------
 
-/// Compiles `template` the way the `HtmlTemplate` loader does (name = asset
-/// path, so `.html` autoescapes).
+/// Compiles `template` the way the `HtmlTemplate` loader does: name = asset
+/// path (so `.html` autoescapes), together with every template it includes
+/// or extends.
 fn compile(assets: &Path, template: &str) -> Result<(), String> {
-    let source = std::fs::read_to_string(assets.join(template)).map_err(|err| err.to_string())?;
     let mut tera = bevy_markup::tera::Tera::new();
-    tera.add_raw_template(template, &source)
+    tera.add_raw_templates(template_set(assets, template)?)
         .map_err(|err| error_chain(&err))
+}
+
+/// `template` and the templates it references (transitively), each with its
+/// `{% include/extends "…" %}` paths rewritten to asset paths — a simple
+/// mirror of the loader's resolution (same-directory and `../` paths).
+fn template_set(assets: &Path, template: &str) -> Result<Vec<(String, String)>, String> {
+    let mut set = Vec::new();
+    let mut pending = vec![template.to_owned()];
+    while let Some(name) = pending.pop() {
+        if set.iter().any(|(done, _)| *done == name) {
+            continue;
+        }
+        let source =
+            std::fs::read_to_string(assets.join(&name)).map_err(|err| format!("{name}: {err}"))?;
+        let dir = Path::new(&name).parent().unwrap_or(Path::new(""));
+        let mut rewritten = source.clone();
+        for keyword in ["include", "extends"] {
+            for chunk in source.split("{%").skip(1) {
+                let body = chunk.trim_start_matches('-').trim_start();
+                let Some(after) = body.strip_prefix(keyword) else {
+                    continue;
+                };
+                let after = after.trim_start();
+                let Some(quote) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+                    continue;
+                };
+                let Some(end) = after[1..].find(quote) else {
+                    continue;
+                };
+                let literal = &after[1..1 + end];
+                let mut resolved = dir.to_path_buf();
+                for part in Path::new(literal).components() {
+                    match part {
+                        std::path::Component::ParentDir => {
+                            resolved.pop();
+                        }
+                        part => resolved.push(part),
+                    }
+                }
+                let resolved = resolved.to_string_lossy().replace('\\', "/");
+                rewritten = rewritten.replace(
+                    &format!("{quote}{literal}{quote}"),
+                    &format!("{quote}{resolved}{quote}"),
+                );
+                pending.push(resolved);
+            }
+        }
+        set.push((name, rewritten));
+    }
+    Ok(set)
 }
 
 /// `None` when the root rendered; otherwise why not.

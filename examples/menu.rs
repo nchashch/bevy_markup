@@ -1,6 +1,7 @@
 //! A settings menu for mouse, keyboard and gamepad: focus and directional
-//! navigation, a modal confirm dialog, tooltips anchored to their buttons,
-//! custom elements and templated inline styles.
+//! navigation, a modal confirm dialog, built-in tooltips, a shared component
+//! library, signals routed to systems, custom elements and templated inline
+//! styles.
 //!
 //! - `autofocus` picks the first focused button; arrows / D-pad move focus
 //!   (`HtmlFocus::navigate`), Enter / A activates it (`HtmlFocus::activate`,
@@ -8,8 +9,16 @@
 //!   the focus ring, which a mouse press hides again.
 //! - "Reset" opens `menu/dialog.html` with `HtmlModal`: focus moves to its
 //!   `autofocus` button and can't leave it until the dialog closes.
-//! - Hovering a button shows `menu/tooltip.html` beside it with
-//!   `HtmlAnchor`, which also despawns it with its button.
+//! - Buttons are one Tera 2 component, `ui.button` in `menu/components.html`,
+//!   which `menu.html` and `dialog.html` include (paths relative to the
+//!   including file) and call with their content as the body.
+//! - Hovering a button with `data-tooltip="<Fluent key>"` shows
+//!   `menu/tooltip.html` beside it: `HtmlTooltips` is all the app does.
+//! - Each button's `data-on-click` name is routed to its own system with
+//!   `on_html_click` / `on_html_signal`; the dialog's two buttons share one
+//!   handler and tell themselves apart by `data-answer`
+//!   (`ElementSignal::data`). A plain `MessageReader` sees the same signals
+//!   ([`record_last_input`]).
 //! - Each root's placement, stacking (`z-index`), dimming background and
 //!   pickability are its `<html class>` rule in `menu/style.css`.
 //! - `<div is="icon" data-src="…">` runs [`icon`], which inserts the image;
@@ -48,6 +57,11 @@ fn main() {
             BevyMarkupPlugin,
         ))
         .define_html_element("icon", icon)
+        .on_html_click("volume", volume_up)
+        .on_html_signal("volume-down", volume_down)
+        .on_html_click("difficulty", next_difficulty)
+        .on_html_click("reset", open_dialog)
+        .on_html_click("dialog", answer_dialog)
         .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
         .init_resource::<Settings>()
         .add_systems(Startup, setup)
@@ -55,7 +69,7 @@ fn main() {
             Update,
             (
                 navigate,
-                handle_signals,
+                record_last_input,
                 close_dialog_on_escape,
                 switch_language,
                 show_settings,
@@ -92,10 +106,6 @@ struct Menu;
 #[derive(Component)]
 struct Dialog;
 
-/// A tooltip root and the element it's for.
-#[derive(Component)]
-struct Tooltip(Entity);
-
 /// Both locales, preloaded so switching is immediate.
 #[derive(Resource)]
 struct Languages(Vec<Handle<BundleAsset>>);
@@ -106,6 +116,10 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
         .insert("System Serif", FontFaces::new(FontSource::Serif))
         .set_generic(GenericFamily::Serif, "System Serif");
     commands.insert_resource(DefaultStylesheet::new(asset_server.load("menu/style.css")));
+    // `data-tooltip` elements show this template (context: `key`, `args`,
+    // `placement`) beside them while hovered.
+    commands
+        .insert_resource(HtmlTooltips::new(asset_server.load("menu/tooltip.html")).with_gap(12.0));
 
     let languages: Vec<Handle<BundleAsset>> = ["en-US", "de"]
         .iter()
@@ -205,19 +219,9 @@ fn input_name(source: &SignalSource) -> &'static str {
     }
 }
 
-/// Every button, tooltip and dialog answer arrives as an `ElementSignal`.
-#[allow(clippy::too_many_arguments)]
-fn handle_signals(
-    mut signals: MessageReader<ElementSignal>,
-    mut settings: ResMut<Settings>,
-    tooltips: Query<(Entity, &Tooltip)>,
-    dialogs: Query<Entity, With<Dialog>>,
-    menus: Query<Entity, With<Menu>>,
-    elements: HtmlElements,
-    mut focus: ResMut<InputFocus>,
-    asset_server: Res<AssetServer>,
-    mut commands: Commands,
-) {
+/// Every signal is still an `ElementSignal` message: a reader sees the
+/// routed ones too. Records what produced the last click.
+fn record_last_input(mut signals: MessageReader<ElementSignal>, mut settings: ResMut<Settings>) {
     for signal in signals.read() {
         if matches!(
             signal.trigger,
@@ -225,58 +229,61 @@ fn handle_signals(
         ) {
             settings.last_input = input_name(&signal.source);
         }
-        match (signal.name.as_ref(), signal.trigger) {
-            ("tip", SignalTrigger::Enter) => {
-                let Some(key) = signal.payload["tip"].as_str() else {
-                    continue;
-                };
-                commands.spawn((
-                    Tooltip(signal.target),
-                    HtmlUi::new(asset_server.load("menu/tooltip.html")),
-                    TemplateContext::new().with("key", key),
-                    HtmlAnchor::new(signal.target, AnchorPlacement::Right).with_gap(12.0),
-                ));
-            }
-            ("tip", SignalTrigger::Leave) => {
-                for (tooltip, &Tooltip(element)) in &tooltips {
-                    if element == signal.target {
-                        commands.entity(tooltip).despawn();
-                    }
-                }
-            }
-            ("volume", SignalTrigger::Click) => {
-                settings.volume = (settings.volume + 25) % 125;
-            }
-            ("volume-down", SignalTrigger::AuxClick) => {
-                settings.volume = (settings.volume + 100) % 125;
-            }
-            ("difficulty", SignalTrigger::Click) => {
-                settings.difficulty = (settings.difficulty + 1) % DIFFICULTIES.len();
-            }
-            ("reset", SignalTrigger::Click) if dialogs.is_empty() => {
-                commands.spawn((
-                    Dialog,
-                    HtmlUi::new(asset_server.load("menu/dialog.html")),
-                    HtmlModal,
-                ));
-            }
-            (answer @ ("dialog-yes" | "dialog-no"), SignalTrigger::Click) => {
-                if answer == "dialog-yes" {
-                    *settings = Settings {
-                        last_input: settings.last_input,
-                        ..default()
-                    };
-                }
-                for dialog in &dialogs {
-                    commands.entity(dialog).despawn();
-                }
-                // Back to the button that opened it.
-                if let Some(reset) = menus.iter().find_map(|menu| elements.by_id(menu, "reset")) {
-                    focus.set(reset, FocusCause::Navigated);
-                }
-            }
-            _ => {}
-        }
+    }
+}
+
+/// `data-on-click="volume"`: primary click, Enter or A.
+fn volume_up(_: In<ElementSignal>, mut settings: ResMut<Settings>) {
+    settings.volume = (settings.volume + 25) % 125;
+}
+
+/// `data-on-auxclick="volume-down"`: right or middle click.
+fn volume_down(_: In<ElementSignal>, mut settings: ResMut<Settings>) {
+    settings.volume = (settings.volume + 100) % 125;
+}
+
+fn next_difficulty(_: In<ElementSignal>, mut settings: ResMut<Settings>) {
+    settings.difficulty = (settings.difficulty + 1) % DIFFICULTIES.len();
+}
+
+/// Opens the confirm dialog; `HtmlModal` keeps focus inside it.
+fn open_dialog(
+    _: In<ElementSignal>,
+    dialogs: Query<(), With<Dialog>>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    if dialogs.is_empty() {
+        commands.spawn((
+            Dialog,
+            HtmlUi::new(asset_server.load("menu/dialog.html")),
+            HtmlModal,
+        ));
+    }
+}
+
+/// Both dialog buttons send `dialog`; `data-answer` says which.
+fn answer_dialog(
+    signal: In<ElementSignal>,
+    mut settings: ResMut<Settings>,
+    dialogs: Query<Entity, With<Dialog>>,
+    menus: Query<Entity, With<Menu>>,
+    elements: HtmlElements,
+    mut focus: ResMut<InputFocus>,
+    mut commands: Commands,
+) {
+    if signal.data("answer") == Some("yes") {
+        *settings = Settings {
+            last_input: settings.last_input,
+            ..default()
+        };
+    }
+    for dialog in &dialogs {
+        commands.entity(dialog).despawn();
+    }
+    // Back to the button that opened it.
+    if let Some(reset) = menus.iter().find_map(|menu| elements.by_id(menu, "reset")) {
+        focus.set(reset, FocusCause::Navigated);
     }
 }
 

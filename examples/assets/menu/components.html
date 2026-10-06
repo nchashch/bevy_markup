@@ -1,0 +1,17 @@
+{# The menu's widgets: Tera 2 components, shared by including this file
+   (`{% include "components.html" %}` — relative to the including template;
+   it renders nothing). Call with a body for the button's content:
+   `{% <ui.button id="x" signal="y"> %}<p>…</p>{% </ui.button> %}`. #}
+
+{# A focusable button. `signal` is its `data-on-click`; optional `aux` its
+   `data-on-auxclick` (right/middle button), `tooltip` a Fluent key shown by
+   `HtmlTooltips` (`data-tooltip`), `answer` a `data-answer` the handler reads
+   with `ElementSignal::data("answer")`. #}
+{% component ui.button(id: string, signal: string, aux: string = "", tooltip: string = "", answer: string = "", autofocus: bool = false) %}
+<div class="button" id="{{ id }}"{% if autofocus %} autofocus{% endif %} data-on-click="{{ signal }}"
+     {%- if aux %} data-on-auxclick="{{ aux }}"{% endif %}
+     {%- if tooltip %} data-tooltip="{{ tooltip }}"{% endif %}
+     {%- if answer %} data-answer="{{ answer }}"{% endif %}>
+  {% if body is defined %}{{ body }}{% endif %}
+</div>
+{% endcomponent ui.button %}

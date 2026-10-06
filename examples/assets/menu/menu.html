@@ -1,24 +1,22 @@
+{% include "components.html" %}
 <html class="screen">
 <div class="menu">
   <h1 data-l10n-id="menu-title">Settings</h1>
 
-  <div class="button" id="volume" autofocus data-on-click="volume" data-on-auxclick="volume-down"
-       data-on-enter="tip" data-on-leave="tip" data-with='{"tip": "menu-volume-tip"}'>
+  {% <ui.button id="volume" signal="volume" aux="volume-down" tooltip="menu-volume-tip" autofocus={true}> %}
     <div class="icon" is="icon" data-src="ui/frame.png"></div>
     <p data-l10n-id="menu-volume" data-l10n-args='{"volume": {{ volume }}}'>Volume: {{ volume }}%</p>
-  </div>
+  {% </ui.button> %}
   <div class="meter"><div class="meter-fill" style="width: {{ volume }}%"></div></div>
 
-  <div class="button" id="difficulty" data-on-click="difficulty"
-       data-on-enter="tip" data-on-leave="tip" data-with='{"tip": "menu-difficulty-tip"}'>
+  {% <ui.button id="difficulty" signal="difficulty" tooltip="menu-difficulty-tip"> %}
     <div class="icon" is="icon" data-src="ui/frame_transparent.png"></div>
     <p data-l10n-id="menu-difficulty" data-l10n-args='{"difficulty": "{{ difficulty }}"}'>Difficulty: {{ difficulty }}</p>
-  </div>
+  {% </ui.button> %}
 
-  <div class="button" id="reset" data-on-click="reset"
-       data-on-enter="tip" data-on-leave="tip" data-with='{"tip": "menu-reset-tip"}'>
+  {% <ui.button id="reset" signal="reset" tooltip="menu-reset-tip"> %}
     <p data-l10n-id="menu-reset">Reset to defaults</p>
-  </div>
+  {% </ui.button> %}
 
   <p class="hint" data-l10n-id="menu-last-input" data-l10n-args='{"input": "{{ last_input }}"}'>Last click: {{ last_input }}</p>
   <p class="hint" data-l10n-id="menu-hint">Arrows or D-pad: move · Enter or A: choose · Esc: cancel · L: language</p>

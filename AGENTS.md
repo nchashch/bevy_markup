@@ -93,12 +93,20 @@ examples/
   grid.rs          CSS grid: page track template switched via context (Space), auto-fill slots
                    with a 2×2 span and dense packing, small grids in slots/stats; L = language
   menu.rs          focus/navigation (autofocus, arrows/D-pad → HtmlFocus, Enter/A activate,
-                   :focus-visible ring), HtmlModal confirm dialog, HtmlAnchor tooltips, roots
-                   styled by `<html class>` (backdrop, z-index, pointer-events), `is="icon"`,
-                   templated `style` meter; L = language, Esc = cancel
+                   :focus-visible ring), HtmlModal confirm dialog, `data-tooltip` + HtmlTooltips,
+                   buttons as a Tera 2 component (`menu/components.html`, included by menu and
+                   dialog, content as the body), handlers routed with on_html_click /
+                   on_html_signal (dialog answer via `data-answer` → `signal.data`), a
+                   MessageReader beside them (last input), roots styled by `<html class>`
+                   (backdrop, z-index, pointer-events), `is="icon"`, templated `style` meter;
+                   L = language, Esc = cancel
   live.rs          a keyed party list rendered from data every frame and updated in place
                    (`id="unit-<name>"`; N adds at the top, K fades out the last via `opacity`),
                    `style` health bars, `is="badge"` spawn counter vs update counter; L = language
+  world.rs         nameplates over walking 3D units with HtmlWorldAnchor (orbiting camera: plates
+                   hide behind it/off screen, with a blinking unit, and go with a knocked-out
+                   unit), distance fade from HtmlWorldAnchorView, `hidden` class toggle, HUD
+                   counting on-screen plates; K = hit nearest, R = respawn, Space, L
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    `is="content-slot"` viewports filled once per slot, contexts),
                    controls.rs (language/theme selection), consts.rs (fonts)
@@ -175,8 +183,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   src/             artwork sources (frame.kra) for the UI images
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
   grid/            grid.html, style.css (all of the grid example's layout), locales/{en-US,de}
-  menu/            menu.html, dialog.html, tooltip.html, style.css (every root's rule), locales/{en-US,de}
+  menu/            menu.html, dialog.html, tooltip.html, components.html (ui.button), style.css
+                   (every root's rule), locales/{en-US,de}
   live/            party.html, stats.html, style.css, locales/{en-US,de}
+  world/           plate.html, hud.html, style.css, locales/{en-US,de}
   ui/frame.png     256x256 frame; frame_transparent.png (clear center; the
                    parchment/terminal panels frame themselves with it)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;

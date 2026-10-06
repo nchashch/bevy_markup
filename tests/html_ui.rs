@@ -2020,6 +2020,62 @@ fn updates_touch_only_changed_components() {
     assert_eq!(changed, ["node a"], "only a's Node is written");
 }
 
+/// Without an `IsDefaultUiCamera` marker, `HtmlWorldAnchor` projects with
+/// Bevy's default UI camera (the window camera), like UI does (bug_0027).
+#[test]
+fn world_anchor_uses_the_implicit_default_ui_camera() {
+    let mut ui = TestUi::with_layout("world-anchor-implicit", &[], UVec2::new(320, 240));
+    let world = ui.world_mut();
+    let marked: Vec<Entity> = world
+        .query_filtered::<Entity, With<bevy::ui::IsDefaultUiCamera>>()
+        .iter(world)
+        .collect();
+    for camera in marked {
+        world
+            .entity_mut(camera)
+            .remove::<bevy::ui::IsDefaultUiCamera>()
+            .insert(bevy::camera::RenderTarget::Window(
+                bevy::window::WindowRef::Primary,
+            ));
+    }
+    let window = world
+        .spawn((
+            Window {
+                resolution: bevy::window::WindowResolution::new(320, 240),
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ))
+        .id();
+    let _ = window;
+    let target = world
+        .spawn((
+            Visibility::Inherited,
+            Transform::default(),
+            GlobalTransform::default(),
+        ))
+        .id();
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            HtmlWorldAnchor::new(target),
+        ))
+        .id();
+    ui.update(3);
+    let world = ui.world_mut();
+    assert!(
+        world.get::<HtmlWorldAnchorView>(overlay).unwrap().on_screen,
+        "projected with the window's camera"
+    );
+    assert_eq!(
+        *world.get::<Visibility>(overlay).unwrap(),
+        Visibility::Inherited
+    );
+}
+
 /// Untyped loads (folders, `load_untyped`) pick bevy_markup's loaders by file
 /// extension: `.css`, `.html`/`.htm`, `.slice.ron`.
 #[test]

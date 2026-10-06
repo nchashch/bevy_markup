@@ -1,0 +1,6 @@
+<html class="plate{% if hidden %} hidden{% endif %}" style="opacity: {{ alpha }}">
+<div class="plate-box">
+  <p class="plate-name">{{ name }}</p>
+  <div class="bar"><div class="fill{% if hp <= 30 %} low{% endif %}" style="width: {{ hp }}%"></div></div>
+</div>
+</html>

@@ -1,9 +1,10 @@
+{% include "components.html" %}
 <html class="backdrop">
 <div class="dialog">
   <p data-l10n-id="dialog-reset">Reset all settings?</p>
   <div class="dialog-buttons">
-    <div class="button" id="dialog-yes" data-on-click="dialog-yes"><p data-l10n-id="dialog-yes">Reset</p></div>
-    <div class="button" id="dialog-no" autofocus data-on-click="dialog-no"><p data-l10n-id="dialog-no">Cancel</p></div>
+    {% <ui.button id="dialog-yes" signal="dialog" answer="yes"> %}<p data-l10n-id="dialog-yes">Reset</p>{% </ui.button> %}
+    {% <ui.button id="dialog-no" signal="dialog" answer="no" autofocus={true}> %}<p data-l10n-id="dialog-no">Cancel</p>{% </ui.button> %}
   </div>
 </div>
 </html>
