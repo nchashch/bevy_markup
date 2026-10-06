@@ -1,5 +1,7 @@
 # world
 
+![The world example: walking 3D units with styled nameplates (ally, hostile and neutral frames) and the HUD buttons](../screenshots/world.png)
+
 Nameplates over 3D units: HTML + CSS UI anchored to points in the world.
 
 ```sh

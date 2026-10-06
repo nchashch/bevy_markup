@@ -1,5 +1,7 @@
 # menu
 
+![The menu example: a settings panel with a volume slider, a difficulty stepper and a reset button, and the volume tooltip beside it](../screenshots/menu.png)
+
 A settings menu that works equally well with a mouse, a keyboard and a
 gamepad: focus and navigation, a slider, a stepper, a modal confirm dialog,
 tooltips and a reusable button component.

@@ -1,5 +1,7 @@
 # quickstart
 
+![The quickstart: a framed panel greeting Ada, a coin counter, and the "Add a coin" and "Language" buttons, one showing the keyboard focus ring](../screenshots/quickstart.png)
+
 The whole bevy_markup API in one small app: an HTML template, a CSS
 stylesheet and Fluent translations become a native Bevy UI, with two buttons
 that work with the mouse, the keyboard and a gamepad.

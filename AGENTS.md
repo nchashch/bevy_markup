@@ -92,7 +92,10 @@ src/
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
                    One directory per example (`<name>/main.rs`, which cargo finds as the
-                   example `<name>`), each with a README.md: what it shows, controls, files.
+                   example `<name>`), each with a README.md: a screenshot, what it shows,
+                   controls, files. Screenshots: `examples/screenshots/<name>.png` — Git LFS
+                   (`.gitattributes`), ≤ 1280 px wide, pngquant + oxipng; excluded from the
+                   crate package. Retake them after visible changes.
                    Their assets stay under `examples/assets/<name>/` (one `AssetPlugin` root,
                    shared `ui/` frames). Every example works with mouse, keyboard and gamepad:
                    focusable controls (`data-on-click`, `tabindex`), a `:focus-visible` ring,

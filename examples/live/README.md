@@ -1,5 +1,7 @@
 # live
 
+![The live example: a party list with spinning badges and health bars, one row focused](../screenshots/live.png)
+
 Live game data: a party list rendered from game state every frame and
 updated in place, so only what changed is touched.
 

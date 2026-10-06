@@ -9,7 +9,14 @@ readme = "README.md"
 keywords = ["bevy", "ui", "html", "css", "localization"]
 categories = ["game-development", "gui", "internationalization"]
 # Developer-only material; not needed to use the crate.
-exclude = [".github/", "docs/agents/", "scripts/", "tests/golden/", "AGENTS.md"]
+exclude = [
+    ".github/",
+    "docs/agents/",
+    "scripts/",
+    "tests/golden/",
+    "examples/screenshots/",
+    "AGENTS.md",
+]
 
 [features]
 # Parley falls back to installed system fonts per script (e.g. CJK, which the

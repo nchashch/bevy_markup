@@ -1,5 +1,7 @@
 # demo
 
+![The demo in its Parchment theme: five framed columns — a localized inventory document, the language / theme / scrollbar options, and three DOM outlines — with styled scrollbars on the overflowing panels](../screenshots/demo.png)
+
 Every feature at once. The whole app — panels, buttons, 9-slice frames,
 scrollbars and their layout — is one HTML document styled with CSS. The Rust
 side only wires behavior onto it: clicks, scrolling, language and theme

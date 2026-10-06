@@ -1,5 +1,7 @@
 # grid
 
+![The grid example on its Gear screen: a paper doll of equipment slots around a framed figure, with the tabs, the details panel and the status bar around it](../screenshots/grid.png)
+
 CSS grid layout, three ways. The page itself is a grid of panels, and its
 tabs switch the main panel between three screens, each built on a different
 grid technique. All of the layout is in the stylesheet; the app only spawns
