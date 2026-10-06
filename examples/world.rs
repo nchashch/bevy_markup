@@ -12,8 +12,17 @@
 //!   counts the ones on screen.
 //! - Hiding plates for the app's own reasons is CSS, not `Visibility`
 //!   (which the anchor owns): Space toggles a `hidden` class.
-//! - Name, health bar and fade are template values written every frame; the
-//!   plate only updates when the rendered output changes.
+//! - The plates are ordinary HTML + CSS (`world/plate.html`,
+//!   `world/style.css`): a faction class on the root picks a 9-slice
+//!   `border-image` frame (hostile), a rounded bordered panel (allies) or an
+//!   outlined one (neutral); a monospace level badge, a bold sans-serif name,
+//!   an italic serif title line and a three-color health bar. Nearer plates
+//!   stack on top through an inline `z-index`.
+//! - The level, title and status lines are Fluent messages with markup
+//!   (`<b>`, `<i>`, `<span class="{ $faction }">`) and plurals, so L
+//!   re-translates every plate.
+//! - Name, health, hits and fade are template values written every frame;
+//!   a plate only updates when the rendered output changes.
 //!
 //! `cargo run --example world` — K knocks out the nearest unit, R brings
 //! everyone back, Space toggles the plates, L switches the language.
@@ -58,11 +67,18 @@ fn main() {
         .run();
 }
 
-/// A unit: its name, health (0–100), and the circle it walks.
+/// A unit: who it is, its health (0–100) and hits taken, and the circle it
+/// walks.
 #[derive(Component)]
 struct Unit {
     name: &'static str,
+    /// `ally`, `hostile` or `neutral`: the plate's frame and colors.
+    faction: &'static str,
+    level: u32,
+    /// A `world-title` epithet variant.
+    epithet: &'static str,
     hp: u32,
+    hits: u32,
     radius: f32,
     speed: f32,
     phase: f32,
@@ -91,18 +107,22 @@ struct Languages(Vec<Handle<BundleAsset>>);
 #[derive(Resource)]
 struct UnitAssets {
     mesh: Handle<Mesh>,
-    material: Handle<StandardMaterial>,
+    /// One per faction: ally, hostile, neutral.
+    materials: [Handle<StandardMaterial>; 3],
     plate: Handle<HtmlTemplate>,
 }
 
-/// Name, walking circle radius, speed (rad/s), start angle.
-const UNITS: [(&str, f32, f32, f32); 6] = [
-    ("Ada", 3.0, 0.6, 0.0),
-    ("Bo", 5.0, -0.4, 1.0),
-    ("Cy", 7.0, 0.3, 2.0),
-    ("Dee", 9.0, -0.25, 3.0),
-    ("Eli", 11.0, 0.2, 4.0),
-    ("Fay", 13.0, -0.15, 5.0),
+const FACTIONS: [&str; 3] = ["ally", "hostile", "neutral"];
+
+/// Name, faction, level, epithet, walking circle radius, speed (rad/s),
+/// start angle.
+const UNITS: [(&str, &str, u32, &str, f32, f32, f32); 6] = [
+    ("Ada", "ally", 12, "brave", 3.0, 0.6, 0.0),
+    ("Bo", "neutral", 3, "quiet", 5.0, -0.4, 1.0),
+    ("Cy", "hostile", 7, "grim", 7.0, 0.3, 2.0),
+    ("Dee", "ally", 9, "swift", 9.0, -0.25, 3.0),
+    ("Eli", "hostile", 15, "lost", 11.0, 0.2, 4.0),
+    ("Fay", "neutral", 5, "wise", 13.0, -0.15, 5.0),
 ];
 
 /// The plate sits this far above the unit's origin (the cube's top + a bit).
@@ -121,7 +141,11 @@ fn setup(
 ) {
     fonts
         .insert("System Serif", FontFaces::new(FontSource::Serif))
-        .set_generic(GenericFamily::Serif, "System Serif");
+        .set_generic(GenericFamily::Serif, "System Serif")
+        .insert("System Sans", FontFaces::new(FontSource::SansSerif))
+        .set_generic(GenericFamily::SansSerif, "System Sans")
+        .insert("System Mono", FontFaces::new(FontSource::Monospace))
+        .set_generic(GenericFamily::Monospace, "System Mono");
     commands.insert_resource(DefaultStylesheet::new(asset_server.load("world/style.css")));
     let languages: Vec<Handle<BundleAsset>> = ["en-US", "de"]
         .iter()
@@ -146,7 +170,12 @@ fn setup(
     ));
     commands.insert_resource(UnitAssets {
         mesh: meshes.add(Cuboid::new(0.8, 1.2, 0.8)),
-        material: materials.add(Color::srgb_u8(0xf2, 0xc4, 0x6d)),
+        materials: [
+            Color::srgb_u8(0x6d, 0xb3, 0xf2),
+            Color::srgb_u8(0xe0, 0x5a, 0x47),
+            Color::srgb_u8(0xc9, 0xc3, 0xb6),
+        ]
+        .map(|color| materials.add(color)),
         plate: asset_server.load("world/plate.html"),
     });
     commands.spawn((Hud, HtmlUi::new(asset_server.load("world/hud.html"))));
@@ -154,20 +183,29 @@ fn setup(
 
 /// Every unit, with its plate. Also R's respawn.
 fn spawn_units(mut commands: Commands, assets: Res<UnitAssets>, units: Query<&Unit>) {
-    for (index, &(name, radius, speed, phase)) in UNITS.iter().enumerate() {
+    for (index, &(name, faction, level, epithet, radius, speed, phase)) in UNITS.iter().enumerate()
+    {
         if units.iter().any(|unit| unit.name == name) {
             continue;
         }
+        let unit = Unit {
+            name,
+            faction,
+            level,
+            epithet,
+            hp: 100,
+            hits: 0,
+            radius,
+            speed,
+            phase,
+        };
+        // Hidden until `show_plates` has the measured distance.
+        let context = plate_context(&unit, 0.0, true);
+        let material = FACTIONS.iter().position(|f| *f == faction).unwrap_or(2);
         let mut unit = commands.spawn((
-            Unit {
-                name,
-                hp: 100,
-                radius,
-                speed,
-                phase,
-            },
+            unit,
             Mesh3d(assets.mesh.clone()),
-            MeshMaterial3d(assets.material.clone()),
+            MeshMaterial3d(assets.materials[material].clone()),
             Transform::from_xyz(radius * phase.cos(), 0.6, radius * phase.sin()),
         ));
         if index == 2 {
@@ -177,12 +215,7 @@ fn spawn_units(mut commands: Commands, assets: Res<UnitAssets>, units: Query<&Un
         commands.spawn((
             Plate,
             HtmlUi::new(assets.plate.clone()),
-            // Hidden until `show_plates` has the measured distance.
-            TemplateContext::new()
-                .with("name", name)
-                .with("hp", &100)
-                .with("alpha", &0.0)
-                .with("hidden", &true),
+            context,
             HtmlWorldAnchor::new(unit).with_offset(PLATE_OFFSET),
         ));
     }
@@ -241,6 +274,7 @@ fn knock_out_and_respawn(
     });
     if let Some((entity, mut unit, _)) = nearest {
         unit.hp = unit.hp.saturating_sub(35);
+        unit.hits += 1;
         if unit.hp == 0 {
             commands.entity(entity).despawn();
         }
@@ -267,11 +301,31 @@ fn show_plates(
         let fade = ((view.distance - FADE_START) / (FADE_END - FADE_START)).clamp(0.0, 1.0);
         // Rounded to what's visible, so a plate only updates when it changes.
         let alpha = ((1.0 - fade) * 100.0).round() / 100.0;
-        context.insert("name", unit.name);
-        context.insert("hp", &unit.hp);
-        context.insert("alpha", &alpha);
-        context.insert("hidden", &(!shown.0 || alpha <= 0.0));
+        let mut plate = plate_context(unit, alpha, !shown.0 || alpha <= 0.0);
+        // Nearer plates on top: `z-index` orders UI roots like `ZIndex`.
+        plate.insert("z", &(1000 - (view.distance * 10.0) as i32));
+        *context = plate;
     }
+}
+
+/// `world/plate.html`'s variables for `unit`.
+fn plate_context(unit: &Unit, alpha: f32, hidden: bool) -> TemplateContext {
+    let health = match unit.hp {
+        61.. => "good",
+        31..=60 => "hurt",
+        _ => "low",
+    };
+    TemplateContext::new()
+        .with("name", unit.name)
+        .with("faction", unit.faction)
+        .with("level", &unit.level)
+        .with("epithet", unit.epithet)
+        .with("hp", &unit.hp)
+        .with("hits", &unit.hits)
+        .with("health", health)
+        .with("alpha", &alpha)
+        .with("hidden", &hidden)
+        .with("z", &0)
 }
 
 /// The HUD counts the plates whose point is on screen.

@@ -9,7 +9,9 @@
 //! "part.html" %}` name other templates by path relative to the template's
 //! own file (like a URL: `../lib/ui.html`, `/ui/lib.html` from the asset
 //! root; `embedded://` templates resolve within their source). The loader
-//! loads them with it — editing one reloads every template using it — and
+//! loads them with it — with Bevy's file watcher, editing one reloads every
+//! template using it (a manual `AssetServer::reload` must name the using
+//! template: Bevy reloads only the given path) — and
 //! renders them as one Tera set, so `{% component %}`s defined in any of
 //! them (Tera 2's macros) can be called from all: include a component
 //! library (it renders nothing) and use `{{ <ui.button label="Go" /> }}`.

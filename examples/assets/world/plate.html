@@ -1,6 +1,16 @@
-<html class="plate{% if hidden %} hidden{% endif %}" style="opacity: {{ alpha }}">
-<div class="plate-box">
-  <p class="plate-name">{{ name }}</p>
-  <div class="bar"><div class="fill{% if hp <= 30 %} low{% endif %}" style="width: {{ hp }}%"></div></div>
+{# A unit's nameplate. The card's faction class picks its frame (style.css):
+   a 9-slice `border-image` for hostile units, a rounded bordered panel for
+   allies, an outlined panel for neutrals. Nearer plates stack on top
+   (`z-index` from the camera distance). Lines below the name are Fluent messages, so
+   switching the language (L) re-translates every plate. #}
+<html class="plate{% if hidden %} hidden{% endif %}" style="opacity: {{ alpha }}; z-index: {{ z }}">
+<div class="card {{ faction }}">
+<div class="head">
+  <p class="level {{ faction }}" data-l10n-id="world-level" data-l10n-args='{"level": {{ level }}}'>Lv {{ level }}</p>
+  <p class="name {{ faction }}">{{ name }}</p>
+</div>
+<p class="title" data-l10n-id="world-title" data-l10n-args='{"epithet": "{{ epithet }}", "faction": "{{ faction }}"}'>{{ epithet }} · {{ faction }}</p>
+<div class="bar"><div class="fill {{ health }}" style="width: {{ hp }}%"></div></div>
+<p class="status" data-l10n-id="world-status" data-l10n-args='{"hp": {{ hp }}, "hits": {{ hits }}}'>{{ hp }} HP</p>
 </div>
 </html>

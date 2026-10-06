@@ -165,12 +165,28 @@ fn menu_tooltip_contexts() -> Vec<Value> {
         .to_vec()
 }
 
-/// `examples/world.rs` `show_plates()`: full, low, fading and hidden.
+/// `examples/world.rs` `plate_context()`: every faction, epithet, health
+/// class and `world-status` hits branch (0, one, other); fading and hidden.
 fn plate_contexts() -> Vec<Value> {
+    let plate = |name: &str,
+                 faction: &str,
+                 level: u32,
+                 epithet: &str,
+                 hp: u32,
+                 hits: u32,
+                 health: &str,
+                 alpha: f32,
+                 hidden: bool| {
+        json!({ "name": name, "faction": faction, "level": level, "epithet": epithet, "hp": hp,
+                "hits": hits, "health": health, "alpha": alpha, "hidden": hidden, "z": 900 })
+    };
     vec![
-        json!({ "name": "Ada", "hp": 100, "alpha": 1.0, "hidden": false }),
-        json!({ "name": "Bo", "hp": 30, "alpha": 0.4, "hidden": false }),
-        json!({ "name": "Cy", "hp": 65, "alpha": 0.0, "hidden": true }),
+        plate("Ada", "ally", 12, "brave", 100, 0, "good", 1.0, false),
+        plate("Bo", "neutral", 3, "quiet", 65, 1, "good", 0.4, false),
+        plate("Cy", "hostile", 7, "grim", 30, 2, "low", 1.0, false),
+        plate("Dee", "ally", 9, "swift", 60, 1, "hurt", 1.0, false),
+        plate("Eli", "hostile", 15, "lost", 100, 0, "good", 0.0, true),
+        plate("Fay", "neutral", 5, "wise", 100, 0, "good", 1.0, false),
     ]
 }
 
@@ -270,7 +286,7 @@ const PAGES: &[Page] = &[
         contexts: plate_contexts,
         stylesheets: &["world/style.css"],
         locales: "world/locales",
-        unlocalized: Some("only data: a unit's name and health bar"),
+        unlocalized: None,
     },
     Page {
         template: "world/hud.html",

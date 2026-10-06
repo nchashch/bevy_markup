@@ -70,6 +70,8 @@ src/
                    HtmlUiBuilt, HtmlElements; render system (Tera + tl)
   template.rs      HtmlTemplate asset + loader (resolve_references: `{% include/extends "…" %}`
                    paths resolved relative to the file, rewritten, loaded with read_asset_bytes
+                   (loader dependencies: Bevy's file watcher reloads every user of an edited
+                   file; a manual `AssetServer::reload` reloads only its own path — bug_0026)
                    → one Tera set per template, components shared), HtmlDocument (+ outline),
                    decode_entities
   l10n.rs          ActiveLocale, LocalizedText; localize system (data-l10n-id/-args)
@@ -106,7 +108,11 @@ examples/
   world.rs         nameplates over walking 3D units with HtmlWorldAnchor (orbiting camera: plates
                    hide behind it/off screen, with a blinking unit, and go with a knocked-out
                    unit), distance fade from HtmlWorldAnchorView, `hidden` class toggle, HUD
-                   counting on-screen plates; K = hit nearest, R = respawn, Space, L
+                   counting on-screen plates; plates are styled HTML (faction card: 9-slice
+                   `border-image` / rounded border / `outline`; monospace level badge, sans name,
+                   italic title, three-color bar; inline `z-index` by distance) with Fluent lines
+                   (markup, plurals, `<span class="{ $faction }">`); K = hit nearest, R =
+                   respawn, Space, L
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    `is="content-slot"` viewports filled once per slot, contexts),
                    controls.rs (language/theme selection), consts.rs (fonts)

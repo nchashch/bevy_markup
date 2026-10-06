@@ -1,6 +1,7 @@
 /* The world example: nameplates kept over 3D units by `HtmlWorldAnchor`,
- * and a HUD. Placement of a plate is the anchor's (left/top); its rule
- * only makes it a free-floating, unpickable layer. */
+ * and a HUD. A plate's placement is the anchor's (left/top) and its stacking
+ * an inline `z-index` (nearer on top); its rule makes it a free-floating,
+ * unpickable layer, and its card's faction class picks the frame. */
 
 html {
   color: #e8e6e3;
@@ -8,9 +9,29 @@ html {
   font-size: 18px;
 }
 
+/* Inline markup inside Fluent translations (`<b>`, `<i>`, `<span>`). */
+b {
+  font-weight: bold;
+  color: #ffffff;
+}
+
+i {
+  font-style: italic;
+}
+
+/* ---- Plates ---------------------------------------------------------- */
+
+/* The root: placed by the anchor, faded and stacked inline; the frame is
+ * the card's (an `outline` needs an element, not the root rule). */
 .plate {
   position: absolute;
   pointer-events: none;
+}
+
+.card {
+  align-items: center;
+  gap: 2px;
+  min-width: 150px;
 }
 
 /* Plates off (Space) or faded out: CSS, since the anchor owns `Visibility`. */
@@ -18,32 +39,132 @@ html {
   display: none;
 }
 
-.plate-box {
-  align-items: center;
-  gap: 3px;
+/* Hostile: the red brushed 9-slice frame (corners at image size; the black
+ * center is drawn too). */
+.card.hostile {
+  border-image: url("../ui/frame.png") 16 stretch;
+  border-width: 12px;
+  padding: 0px 6px 2px 6px;
 }
 
-.plate-name {
-  font-size: 16px;
-  color: #ffffff;
+/* Allies: no image — a rounded, bordered panel. */
+.card.ally {
+  background-color: rgba(14, 26, 44, 0.88);
+  border-width: 2px;
+  border-color: #6db3f2;
+  border-radius: 10px;
+  padding: 6px 14px 8px 14px;
+}
+
+/* Neutral: a dim rounded panel ringed by an `outline` drawn outside it. */
+.card.neutral {
+  background-color: rgba(24, 24, 28, 0.85);
+  border-radius: 6px;
+  outline: 1px solid #8f8a80;
+  outline-offset: 3px;
+  padding: 6px 14px 8px 14px;
+}
+
+.head {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The level badge: a monospace pill whose color follows the faction. */
+.level {
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: bold;
+  color: #101014;
+  padding: 1px 5px;
+  border-radius: 6px;
+}
+
+.level.ally {
+  background-color: #6db3f2;
+}
+
+.level.hostile {
+  background-color: #e05a47;
+}
+
+.level.neutral {
+  background-color: #c9c3b6;
+}
+
+.name {
+  font-family: sans-serif;
+  font-size: 19px;
+  font-weight: bold;
+}
+
+.name.ally {
+  color: #bfe0ff;
+}
+
+.name.hostile {
+  color: #ffb3a6;
+}
+
+.name.neutral {
+  color: #f2ead8;
+}
+
+/* "the Brave · ally": italic serif, the faction word colored by a class the
+ * translation itself sets (`<span class="{ $faction }">`). */
+.title {
+  font-size: 13px;
+  font-style: italic;
+  color: #b9b4a8;
+}
+
+span.ally {
+  color: #6db3f2;
+}
+
+span.hostile {
+  color: #e05a47;
+}
+
+span.neutral {
+  color: #c9c3b6;
 }
 
 .bar {
-  width: 70px;
-  height: 6px;
+  width: 120px;
+  height: 7px;
+  margin: 2px 0px;
   background-color: #000000;
   border-width: 1px;
-  border-color: #3a3f4b;
+  border-color: #4a4f5b;
+  border-radius: 4px;
 }
 
 .fill {
   height: 100%;
+  border-radius: 3px;
+}
+
+.fill.good {
   background-color: #4caf50;
+}
+
+.fill.hurt {
+  background-color: #e3b341;
 }
 
 .fill.low {
   background-color: #e05a47;
 }
+
+.status {
+  font-family: sans-serif;
+  font-size: 12px;
+  color: #9aa0aa;
+}
+
+/* ---- HUD ------------------------------------------------------------- */
 
 .hud {
   flex-direction: column;
