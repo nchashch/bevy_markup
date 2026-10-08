@@ -1175,9 +1175,13 @@ Next steps (roughly in order of value):
   to `main` and every PR (`RUSTFLAGS`/`RUSTDOCFLAGS=-D warnings`, debug info
   off to fit the runner's disk), and that `tests/vectors/*/fluent.html` is
   what `scripts/fluent_oracle.sh` produces. `nightly.yml` runs the golden
-  images on Ubuntu's lavapipe (references were recorded on Arch's Mesa 26.2;
-  if Ubuntu's Mesa renders differently beyond the tolerance, the job uploads
-  `golden-diffs`), checks `browser.json` against the runner's Chrome
+  images on Ubuntu's lavapipe — the runner is the canonical renderer
+  (2026-10-08): when its Mesa renders differently from the references
+  beyond the tolerance, the job fails and uploads `golden-diffs`; re-record
+  the references with the manual `Update golden references (lavapipe)` job
+  (workflow_dispatch), download its `golden-references` artifact, copy the
+  PNGs over `tests/golden/*/expected.png`, review and commit. It checks
+  `browser.json` against the runner's Chrome
   (ignoring the generator line; a failure means Chrome changed or a vector
   is stale), fuzzes each cargo-fuzz target for 15 min (`-rss_limit_mb=4096`) and builds the other
   fuzz drivers. Nightly failures are reports to triage, not merge blockers.
@@ -1211,7 +1215,11 @@ Next steps (roughly in order of value):
   Mesa (golden images: lavapipe rendering vs the references) and the apt
   package names (Bevy/honggfuzz build dependencies). If the nightly breaks
   around then, suspect the image first (`golden-diffs` artifact, apt
-  errors); pinning `runs-on: ubuntu-24.04` is the quick fallback.
+  errors); re-record the references with the `Update golden references
+  (lavapipe)` job; pinning `runs-on: ubuntu-24.04` is the quick fallback.
+  The nightly golden job has been failing since 2026-10-06 on the stale
+  references (recorded 2026-10-04 locally, before the renderer moved) —
+  re-record with the dispatch job once it lands.
   First CI runs (2026-10-04): CI and nightly golden, browser oracle and
   fuzz-driver builds green; the cargo-fuzz jobs needed
   `fuzz-libfuzzer.sh` to pass `--target` (the prebuilt cargo-fuzz defaults

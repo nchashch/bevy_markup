@@ -285,6 +285,12 @@ the matching package into `target/golden-lavapipe/`.
 - Failures write `target/tmp/golden/<scene>.{actual,diff}.png`.
 - `scripts/golden.sh --update` rewrites the references. Look at the PNGs
   before committing them.
+- The canonical renderer is CI's runner (2026-10-08): when a runner image
+  change fails the nightly's `Golden images (lavapipe)` job, dispatch
+  `Update golden references (lavapipe)` in `nightly.yml`, download its
+  `golden-references` artifact (`gh run download <run> -n
+  golden-references`), copy the PNGs over `tests/golden/<scene>/`, and
+  commit.
 - Use only committed inputs: Bevy's default font and `tests/fixtures/`.
 - Keep it to a few scenes: it's a smoke check, not a spec.
 
@@ -454,8 +460,10 @@ reporting upstream or removing a vendored patch.
 - `.github/workflows/ci.yml` (every push and PR, blocks merges): the
   warning-free checks, `cargo test`, the `fuzzing`-feature tests, and that
   `fluent.html` matches what the script generates.
-- `nightly.yml`: golden images on Ubuntu's lavapipe, the browser oracle
-  against the runner's Chrome, 15 min of cargo-fuzz per target (RSS limit raised to 4 GB), and builds of
+- `nightly.yml`: golden images on Ubuntu's lavapipe (the canonical
+  renderer; a manual `Update golden references (lavapipe)` job,
+  workflow_dispatch only, re-records the references on it), the browser
+  oracle against the runner's Chrome, 15 min of cargo-fuzz per target (RSS limit raised to 4 GB), and builds of
   the other fuzz drivers. Failures are reports to triage, not blockers. The
   fuzz corpora carry over between nights (GitHub cache
   `fuzz-corpus-<target>-*`, minimized with `cargo fuzz cmin` on Sundays).
@@ -468,7 +476,7 @@ Shared build caches (`Swatinem/rust-cache` `shared-key`):
 
 | Cache | Built by | Restored by |
 |---|---|---|
-| `dev` | ci.yml `test` | nightly `golden` |
+| `dev` | ci.yml `test` | nightly `golden`, `golden-update` |
 | `mutants` | cache.yml `mutants` | the 4 mutants shards |
 | `fuzz` | cache.yml `fuzz` | nightly `fuzz` (3 targets) |
 
