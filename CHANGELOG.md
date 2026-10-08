@@ -8,6 +8,8 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-08
+
 ### Added
 
 - **`LocaleBundle` asset.** Locale bundles are now bevy_markup's own asset:
@@ -135,7 +137,8 @@ and that update in place every frame.
   into native Bevy UI entities. Stylesheets, translations and fonts can be
   switched at runtime.
 
-[Unreleased]: https://github.com/nchashch/bevy_markup/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nchashch/bevy_markup/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/nchashch/bevy_markup/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nchashch/bevy_markup/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nchashch/bevy_markup/releases/tag/v0.2.0
 [0.1.0]: https://crates.io/crates/bevy_markup/0.1.0
