@@ -179,15 +179,16 @@ The crate documentation (`cargo doc --open`) is the full guide.
 
 ## Bevy compatibility
 
-| bevy_markup | Bevy | bevy_fluent |
-|---|---|---|
-| 0.3 | 0.19 | 0.15 |
-| 0.2 | 0.19 | 0.15 |
-| 0.1 | 0.19 | 0.15 |
+| bevy_markup | Bevy |
+|---|---|
+| 0.4 | 0.19 |
+| 0.3 | 0.19 |
+| 0.2 | 0.19 |
+| 0.1 | 0.19 |
 
 ### Recommended: patched fluent-syntax
 
-The fluent-syntax version Bevy's Fluent integration uses
+The fluent-syntax version `fluent` 0.16 (fluent-bundle 0.15) uses
 (0.11) has two bugs that a malformed translation file can
 trigger: a panic on a broken unicode escape, and a stack
 overflow (process abort) on deeply nested expressions. Until

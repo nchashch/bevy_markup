@@ -112,7 +112,7 @@ struct PlatesShown(bool);
 
 /// Both locales, preloaded so switching is immediate.
 #[derive(Resource)]
-struct Languages(Vec<Handle<BundleAsset>>);
+struct Languages(Vec<Handle<LocaleBundle>>);
 
 #[derive(Resource)]
 struct UnitAssets {
@@ -157,7 +157,7 @@ fn setup(
         .insert("System Mono", FontFaces::new(FontSource::Monospace))
         .set_generic(GenericFamily::Monospace, "System Mono");
     commands.insert_resource(DefaultStylesheet::new(asset_server.load("world/style.css")));
-    let languages: Vec<Handle<BundleAsset>> = ["en-US", "de"]
+    let languages: Vec<Handle<LocaleBundle>> = ["en-US", "de"]
         .iter()
         .map(|id| asset_server.load(format!("world/locales/{id}/main.ftl.ron")))
         .collect();

@@ -1,6 +1,6 @@
 [package]
 name = "bevy_markup"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "HTML templates (Tera), CSS and Fluent localization as native Bevy UI"
@@ -24,8 +24,7 @@ exclude = [
 system_fonts = ["bevy/system_font_discovery"]
 # Exposes `bevy_markup::fuzz` (`#[doc(hidden)]`, not covered by semver): internal
 # glue callable without a full Bevy app, for `fuzz/` targets.
-fuzzing = ["dep:wgpu-types", "dep:unic-langid"]
-unic-langid = ["dep:unic-langid"]
+fuzzing = ["dep:wgpu-types"]
 
 [dependencies]
 # Only what the library's code uses; the app picks rendering, windowing,
@@ -49,15 +48,15 @@ tera = { version = "2.4.0", features = ["fast"] }
 # character of the attribute after a value-less one (`autofocus data-on-click` →
 # `ata-on-click`); see docs/agents/bugs/bug_0019.md and UPSTREAM.md.
 tl = { package = "astral-tl", version = "0.8.0" }
-# Localization; `fluent` must match bevy_fluent's version.
-bevy_fluent = "0.15"
+# Localization: FTL syntax, bundle, formatting (https://projectfluent.org).
 fluent = "0.16.0"
+# Locale identifiers: the `*.ftl.ron` manifest's `locale` field.
+unic-langid = { version = "0.9", features = ["serde"] }
 # CSS. `into_owned`: parsed StyleSheet<'i> → StyleSheet<'static> for storing as an asset.
 lightningcss = { version = "1.0.0-alpha.72", features = ["into_owned"] }
 # Only for the `fuzzing` harness: `Image::new_fill` needs wgpu texture types,
 # which bevy_image does not re-export.
 wgpu-types = { version = "29.0.3", optional = true }
-unic-langid = { version = "0.9", optional = true }
 
 [dev-dependencies]
 arbtest = "0.3.2"
@@ -81,7 +80,7 @@ test-strategy = "0.3.1"
 # asset (docs/agents/bugs/UPSTREAM.md U1, U2): a panic on an invalid unicode
 # escape before a multi-byte character, and a stack overflow on deeply nested
 # expressions. Branch fix/fuzzing-bugs-0.11 is upstream's fluent-syntax 0.11.1
-# tag plus the fixes; 0.11 is what bevy_fluent 0.15's fluent-bundle requires.
+# tag plus the fixes; 0.11 is what fluent 0.16's fluent-bundle requires.
 # Cargo.lock pins the commit. Applies only inside this repository: crates
 # depending on bevy_markup need the same entry (see README). The fuzz
 # workspaces repeat it.

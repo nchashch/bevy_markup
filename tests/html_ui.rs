@@ -449,7 +449,7 @@ html-ui border=16,16,16,16 padding=10,10,10,10 slice=frame.png 4,4,4,4 stretch
 "#,
     );
 
-    let de = ui.load::<BundleAsset>("locales/de/main.ftl.ron");
+    let de = ui.load::<LocaleBundle>("locales/de/main.ftl.ron");
     ui.world_mut().resource_mut::<ActiveLocale>().set(de);
     ui.settle().assert_dump(
         r#"

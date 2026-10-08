@@ -24,7 +24,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 
 | Item | Kind | Role |
 |---|---|---|
-| `BevyMarkupPlugin` | Plugin | loaders, resources, systems; adds bevy_fluent's `FluentPlugin` if absent |
+| `BevyMarkupPlugin` | Plugin | loaders, resources, systems |
 | `HtmlUiSystems::{Render, Localize, Build}` | SystemSet | chained in `PostUpdate`, before `UiSystems::Prepare` |
 | `HtmlUi(Handle<HtmlTemplate>)` | Component | the UI; requires `Node`, `TemplateContext`, `RenderedHtml`, `LocalizedText` |
 | `TemplateContext(tera::Context)` | Component | Tera variables; `.with(k, &v)` builder; Deref to `tera::Context`; mutate → re-render (rebuild only if the HTML changed) |
@@ -36,11 +36,10 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlUiRestyled { entity }` | EntityEvent | after a style-only change applied in place (entities and attached components kept) |
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
-| `ActiveLocale(Option<Handle<BundleAsset>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
+| `ActiveLocale(Option<Handle<LocaleBundle>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
 | `FontFamilies` / `FontFaces` / `GenericFamily` | Resource + types | CSS `font-family` name → faces: font files or system families (any `FontSource`; for system families bold/italic are requested via `TextFont` weight/style), + generic keyword mapping |
-| `HtmlTemplate`, `Stylesheet`, `NineSlice` | Assets | `.html`/`.htm`, `.css`, `*.slice.ron` |
+| `HtmlTemplate`, `Stylesheet`, `NineSlice`, `LocaleBundle` | Assets | `.html`/`.htm`, `.css`, `*.slice.ron`, `*.ftl.ron` |
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
-| `BundleAsset` | Asset (bevy_fluent) | `*.ftl.ron` locale bundle |
 | `HtmlCustomElementsExt::define_html_element(name, system)`, `ElementConnected { entity, root, name, dataset }` | App ext, system input | `is="<name>"` customized built-ins: the system (`In<ElementConnected>`, `data-*` attributes as `dataset`) runs on every spawn of the element, in document order, before `HtmlUiBuilt`; not on restyles |
 | `HtmlWorldAnchor { target, offset, pivot, camera }`, `HtmlWorldAnchorView { distance, on_screen }` | Component | keeps a UI root's `pivot` (fraction of its size, default bottom center) over `target`'s translation + `offset` projected through `camera` / its `UiTargetCamera` / the default UI camera; owns its `Visibility` (hidden behind the camera, off screen, or over an invisible target); despawned with `target`; `place_world_anchored`, `PostUpdate` before `UiSystems::Prepare` (last frame's transforms) |
 | `HtmlAnchor { element, placement, gap }`, `AnchorPlacement::{Right, Left, Above, Below}` | Component | keeps an (absolute) overlay node beside `element` each frame: insets from its rect, clamped to the viewport by the overlay's size, `UiTargetCamera` copied, despawned with the element |
@@ -55,14 +54,14 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 
 Re-exported crates (their types appear in the API): `tera`, `tl` (the
 `astral-tl` fork, bug_0019 / UPSTREAM.md U11),
-`bevy_fluent`, `lightningcss`. Cargo feature `system_fonts` enables Bevy's
+`fluent`, `lightningcss`. Cargo feature `system_fonts` enables Bevy's
 `system_font_discovery`.
 
 ## Layout
 
 ```
 README.md        human-facing overview: what bevy_markup is, how it works, testing strategy, Bevy
-                 compatibility table (add a row on every release or Bevy/bevy_fluent bump; keep in sync)
+                 compatibility table (add a row on every release or Bevy bump; keep in sync)
 LICENSE-MIT, LICENSE-APACHE  dual license (MIT OR Apache-2.0, Cargo.toml `license`)
 src/
   lib.rs           crate docs (guide), BevyMarkupPlugin, HtmlUiSystems, prelude, re-exports
@@ -74,7 +73,8 @@ src/
                    file; a manual `AssetServer::reload` reloads only its own path — bug_0026)
                    → one Tera set per template, components shared), HtmlDocument (+ outline),
                    decode_entities
-  l10n.rs          ActiveLocale, LocalizedText; localize system (data-l10n-id/-args)
+  l10n.rs          LocaleBundle asset + loader (`.ftl.ron`: manifest → Fluent resources, read as
+                   dependencies), ActiveLocale, LocalizedText; localize system (data-l10n-id/-args)
   style.rs         Stylesheet asset + loader, DefaultStylesheet, HtmlStylesheet; CSS subset docs
   cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
   fonts.rs         FontFamilies, FontFaces, GenericFamily
@@ -343,8 +343,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   The same fixes are proposed upstream from branch `fix/fuzzing-bugs` (on
   upstream `main`, 0.12). `[patch]` doesn't reach crates that depend on
   bevy_markup: they need the same entry (README). Re-check when bumping
-  bevy_fluent; drop the patch once upstream releases the fixes in the
-  fluent-syntax version bevy_fluent uses (UPSTREAM.md U1/U2).
+  `fluent`; drop the patch once upstream releases the fixes in the
+  fluent-syntax version `fluent` uses (UPSTREAM.md U1/U2).
 - `vendor/honggfuzz` is a patched fork of the honggfuzz crate used only by
   `honggfuzz/` targets: its bundled C source fails against current binutils
   (`bfd.h` no longer defines `TRUE`).
@@ -525,7 +525,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 - Tera 2 (not 1.x): unknown functions/filters fail at template *compile* time,
   so custom ones must be registered in the loader before `add_raw_template`.
   Tera prints maps as `{"k": v}` (valid JSON except control characters).
-- Fluent wraps placeables in U+2068/U+2069; bevy_fluent's bundle is behind an
+- Fluent wraps placeables in U+2068/U+2069; the bundle is shared behind an
   `Arc`, so `l10n.rs` strips them. Fluent term arguments only accept literals;
   message references share the caller's variables.
 - rustdoc: a bare `[`template`]` link is ambiguous (Bevy has a `template` fn);
@@ -889,9 +889,9 @@ known gaps:
     0.11.1 slices parser source at byte ranges that can land inside a
     multi-byte character (e.g. FTL `u={"\" + U-escape + replacement char`).
     Reachable from any FTL asset; not fixed upstream and the version is
-    pinned by bevy_fluent's fluent. Fixed in the fluent-syntax fork (first
-    vendored as `vendor/fluent-syntax`; see Gotchas); regression tests in
-    `src/fuzz.rs`.
+    pinned by `fluent` 0.16 (fluent-bundle 0.15). Fixed in the fluent-syntax
+    fork (first vendored as `vendor/fluent-syntax`; see Gotchas); regression
+    tests in `src/fuzz.rs`.
   - [x] The arbtest harness (`tests/arbtest.rs`) covers the pipeline end to
     end with arbitrary bytes; its first run found the failed-stylesheet hang
     (fixed in `build.rs`, see Gotchas).
@@ -1145,8 +1145,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
   the five escapes Tera emits (no numeric references). Mixed inline content
   directly in a container (`<div>Mixed <b>bold</b> text</div>`, also from a
   translation) becomes one anonymous block per text piece, not one line.
-- **Fluent:** numbers format without locale grouping (fluent-rs; bevy_fluent's
-  shared bundle exposes no custom formatter) — pre-format in Tera if needed.
+- **Fluent:** numbers format without locale grouping (fluent-rs; the loader
+  exposes no configuration for `FluentBundle::set_formatter` yet) — pre-format
+  in Tera if needed.
 - **Fonts:** no bundled CJK font; Japanese relies on `system_fonts`. Bevy's
   default font covers printable ASCII only, so with no registered family even
   the `li` bullet (`•`) comes from font fallback.

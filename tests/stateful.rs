@@ -27,7 +27,6 @@ use common::{SERIF, TestUi};
 
 use async_trait::async_trait;
 use bevy::prelude::*;
-use bevy_markup::bevy_fluent::BundleAsset;
 use bevy_markup::prelude::*;
 use proptest::prelude::*;
 use proptest_stateful::{ModelState, ProptestStatefulConfig};
@@ -394,8 +393,8 @@ impl ModelState for UiModel {
         // Preload everything an op may switch to.
         let _: Handle<Stylesheet> = ui.load("plain.css");
         let _: Handle<Stylesheet> = ui.load("broken.css");
-        let _: Handle<BundleAsset> = ui.load("locales/en-US/main.ftl.ron");
-        let _: Handle<BundleAsset> = ui.load("locales/de/main.ftl.ron");
+        let _: Handle<LocaleBundle> = ui.load("locales/en-US/main.ftl.ron");
+        let _: Handle<LocaleBundle> = ui.load("locales/de/main.ftl.ron");
         ui.settle();
         ui
     }

@@ -8,6 +8,31 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`LocaleBundle` asset.** Locale bundles are now bevy_markup's own asset:
+  a `*.ftl.ron` manifest naming the locale and its FTL resources (paths
+  relative to the manifest, read as dependencies so they hot-reload). FTL
+  parse errors are logged and the resource still loads (Fluent keeps the
+  valid messages), as before.
+
+### Changed
+
+- **Breaking:** bevy_markup no longer depends on (or re-exports)
+  `bevy_fluent` — localization goes through `fluent` directly. `ActiveLocale`
+  holds a `Handle<LocaleBundle>` instead of `Handle<bevy_fluent::BundleAsset>`:
+  change the type in `load` calls; asset paths and the manifest format are
+  unchanged, so existing bundle files need no edits. Apps that use
+  `bevy_fluent` themselves can keep depending on it directly.
+
+### Removed
+
+- The `bevy_fluent` dependency and re-export. With it, bevy_fluent's
+  `.ftl.yaml`/`.ftl.yml` bundle format stops loading (bevy_markup documents
+  `*.ftl.ron` only), and the never-documented `unic-langid` cargo feature is
+  gone (the crate now always depends on `unic-langid` for the manifest's
+  `locale` field).
+
 ## [0.3.0] - 2026-10-06
 
 Interactive UIs: bevy_markup goes from rendering documents to building menus,

@@ -168,7 +168,7 @@ struct Dialog;
 
 /// Both locales, preloaded so switching is immediate.
 #[derive(Resource)]
-struct Languages(Vec<Handle<BundleAsset>>);
+struct Languages(Vec<Handle<LocaleBundle>>);
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
     commands.spawn(Camera2d);
@@ -181,7 +181,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
     commands
         .insert_resource(HtmlTooltips::new(asset_server.load("menu/tooltip.html")).with_gap(12.0));
 
-    let languages: Vec<Handle<BundleAsset>> = ["en-US", "de"]
+    let languages: Vec<Handle<LocaleBundle>> = ["en-US", "de"]
         .iter()
         .map(|id| asset_server.load(format!("menu/locales/{id}/main.ftl.ron")))
         .collect();

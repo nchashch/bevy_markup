@@ -680,7 +680,7 @@ fn locale_problems(reference: &Catalog, locale: &Catalog) -> Vec<String> {
     problems
 }
 
-/// `main.ftl.ron` as bevy_fluent reads it.
+/// `main.ftl.ron` as the bundle loader reads it.
 #[derive(serde::Deserialize)]
 struct Manifest {
     locale: String,

@@ -29,5 +29,6 @@ as `[INFERENCE]`.
 | [0010](./0010-overlays-anchors-and-tooltips.md) | Overlays: anchored to elements and world points, with tooltips built in | Accepted |
 | [0011](./0011-signal-sources-dataset-and-routing.md) | Signals: what produced them, browser button semantics, per-feature `data-*`, routing by name | Accepted |
 | [0012](./0012-template-composition-and-examples.md) | Template composition: one Tera set per template, Tera 2 components as the widget library | Accepted |
+| [0013](./0013-own-the-fluent-bundle-asset.md) | Own the Fluent bundle asset instead of bevy_fluent | Accepted |
 
 Add new records to this index in the same commit that adds the file.

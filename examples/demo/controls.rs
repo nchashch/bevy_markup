@@ -39,14 +39,14 @@ pub struct Selection {
 
 /// Every demo locale's bundle, preloaded so switching is immediate.
 #[derive(Resource)]
-pub struct Locales(Vec<Handle<BundleAsset>>);
+pub struct Locales(Vec<Handle<LocaleBundle>>);
 
 /// Every theme's stylesheet, preloaded so switching is immediate.
 #[derive(Resource)]
 pub struct Themes(Vec<Handle<Stylesheet>>);
 
 pub fn spawn(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let bundles: Vec<Handle<BundleAsset>> = LOCALES
+    let bundles: Vec<Handle<LocaleBundle>> = LOCALES
         .iter()
         .map(|(id, _)| asset_server.load(format!("locales/{id}/main.ftl.ron")))
         .collect();

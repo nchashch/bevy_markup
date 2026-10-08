@@ -158,7 +158,6 @@
 
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use bevy_fluent::FluentPlugin;
 
 #[cfg(feature = "fuzzing")]
 #[cfg_attr(docsrs, doc(cfg(feature = "fuzzing")))]
@@ -181,7 +180,7 @@ pub mod template;
 pub mod tooltips;
 
 /// Dependencies whose types appear in this crate's API.
-pub use {bevy_fluent, lightningcss, tera, tl};
+pub use {fluent, lightningcss, tera, tl};
 
 /// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {
@@ -195,7 +194,7 @@ pub mod prelude {
         HtmlDebugOutline, HtmlElement, HtmlElements, HtmlUi, HtmlUiBuilt, HtmlUiRestyled,
         RenderedHtml, TemplateContext,
     };
-    pub use crate::l10n::ActiveLocale;
+    pub use crate::l10n::{ActiveLocale, LocaleBundle};
     pub use crate::nine_slice::{NineSlice, NineSliceFrame};
     pub use crate::signals::{
         ActivationInput, ElementSignal, ElementSignals, HtmlSignalsExt, PseudoState, SignalBinding,
@@ -205,16 +204,13 @@ pub mod prelude {
     pub use crate::template::HtmlTemplate;
     pub use crate::tooltips::{HtmlTooltip, HtmlTooltips};
     pub use crate::{BevyMarkupPlugin, HtmlUiSystems};
-    pub use bevy_fluent::BundleAsset;
 }
 
-/// Adds the asset loaders (`.html`, `.css`, `*.slice.ron`, Fluent's
-/// `*.ftl.ron`), the [`DefaultStylesheet`](style::DefaultStylesheet),
+/// Adds the asset loaders (`.html`, `.css`, `*.slice.ron`, `*.ftl.ron`), the
+/// [`DefaultStylesheet`](style::DefaultStylesheet),
 /// [`ActiveLocale`](l10n::ActiveLocale) and
 /// [`FontFamilies`](fonts::FontFamilies) resources, and the systems that turn
 /// [`HtmlUi`](html::HtmlUi) entities into Bevy UI.
-///
-/// Adds bevy_fluent's `FluentPlugin` unless the app already did.
 #[derive(Default)]
 pub struct BevyMarkupPlugin;
 
@@ -235,15 +231,14 @@ pub enum HtmlUiSystems {
 
 impl Plugin for BevyMarkupPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<FluentPlugin>() {
-            app.add_plugins(FluentPlugin);
-        }
         app.init_asset::<template::HtmlTemplate>()
             .init_asset_loader::<template::HtmlTemplateLoader>()
             .init_asset::<style::Stylesheet>()
             .init_asset_loader::<style::StylesheetLoader>()
             .init_asset::<nine_slice::NineSlice>()
             .init_asset_loader::<nine_slice::NineSliceLoader>()
+            .init_asset::<l10n::LocaleBundle>()
+            .init_asset_loader::<l10n::LocaleBundleLoader>()
             .init_resource::<style::DefaultStylesheet>()
             .init_resource::<l10n::ActiveLocale>()
             .init_resource::<fonts::FontFamilies>()

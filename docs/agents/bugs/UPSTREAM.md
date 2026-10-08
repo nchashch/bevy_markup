@@ -30,7 +30,8 @@ the issue may already be fixed or reported.
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
 `fix/fuzzing-bugs-0.11` (on tag `fluent-syntax@0.11.1`; what bevy_markup
-patches in, since bevy_fluent 0.15 needs `^0.11`). One commit on each, same
+patches in, since fluent 0.16 / fluent-bundle 0.15 needs `^0.11`). One
+commit on each, same
 diff: `fluent-syntax/src/parser/{core,errors,expression,helper}.rs` and the
 new test file `fluent-syntax/tests/robustness.rs`. Upstream's `cargo fmt`,
 CI clippy command and workspace tests pass on both.
@@ -38,8 +39,8 @@ CI clippy command and workspace tests pass on both.
 ## U1 — fluent-syntax: invalid unicode escape before a multi-byte character panics
 
 - **Project:** [projectfluent/fluent-rs](https://github.com/projectfluent/fluent-rs),
-  crate `fluent-syntax`. Affected: 0.11.1 (pinned by bevy_fluent 0.15 via
-  fluent 0.16 / fluent-bundle 0.15) and 0.12.0 (latest checked, 2026-10-05).
+  crate `fluent-syntax`. Affected: 0.11.1 (pinned by fluent 0.16 via
+  fluent-bundle 0.15) and 0.12.0 (latest checked, 2026-10-05).
 - **Problem:** `skip_unicode_escape_sequence` reports an invalid `\u`/`\U`
   escape with the character that ended it, sliced as `ptr + 1`, one byte.
   If that character is multi-byte, `Slice::slice` (`&self[range]`) panics.

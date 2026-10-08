@@ -103,7 +103,7 @@ const TABS: [&str; 3] = ["items", "gear", "quests"];
 
 /// Both locales, preloaded so switching is immediate.
 #[derive(Resource)]
-struct Languages(Vec<Handle<BundleAsset>>);
+struct Languages(Vec<Handle<LocaleBundle>>);
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
     commands.spawn(Camera2d);
@@ -117,7 +117,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
 
     commands.insert_resource(DefaultStylesheet::new(asset_server.load("grid/style.css")));
 
-    let languages: Vec<Handle<BundleAsset>> = ["en-US", "de"]
+    let languages: Vec<Handle<LocaleBundle>> = ["en-US", "de"]
         .iter()
         .map(|id| asset_server.load(format!("grid/locales/{id}/main.ftl.ron")))
         .collect();

@@ -12,7 +12,6 @@ mod common;
 use common::TestUi;
 
 use bevy::prelude::*;
-use bevy_markup::bevy_fluent::BundleAsset;
 use bevy_markup::prelude::*;
 use proptest::strategy::Strategy;
 use proptest::{prop_assert, prop_assert_eq};
@@ -379,7 +378,7 @@ fn locale_and_context_round_trip(
     let start = ui.settle().dump();
 
     let server = ui.world_mut().resource::<AssetServer>().clone();
-    let de: Handle<BundleAsset> = server.load("locales/de/main.ftl.ron");
+    let de: Handle<LocaleBundle> = server.load("locales/de/main.ftl.ron");
     ui.world_mut().insert_resource(ActiveLocale::new(de));
     let root = ui.root();
     ui.world_mut()
@@ -388,7 +387,7 @@ fn locale_and_context_round_trip(
         .insert("n", &w);
     ui.settle();
 
-    let en: Handle<BundleAsset> = server.load("locales/en-US/main.ftl.ron");
+    let en: Handle<LocaleBundle> = server.load("locales/en-US/main.ftl.ron");
     ui.world_mut().insert_resource(ActiveLocale::new(en));
     ui.world_mut()
         .get_mut::<TemplateContext>(root)

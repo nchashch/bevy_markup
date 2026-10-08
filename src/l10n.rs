@@ -35,32 +35,130 @@
 //! args are HTML-escaped before formatting, so values like `Ada <The Brave>`
 //! stay text; and numbers format as fluent-rs does (`1234.5`, no locale
 //! grouping like `1,234.5`).
+//!
+//! # Locale bundles
+//!
+//! Messages come from a `*.ftl.ron` bundle ([`LocaleBundle`]): a manifest
+//! naming the locale and its FTL resources, registered by
+//! [`BevyMarkupPlugin`](crate::BevyMarkupPlugin):
+//!
+//! ```ron
+//! (
+//!     locale: "en-US",
+//!     resources: ["ui.ftl"],
+//! )
+//! ```
+//!
+//! Resource paths resolve relative to the manifest (like a URL: `../ui.ftl`
+//! from the asset root, `/ui/ui.ftl` from the asset root) and are read as
+//! dependencies, so Bevy's file watcher reloads every bundle that uses an
+//! edited `.ftl` file (a manual `AssetServer::reload` must name the bundle).
+//! A resource with syntax errors still loads — Fluent keeps its valid
+//! messages — with the errors logged.
 
+use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy_fluent::BundleAsset;
 use fluent::{FluentArgs, FluentResource, bundle::FluentBundle, memoizer::MemoizerKind};
-use std::borrow::Borrow;
+use serde::Deserialize;
+use std::{borrow::Borrow, ops::Deref, sync::Arc};
+use unic_langid::LanguageIdentifier;
 
 use crate::html::RenderedHtml;
 use crate::template::decode_entities;
 
-/// The Fluent bundle (`*.ftl.ron`, loaded via bevy_fluent) that
-/// `data-l10n-id` attributes resolve against. `None` (the default): no
-/// localization, elements show their own content. Set a different handle to
-/// switch language; every `HtmlUi` re-localizes once the bundle is loaded, so
-/// preload bundles you'll switch to.
+/// The Fluent resources of one locale, loaded from a `*.ftl.ron` manifest
+/// (see the [locale bundles](self#locale-bundles) section). Use it via
+/// [`ActiveLocale`].
+#[derive(Asset, Clone, TypePath)]
+pub struct LocaleBundle(Arc<ConcurrentBundle>);
+
+/// A [`FluentBundle`] over shared resources: an asset must be `Send + Sync`,
+/// so the concurrent memoizer.
+type ConcurrentBundle = fluent::concurrent::FluentBundle<Arc<FluentResource>>;
+
+impl Deref for LocaleBundle {
+    type Target = ConcurrentBundle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocaleBundleDescriptor {
+    locale: LanguageIdentifier,
+    resources: Vec<String>,
+}
+
+#[derive(Default, TypePath)]
+pub(crate) struct LocaleBundleLoader;
+
+impl AssetLoader for LocaleBundleLoader {
+    type Asset = LocaleBundle;
+    type Settings = ();
+    type Error = BevyError;
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &(),
+        load_context: &mut LoadContext<'_>,
+    ) -> Result<LocaleBundle, BevyError> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        let manifest: LocaleBundleDescriptor = ron::de::from_bytes(&bytes)?;
+
+        let mut bundle = ConcurrentBundle::new_concurrent(vec![manifest.locale]);
+        for name in manifest.resources {
+            let path = load_context.path().resolve_embed_str(&name)?;
+            // Reading through the load context makes each `.ftl` a
+            // dependency of the bundle: with Bevy's file watcher, editing one
+            // reloads every bundle that uses it.
+            let bytes = load_context.read_asset_bytes(path.clone()).await?;
+            let source = String::from_utf8(bytes)?;
+            // A resource with syntax errors still loads: Fluent keeps its
+            // valid messages and the errors name the broken ones.
+            let resource = match FluentResource::try_new(source) {
+                Ok(resource) => resource,
+                Err((resource, errors)) => {
+                    for error in errors {
+                        error!("parsing `{path}`: {error}");
+                    }
+                    resource
+                }
+            };
+            // Duplicate message ids across resources: the earlier one wins.
+            if let Err(errors) = bundle.add_resource(Arc::new(resource)) {
+                for error in errors {
+                    warn!("adding `{path}`: {error}");
+                }
+            }
+        }
+        Ok(LocaleBundle(Arc::new(bundle)))
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["ftl.ron"]
+    }
+}
+
+/// The [`LocaleBundle`] that `data-l10n-id` attributes resolve against.
+/// `None` (the default): no localization, elements show their own content.
+/// Set a different handle to switch language; every `HtmlUi` re-localizes
+/// once the bundle is loaded, so preload bundles you'll switch to.
 #[derive(Resource, Default, Clone, Debug, Reflect)]
 #[reflect(Resource, Default)]
-pub struct ActiveLocale(pub Option<Handle<BundleAsset>>);
+pub struct ActiveLocale(pub Option<Handle<LocaleBundle>>);
 
 impl ActiveLocale {
-    pub fn new(bundle: Handle<BundleAsset>) -> Self {
+    pub fn new(bundle: Handle<LocaleBundle>) -> Self {
         Self(Some(bundle))
     }
 
     /// Switches to `bundle`.
-    pub fn set(&mut self, bundle: Handle<BundleAsset>) {
+    pub fn set(&mut self, bundle: Handle<LocaleBundle>) {
         self.0 = Some(bundle);
     }
 }
@@ -73,9 +171,9 @@ impl ActiveLocale {
 pub struct LocalizedText(pub(crate) HashMap<tl::NodeHandle, Result<String, String>>);
 
 pub(crate) fn localize(
-    mut events: MessageReader<AssetEvent<BundleAsset>>,
+    mut events: MessageReader<AssetEvent<LocaleBundle>>,
     locale: Res<ActiveLocale>,
-    bundles: Res<Assets<BundleAsset>>,
+    bundles: Res<Assets<LocaleBundle>>,
     mut views: Query<(Ref<RenderedHtml>, &mut LocalizedText)>,
 ) {
     let Some(handle) = &locale.0 else {
@@ -224,10 +322,9 @@ mod tests {
     use proptest::prelude::*;
 
     /// An en-US bundle with Fluent's default bidi isolation on (as
-    /// bevy_fluent's bundles have it).
+    /// [`LocaleBundle`]s have it).
     fn bundle(ftl: &str) -> FluentBundle<FluentResource> {
-        // The element type is inferred: `unic-langid` is only a direct
-        // dependency with the `fuzzing` feature.
+        // The element type is inferred.
         let mut bundle = FluentBundle::new(vec!["en-US".parse().unwrap()]);
         bundle
             .add_resource(FluentResource::try_new(ftl.to_owned()).unwrap())
