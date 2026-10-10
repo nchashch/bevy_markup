@@ -226,6 +226,12 @@ stylesheets, translations and images are in `examples/assets/`. Text uses the fo
 `serif`, `sans-serif` and `monospace`, via Bevy's `system_font_discovery`),
 so no font files ship with the repository.
 
+With `--features dev-tools`, the examples also serve a localhost
+agent/QA tool surface (`bevy_mcp_harness`): BRP on 127.0.0.1:15702 and MCP on
+127.0.0.1:15710/mcp — screenshots (`game/screenshot`), the laid-out UI tree
+(`game/ui`), and mocked keyboard/gamepad/mouse input — so an agent can
+playtest them. Off by default; the examples run unchanged without it.
+
 ## Testing
 
 A UI library is easy to get subtly wrong: a rule that applies in the wrong
@@ -334,8 +340,8 @@ their time testing rather than compiling Bevy.
 
 ```
 src/            the library
-examples/       quickstart, grid, menu, live, world and demo, one directory and
-                README each (+ shared/input.rs)
+examples/       quickstart, grid, menu, live, world, inline and demo, one
+                directory and README each (+ shared/input.rs, shared/harness.rs)
 tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in
                 honggfuzz/, fuzzcheck/, test-fuzz/)

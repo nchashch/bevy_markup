@@ -31,6 +31,9 @@ use bevy_markup::prelude::*;
 mod input;
 use input::{ExampleInputPlugin, Hotkeys};
 
+#[path = "../shared/harness.rs"]
+mod harness;
+
 fn main() {
     App::new()
         .add_plugins((
@@ -48,6 +51,7 @@ fn main() {
                     ..default()
                 }),
             BevyMarkupPlugin,
+            harness::HarnessPlugin,
             ExampleInputPlugin,
         ))
         .add_message::<SwitchLanguage>()

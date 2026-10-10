@@ -126,6 +126,14 @@ fn quickstart_contexts() -> Vec<Value> {
         .collect()
 }
 
+/// `examples/inline/main.rs`: the quests' done-flags (some open, one done).
+fn inline_contexts() -> Vec<Value> {
+    vec![
+        json!({ "player": "Ada", "day": 7, "quests": [true, false, false] }),
+        json!({ "player": "Ada", "day": 7, "quests": [true, true, true] }),
+    ]
+}
+
 /// `examples/grid/main.rs`: both page layouts (the status message selects on
 /// `layout`); items as in `ITEMS`.
 fn grid_contexts() -> Vec<Value> {
@@ -298,6 +306,13 @@ const PAGES: &[Page] = &[
         contexts: quickstart_contexts,
         stylesheets: &["quickstart/style.css"],
         locales: "quickstart/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "inline/page.html",
+        contexts: inline_contexts,
+        stylesheets: &["inline/style.css"],
+        locales: "inline/locales",
         unlocalized: None,
     },
     Page {

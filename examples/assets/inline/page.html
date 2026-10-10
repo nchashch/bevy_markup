@@ -1,0 +1,24 @@
+{# The 0.5.1 features in one page: inline `background-color` (the author and
+   the highlights), `text-decoration` (the day is underlined, done quests are
+   struck through), an `<img>` flowing in the text (the seals), an elliptical
+   `border-radius` (the quest panel and the ribbon) and a `position: fixed`
+   ribbon (pinned to the viewport, not the framed page). Tera fills the
+   context; data-l10n-id elements take their text from Fluent. #}
+<div class="ribbon" data-l10n-id="journal-ribbon">Field notes</div>
+<h1 data-l10n-id="journal-title">Field Journal</h1>
+<p data-l10n-id="journal-byline" data-l10n-args='{"name": "{{ player }}", "day": {{ day }}}'>By <span class="author">{{ player }}</span>, day <span class="day">{{ day }}</span> of the expedition.</p>
+<section class="quests">
+  {# Each quest is clickable (data-on-click makes it focusable): clicking
+     marks it done — the name is struck through, the author's ink turns grey.
+     The seals are plain <img> elements, sized by their width attribute. #}
+  {% for quest in quests %}
+  <p class="quest{% if quest %} done{% endif %}" data-on-click="toggle-quest-{{ loop.index0 }}">
+    <img class="seal" src="../ui/frame.png" width="20">
+    <span data-l10n-id="journal-quest-{{ loop.index0 }}">Quest {{ loop.index0 }}</span>
+  </p>
+  {% endfor %}
+</section>
+<div class="actions">
+  <p class="action" data-on-click="switch-language" data-l10n-id="journal-language">Language</p>
+</div>
+<p class="hint" data-l10n-id="journal-hint">Click a quest to strike it out. <kbd>↑</kbd> <kbd>↓</kbd> / D-pad to choose, <kbd>Enter</kbd> / A to press. <kbd>Space</kbd> / Y switches the language.</p>

@@ -24,6 +24,9 @@ mod shell;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 
+#[path = "../shared/harness.rs"]
+mod harness;
+
 fn main() {
     App::new()
         .add_plugins((
@@ -43,6 +46,7 @@ fn main() {
                     ..default()
                 }),
             BevyMarkupPlugin,
+            harness::HarnessPlugin,
             input::ExampleInputPlugin,
         ))
         // Left / right move focus, up / down scroll (`shell::scroll_focused`).

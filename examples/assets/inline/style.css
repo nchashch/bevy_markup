@@ -1,0 +1,107 @@
+/* The inline features of 0.5.1:
+   - `background-color` on inline elements paints behind the text run;
+   - `text-decoration` draws under/through it (`-color` included);
+   - `<img>` flows inline, sized by its `width` attribute;
+   - `border-radius: h / v` gives the panels elliptical corners;
+   - `position: fixed` pins the ribbon to the viewport's top-right corner,
+     ignoring the framed page (and anything else). */
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-width: 16px;
+  padding: 20px 32px;
+  gap: 14px;
+}
+
+h1 {
+  color: #f0b429;
+  font-size: 44px;
+  font-weight: bold;
+}
+
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+/* A highlighted run: paint behind the glyphs, like a marker pen. */
+.author {
+  background-color: #3b6fd4;
+  color: #ffffff;
+  padding: 2px 8px;
+}
+
+.day {
+  color: #f0b429;
+  text-decoration: underline;
+  text-decoration-color: #f0b429;
+}
+
+/* Elliptical corners: horizontal radii of 28px, vertical of 14px. */
+.quests {
+  background-color: #1a1a1a;
+  border-style: solid;
+  border-width: 2px;
+  border-color: #4a4a4a;
+  border-radius: 28px 28px 28px 28px / 14px 14px 14px 14px;
+  padding: 14px 20px;
+  gap: 8px;
+}
+
+.quest {
+  color: #e6e6e6;
+}
+
+.seal {
+  margin-right: 8px;
+}
+
+/* A done quest: struck out (with a declared color), the ink dimmed. */
+.quest.done {
+  color: #8a8a8a;
+}
+
+.quest.done span {
+  text-decoration: line-through;
+  text-decoration-color: #b05050;
+}
+
+/* Fixed: the ribbon sits at the viewport's top-right corner — the page's
+   frame and margins don't move it. One elliptical corner rounds it into
+   the screen edge. */
+.ribbon {
+  position: fixed;
+  top: 0;
+  right: 0;
+  padding: 6px 20px;
+  background-color: #7a2f3a;
+  color: #ffe8e0;
+  font-size: 0.75em;
+  border-radius: 0 0 0 24px / 0 0 0 12px;
+}
+
+/* The action button, as in the other examples: focusable, with a focus
+   ring (a mouse press hides it again). */
+.action {
+  color: #f0b429;
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 4px 16px;
+}
+
+.action:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
+.actions {
+  gap: 8px;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}

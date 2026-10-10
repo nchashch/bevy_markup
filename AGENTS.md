@@ -108,6 +108,11 @@ examples/
                    sets `InputFocus` + `InputFocusVisible` — and ↑ ↓ are left to the app);
                    `Arrows` SystemParam (held axes from arrows / D-pad / left stick); `Hotkeys`
                    SystemParam (`just_pressed(key, gamepad_button)`)
+  shared/harness.rs (not an example; `#[path]`-included; `dev-tools` feature)
+                   HarnessPlugin: adds bevy_mcp_harness's localhost BRP + MCP
+                   surfaces to the example (screenshots, `game/ui` with the
+                   `data-on-click` `clickable` hook, input mocks); compiles
+                   away without the feature
   quickstart/      fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, two `data-on-click`
                    buttons (add a coin, language) in a column, with an inline minimal `navigate` (arrows / D-pad, all four directions,
                    Enter / A; kept self-contained); Space / Y = language
@@ -147,6 +152,12 @@ examples/
                    (markup, plurals, `<span class="{ $faction }">`); HUD buttons (root
                    `pointer-events: none`, button row `auto`): Hit nearest (K / B), Everyone
                    back (R / X), Plates (Space / Select), Language (L / Y)
+  inline/          the 0.5.1 features in one journal page: inline
+                   `background-color` (author) and `text-decoration`
+                   (underlined day; clicking a quest toggles its
+                   strikethrough), `<img>` seals in the text, an elliptical
+                   `border-radius` quest panel, a `position: fixed` ribbon;
+                   Language button, Space / Y
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    `is="content-slot"` viewports filled once per slot, contexts),
                    controls.rs (language/theme selection; L / Y, T / X hotkeys), consts.rs (fonts);
@@ -251,6 +262,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
                    (every root's rule), locales/{en-US,de}
   live/            party.html, stats.html, style.css, locales/{en-US,de}
   world/           plate.html, hud.html, style.css, locales/{en-US,de}
+  inline/          page.html, style.css, locales/{en-US,de}
   ui/frame.png     256x256 frame; frame_transparent.png (clear center; the
                    parchment/terminal panels frame themselves with it)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;
@@ -1252,9 +1264,20 @@ Next steps (roughly in order of value):
   --all-targets`, `cargo doc --no-deps`. `cargo test` must pass: cascade unit
   tests, the headless test vectors, and the `no_run` doc examples (see
   Testing). Library changes that alter the mapping need a vector.
-- Visual changes: run an example and capture an in-app screenshot (desktop
-  screenshots grab whatever workspace is visible). Throwaway system, removed
-  afterwards:
+- Visual changes: run an example and capture an in-app screenshot. The
+  dev-tools feature serves every example over localhost BRP + MCP
+  (`bevy_mcp_harness`, see `examples/shared/harness.rs`): run
+  `cargo run --example <name> --features dev-tools`, then
+  `game/screenshot` (`{"label":"…"}`) over HTTP POST
+  `127.0.0.1:15702` — the full-resolution PNG lands in
+  `mcp_harness/screenshots/` (gitignored); downscale to ≤1280 px and
+  pngquant + oxipng it into `examples/screenshots/<name>.png`. The same
+  surface playtests the examples for real: `game/ui` (the laid-out tree,
+  `clickable` flags via the `data-on-click` hook), `click_node`,
+  `game/keyboard`/`game/gamepad`/`game/mouse` mocks, `wait_until`/`game_assert`
+  (the MCP tools are thin proxies to the BRP methods; the MCP flow
+  initializes a session first). The old throwaway screenshot system still
+  works when the feature is off:
 
   ```rust
   app.add_systems(Update, |mut c: Commands, t: Res<Time>, mut done: Local<bool>| {

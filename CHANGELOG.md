@@ -8,6 +8,14 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`dev-tools` feature** for the examples: `--features dev-tools` serves
+  the example over localhost BRP + MCP (`bevy_mcp_harness`) so an agent can
+  playtest it — screenshots, the laid-out UI tree (`data-on-click` elements
+  report `clickable`), mocked keyboard/gamepad/mouse input. Inert without
+  the feature; the library never touches the dependency.
+
 ## [0.5.1] - 2026-10-10
 
 ### Added

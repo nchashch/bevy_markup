@@ -25,6 +25,11 @@ system_fonts = ["bevy/system_font_discovery"]
 # Exposes `bevy_markup::fuzz` (`#[doc(hidden)]`, not covered by semver): internal
 # glue callable without a full Bevy app, for `fuzz/` targets.
 fuzzing = ["dep:wgpu-types"]
+# Dev/QA only: serves the examples over localhost BRP + MCP
+# (bevy_mcp_harness), so an agent can playtest them — `game/screenshot`
+# (the examples' README screenshots), `game/ui`, input mocks. Never enabled
+# in a shipped build.
+dev-tools = ["dep:bevy_mcp_harness"]
 
 [dependencies]
 # Only what the library's code uses; the app picks rendering, windowing,
@@ -57,6 +62,12 @@ lightningcss = { version = "1.0.0-alpha.72", features = ["into_owned"] }
 # Only for the `fuzzing` harness: `Image::new_fill` needs wgpu texture types,
 # which bevy_image does not re-export.
 wgpu-types = { version = "30.0.1", optional = true }
+# Only for the `dev-tools` feature: the examples' QA tool surface — localhost
+# BRP + MCP (bevy_mcp_harness) so an agent can playtest the examples:
+# `game/screenshot` (the examples' README screenshots), `game/ui`, input
+# mocks. Inert unless enabled; the library itself never touches it. Same
+# author as bevy_markup; bevy 0.20 only.
+bevy_mcp_harness = { version = "0.4.0", optional = true }
 
 [dev-dependencies]
 arbtest = "0.3.2"

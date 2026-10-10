@@ -1,11 +1,13 @@
-//! The whole API in one small app: an HTML template with Tera variables,
-//! Fluent translations and a CSS stylesheet; clickable elements
-//! (`data-on-click`, read as `ElementSignal` messages) that the keyboard and
-//! a gamepad reach too (`HtmlFocus`); runtime language switching.
+//! The 0.5.1 features in one small app: an inline element's
+//! `background-color` paints behind its text run and `text-decoration`
+//! underlines or strikes it; `<img>` flows an image into the text; CSS
+//! `border-radius: h / v` gives panels elliptical corners; `position: fixed`
+//! pins the ribbon to the viewport, ignoring the framed page.
 //!
-//! `cargo run --example quickstart` — click "add a coin" or "Language", or
-//! move between them with ↑ ↓ / D-pad and press Enter / A. Space / Y also
-//! switches between English and German.
+//! Clicking a quest (keyboard: ↑ ↓ / D-pad + Enter / A) toggles it done —
+//! its name is struck through. Space / Y switches English and German.
+//!
+//! `cargo run --example inline`
 
 use bevy::math::CompassOctant;
 use bevy::prelude::*;
@@ -26,7 +28,7 @@ fn main() {
             harness::HarnessPlugin,
         ))
         .add_systems(Startup, setup)
-        .add_systems(Update, (navigate, handle_signals, switch_language))
+        .add_systems(Update, (navigate, complete_next, handle_signals, switch_language))
         .run();
 }
 
@@ -34,33 +36,40 @@ fn main() {
 #[derive(Resource)]
 struct Languages(Vec<Handle<LocaleBundle>>);
 
+/// The quests' done-flags: the source of truth lives in the app, the
+/// context's `quests` mirrors it (each `context.insert` re-renders).
+#[derive(Resource, Clone)]
+struct Quests(Vec<bool>);
+
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
     commands.spawn(Camera2d);
 
     // CSS generic keywords → the system's fonts (Bevy's system_font_discovery).
-    // One source per family: the system picks bold and italic faces.
     fonts
         .insert("System Serif", FontFaces::new(FontSource::serif()))
         .insert("System Mono", FontFaces::new(FontSource::monospace()))
         .set_generic(GenericFamily::Serif, "System Serif")
         .set_generic(GenericFamily::Monospace, "System Mono");
 
-    commands.insert_resource(DefaultStylesheet::new(
-        asset_server.load("quickstart/style.css"),
-    ));
+    commands.insert_resource(DefaultStylesheet::new(asset_server.load("inline/style.css")));
 
     let languages: Vec<Handle<LocaleBundle>> = ["en-US", "de"]
         .iter()
-        .map(|id| asset_server.load(format!("quickstart/locales/{id}/main.ftl.ron")))
+        .map(|id| asset_server.load(format!("inline/locales/{id}/main.ftl.ron")))
         .collect();
     commands.insert_resource(ActiveLocale::new(languages[0].clone()));
     commands.insert_resource(Languages(languages));
 
+    // The quests are just done-flags: their names come from Fluent
+    // (`journal-quest-<index>`), so every locale translates them.
+    let quests = Quests(vec![true, false, false]);
+    commands.insert_resource(quests.clone());
     commands.spawn((
-        HtmlUi::new(asset_server.load("quickstart/hello.html")),
+        HtmlUi::new(asset_server.load("inline/page.html")),
         TemplateContext::new()
             .with("player", "Ada")
-            .with("coins", &0),
+            .with("day", &7)
+            .with("quests", &quests.0),
         Node {
             width: Val::Px(560.0),
             margin: UiRect::all(Val::Auto),
@@ -71,18 +80,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
     ));
 }
 
-/// Keyboard and gamepad: bevy_markup owns focus (`data-on-click` elements
-/// are focusable, `autofocus` picks the first) but reads no input — the app
-/// binds it. Navigating shows the `:focus-visible` ring; activating sends the
-/// same `ElementSignal` a click does.
+/// Keyboard and gamepad navigation, as in the quickstart example.
 fn navigate(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(Entity, &Gamepad)>,
     mut focus: HtmlFocus,
 ) {
     let pad = |button| gamepads.iter().find(|(_, pad)| pad.just_pressed(button));
-    // All four directions: `navigate` picks the nearest focusable element
-    // that way on screen, so the keys follow whatever the layout is.
     for (key, button, direction) in [
         (
             KeyCode::ArrowUp,
@@ -119,12 +123,35 @@ fn navigate(
     }
 }
 
-/// Clicks (and activations) arrive as `ElementSignal` messages. Wiring
-/// them in the template (rather than attaching observers after a build)
-/// keeps working when updates keep the elements: the binding is part of them.
+/// The C key / West button completes the next open quest — the same context
+/// change a click sends.
+fn complete_next(
+    keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<&Gamepad>,
+    mut signals: MessageWriter<ElementSignal>,
+) {
+    let pad = gamepads
+        .iter()
+        .any(|pad| pad.just_pressed(GamepadButton::West));
+    if keys.just_pressed(KeyCode::KeyC) || pad {
+        signals.write(ElementSignal {
+            name: "complete-next".into(),
+            trigger: SignalTrigger::Click,
+            target: Entity::PLACEHOLDER,
+            element: default(),
+            payload: default(),
+            source: SignalSource::Activation(ActivationInput::Key(KeyCode::KeyC)),
+        });
+    }
+}
+
+/// Clicks (and activations) arrive as `ElementSignal` messages. A quest's
+/// signal name carries its index (`toggle-quest-<index>`); toggling the
+/// resource re-renders the template and the name loses its strikethrough.
 fn handle_signals(
     mut signals: MessageReader<ElementSignal>,
     mut contexts: Query<&mut TemplateContext>,
+    mut quests: ResMut<Quests>,
     languages: Res<Languages>,
     mut active: ResMut<ActiveLocale>,
 ) {
@@ -133,12 +160,23 @@ fn handle_signals(
             continue;
         }
         match signal.name.as_ref() {
-            "add-coin" => {
-                for mut context in &mut contexts {
-                    let coins = context.get("coins").and_then(|v| v.as_i64()).unwrap_or(0);
-                    // Mutating the context re-renders the template (and
-                    // updates the UI in place).
-                    context.insert("coins", &(coins + 1));
+            name if name.starts_with("toggle-quest-") => {
+                if let Ok(quest) = name["toggle-quest-".len()..].parse::<usize>()
+                    && let Some(done) = quests.0.get_mut(quest)
+                {
+                    *done = !*done;
+                    for mut context in &mut contexts {
+                        context.insert("quests", &quests.0);
+                    }
+                }
+            }
+            "complete-next" => {
+                let open = quests.0.iter().position(|done| !done);
+                if let Some(quest) = open {
+                    quests.0[quest] = true;
+                    for mut context in &mut contexts {
+                        context.insert("quests", &quests.0);
+                    }
                 }
             }
             "switch-language" => next_language(&languages, &mut active),

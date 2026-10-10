@@ -52,6 +52,9 @@ use bevy_markup::prelude::*;
 mod input;
 use input::{ExampleInputPlugin, Hotkeys, SettingStep};
 
+#[path = "../shared/harness.rs"]
+mod harness;
+
 fn main() {
     App::new()
         .add_plugins((
@@ -69,6 +72,7 @@ fn main() {
                     ..default()
                 }),
             BevyMarkupPlugin,
+            harness::HarnessPlugin,
             ExampleInputPlugin,
         ))
         .define_html_element("icon", icon)
