@@ -32,24 +32,6 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `text-decoration` apply to link spans too.
 
 ### Added
-- **Three new examples:** `inputs` (text input fields with a live
-  preview and reset buttons), `links` (`<a href>` opening as an `open`
-  signal, with keyboard cycling) and `forms` (form submission to a receipt
-  panel, including a non-submitting `type="button"`). Run with
-  `--features text-input` for the fields.
-- **Form submission.** A `<form data-on-submit="name">` whose
-  `<button type="submit">` is clicked emits the form's `Submit`
-  [`ElementSignal`](src/signals.rs) with a JSON object of the named
-  inputs' live values (`{name: value}`; unnamed inputs excluded). Route it
-  with `on_html_signal` or drain the message queue like any other signal.
-  Submit buttons render as ordinary button blocks (focusable, styleable,
-  clickable) even without their own `data-on-click`. With the `text-input`
-  feature the payload carries each input's live text; without it the form
-  still submits, with an empty payload.
-
-## [0.5.2] - 2026-10-10
-
-### Added
 
 - **Text input.** `<input type="text" value maxlength>` renders an editable
   text field (Bevy 0.20's `EditableText` + `TextInput` behind the new
@@ -91,6 +73,21 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   playtest it — screenshots, the laid-out UI tree (`data-on-click` elements
   report `clickable`), mocked keyboard/gamepad/mouse input. Inert without
   the feature; the library never touches the dependency.
+
+- **Three new examples:** `inputs` (text input fields with a live
+  preview and reset buttons), `links` (`<a href>` opening as an `open`
+  signal, with keyboard cycling) and `forms` (form submission to a receipt
+  panel, including a non-submitting `type="button"`). Run with
+  `--features text-input` for the fields.
+- **Form submission.** A `<form data-on-submit="name">` whose
+  `<button type="submit">` is clicked emits the form's `Submit`
+  [`ElementSignal`](src/signals.rs) with a JSON object of the named
+  inputs' live values (`{name: value}`; unnamed inputs excluded). Route it
+  with `on_html_signal` or drain the message queue like any other signal.
+  Submit buttons render as ordinary button blocks (focusable, styleable,
+  clickable) even without their own `data-on-click`. With the `text-input`
+  feature the payload carries each input's live text; without it the form
+  still submits, with an empty payload.
 
 ## [0.5.1] - 2026-10-10
 
@@ -260,8 +257,7 @@ and that update in place every frame.
   into native Bevy UI entities. Stylesheets, translations and fonts can be
   switched at runtime.
 
-[Unreleased]: https://github.com/nchashch/bevy_markup/compare/v0.5.2...HEAD
-[0.5.2]: https://github.com/nchashch/bevy_markup/compare/v0.5.1...v0.5.2
+[Unreleased]: https://github.com/nchashch/bevy_markup/compare/v0.5.1...HEAD
 [0.5.1]: https://github.com/nchashch/bevy_markup/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/nchashch/bevy_markup/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nchashch/bevy_markup/compare/v0.3.0...v0.4.0
