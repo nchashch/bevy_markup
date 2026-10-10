@@ -73,13 +73,15 @@ pub fn cascade(css: &str) -> Result<String, String> {
 
     let styles = HtmlStyles::from_sheet(&stylesheet.sheet);
     let fonts = FontFamilies::default();
-    let root = root_style(&styles, &fonts, &assets, &element_tag("html"), None);
+    let root = root_style(&styles, &fonts, &assets, None, &element_tag("html"), None);
     let styler = Styler {
         styles: &styles,
         fonts: &fonts,
         root_size: root.size,
         sheet: Some(&stylesheet),
         images: &assets,
+        server: None,
+        template: None,
     };
 
     let elements = [

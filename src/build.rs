@@ -317,8 +317,9 @@ pub(crate) struct Styler<'a> {
     /// For `border-image` sources.
     pub(crate) sheet: Option<&'a Stylesheet>,
     pub(crate) images: &'a Assets<Image>,
-    /// For `<img src>` resolution and loads.
-    pub(crate) server: &'a AssetServer,
+    /// For `<img src>` loads. `None` where assets can't load (the fuzzing
+    /// harness): `<img>` runs are then skipped.
+    pub(crate) server: Option<&'a AssetServer>,
     /// The template's asset path: `<img src="…">` resolves against it.
     pub(crate) template: Option<AssetPath<'static>>,
 }
@@ -398,7 +399,7 @@ impl Styler<'_> {
         let width = attr_px(tag, "width");
         let height = attr_px(tag, "height");
         Some(ImageRun {
-            image: self.server.load(resolved),
+            image: self.server?.load(resolved),
             width,
             height,
         })
@@ -495,7 +496,7 @@ pub(crate) fn root_style(
     styles: &HtmlStyles,
     fonts: &FontFamilies,
     images: &Assets<Image>,
-    server: &AssetServer,
+    server: Option<&AssetServer>,
     root: &HtmlElement,
     inline: Option<&InlineStyle>,
 ) -> Style {
@@ -688,7 +689,7 @@ pub(crate) fn build_html_ui(
             &styles,
             &fonts,
             &images,
-            &server,
+            Some(&server),
             &root_element,
             root_inline.as_ref(),
         );
@@ -704,7 +705,7 @@ pub(crate) fn build_html_ui(
             root_size: root.size,
             sheet: css,
             images: &images,
-            server: &server,
+            server: Some(&server),
             template,
         };
 
