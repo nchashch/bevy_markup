@@ -42,6 +42,8 @@ use bevy::picking::events::{PointerClick, PointerEvent, PointerPress, PointerRel
 use bevy::picking::hover::{HoverMap, PickingInteraction};
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
+#[cfg(feature = "text-input")]
+use bevy::text::EditableText;
 use serde_json::Value;
 
 use crate::html::HtmlElement;
@@ -58,6 +60,9 @@ pub enum SignalTrigger {
     Release,
     Enter,
     Leave,
+    /// A form was submitted: the payload carries the named inputs' values.
+    /// Fired when a submit button in the form is clicked.
+    Submit,
 }
 
 /// One declared hook: the signal name and its rendered payload.
@@ -139,13 +144,14 @@ pub enum ActivationInput {
     Other,
 }
 
-const TRIGGERS: [(&str, SignalTrigger); 6] = [
+const TRIGGERS: [(&str, SignalTrigger); 7] = [
     ("data-on-click", SignalTrigger::Click),
     ("data-on-auxclick", SignalTrigger::AuxClick),
     ("data-on-press", SignalTrigger::Press),
     ("data-on-release", SignalTrigger::Release),
     ("data-on-enter", SignalTrigger::Enter),
     ("data-on-leave", SignalTrigger::Leave),
+    ("data-on-submit", SignalTrigger::Submit),
 ];
 
 /// The `data-on-*`/`data-with` attributes of `tag`, parsed.
@@ -192,6 +198,18 @@ pub(crate) fn signal_bindings(tag: &tl::HTMLTag) -> Vec<SignalBinding> {
 /// are attached.
 #[derive(Component)]
 pub(crate) struct PointerSignalObservers;
+
+/// An `<input>`'s form identity: submissions collect the field's value
+/// under this name (unnamed inputs are excluded from submissions).
+/// Constructed behind the `text-input` feature.
+#[derive(Component, Debug, Deref)]
+#[cfg_attr(not(feature = "text-input"), expect(dead_code))]
+pub(crate) struct InputName(pub String);
+
+/// Marks a `<button type="submit">` inside a form: clicking it collects
+/// the enclosing form's named inputs and emits the form's `Submit` signal.
+#[derive(Component)]
+pub(crate) struct FormSubmitButton;
 
 /// Attaches the click/press/release observers to `entity` once. They read
 /// the element's [`ElementSignals`] when the event arrives, so an in-place
@@ -254,6 +272,12 @@ struct PointerParams<'w, 's> {
     signals: Query<'w, 's, &'static ElementSignals>,
     parents: Query<'w, 's, &'static ChildOf>,
     elements: Query<'w, 's, &'static HtmlElement>,
+    #[cfg(feature = "text-input")]
+    children: Query<'w, 's, &'static Children>,
+    #[cfg(feature = "text-input")]
+    editable: Query<'w, 's, &'static EditableText>,
+    #[cfg(feature = "text-input")]
+    names: Query<'w, 's, &'static InputName>,
 }
 
 fn on_click(event: On<PointerClick>, params: PointerParams) {
@@ -275,11 +299,7 @@ fn on_release(event: On<PointerRelease>, params: PointerParams) {
 /// deeper bound element under the pointer owns it. `event_target()` is the
 /// entity this invocation runs for; `hit` the deepest picked entity
 /// (`On::original_event_target`), extracted by the concrete observer.
-fn on_pointer<E: PointerSignal>(
-    event: &E,
-    hit: Entity,
-    mut params: PointerParams,
-) {
+fn on_pointer<E: PointerSignal>(event: &E, hit: Entity, mut params: PointerParams) {
     let target = event.event_target();
     let (trigger, button) = event.signal_trigger();
     let Ok(bound) = params.signals.get(target) else {
@@ -304,6 +324,95 @@ fn on_pointer<E: PointerSignal>(
             payload: binding.payload.clone(),
             source,
         });
+    }
+
+    // A submit button clicked: collect the enclosing form's named inputs
+    // and emit the form's `Submit` signal with their values (ADR: form
+    // submissions are signals — Bevy has no HTTP client, the app decides
+    // what submitting means).
+    if trigger == SignalTrigger::Click && params.parents.contains(target) {
+        emit_form_submit(target, &mut params);
+    }
+}
+
+/// Finds the enclosing form of `button` (a `<form>` whose bindings include
+/// a `Submit` hook), collects the named inputs' values from its subtree,
+/// and emits the form's `Submit` signal.
+fn emit_form_submit(button: Entity, params: &mut PointerParams) {
+    // The nearest form ancestor with a `data-on-submit` hook.
+    let Some((form, name)) = std::iter::successors(
+        params
+            .parents
+            .get(button)
+            .ok()
+            .map(|child_of| child_of.parent()),
+        |current| {
+            params
+                .parents
+                .get(*current)
+                .ok()
+                .map(|child_of| child_of.parent())
+        },
+    )
+    .find_map(|form| {
+        let element = params.elements.get(form).ok()?;
+        if element.tag != "form" {
+            return None;
+        }
+        let signals = params.signals.get(form).ok()?;
+        let binding = signals
+            .0
+            .iter()
+            .find(|binding| binding.trigger == SignalTrigger::Submit)?;
+        Some((form, binding.name.clone()))
+    }) else {
+        return;
+    };
+
+    // The named inputs' values in the form's subtree, in tree order.
+    // Without the `text-input` feature, `<input>`s don't spawn: the form
+    // submits with an empty payload.
+    #[allow(unused_mut)]
+    let mut payload = serde_json::Map::new();
+    #[cfg(feature = "text-input")]
+    collect_input_values(form, params, &mut payload);
+
+    params.writer.write(ElementSignal {
+        name: Cow::Owned(name),
+        trigger: SignalTrigger::Submit,
+        target: form,
+        element: params.elements.get(form).cloned().unwrap_or_default(),
+        payload: serde_json::Value::Object(payload),
+        source: SignalSource::Pointer {
+            pointer: PointerId::Mouse,
+            button: PointerButton::Primary,
+            position: Vec2::ZERO,
+            count: 1,
+        },
+    });
+}
+
+/// Walks `form`'s subtree and inserts each named input's live text under
+/// its name (tree order; unnamed inputs excluded).
+#[cfg(feature = "text-input")]
+fn collect_input_values(
+    form: Entity,
+    params: &PointerParams,
+    payload: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    let mut stack: Vec<Entity> = vec![form];
+    while let Some(entity) = stack.pop() {
+        if let Ok(children) = params.children.get(entity) {
+            stack.extend(children.iter().rev());
+        }
+        if let Ok(name) = params.names.get(entity)
+            && let Ok(editable) = params.editable.get(entity)
+        {
+            payload.insert(
+                name.0.clone(),
+                serde_json::json!(editable.editor.text().to_string()),
+            );
+        }
     }
 }
 
@@ -806,10 +915,7 @@ mod tests {
                 button,
                 hit: hit(),
             };
-            assert_eq!(
-                release.signal_trigger(),
-                (SignalTrigger::Release, button)
-            );
+            assert_eq!(release.signal_trigger(), (SignalTrigger::Release, button));
             assert_eq!(release.count(), 1);
         }
     }

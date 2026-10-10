@@ -169,6 +169,10 @@ bevy_markup implements a useful subset of the web, not all of it:
   `-release`, `-enter`, `-leave`. Each message says what produced it: the
   pointer (mouse, touch, a VR laser…) and button with the position, or the
   key or gamepad button that activated the element.
+- **Forms:** `<form data-on-submit="login">` collects its named
+  `<input>`s: clicking a `<button type="submit">` in the form emits the
+  form's `Submit` signal with a JSON object of their live values (the app
+  decides what submitting means — bevy_markup has no HTTP client).
 - **Tooltips:** `data-tooltip="shop-buy-tooltip"` on any element shows your
   tooltip template beside it while it's hovered (with `data-tooltip-args`
   and `data-tooltip-placement`), like a browser's `title`.

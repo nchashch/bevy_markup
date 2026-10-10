@@ -46,7 +46,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlAnchor { element, placement, gap }`, `AnchorPlacement::{Right, Left, Above, Below}` | Component | keeps an (absolute) overlay node beside `element` each frame: insets from its rect, clamped to the viewport by the overlay's size, `UiTargetCamera` copied, despawned with the element |
 | `HtmlSignalsExt::on_html_click(name, system)` / `on_html_signal(name, system)` | App ext | route `ElementSignal`s by name to systems taking `In<ElementSignal>` (`on_html_click`: `Click` only); run by `dispatch_signals` (exclusive, `PostUpdate` before `Render`, own message cursor); messages still sent |
 | `HtmlTooltips { template, gap }`, `HtmlTooltip { element }` | Resource, Component | `data-tooltip="key"` (+ `data-tooltip-args` JSON, `data-tooltip-placement` right/left/above/below): while a pointer hovers the element or a descendant (nearest wins), an `HtmlUi` of `template` with `key`/`args`/`placement` is anchored beside it; refreshed by updates, despawned on leave |
-| `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger`, `SignalSource`, `ActivationInput` | Message, Component, enums | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click = primary button or activation, auxclick = other buttons, press/release = any button, enter/leave); `source`: `Pointer { pointer, button, position, count }` / `Hover { pointer }` / `Activation(input)`; deepest bound element wins |
+| `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger`, `SignalSource`, `ActivationInput` | Message, Component, enums | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click = primary button or activation, auxclick = other buttons, press/release = any button, enter/leave, submit = a `<form>`'s submit button clicked — payload `{name: value}` of its named inputs); `source`: `Pointer { pointer, button, position, count }` / `Hover { pointer }` / `Activation(input)`; deepest bound element wins |
 | `PseudoState { hovered, active, focused, focus_visible }` | Component | `:hover`/`:active` (from picking) and `:focus`/`:focus-visible` (from `InputFocus`/`InputFocusVisible`) per element; a change restyles in place; apps may set it |
 | `Focusable { autofocus }` | Component | on focusable elements (`data-on-click` or `tabindex >= 0`, not `tabindex="-1"`) |
 | `HtmlFocus` | SystemParam | `navigate(CompassOctant)` (shows focus; `FocusEdge` at an edge), `activate(ActivationInput)` (the input the app saw: `Key`, `GamepadButton`, `Synthetic` for harnesses, `Other`), `focused()` — the app binds its own input |
@@ -1192,9 +1192,17 @@ Known limits (each skipped/ignored value is logged at `debug`):
   [`ElementSignal`] messages (`signals.rs`; click/auxclick/press/release via
   picking observers — one per event type per element, mapping the pointer
   button to the trigger and reporting it in `SignalSource::Pointer` — enter/leave via hover tracking that survives rebuilds — the
-  deepest bound element wins, so buttons can nest). What signals *mean* is
-  app code reading the queue (the demo's `controls::read_signals`). No
-  built-in reactions, no forms/inputs. `:hover`/`:active` styling works
+  deepest bound element wins, so buttons can nest; forms: a `<form
+  data-on-submit="name">` whose `<button type="submit">` is clicked emits
+  the form's `Submit` signal with the named inputs' values as a JSON
+  object — unnamed inputs excluded; the collection reads each input's live
+  `EditableText`, so without `text-input` (no input entities) the payload
+  is empty; the submit button is a plain block carrying the
+  `FormSubmitButton` marker — no bindings of its own, but its click
+  submits, so its observers attach for `spec.submit` too, and
+  `update_spec` keeps marker/observers/`ElementSignals` in step on
+  restyles). What signals *mean* is app code reading the queue (the demo's
+  `controls::read_signals`). No built-in reactions. `:hover`/`:active` styling works
   (see the Selectors limit); focus and directional navigation are
   library-side (`focus.rs`), input bindings are the app's. No
   `:focus-within`, no Tab order (directional navigation only). App

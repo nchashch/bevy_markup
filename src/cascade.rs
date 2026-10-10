@@ -18,7 +18,6 @@ use lightningcss::properties::border_image::{
 };
 use lightningcss::properties::custom::CustomPropertyName;
 use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
-use lightningcss::properties::text::TextDecorationLine;
 use lightningcss::properties::flex as css_flex;
 use lightningcss::properties::font::{
     AbsoluteFontSize, AbsoluteFontWeight, FontFamily, FontSize, FontStyle, FontWeight,
@@ -30,6 +29,7 @@ use lightningcss::properties::grid::{
 use lightningcss::properties::overflow::OverflowKeyword;
 use lightningcss::properties::position as css_position;
 use lightningcss::properties::size::{self as css_size, MaxSize, Size};
+use lightningcss::properties::text::TextDecorationLine;
 use lightningcss::rules::CssRule;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleAttribute, StyleSheet};
 use lightningcss::traits::IntoOwned;
@@ -195,10 +195,22 @@ impl LayoutDecl {
         set(&mut node.grid_row, &grid_placement(self.grid_row));
         set(&mut node.grid_column, &grid_placement(self.grid_column));
         let corners = &mut node.border_radius;
-        set(&mut corners.top_left, &self.border_radius[0].map(CornerRadius::from));
-        set(&mut corners.top_right, &self.border_radius[1].map(CornerRadius::from));
-        set(&mut corners.bottom_right, &self.border_radius[2].map(CornerRadius::from));
-        set(&mut corners.bottom_left, &self.border_radius[3].map(CornerRadius::from));
+        set(
+            &mut corners.top_left,
+            &self.border_radius[0].map(CornerRadius::from),
+        );
+        set(
+            &mut corners.top_right,
+            &self.border_radius[1].map(CornerRadius::from),
+        );
+        set(
+            &mut corners.bottom_right,
+            &self.border_radius[2].map(CornerRadius::from),
+        );
+        set(
+            &mut corners.bottom_left,
+            &self.border_radius[3].map(CornerRadius::from),
+        );
         set(&mut node.overflow.x, &self.overflow[0]);
         set(&mut node.overflow.y, &self.overflow[1]);
         let position_type = match self.position {
@@ -2463,7 +2475,8 @@ mod tests {
 
         assert_eq!(declared("pointer-events: none").pointer_events, Some(false));
         assert_eq!(declared("pointer-events: AUTO").pointer_events, Some(true));
-        assert_eq!(declared("pointer-events: visiblePainted").pointer_events,
+        assert_eq!(
+            declared("pointer-events: visiblePainted").pointer_events,
             None
         );
         assert_eq!(declared("color: red").pointer_events, None);
@@ -2523,10 +2536,7 @@ mod tests {
             Some(Val::Em(1.0))
         );
         assert_eq!(layout("width: 1.5em").width, Some(Val::Em(1.5)));
-        assert_eq!(
-            layout("margin: 2rem").margin,
-            [Some(Val::Rem(2.0)); 4]
-        );
+        assert_eq!(layout("margin: 2rem").margin, [Some(Val::Rem(2.0)); 4]);
         // `ex`/`ch` have no Bevy counterpart.
         assert_eq!(layout("width: 3ch").width, None);
     }

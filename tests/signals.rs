@@ -9,9 +9,12 @@
 
 mod common;
 
+use bevy::ecs::message::Messages;
 use bevy::input::ButtonState;
-use bevy::picking::pointer::{PointerButton, PointerId};
+use bevy::input::keyboard::Key;
+use bevy::input::keyboard::KeyboardInput;
 use bevy::math::Vec2;
+use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 use common::{TestUi, node_rect};
@@ -803,4 +806,133 @@ fn links_emit_open_signals_with_the_href() {
         Some("https://example.com/other"),
         "the re-rendered href"
     );
+}
+
+/// `<form data-on-submit>`: clicking a submit button collects the named
+/// inputs' values into the Submit signal on the form; unnamed inputs are
+/// excluded; only the clicked form submits. Typing goes through the
+/// widget's keyboard handling (the field focused via press-to-focus).
+#[test]
+fn form_submit_collects_named_inputs() {
+    let page = r#"<div class="app">
+  <form id="login" data-on-submit="login">
+    <input type="text" name="user" value="ada">
+    <input type="text" name="pass" id="pass">
+    <input type="text" value="unnamed">
+    <button type="submit" id="go">Log in</button>
+  </form>
+  <form id="other" data-on-submit="other">
+    <input type="text" name="q" value="query">
+    <button type="submit" id="other-go">Go</button>
+  </form>
+</div>"#;
+    let mut ui = page_ui(
+        "signals-form",
+        page,
+        "input { width: 200px; height: 24px } button { height: 24px; width: 100px }",
+        TemplateContext::new(),
+    );
+    ui.settle();
+    ui.update(1);
+
+    // The forms and the submit buttons are entities.
+    let (login, other, go) = {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement)>();
+        let mut by_id = |id: &str| {
+            elements
+                .iter(world)
+                .find(|(_, element)| element.id.as_deref() == Some(id))
+                .map(|(entity, _)| entity)
+                .unwrap_or_else(|| panic!("{id}"))
+        };
+        (by_id("login"), by_id("other"), by_id("go"))
+    };
+
+    // Click the login form's submit button: the Submit signal carries the
+    // named inputs' values (the unnamed one excluded), targets the form,
+    // and the other form doesn't submit.
+    let at = {
+        let world = ui.world_mut();
+        node_rect(world, go).expect("laid out").center()
+    };
+    ui.click_at(at);
+    let submits: Vec<ElementSignal> = ui
+        .take_signals()
+        .into_iter()
+        .filter(|signal| signal.trigger == SignalTrigger::Submit)
+        .collect();
+    assert_eq!(submits.len(), 1, "one submit");
+    assert_eq!(submits[0].name.as_ref(), "login");
+    assert_eq!(submits[0].target, login);
+    assert!(
+        !submits.iter().any(|signal| signal.target == other),
+        "only the clicked form submits"
+    );
+    // The values (and the inputs they come from) need the `text-input`
+    // feature: without it, `<input>`s don't spawn and the form submits
+    // with an empty payload.
+    #[cfg(feature = "text-input")]
+    {
+        assert_eq!(submits[0].payload["user"].as_str(), Some("ada"));
+        assert_eq!(submits[0].payload["pass"].as_str(), Some(""));
+        assert!(
+            submits[0].payload.get("unnamed").is_none(),
+            "unnamed inputs excluded"
+        );
+    }
+
+    // Typing into the pass field and re-submitting needs the
+    // `text-input` feature (the field and the widget's keyboard handling
+    // only exist with it).
+    #[cfg(feature = "text-input")]
+    {
+        let pass = {
+            let world = ui.world_mut();
+            let mut elements = world.query::<(Entity, &HtmlElement)>();
+            elements
+                .iter(world)
+                .find(|(_, element)| element.id.as_deref() == Some("pass"))
+                .map(|(entity, _)| entity)
+                .expect("pass")
+        };
+        let pass_rect = {
+            let world = ui.world_mut();
+            node_rect(world, pass).expect("laid out")
+        };
+        ui.click_at(pass_rect.center());
+        ui.take_signals();
+        let window = window_of(&mut ui);
+        for (code, character) in [(KeyCode::KeyH, "h"), (KeyCode::KeyI, "i")] {
+            ui.world_mut()
+                .resource_mut::<Messages<KeyboardInput>>()
+                .write(KeyboardInput {
+                    key_code: code,
+                    logical_key: Key::Character(character.into()),
+                    state: ButtonState::Pressed,
+                    text: Some(character.into()),
+                    repeat: false,
+                    window,
+                });
+            ui.update(2);
+        }
+        ui.click_at(at);
+        let submits: Vec<ElementSignal> = ui
+            .take_signals()
+            .into_iter()
+            .filter(|signal| signal.trigger == SignalTrigger::Submit)
+            .collect();
+        assert_eq!(submits.len(), 1, "one submit after typing");
+        assert_eq!(submits[0].payload["pass"].as_str(), Some("hi"), "typed");
+        assert_eq!(submits[0].payload["user"].as_str(), Some("ada"));
+    }
+}
+
+/// The harness's primary window entity (the keyboard event's target).
+fn window_of(ui: &mut TestUi) -> Entity {
+    use bevy::window::PrimaryWindow;
+    ui.world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(ui.world_mut())
+        .expect("primary window")
 }

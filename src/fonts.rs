@@ -246,10 +246,7 @@ mod tests {
             families.resolve_chain(&[named("Nope"), named("Spectral")]),
             spectral
         );
-        assert_eq!(
-            families.faces(spectral[0]).unwrap().regular,
-            font(1).into()
-        );
+        assert_eq!(families.faces(spectral[0]).unwrap().regular, font(1).into());
     }
 
     /// Unregistered names, unmapped generics and generics mapped to
@@ -266,7 +263,11 @@ mod tests {
             families.resolve_chain(&[serif.clone(), cursive.clone(), mono]),
             iosevka
         );
-        assert!(families.resolve_chain(&[named("Nope"), serif, cursive]).is_empty());
+        assert!(
+            families
+                .resolve_chain(&[named("Nope"), serif, cursive])
+                .is_empty()
+        );
         assert!(families.resolve_chain(&[]).is_empty());
     }
 

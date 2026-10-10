@@ -3,14 +3,14 @@
 use std::cell::RefCell;
 
 use bevy::asset::{AssetEvent, AssetPath, LoadState};
+use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use bevy::text::{InlineBox, InlineBoxKind};
 #[cfg(feature = "text-input")]
 use bevy::text::EditableText;
+use bevy::text::{InlineBox, InlineBoxKind};
 #[cfg(feature = "text-input")]
 use bevy::ui_widgets::TextInput;
-use bevy::ecs::system::SystemParam;
 
 use crate::cascade::{
     self, CssPosition, DecorationDecl, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo,
@@ -115,6 +115,8 @@ struct TextInputSpec {
     initial: String,
     font: TextFont,
     color: Color,
+    /// The form identity: submissions collect the value under this name.
+    name: Option<String>,
 }
 
 /// An `<img>`: the loaded image and its `width`/`height` attributes (px;
@@ -152,10 +154,15 @@ enum BlockKind {
     Paragraph,
     ListItem,
     Preformatted,
+    /// `<button>`: a block carrying its bindings; `type="submit"` submits
+    /// the enclosing form.
+    Button,
 }
 
 struct Block {
     kind: BlockKind,
+    /// `<button type="submit">`: clicking submits the enclosing form.
+    submit: bool,
     /// `None` for anonymous loose text.
     element: Option<HtmlElement>,
     /// The element's `data-on-*` hooks.
@@ -408,11 +415,7 @@ impl Styler<'_> {
     /// `text-decoration`); `None` when it declares neither. Not inherited:
     /// `push_runs` keeps the subtree's running values unless an element
     /// declares its own.
-    fn run_extras(
-        &self,
-        element: &HtmlElement,
-        inline: Option<&InlineStyle>,
-    ) -> Option<RunExtras> {
+    fn run_extras(&self, element: &HtmlElement, inline: Option<&InlineStyle>) -> Option<RunExtras> {
         let declared = self.styles.get_with(element, Pseudo::default(), inline);
         if declared.background.is_none() && declared.text_decoration.is_none() {
             return None;
@@ -444,9 +447,12 @@ impl Styler<'_> {
             debug!("html img: {src} — only asset paths are supported; skipped");
             return None;
         }
-        let resolved = template.resolve_embed_str(&src).inspect_err(|error| {
-            debug!("html img: {src} skipped ({error})");
-        }).ok()?;
+        let resolved = template
+            .resolve_embed_str(&src)
+            .inspect_err(|error| {
+                debug!("html img: {src} skipped ({error})");
+            })
+            .ok()?;
         let width = attr_px(tag, "width");
         let height = attr_px(tag, "height");
         Some(ImageRun {
@@ -696,7 +702,9 @@ pub(crate) fn build_html_ui(
     // First pass: the decision per UI. Nested UIs need the whole set before
     // anything acts (see the suppression below).
     let mut decisions: Vec<(Entity, Decision)> = Vec::new();
-    for (entity, rendered, localized, own_sheet, outline, _ui, used_images, mut rebuild) in &mut views {
+    for (entity, rendered, localized, own_sheet, outline, _ui, used_images, mut rebuild) in
+        &mut views
+    {
         let frame = Frame {
             own: own_sheet.as_ref().map(|own| phase(&own.0)),
             default: default_sheet.0.as_ref().map(phase),
@@ -760,9 +768,9 @@ pub(crate) fn build_html_ui(
             root_inline.as_ref(),
         );
         let template = match (&*rendered, ui) {
-            (RenderedHtml::Ready(_), HtmlUi(template)) => templates.get(template).map(|template| {
-                AssetPath::parse(&template.name).clone_owned()
-            }),
+            (RenderedHtml::Ready(_), HtmlUi(template)) => templates
+                .get(template)
+                .map(|template| AssetPath::parse(&template.name).clone_owned()),
             _ => None,
         };
         let styler = Styler {
@@ -838,6 +846,7 @@ pub(crate) fn build_html_ui(
                 signals: Vec::new(),
                 focus: None,
                 custom: None,
+                submit: false,
                 runs: vec![Run {
                     text,
                     style: style.clone(),
@@ -860,6 +869,7 @@ pub(crate) fn build_html_ui(
                     signals: Vec::new(),
                     focus: None,
                     custom: None,
+                    submit: false,
                     runs: vec![Run {
                         text: format!("failed to render: {message}"),
                         style: root.clone(),
@@ -938,6 +948,9 @@ struct NodeSpec {
     /// The element's computed font-size (CSS `em` resolves against it via
     /// Bevy's `EmSize`; `rem` against the synced `RemSize`).
     font_size: f32,
+    /// `<button type="submit">`: clicking emits the enclosing form's
+    /// `Submit` signal.
+    submit: bool,
     /// `<input type="text">` (the `text-input` feature): an editable text
     /// field. `Some` = initial text and the cascade's font/color.
     #[cfg(feature = "text-input")]
@@ -996,6 +1009,7 @@ impl NodeSpec {
             outline: None,
             pickable: true,
             fixed: false,
+            submit: false,
             font_size: DEFAULT_FONT_SIZE,
             #[cfg(feature = "text-input")]
             text_input: None,
@@ -1111,7 +1125,11 @@ fn spawn_spans(spans: &mut ChildSpawnerCommands<'_>, text: TextSpec, pickable: b
         // `open` click carries the href). `HtmlElement`/`DomNode` give it
         // hover state (`a:hover`) and element identity.
         if let Some(link) = span.link {
-            child.insert((ElementSignals(link.bindings), link.element, DomNode(link.handle)));
+            child.insert((
+                ElementSignals(link.bindings),
+                link.element,
+                DomNode(link.handle),
+            ));
             signals::observe_pointer_signals(&mut child);
         }
         if let Some(background) = span.background {
@@ -1155,71 +1173,71 @@ type Tree<'w, 's> = Query<
 fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
     let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children) =
         match item {
-        Item::Block(block) => return block_spec(styler, block),
-        #[cfg(feature = "text-input")]
-        Item::TextInput {
-            element,
-            handle,
-            signals,
-            focus,
-            custom,
-            boxed,
-            pointer_events,
-            font_size,
-            value,
-        } => {
-            // Returns directly: the other arms feed the shared tuple tail.
-            let mut node = Node {
-                flex_direction: FlexDirection::Column,
-                flex_shrink: 0.0,
-                box_sizing: BoxSizing::ContentBox,
-                border: rect_over(UiRect::DEFAULT, boxed.border),
-                padding: rect_over(UiRect::DEFAULT, boxed.padding),
-                ..default()
-            };
-            boxed.layout.apply_to(&mut node);
-            return NodeSpec {
-                element: Some(element),
+            Item::Block(block) => return block_spec(styler, block),
+            #[cfg(feature = "text-input")]
+            Item::TextInput {
+                element,
+                handle,
                 signals,
                 focus,
                 custom,
-                handle,
-                border_color: boxed.border_color(),
-                background: boxed.background,
-                image: boxed.sliced_image(),
-                outline: boxed.drawn_outline,
-                z_index: boxed.z_index.map(ZIndex),
-                pickable: pointer_events,
-                fixed: boxed.layout.position == Some(CssPosition::Fixed),
+                boxed,
+                pointer_events,
                 font_size,
-                #[cfg(feature = "text-input")]
-                text_input: Some(value),
-                children: Vec::new(),
-                ..NodeSpec::new(node)
-            };
-        }
-        Item::Container {
-            element,
-            handle,
-            signals,
-            focus,
-            custom,
-            boxed,
-            pointer_events,
-            font_size,
-            children,
-        } => (
-            element,
-            handle,
-            signals,
-            focus,
-            custom,
-            boxed,
-            pointer_events,
-            font_size,
-            children,
-        ),
-    };
+                value,
+            } => {
+                // Returns directly: the other arms feed the shared tuple tail.
+                let mut node = Node {
+                    flex_direction: FlexDirection::Column,
+                    flex_shrink: 0.0,
+                    box_sizing: BoxSizing::ContentBox,
+                    border: rect_over(UiRect::DEFAULT, boxed.border),
+                    padding: rect_over(UiRect::DEFAULT, boxed.padding),
+                    ..default()
+                };
+                boxed.layout.apply_to(&mut node);
+                return NodeSpec {
+                    element: Some(element),
+                    signals,
+                    focus,
+                    custom,
+                    handle,
+                    border_color: boxed.border_color(),
+                    background: boxed.background,
+                    image: boxed.sliced_image(),
+                    outline: boxed.drawn_outline,
+                    z_index: boxed.z_index.map(ZIndex),
+                    pickable: pointer_events,
+                    fixed: boxed.layout.position == Some(CssPosition::Fixed),
+                    font_size,
+                    #[cfg(feature = "text-input")]
+                    text_input: Some(value),
+                    children: Vec::new(),
+                    ..NodeSpec::new(node)
+                };
+            }
+            Item::Container {
+                element,
+                handle,
+                signals,
+                focus,
+                custom,
+                boxed,
+                pointer_events,
+                font_size,
+                children,
+            } => (
+                element,
+                handle,
+                signals,
+                focus,
+                custom,
+                boxed,
+                pointer_events,
+                font_size,
+                children,
+            ),
+        };
     let mut node = Node {
         flex_direction: FlexDirection::Column,
         flex_shrink: 0.0,
@@ -1353,6 +1371,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             z_index: boxed.z_index.map(ZIndex),
             pickable: block.style.pointer_events,
             fixed: boxed.layout.position == Some(CssPosition::Fixed),
+            submit: block.submit,
             font_size: block.style.size,
             images,
             text: Some(text),
@@ -1387,6 +1406,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         z_index: boxed.z_index.map(ZIndex),
         pickable: block.style.pointer_events,
         fixed: boxed.layout.position == Some(CssPosition::Fixed),
+        submit: block.submit,
         font_size: block.style.size,
         images,
         children: vec![NodeSpec {
@@ -1438,9 +1458,15 @@ fn spawn_spec(
             TextColor(input.color),
             TextInput,
         ));
+        if let Some(name) = input.name {
+            entity.insert(signals::InputName(name));
+        }
     }
     #[cfg(not(feature = "text-input"))]
     let _ = is_text_input;
+    if spec.submit {
+        entity.insert(signals::FormSubmitButton);
+    }
     if let Some(custom) = spec.custom {
         connected.push(ElementConnected {
             entity: id,
@@ -1459,7 +1485,9 @@ fn spawn_spec(
     if let Some(focusable) = spec.focus {
         entity.insert(focusable);
     }
-    if !spec.signals.is_empty() {
+    // A submit button has no bindings of its own, but its click submits
+    // the enclosing form (`on_pointer` checks the marker).
+    if !spec.signals.is_empty() || spec.submit {
         signals::observe_pointer_signals(&mut entity);
         entity.insert(ElementSignals(spec.signals));
     }
@@ -1647,7 +1675,10 @@ fn update_spec(
         ..
     } = spec;
     let is_text = spec.text.is_some();
-    if !bindings.is_empty() {
+    // A submit button's click submits the enclosing form even though it
+    // has no bindings of its own (`on_pointer` checks the marker).
+    let submit = spec.submit;
+    if !bindings.is_empty() || submit {
         signals::observe_pointer_signals(&mut target);
     }
     target.queue(move |mut entity: EntityWorldMut| {
@@ -1664,8 +1695,13 @@ fn update_spec(
         put(&mut entity, focus);
         put(
             &mut entity,
-            (!bindings.is_empty()).then_some(ElementSignals(bindings)),
+            (!bindings.is_empty() || submit).then_some(ElementSignals(bindings)),
         );
+        if submit {
+            entity.insert(signals::FormSubmitButton);
+        } else {
+            entity.remove::<signals::FormSubmitButton>();
+        }
         put(&mut entity, background.map(BackgroundColor));
         match image {
             // `ImageNode` has no `PartialEq`; frames are rare.
@@ -1843,12 +1879,7 @@ fn put_marker<C: Component + Default>(entity: &mut EntityWorldMut, set: bool) {
 /// sibling roots too, as Bevy sorts roots by `GlobalZIndex` then `ZIndex`)
 /// and `pointer-events: none` as components. What it no longer declares goes
 /// back to the app's value ([`CssRoot`]).
-fn apply_root(
-    entity: &mut EntityWorldMut,
-    boxed: BoxStyle,
-    pointer_events: bool,
-    root_size: f32,
-) {
+fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool, root_size: f32) {
     let state = entity.take::<CssRoot>();
     let Some(current) = entity.get::<Node>().cloned() else {
         return;
@@ -2081,6 +2112,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
                     signals: Vec::new(),
                     focus: None,
                     custom: None,
+                    submit: false,
                     style: inherited.clone(),
                     boxed: BoxStyle::default(),
                     runs,
@@ -2092,7 +2124,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
     };
 
     let signals = signals::signal_bindings(tag);
-    let focus = focus::focusable(tag, &signals);
+    let mut focus = focus::focusable(tag, &signals);
     let custom = custom_elements::custom_element(tag);
     let state = ctx
         .states
@@ -2127,11 +2159,21 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
     {
         // An editable text field (ADR 0016): a block with the widget's
         // components; its content is the field's state, not walked markup.
+        // An `<input>` is focusable like a block with `data-on-click`
+        // (HTML inputs are focusable), unless `tabindex="-1"`.
+        focus = Some(Focusable {
+            autofocus: tag.attributes().get("autofocus").flatten().is_some(),
+        });
         let value = tag
             .attributes()
             .get("value")
             .flatten()
             .map(|value| decode_entities(&value.as_utf8_str()).to_string());
+        let name = tag
+            .attributes()
+            .get("name")
+            .flatten()
+            .map(|name| decode_entities(&name.as_utf8_str()).to_string());
         let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref());
         boxed.drawn_outline = boxed.outline(style.color);
         boxed.fade(style.opacity);
@@ -2148,11 +2190,21 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
                 initial: value.unwrap_or_default(),
                 font: ctx.styler.text_font(&style),
                 color: faded(style.color, style.opacity),
+                name,
             },
         });
         return;
     }
+    // A button: a block carrying its bindings and element; clicking a
+    // submit button submits the enclosing form (the marker is on the
+    // spawn path, behind the `text-input` feature — without it the
+    // Submit signal's payload is just empty).
+    let is_button = element.tag == "button";
     let kind = match element.tag.as_str() {
+        "button" => {
+            kind_button_focus(&mut focus, tag);
+            BlockKind::Button
+        }
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
         "p" => BlockKind::Paragraph,
         "li" => BlockKind::ListItem,
@@ -2209,6 +2261,13 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
     };
     // A missing translation falls back to the element's own content.
     let preformatted = matches!(kind, BlockKind::Preformatted);
+    let submit = is_button
+        && tag
+            .attributes()
+            .get("type")
+            .flatten()
+            .map(|kind| kind.as_utf8_str())
+            .is_none_or(|kind| kind == "submit");
     let mut runs = Vec::new();
     push_content_runs(ctx, handle, tag, &style, RunExtras::default(), &mut runs);
     items.push(Item::Block(Block {
@@ -2219,12 +2278,30 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
         focus,
         custom,
         style,
+        submit,
         boxed,
         runs: finish_runs(runs, preformatted),
     }));
 }
 
 /// Tag name (lowercase), `id` and `class` of an element.
+/// A `<button>` is focusable like a block with `data-on-click` (HTML
+/// buttons are focusable), unless the author opts out with `tabindex="-1"`.
+fn kind_button_focus(focus: &mut Option<Focusable>, tag: &tl::HTMLTag) {
+    if focus.is_none()
+        && tag
+            .attributes()
+            .get("tabindex")
+            .flatten()
+            .map(|v| v.as_utf8_str())
+            != Some("-1".into())
+    {
+        *focus = Some(Focusable {
+            autofocus: tag.attributes().get("autofocus").flatten().is_some(),
+        });
+    }
+}
+
 fn element_of(tag: &tl::HTMLTag) -> HtmlElement {
     let attribute = |key: &str| {
         tag.attributes()
@@ -2321,8 +2398,7 @@ fn push_runs(
                 }),
             }
         }
-                Some(tl::Node::Tag(tag)) => {
-            
+        Some(tl::Node::Tag(tag)) => {
             if tag.name().as_utf8_str() == *"img" {
                 push_image_run(ctx, tag, style, extras, runs);
                 return;
@@ -2335,15 +2411,13 @@ fn push_runs(
                 .copied()
                 .unwrap_or_default();
             // An unmatched `data-l10n-name` element is plain text.
-            let style = ctx
-                .element(tag)
-                .map_or_else(
-                    || style.clone(),
-                    |element| {
-                        let inline = cascade::inline_style(tag);
-                        ctx.styler.style_of(&element, style, state, inline.as_ref())
-                    },
-                );
+            let style = ctx.element(tag).map_or_else(
+                || style.clone(),
+                |element| {
+                    let inline = cascade::inline_style(tag);
+                    ctx.styler.style_of(&element, style, state, inline.as_ref())
+                },
+            );
             // This element's `background`/`text-decoration` over the
             // subtree's running values, faded with its opacity.
             let inherited_link = extras.link.clone();

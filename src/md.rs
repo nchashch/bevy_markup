@@ -47,7 +47,10 @@ mod tests {
     fn converts_the_document_basics() {
         let html = to_html("# Title\n\nplain *slanted* and **strong** text\n");
         assert!(html.contains("<h1>Title</h1>"), "{html}");
-        assert!(html.contains("<p>plain <em>slanted</em> and <strong>strong</strong> text</p>"), "{html}");
+        assert!(
+            html.contains("<p>plain <em>slanted</em> and <strong>strong</strong> text</p>"),
+            "{html}"
+        );
         let html = to_html("- one\n- two\n");
         assert!(html.contains("<li>one</li>"), "{html}");
         let html = to_html("```\ncode\n```\n");
@@ -69,11 +72,16 @@ mod tests {
     #[test]
     fn passes_raw_html_through() {
         let html = to_html("before <span class=\"hl\">marked</span> after\n");
-        assert!(html.contains("before <span class=\"hl\">marked</span> after"), "{html}");
-        let html = to_html(
-            "text\n\n<div data-on-click=\"buy\" class=\"action\">Buy</div>\n\ntail\n",
+        assert!(
+            html.contains("before <span class=\"hl\">marked</span> after"),
+            "{html}"
         );
-        assert!(html.contains("<div data-on-click=\"buy\" class=\"action\">Buy</div>"), "{html}");
+        let html =
+            to_html("text\n\n<div data-on-click=\"buy\" class=\"action\">Buy</div>\n\ntail\n");
+        assert!(
+            html.contains("<div data-on-click=\"buy\" class=\"action\">Buy</div>"),
+            "{html}"
+        );
     }
 
     /// Entities survive: escaped text is not re-interpreted as markup

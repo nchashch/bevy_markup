@@ -33,7 +33,7 @@ dev-tools = ["dep:bevy_mcp_harness"]
 # `<input type="text">` maps to Bevy 0.20's editable-text widget
 # (`EditableText` + `TextInput`); the widget crate isn't part of the
 # crate's minimal `ui_api` bevy features, so it's opt-in.
-text-input = ["bevy/bevy_ui_widgets"]
+text-input = ["bevy/bevy_ui_widgets", "bevy/keyboard"]
 
 [dependencies]
 # Only what the library's code uses; the app picks rendering, windowing,

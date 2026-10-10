@@ -8,6 +8,17 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+- **Form submission.** A `<form data-on-submit="name">` whose
+  `<button type="submit">` is clicked emits the form's `Submit`
+  [`ElementSignal`](src/signals.rs) with a JSON object of the named
+  inputs' live values (`{name: value}`; unnamed inputs excluded). Route it
+  with `on_html_signal` or drain the message queue like any other signal.
+  Submit buttons render as ordinary button blocks (focusable, styleable,
+  clickable) even without their own `data-on-click`. With the `text-input`
+  feature the payload carries each input's live text; without it the form
+  still submits, with an empty payload.
+
 ## [0.5.2] - 2026-10-10
 
 ### Added

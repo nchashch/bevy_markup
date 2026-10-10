@@ -532,6 +532,8 @@ impl ModelState for UiModel {
                     SignalTrigger::Release => RELEASE,
                     SignalTrigger::Enter => ENTER,
                     SignalTrigger::Leave => LEAVE,
+                    // The model never submits a form.
+                    SignalTrigger::Submit => unreachable!("no forms"),
                 };
                 (signal.name.to_string(), trigger)
             })

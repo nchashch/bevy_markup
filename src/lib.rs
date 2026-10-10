@@ -131,6 +131,16 @@
 //!   ```
 //!
 //!   Nested hooks: the deepest bound element under the pointer wins.
+//! - **Text inputs and forms** ([`signals`], `text-input` feature):
+//!   `<input type="text">` renders Bevy's editable-text widget (its
+//!   `value`, `placeholder` and `name` attributes carry over; it is
+//!   focusable, and the app binds keyboard input — the widget edits the
+//!   focused field's text). `<form data-on-submit="name">` collects its
+//!   named inputs' values: clicking the form's `<button type="submit">`
+//!   emits the form's `Submit` signal with a JSON object of
+//!   `{name: value}` (unnamed inputs excluded; the submit needs the
+//!   `text-input` feature's input entities — without it the payload is
+//!   empty). `<input>`s elsewhere are walked through.
 //! - **Custom elements** ([`custom_elements`]): `is="<name>"` on a block or
 //!   container runs the system the app defined with
 //!   [`define_html_element`](custom_elements::HtmlCustomElementsExt::define_html_element)
@@ -257,19 +267,33 @@ impl Plugin for BevyMarkupPlugin {
             .init_resource::<RemSize>()
             .init_resource::<fonts::FontFamilies>()
             .init_resource::<custom_elements::CustomElements>();
-            #[cfg(feature = "text-input")]
-            {
-                if !app.is_plugin_added::<bevy::ui_widgets::TextInputPlugin>() {
-                    app.add_plugins(bevy::ui_widgets::TextInputPlugin);
-                }
-                // The widget's systems read these; a real app has them via
-                // `WindowPlugin`/`UiScale`, but headless apps don't.
-                app.add_message::<bevy::window::Ime>()
-                    .add_message::<bevy::picking::events::PointerRelease>()
-                    .init_resource::<bevy::ui::UiScale>();
+        #[cfg(feature = "text-input")]
+        {
+            // The widget's keyboard editing keys off Bevy's
+            // `InputFocus`: the focus plugin (already the crate's
+            // model) plus the dispatcher for `FocusedInput` events.
+            if !app.is_plugin_added::<bevy::input_focus::InputFocusPlugin>() {
+                app.add_plugins(bevy::input_focus::InputFocusPlugin);
             }
-            app.add_message::<signals::ElementSignal>()
-                .add_systems(
+            if !app.is_plugin_added::<bevy::input_focus::InputDispatchPlugin>() {
+                app.add_plugins(bevy::input_focus::InputDispatchPlugin);
+            }
+            if !app.is_plugin_added::<bevy::ui_widgets::TextInputPlugin>() {
+                app.add_plugins(bevy::ui_widgets::TextInputPlugin);
+            }
+            // The widget's systems read these; a real app has them via
+            // `WindowPlugin`/`UiScale`, but headless apps don't.
+            app.add_message::<bevy::input::keyboard::KeyboardInput>()
+                .add_message::<bevy::input::gamepad::GamepadButtonChangedEvent>()
+                .add_message::<bevy::input::mouse::MouseWheel>()
+                .add_message::<bevy::window::Ime>()
+                .add_message::<bevy::picking::events::PointerRelease>()
+                .add_message::<bevy::picking::events::PointerPress>()
+                .add_message::<bevy::picking::events::PointerMove>()
+                .init_resource::<bevy::ui::UiScale>();
+        }
+        app.add_message::<signals::ElementSignal>()
+            .add_systems(
                 Update,
                 (
                     signals::hover_signals,
