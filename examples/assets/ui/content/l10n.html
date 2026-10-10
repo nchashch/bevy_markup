@@ -39,7 +39,9 @@ fn main() {
   <h2 data-l10n-id="log-title">Expedition log</h2>
   {% set places = ["galleries", "cistern", "chasm", "stair"] %}
   {% set events = ["march", "rest", "found", "storm", "map", "camp"] %}
+  <ul class="log">
   {% for day in range(start=1, end=61) %}
-  <p class="log-entry" data-l10n-id="log-entry" data-l10n-args='{"day": {{ day }}, "place": "{{ places[day % 4] }}", "event": "{{ events[(day * 5) % 6] }}", "count": {{ day % 4 + 1 }}}'>Day {{ day }}</p>
+    <li class="log-entry" data-l10n-id="log-entry" data-l10n-args='{"day": {{ day }}, "place": "{{ places[day % 4] }}", "event": "{{ events[(day * 5) % 6] }}", "count": {{ day % 4 + 1 }}}'>Day {{ day }}</li>
   {% endfor %}
+  </ul>
 </section>

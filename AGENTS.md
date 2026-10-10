@@ -565,6 +565,12 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   first scrollbar thumbs flickered "behind" their track and lost hits). Only
   the root keeps app values for fields CSS doesn't declare (`CssRoot`). For
   per-frame visuals on elements, use template values (`style="…"`, classes).
+- **The root node gets an automatic minimum size in Taffy 0.9 (Bevy
+  0.20).** CSS says `min-width`/`min-height: auto` compute to zero for a
+  root (the automatic minimum is a flex-*item* rule); taffy 0.9 applies the
+  content minimum to root nodes too, so a root with content taller than the
+  window grows to it instead of clipping — the scrolling recipe (below)
+  stopped working until `apply_root` zeroed the undeclared minimums.
 - **A scroll panel needs every flex level on its path allowed to shrink.**
   Containers default to `flex-shrink: 0` (browsers: 1), so the browser recipe
   `flex-grow: 1; min-height: 0; overflow-y: scroll` alone does nothing: the

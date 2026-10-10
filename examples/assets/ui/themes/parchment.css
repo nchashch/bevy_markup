@@ -145,6 +145,11 @@ em {
   overflow-y: scroll;
 }
 
+/* The expedition log's entries get breathing room between the rows. */
+.log {
+  gap: 10px;
+}
+
 .row {
   flex-direction: row;
   flex-wrap: wrap;

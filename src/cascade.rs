@@ -1789,6 +1789,23 @@ mod tests {
     }
 
     /// `p`'s declared style under one `p { declarations }` rule.
+    /// THROWAWAY: the demo's `.columns` rule, parsed.
+    #[test]
+    fn throwaway_columns_decl() {
+        let style = declared(
+            "flex-direction: row; gap: 16px; padding: 16px; flex-grow: 1; \
+             flex-shrink: 1; flex-basis: 0; min-height: 0;",
+        );
+        eprintln!(
+            "DECL grow={:?} shrink={:?} basis={:?} min_h={:?} dir={:?}",
+            style.layout.flex_grow,
+            style.layout.flex_shrink,
+            style.layout.flex_basis,
+            style.layout.min_height,
+            style.layout.flex_direction,
+        );
+    }
+
     fn declared(declarations: &str) -> ElementStyle {
         let sheet = owned_sheet(&format!("p {{ {declarations} }}"));
         HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), Pseudo::default())

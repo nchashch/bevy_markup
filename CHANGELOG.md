@@ -20,6 +20,13 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   re-render.
 
 ### Fixed
+- **Scrolling panels stopped working: the root grew to its content.** Taffy
+  (in Bevy 0.20) applies the automatic minimum size to root nodes, so a
+  root with undeclared `min-height` grew to its tallest content instead of
+  the window — nothing overflowed its scrolling panel any more. The root
+  now follows CSS: `min-width`/`min-height: auto` compute to zero for it
+  (unless the root rule declares a minimum), restoring the Bevy 0.19
+  behavior the scroll recipe relies on.
 - **`repair_focus` cleared focus the app set on an activation target.**
   An entity with signals (a link span — no `Focusable`, no `Node`) was
   treated as stale every frame, so app-driven keyboard focus on links (as

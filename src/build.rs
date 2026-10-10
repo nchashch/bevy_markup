@@ -2004,6 +2004,19 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
     }
     let mut node = base.clone();
     boxed.layout.apply_to(&mut node);
+    // CSS: `min-width`/`min-height: auto` compute to zero for the root (the
+    // automatic minimum is a flex-*item* rule) — content overflows the
+    // root, it doesn't size it. Taffy 0.9 applies the content minimum to
+    // root nodes too, which would grow the root to its content instead of
+    // letting the window clip it (a Bevy 0.19 → 0.20 behavior change; the
+    // scrolling-panel recipe depends on it). Zero it unless the root rule
+    // declares a minimum.
+    if boxed.layout.min_width.is_none() {
+        node.min_width = Val::Px(0.0);
+    }
+    if boxed.layout.min_height.is_none() {
+        node.min_height = Val::Px(0.0);
+    }
     node.border = rect_over(node.border, boxed.border);
     node.padding = rect_over(node.padding, boxed.padding);
     if let Some(gap) = boxed.row_gap {
