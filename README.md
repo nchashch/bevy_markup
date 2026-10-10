@@ -221,9 +221,10 @@ button (shown on screen). bevy_markup owns focus and activation; the
 examples bind the input (`examples/shared/input.rs`).
 
 Each example lives in its own directory with a README showing a screenshot
-and explaining what it shows and how to drive it. Their templates,
-stylesheets, translations and images are in `examples/assets/`. Text uses
-the fonts installed on your system (CSS `serif`, `sans-serif` and
+and explaining what it shows and how to drive it
+([examples/README.md](examples/README.md) indexes them all). Their
+templates, stylesheets, translations and images are in `examples/assets/`.
+Text uses the fonts installed on your system (CSS `serif`, `sans-serif` and
 `monospace`, via Bevy's `system_font_discovery`), so no font files ship with
 the repository.
 

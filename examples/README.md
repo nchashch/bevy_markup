@@ -1,0 +1,48 @@
+# Examples
+
+Runnable mini-apps, one directory each, each with its own README showing a
+screenshot and explaining what it shows and how to drive it. Their
+templates, stylesheets, translations and images live in `examples/assets/`
+(one `AssetPlugin` root shared by all). Text uses the fonts installed on
+your system (CSS `serif`, `sans-serif`, `monospace`), so no font files ship
+with the repository.
+
+Every example works with mouse, keyboard and gamepad alike: arrows / D-pad /
+left stick move focus, Enter / A press, and each shortcut has a gamepad
+button (shown on screen). bevy_markup owns focus and activation; the
+examples bind the input (`shared/input.rs`).
+
+## Start here
+
+| | Example |
+|---|---|
+| <img src="screenshots/quickstart.png" width="320"> | [`quickstart`](quickstart/) — `cargo run --example quickstart`<br><br>The whole API in one small app: an HTML template + CSS + Fluent become a native UI, with two clickable buttons (`data-on-click`), keyboard/gamepad focus, runtime language switching and Tera-driven in-place updates. Read this one top to bottom — it's deliberately self-contained. |
+
+## Each feature in context
+
+| | Example |
+|---|---|
+| <img src="screenshots/inputs.png" width="240"> | [`inputs`](inputs/) — `cargo run --example inputs --features text-input`<br><br>Text fields: `<input type="text">` renders Bevy's editable-text widget; the app reads the fields' `EditableText` into the context, so a preview follows every keystroke, and reset buttons write fields back. Without the feature the fields don't render. |
+| <img src="screenshots/forms.png" width="240"> | [`forms`](forms/) — `cargo run --example forms --features text-input`<br><br>Form submission: clicking a `<button type="submit">` emits the form's `Submit` signal with a JSON object of the named fields' live values; the template swaps the form for a receipt panel (plus a non-submitting `type="button"`). |
+| <img src="screenshots/links.png" width="240"> | [`links`](links/) — `cargo run --example links`<br><br>`<a href>` links: clicks (and keyboard activation) emit the `open` signal with the href, recorded in a status line; ← → ↑ ↓ / LB RB cycle the links and the Language button, with `:focus-visible` styling. |
+| <img src="screenshots/menu.png" width="240"> | [`menu`](menu/) — `cargo run --example menu`<br><br>A settings menu for mouse, keyboard and gamepad: focus with a `:focus-visible` ring, a volume slider, a difficulty stepper, `data-tooltip`, an `HtmlModal` confirm dialog, signals routed to systems and a Tera 2 component library. |
+| <img src="screenshots/grid.png" width="240"> | [`grid`](grid/) — `cargo run --example grid`<br><br>CSS grid layout, three ways: responsive `auto-fill` slots with spanning and dense packing, a fixed paper-doll grid placed by line numbers, and equal columns of nested card grids — tabs switch between them. |
+| <img src="screenshots/inline.png" width="240"> | [`inline`](inline/) — `cargo run --example inline`<br><br>Inline styling: `background-color` and `text-decoration` on text runs, CSS-sized `<img>` images, elliptical `border-radius`, and a `position: fixed` ribbon. |
+| <img src="screenshots/live.png" width="240"> | [`live`](live/) — `cargo run --example live`<br><br>Live game data: a party list rendered from state every frame and updated in place — rows keep their focus and hover while members join and leave; inline styles, opacity fading. |
+| <img src="screenshots/markdown.png" width="240"> | [`markdown`](markdown/) — `cargo run --example markdown`<br><br>Localized Markdown documents (ADR 0014): a reader whose pages are `.md` files and whose prose is Fluent values in Markdown (`markdown: true`), with raw-HTML UI embedded in the documents. |
+| <img src="screenshots/world.png" width="240"> | [`world`](world/) — `cargo run --example world`<br><br>Styled, localized nameplates over walking 3D units (`HtmlWorldAnchor`), with distance fade and HUD buttons over the 3D scene. |
+| <img src="screenshots/demo.png" width="240"> | [`demo`](demo/) — `cargo run --example demo`<br><br>Every feature at once: themes and languages, scrolling panels with styled scrollbars, DOM outlines, 9-slice frames, per-theme chrome — the big one, also the agent/QA playground with `--features dev-tools`. |
+
+## Shared code
+
+- `shared/input.rs` — `ExampleInputPlugin`: arrows / D-pad / left stick move
+  focus with hold-to-repeat (leaving a focused text field's caret keys
+  alone), Enter / A activate, and `Hotkeys` maps a shortcut key to a
+  gamepad button.
+- `shared/harness.rs` — the `dev-tools` feature's agent/QA surface
+  (`bevy_mcp_harness`); compiles away without the feature.
+
+With `--features dev-tools`, every example also serves a localhost agent/QA
+tool surface: BRP on 127.0.0.1:15702 and MCP on 127.0.0.1:15710/mcp —
+screenshots (`game/screenshot`), the laid-out UI tree (`game/ui`), and
+mocked keyboard/gamepad/mouse input.
