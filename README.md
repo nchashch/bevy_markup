@@ -11,7 +11,7 @@ Write game UI the way you'd write a web page, and get native
 > own; read [CHANGELOG.md](CHANGELOG.md) before you do. Bug reports and
 > feedback are very welcome.
 
-bevy_markup is a Bevy 0.19 library. You describe a piece of UI as an HTML template,
+bevy_markup is a Bevy 0.20 library. You describe a piece of UI as an HTML template,
 style it with CSS, and translate it with [Fluent](https://projectfluent.org);
 bevy_markup turns that into ordinary Bevy UI entities (`Node`, `Text`, `TextSpan`,
 `ImageNode`). No browser, no web view: the result is plain Bevy UI that lays
@@ -181,6 +181,7 @@ The crate documentation (`cargo doc --open`) is the full guide.
 
 | bevy_markup | Bevy |
 |---|---|
+| Unreleased | 0.20 |
 | 0.4 | 0.19 |
 | 0.3 | 0.19 |
 | 0.2 | 0.19 |
@@ -346,7 +347,7 @@ AGENTS.md       detailed project notes: architecture, conventions, gotchas
 
 ## Status
 
-Early development, on Bevy 0.19. The API is unstable and changes often (see
+Early development, on Bevy 0.20. The API is unstable and changes often (see
 the warning at the top and [CHANGELOG.md](CHANGELOG.md)). What exists is
 tested heavily (above), but large areas aren't built yet, among them:
 

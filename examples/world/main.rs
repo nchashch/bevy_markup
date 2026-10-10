@@ -150,11 +150,11 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     fonts
-        .insert("System Serif", FontFaces::new(FontSource::Serif))
+        .insert("System Serif", FontFaces::new(FontSource::serif()))
         .set_generic(GenericFamily::Serif, "System Serif")
-        .insert("System Sans", FontFaces::new(FontSource::SansSerif))
+        .insert("System Sans", FontFaces::new(FontSource::sans_serif()))
         .set_generic(GenericFamily::SansSerif, "System Sans")
-        .insert("System Mono", FontFaces::new(FontSource::Monospace))
+        .insert("System Mono", FontFaces::new(FontSource::monospace()))
         .set_generic(GenericFamily::Monospace, "System Mono");
     commands.insert_resource(DefaultStylesheet::new(asset_server.load("world/style.css")));
     let languages: Vec<Handle<LocaleBundle>> = ["en-US", "de"]

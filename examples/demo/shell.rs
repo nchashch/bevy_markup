@@ -291,7 +291,7 @@ fn scrollbar_of_thumb<'a>(
 
 /// A thumb drag starts / ends: remember which, for `.dragging`.
 pub fn start_thumb_drag(
-    drag: On<Pointer<DragStart>>,
+    drag: On<PointerDragStart>,
     elements: Query<&HtmlElement>,
     parents: Query<&ChildOf>,
     tracks: Query<(&DemoScrollbar, &ComputedNode)>,
@@ -302,7 +302,7 @@ pub fn start_thumb_drag(
     }
 }
 
-pub fn end_thumb_drag(drag: On<Pointer<DragEnd>>, mut dragged: ResMut<DraggedThumb>) {
+pub fn end_thumb_drag(drag: On<PointerDragEnd>, mut dragged: ResMut<DraggedThumb>) {
     if drag.original_event_target() == drag.entity {
         dragged.0 = None;
     }
@@ -363,7 +363,7 @@ pub fn update_scrollbars(
 
 /// Dragging a thumb scrolls its target by the same fraction of the content.
 pub fn drag_thumb(
-    drag: On<Pointer<Drag>>,
+    drag: On<PointerDrag>,
     parents: Query<&ChildOf>,
     tracks: Query<(&DemoScrollbar, &ComputedNode)>,
     elements: Query<&HtmlElement>,
@@ -392,7 +392,7 @@ pub fn drag_thumb(
 
 /// Pressing the track (not the thumb) pages toward the pointer.
 pub fn press_track(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     tracks: Query<(&DemoScrollbar, &ComputedNode, &UiGlobalTransform)>,
     html: HtmlElements,
     mut areas: Query<(&mut ScrollPosition, &ComputedNode)>,
@@ -415,7 +415,7 @@ pub fn press_track(
     let track_top = transform.translation.y * scale - track_node.size.y * scale / 2.0;
     let track = track_node.size.y * scale;
     let thumb_mid = track_top + (scroll + visible / 2.0) / content * track;
-    let direction = if press.pointer_location.position.y < thumb_mid {
+    let direction = if press.pointer.position.y < thumb_mid {
         -1.0
     } else {
         1.0

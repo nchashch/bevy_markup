@@ -29,7 +29,7 @@ fuzzing = ["dep:wgpu-types"]
 [dependencies]
 # Only what the library's code uses; the app picks rendering, windowing,
 # platform and everything else. Check with `cargo check --lib`.
-bevy = { version = "0.19.1", default-features = false, features = [
+bevy = { version = "0.20.0", default-features = false, features = [
 	# Node, ImageNode, Text/TextSpan (bevy_ui + bevy_text), assets, ECS.
 	"ui_api",
 	# Fallback when the CSS names no registered font family.
@@ -56,14 +56,14 @@ unic-langid = { version = "0.9", features = ["serde"] }
 lightningcss = { version = "1.0.0-alpha.72", features = ["into_owned"] }
 # Only for the `fuzzing` harness: `Image::new_fill` needs wgpu texture types,
 # which bevy_image does not re-export.
-wgpu-types = { version = "29.0.3", optional = true }
+wgpu-types = { version = "30.0.1", optional = true }
 
 [dev-dependencies]
 arbtest = "0.3.2"
 async-trait = "0.1.92"
 # Examples are full apps: Bevy defaults (window, renderer, …) plus system
 # font fallback so the demo's Japanese locale renders.
-bevy = { version = "0.19.1", features = ["system_font_discovery"] }
+bevy = { version = "0.20.0", features = ["system_font_discovery"] }
 # FTL AST for tests/content_lint.rs (message ids, pseudo-locale); fluent
 # doesn't re-export it. Same version as fluent's, patched below.
 fluent-syntax = "0.11.1"

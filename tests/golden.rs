@@ -89,7 +89,7 @@ fn golden_scenes() {
     let root = std::env::temp_dir().join(format!("bevy_markup-golden-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let mut app = render_app(&root);
-    let adapter = app.world().resource::<RenderAdapterInfo>().0.clone();
+    let adapter = app.world().resource::<RenderAdapterInfo>();
     eprintln!(
         "golden: adapter {:?} ({:?}, driver {:?} {:?})",
         adapter.name, adapter.backend, adapter.driver, adapter.driver_info

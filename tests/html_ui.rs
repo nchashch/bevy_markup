@@ -99,7 +99,7 @@ fn system_font_families_request_weight_and_style() {
     );
     ui.world_mut()
         .resource_mut::<FontFamilies>()
-        .insert("Body", FontFaces::new(FontSource::Serif));
+        .insert("Body", FontFaces::new(FontSource::serif()));
     let mut ui =
         ui.stylesheet("style.css")
             .spawn("page.html", TemplateContext::new(), Node::default());
@@ -1295,7 +1295,7 @@ fn root_rule_styles_the_html_ui_entity() {
         UiRect::all(Val::Px(3.0)),
         "the `html` rule applies too"
     );
-    assert_eq!(node.border_radius.top_left, Val::Px(4.0));
+    assert_eq!(node.border_radius.top_left, Val::Px(4.0).into());
     assert_eq!(
         world.get::<BackgroundColor>(root).unwrap().0,
         Color::srgba(1.0, 0.0, 0.0, 0.5),
@@ -1335,7 +1335,7 @@ fn root_rule_styles_the_html_ui_entity() {
     assert_eq!(node.width, Val::Px(50.0));
     assert_eq!(node.flex_direction, FlexDirection::Row);
     assert_eq!(node.padding, UiRect::all(Val::Px(1.0)));
-    assert_eq!(node.border_radius.top_left, Val::ZERO);
+    assert_eq!(node.border_radius.top_left, CornerRadius::ZERO);
     assert_eq!(world.get::<BackgroundColor>(root).unwrap().0, blue);
     assert_eq!(world.get::<ZIndex>(root), Some(&ZIndex(0)));
     assert_eq!(world.get::<Pickable>(root), None);

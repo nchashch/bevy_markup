@@ -8,6 +8,15 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** bevy_markup now depends on Bevy 0.20 (was 0.19), following
+  Bevy's changes: the picking events behind `data-on-*` are flattened
+  (`Pointer<Press>` → `PointerPress`; apps reading `SignalSource::Pointer`
+  are unaffected), and `FontSource`'s generic-family variants became
+  constructor methods (`FontSource::Serif` → `FontSource::serif()`, same for
+  `sans_serif()`/`monospace()`). The bevy_markup API itself is unchanged.
+
 ## [0.4.0] - 2026-10-08
 
 ### Added

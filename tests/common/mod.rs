@@ -28,7 +28,12 @@ pub const MONO: Handle<Font> = font(5);
 
 pub fn face_label(source: &FontSource) -> String {
     let FontSource::Handle(handle) = source else {
-        return format!("{source:?}");
+        // System families: label by the generic family (Bevy 0.20 wraps them
+        // in `FontSource::Generic`), the raw debug otherwise.
+        return match source {
+            FontSource::Generic(family) => format!("{family:?}"),
+            _ => format!("{source:?}"),
+        };
     };
     let labels = [
         (&SERIF[0], "serif"),
@@ -722,10 +727,10 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         let radius = node.border_radius;
         if radius != BorderRadius::DEFAULT {
             let corners = [
-                radius.top_left,
-                radius.top_right,
-                radius.bottom_right,
-                radius.bottom_left,
+                radius.top_left.x,
+                radius.top_right.x,
+                radius.bottom_right.x,
+                radius.bottom_left.x,
             ];
             write!(line, " radius={}", corners.map(val).join(",")).unwrap();
         }

@@ -6,7 +6,7 @@
 //!
 //! A face is any [`FontSource`]: a loaded font file, or a family resolved
 //! from the fonts installed on the system (a name like `"DejaVu Serif"` or a
-//! generic like [`FontSource::Serif`]; needs Bevy's `system_font_discovery`,
+//! generic like [`FontSource::serif`]; needs Bevy's `system_font_discovery`,
 //! which the `system_fonts` feature enables). For system families, bold and
 //! italic are requested from the system, which picks the family's real faces.
 //!
@@ -22,7 +22,7 @@
 //!                 .with_bold(asset_server.load("fonts/IosevkaSlabMono-Bold.ttf")),
 //!         )
 //!         // The system's serif family, all faces.
-//!         .insert("Body", FontFaces::new(FontSource::Serif))
+//!         .insert("Body", FontFaces::new(FontSource::serif()))
 //!         .set_generic(GenericFamily::Monospace, "Iosevka Slab Mono");
 //! }
 //! ```

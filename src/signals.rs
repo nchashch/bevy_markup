@@ -37,8 +37,8 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-use bevy::ecs::system::SystemId;
-use bevy::picking::events::{Click, Pointer, Press, Release};
+use bevy::ecs::system::{SystemId, SystemParam};
+use bevy::picking::events::{PointerClick, PointerEvent, PointerPress, PointerRelease};
 use bevy::picking::hover::{HoverMap, PickingInteraction};
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
@@ -205,24 +205,25 @@ pub(crate) fn observe_pointer_signals(entity: &mut EntityCommands) {
             return;
         }
         entity.insert(PointerSignalObservers);
-        entity.observe(on_pointer::<Click>);
-        entity.observe(on_pointer::<Press>);
-        entity.observe(on_pointer::<Release>);
+        entity.observe(on_click);
+        entity.observe(on_press);
+        entity.observe(on_release);
     });
 }
 
 /// The pointer events with `data-on-*` triggers.
-trait PointerSignal: std::fmt::Debug + Clone + Reflect {
-    /// The trigger this event fires and the button behind it.
-    fn trigger(&self) -> (SignalTrigger, PointerButton);
+trait PointerSignal: PointerEvent + std::fmt::Debug + Clone + Reflect {
+    /// The trigger this event fires and the button behind it. Named
+    /// `signal_trigger` to stay clear of `Event`'s associated `Trigger`.
+    fn signal_trigger(&self) -> (SignalTrigger, PointerButton);
     /// Consecutive clicks.
     fn count(&self) -> u8 {
         1
     }
 }
 
-impl PointerSignal for Click {
-    fn trigger(&self) -> (SignalTrigger, PointerButton) {
+impl PointerSignal for PointerClick {
+    fn signal_trigger(&self) -> (SignalTrigger, PointerButton) {
         let trigger = match self.button {
             PointerButton::Primary => SignalTrigger::Click,
             _ => SignalTrigger::AuxClick,
@@ -234,55 +235,72 @@ impl PointerSignal for Click {
     }
 }
 
-impl PointerSignal for Press {
-    fn trigger(&self) -> (SignalTrigger, PointerButton) {
+impl PointerSignal for PointerPress {
+    fn signal_trigger(&self) -> (SignalTrigger, PointerButton) {
         (SignalTrigger::Press, self.button)
     }
 }
 
-impl PointerSignal for Release {
-    fn trigger(&self) -> (SignalTrigger, PointerButton) {
+impl PointerSignal for PointerRelease {
+    fn signal_trigger(&self) -> (SignalTrigger, PointerButton) {
         (SignalTrigger::Release, self.button)
     }
 }
 
+/// System params shared by the three pointer observers.
+#[derive(SystemParam)]
+struct PointerParams<'w, 's> {
+    writer: MessageWriter<'w, ElementSignal>,
+    signals: Query<'w, 's, &'static ElementSignals>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    elements: Query<'w, 's, &'static HtmlElement>,
+}
+
+fn on_click(event: On<PointerClick>, params: PointerParams) {
+    let hit = event.original_event_target();
+    on_pointer(&*event, hit, params)
+}
+
+fn on_press(event: On<PointerPress>, params: PointerParams) {
+    let hit = event.original_event_target();
+    on_pointer(&*event, hit, params)
+}
+
+fn on_release(event: On<PointerRelease>, params: PointerParams) {
+    let hit = event.original_event_target();
+    on_pointer(&*event, hit, params)
+}
+
 /// Emits the observed element's bindings for the event's trigger, unless a
-/// deeper bound element under the pointer owns it.
+/// deeper bound element under the pointer owns it. `event_target()` is the
+/// entity this invocation runs for; `hit` the deepest picked entity
+/// (`On::original_event_target`), extracted by the concrete observer.
 fn on_pointer<E: PointerSignal>(
-    event: On<Pointer<E>>,
-    mut writer: MessageWriter<ElementSignal>,
-    signals: Query<&ElementSignals>,
-    parents: Query<&ChildOf>,
-    elements: Query<&HtmlElement>,
-) where
-    Pointer<E>: Message,
-{
-    let target = event.entity;
-    let (trigger, button) = event.event.trigger();
-    let Ok(bound) = signals.get(target) else {
+    event: &E,
+    hit: Entity,
+    mut params: PointerParams,
+) {
+    let target = event.event_target();
+    let (trigger, button) = event.signal_trigger();
+    let Ok(bound) = params.signals.get(target) else {
         return;
     };
-    if covered_by_deeper(
-        event.original_event_target(),
-        target,
-        trigger,
-        &signals,
-        &parents,
-    ) {
+    if covered_by_deeper(hit, target, trigger, &params.signals, &params.parents) {
         return;
     }
+    let pointer = event.pointer();
     let source = SignalSource::Pointer {
-        pointer: event.pointer_id,
+        pointer: pointer.id,
         button,
-        position: event.pointer_location.position,
-        count: event.event.count(),
+        position: pointer.position,
+        count: event.count(),
     };
     for binding in bound.0.iter().filter(|binding| binding.trigger == trigger) {
-        writer.write(ElementSignal {
+        params.writer.write(ElementSignal {
             name: Cow::Owned(binding.name.clone()),
             trigger,
             target,
-            element: elements.get(target).cloned().unwrap_or_default(),
+            element: params.elements.get(target).cloned().unwrap_or_default(),
             payload: binding.payload.clone(),
             source,
         });
@@ -599,8 +617,12 @@ pub(crate) fn update_pseudo_states(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::camera::NormalizedRenderTarget;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::picking::backend::HitData;
+    use bevy::picking::events::Pointer;
+    use bevy::picking::pointer::Location;
+    use bevy::window::WindowRef;
     use std::time::Duration;
 
     /// bug_0021: an app system despawning a UI in the same frame (its
@@ -725,19 +747,32 @@ mod tests {
     /// button, with a count of 1.
     #[test]
     fn click_triggers_follow_the_button() {
+        let pointer = Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: NormalizedRenderTarget::Window(
+                    WindowRef::Primary
+                        .normalize(Some(Entity::PLACEHOLDER))
+                        .unwrap(),
+                ),
+                position: Vec2::ZERO,
+            },
+        );
         let hit = || HitData::new(Entity::PLACEHOLDER, 0.0, None, None);
         for button in [
             PointerButton::Primary,
             PointerButton::Secondary,
             PointerButton::Middle,
         ] {
-            let click = Click {
+            let click = PointerClick {
+                entity: Entity::PLACEHOLDER,
+                pointer: pointer.clone(),
                 button,
                 hit: hit(),
                 duration: Duration::ZERO,
                 count: 2,
             };
-            let (trigger, event_button) = click.trigger();
+            let (trigger, event_button) = click.signal_trigger();
             assert_eq!(event_button, button);
             assert_eq!(
                 trigger,
@@ -749,16 +784,26 @@ mod tests {
             );
             assert_eq!(click.count(), 2);
 
-            let press = Press {
+            let press = PointerPress {
+                entity: Entity::PLACEHOLDER,
+                pointer: pointer.clone(),
                 button,
                 hit: hit(),
                 count: 1,
             };
-            assert_eq!(press.trigger(), (SignalTrigger::Press, button));
+            assert_eq!(press.signal_trigger(), (SignalTrigger::Press, button));
             assert_eq!(press.count(), 1);
 
-            let release = Release { button, hit: hit() };
-            assert_eq!(release.trigger(), (SignalTrigger::Release, button));
+            let release = PointerRelease {
+                entity: Entity::PLACEHOLDER,
+                pointer: pointer.clone(),
+                button,
+                hit: hit(),
+            };
+            assert_eq!(
+                release.signal_trigger(),
+                (SignalTrigger::Release, button)
+            );
             assert_eq!(release.count(), 1);
         }
     }

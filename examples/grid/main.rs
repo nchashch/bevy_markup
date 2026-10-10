@@ -110,8 +110,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
 
     // CSS generic keywords → the system's fonts (Bevy's system_font_discovery).
     fonts
-        .insert("System Serif", FontFaces::new(FontSource::Serif))
-        .insert("System Mono", FontFaces::new(FontSource::Monospace))
+        .insert("System Serif", FontFaces::new(FontSource::serif()))
+        .insert("System Mono", FontFaces::new(FontSource::monospace()))
         .set_generic(GenericFamily::Serif, "System Serif")
         .set_generic(GenericFamily::Monospace, "System Mono");
 

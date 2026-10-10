@@ -190,10 +190,10 @@ impl LayoutDecl {
         set(&mut node.grid_row, &grid_placement(self.grid_row));
         set(&mut node.grid_column, &grid_placement(self.grid_column));
         let corners = &mut node.border_radius;
-        set(&mut corners.top_left, &self.border_radius[0]);
-        set(&mut corners.top_right, &self.border_radius[1]);
-        set(&mut corners.bottom_right, &self.border_radius[2]);
-        set(&mut corners.bottom_left, &self.border_radius[3]);
+        set(&mut corners.top_left, &self.border_radius[0].map(CornerRadius::from));
+        set(&mut corners.top_right, &self.border_radius[1].map(CornerRadius::from));
+        set(&mut corners.bottom_right, &self.border_radius[2].map(CornerRadius::from));
+        set(&mut corners.bottom_left, &self.border_radius[3].map(CornerRadius::from));
         set(&mut node.overflow.x, &self.overflow[0]);
         set(&mut node.overflow.y, &self.overflow[1]);
         let position_type = match self.position {
@@ -1252,6 +1252,9 @@ fn min_breadth(breadth: &TrackBreadth) -> Option<MinTrackSizingFunction> {
             Val::VMin(v) => MinTrackSizingFunction::VMin(v),
             Val::VMax(v) => MinTrackSizingFunction::VMax(v),
             Val::Auto => MinTrackSizingFunction::Auto,
+            // `length_percentage_val` never produces these (em/rem fail
+            // `to_px` above); listed so the match stays exhaustive.
+            Val::Em(_) | Val::Rem(_) => return unsupported("font-relative track size"),
         },
         TrackBreadth::Auto => MinTrackSizingFunction::Auto,
         TrackBreadth::MinContent => MinTrackSizingFunction::MinContent,
@@ -1270,6 +1273,8 @@ fn max_breadth(breadth: &TrackBreadth) -> Option<MaxTrackSizingFunction> {
             Val::VMin(v) => MaxTrackSizingFunction::VMin(v),
             Val::VMax(v) => MaxTrackSizingFunction::VMax(v),
             Val::Auto => MaxTrackSizingFunction::Auto,
+            // See `min_breadth`: unreachable, keeps the match exhaustive.
+            Val::Em(_) | Val::Rem(_) => return unsupported("font-relative track size"),
         },
         TrackBreadth::Flex(fr) => MaxTrackSizingFunction::Fraction(*fr),
         TrackBreadth::Auto => MaxTrackSizingFunction::Auto,

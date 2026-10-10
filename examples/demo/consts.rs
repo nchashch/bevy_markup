@@ -5,6 +5,6 @@
 
 use bevy::prelude::*;
 
-pub const HEADER_FONT: FontSource = FontSource::SansSerif;
-pub const BODY_FONT: FontSource = FontSource::Serif;
-pub const MONO_FONT: FontSource = FontSource::Monospace;
+pub const HEADER_FONT: FontSource = FontSource::sans_serif();
+pub const BODY_FONT: FontSource = FontSource::serif();
+pub const MONO_FONT: FontSource = FontSource::monospace();

@@ -1,6 +1,6 @@
 # bevy_markup
 
-Bevy 0.19 library: HTML templates (Tera) + Fluent + CSS → Bevy UI, with
+Bevy 0.20 library: HTML templates (Tera) + Fluent + CSS → Bevy UI, with
 9-slice frames. Dependencies are limited to that; don't add unrelated crates.
 
 - `cargo run --example quickstart` — the API in one small app.
@@ -514,7 +514,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `HtmlUiBuilt` (the demo's `wire_shell_build`). UIs update deepest first, so
   a nested UI's own commands are queued before an ancestor despawns its slot
   (bug_0016).
-- Bevy 0.19: `BorderRadius` is a `Node` field, not a component.
+- Bevy 0.20: `BorderRadius` corners are `CornerRadius { x, y }` (2D, for
+  elliptical corners; `From<Val>` sets `x`, leaves `y` auto); still a `Node`
+  field, not a component.
 - `tl::VDom` borrows its input; `HtmlDocument` uses `tl::parse_owned` (unsafe
   fn, sound per its docs) → `VDomGuard`, which only hands out shared borrows,
   so the DOM is never mutated; translations live beside it keyed by
@@ -550,7 +552,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   world's `PipelineCache::waiting_pipelines()` is empty (disable
   `PipelinedRenderingPlugin` to inspect it inside `app.update()`). Without
   `App::run`, poll `plugins_state()`, then `finish()` and `cleanup()`.
-- wgpu's GL backend isn't usable for software rendering (Bevy 0.19 doesn't
+- wgpu's GL backend isn't usable for software rendering (Bevy 0.20 doesn't
   enable wgpu `gles`; llvmpipe GL can't compile some of Bevy's GLSL): use
   lavapipe (Vulkan).
 - `rustfmt tests/<file>.rs` also formats `tests/common/mod.rs` (it follows

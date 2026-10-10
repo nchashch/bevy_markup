@@ -134,7 +134,7 @@ struct Languages(Vec<Handle<LocaleBundle>>);
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
     commands.spawn(Camera2d);
     fonts
-        .insert("System Serif", FontFaces::new(FontSource::Serif))
+        .insert("System Serif", FontFaces::new(FontSource::serif()))
         .set_generic(GenericFamily::Serif, "System Serif");
     commands.insert_resource(DefaultStylesheet::new(asset_server.load("live/style.css")));
 

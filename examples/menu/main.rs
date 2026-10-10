@@ -173,7 +173,7 @@ struct Languages(Vec<Handle<LocaleBundle>>);
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResMut<FontFamilies>) {
     commands.spawn(Camera2d);
     fonts
-        .insert("System Serif", FontFaces::new(FontSource::Serif))
+        .insert("System Serif", FontFaces::new(FontSource::serif()))
         .set_generic(GenericFamily::Serif, "System Serif");
     commands.insert_resource(DefaultStylesheet::new(asset_server.load("menu/style.css")));
     // `data-tooltip` elements show this template (context: `key`, `args`,
@@ -209,24 +209,24 @@ fn slider(slider: In<ElementConnected>, mut commands: Commands) {
     commands
         .entity(bar)
         .observe(
-            move |press: On<Pointer<Press>>,
+            move |press: On<PointerPress>,
                   bars: Query<(&ComputedNode, &UiGlobalTransform)>,
                   mut settings: ResMut<Settings>| {
                 if press.button == PointerButton::Primary {
-                    settings.last_input = match press.pointer_id {
+                    settings.last_input = match press.pointer().id {
                         PointerId::Touch(_) => "touch",
                         _ => "mouse-primary",
                     };
-                    set_volume_at(bar, press.pointer_location.position, &bars, &mut settings);
+                    set_volume_at(bar, press.pointer().position, &bars, &mut settings);
                 }
             },
         )
         .observe(
-            move |drag: On<Pointer<Drag>>,
+            move |drag: On<PointerDrag>,
                   bars: Query<(&ComputedNode, &UiGlobalTransform)>,
                   mut settings: ResMut<Settings>| {
                 if drag.button == PointerButton::Primary {
-                    set_volume_at(bar, drag.pointer_location.position, &bars, &mut settings);
+                    set_volume_at(bar, drag.pointer().position, &bars, &mut settings);
                 }
             },
         );

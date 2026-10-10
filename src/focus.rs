@@ -44,7 +44,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::input_focus::directional_navigation::DirectionalNavigationPlugin;
 use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
 use bevy::math::CompassOctant;
-use bevy::picking::events::{Pointer, Press};
+use bevy::picking::events::PointerPress;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy::ui::auto_directional_navigation::{AutoDirectionalNavigation, AutoDirectionalNavigator};
@@ -343,7 +343,7 @@ fn repair_focus(
 /// A pointer press focuses the pressed focusable element (the deepest one
 /// under the pointer) and hides the focus ring, like a browser's mousedown.
 fn focus_on_press(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     focusables: Query<(), (With<Focusable>, With<AutoDirectionalNavigation>)>,
     any_focusable: Query<(), With<Focusable>>,
     parents: Query<&ChildOf>,
