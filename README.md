@@ -155,6 +155,9 @@ bevy_markup implements a useful subset of the web, not all of it:
   and `tabindex` elements are focusable, `autofocus`, `:focus` /
   `:focus-visible` with `outline`, modal roots, and focus kept across
   updates. You bind the input; bevy_markup moves focus and activates.
+- **Links:** `<a href>` emits an `open` signal with the href when clicked
+  (the app decides what that means — open a URL, navigate, …); the text
+  styles through the cascade.
 - **Text input:** `<input type="text">` renders Bevy 0.20's editable-text
   widget behind the `text-input` cargo feature — typed text, cursor and
   selection; the value is app state, focusing through the crate's focus

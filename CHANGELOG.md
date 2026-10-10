@@ -19,6 +19,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `HtmlFocus` navigation, `HtmlModal`), the text styled by the cascade and
   the box by CSS. The app reads the value from the entity's `EditableText`.
   Without the feature `<input>` stays an unknown tag.
+- **Links.** `<a href>` spans become picked entities: clicking emits the
+  `open` signal with the href payload (the app decides what opening a link
+  means — Bevy has no URL opener), the deepest-bound-element rule applies,
+  `HtmlElements` finds links, and `:hover` styles work on them. A link
+  without an href stays plain styled text.
 - **Font fallback lists.** A CSS `font-family` list resolves to *every*
   registered family in order (not just the first hit), and the text composes
   them into Bevy 0.20's fallback list — fontique picks the first face

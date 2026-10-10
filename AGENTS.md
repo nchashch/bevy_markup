@@ -1175,10 +1175,15 @@ Known limits (each skipped/ignored value is logged at `debug`):
   `line-through`, a declared `text-decoration-color`) draws on the run, but
   borders, frames and padding on inline elements are ignored (Bevy
   `TextSpan` has no box). `<img>` (asset paths, `width`/`height` in px)
-  flows inline (`InlineBox`/`InlineImage`); other inline content keeps no
-  entity, so `HtmlElements` can't find it (only blocks/containers), and
-  `display: inline-block` with widget children isn't supported (Bevy
-  reserves the space but doesn't place content in it).
+  flows inline (`InlineBox`/`InlineImage`); `<a href>` spans become picked
+  entities carrying the bindings — clicking emits the `open` signal with
+  the href payload, the deepest-bound-element rule applies (a link inside
+  a `data-on-click` block suppresses it), `HtmlElements` finds them, and
+  `:hover` works (their spans carry `DomNode` + `PseudoState`); a link
+  without an href is plain styled text. Other inline content keeps no
+  entity, so `HtmlElements` can't find it (only blocks/containers and
+  link spans), and `display: inline-block` with widget children isn't
+  supported (Bevy reserves the space but doesn't place content in it).
 - **Interactivity:** text input behind the `text-input` feature
   (`<input type="text" value maxlength>` → Bevy 0.20's `EditableText` +
   `TextInput`; the value is app state — read the entity's `EditableText`, a

@@ -35,4 +35,5 @@ tutorial-body = ## Writing a page
         ```
   - [ ] Your first page
 
-  Missing: tables and links have no UI mapping yet — they render as text.
+  Missing: tables and `ex`/`ch` units; links emit an `open` signal the
+  app handles (this demo logs nothing — yet).

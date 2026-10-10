@@ -2361,6 +2361,41 @@ html-ui
     );
 }
 
+/// `<a href>` links: the link's runs become a picked span entity that
+/// emits the `open` signal with the href when clicked; the text styles by
+/// the cascade (`a` rules); a link without an href is plain styled text.
+#[test]
+fn links_carry_their_href_on_span_entities() {
+    let mut ui = TestUi::new(
+        "links",
+        &[
+            (
+                "page.html",
+                r#"<p>See <a href="https://example.com" class="ref">the docs</a>
+                   and <a id="plain">not a link</a>.</p>"#,
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff; font-family: serif }\n\
+                 a { color: #00ffff; text-decoration: underline }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "See " default 16px #ffffff
+    "the docs" default 16px #00ffff open=https://example.com underline
+    " and " default 16px #ffffff
+    "not a link" default 16px #00ffff underline
+    "." default 16px #ffffff
+"#,
+    );
+}
+
 /// A loaded template is named after its asset path (Tera picks HTML
 /// autoescaping from the `.html` name).
 #[test]

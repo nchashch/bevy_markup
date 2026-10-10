@@ -882,6 +882,16 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
                 if let Some(background) = child.get::<TextBackgroundColor>() {
                     write!(label, " bg={}", hex(background.0)).unwrap();
                 }
+                // A link span: the `open` click binding's href.
+                if let Some(signals) = child.get::<ElementSignals>()
+                    && let Some(binding) = signals
+                        .0
+                        .iter()
+                        .find(|binding| binding.name == "open")
+                    && let Some(href) = binding.payload.get("href").and_then(|v| v.as_str())
+                {
+                    write!(label, " open={href}").unwrap();
+                }
                 if child.contains::<Underline>() {
                     match child.get::<UnderlineColor>() {
                         Some(color) => write!(label, " underline={}", hex(color.0)).unwrap(),

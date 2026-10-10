@@ -37,5 +37,6 @@ tutorial-body = ## Eine Seite schreiben
         ```
   - [ ] Deine erste Seite
 
-  Fehlt: Tabellen und Links haben noch kein UI-Mapping — sie erscheinen
-  als Text.
+  Fehlt: Tabellen und `ex`/`ch`-Einheiten; Links senden ein
+  `open`-Signal, das die App verarbeitet (diese Demo protokolliert noch
+  nichts).

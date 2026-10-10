@@ -11,6 +11,7 @@ mod common;
 
 use bevy::input::ButtonState;
 use bevy::picking::pointer::{PointerButton, PointerId};
+use bevy::math::Vec2;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 use common::{TestUi, node_rect};
@@ -714,4 +715,92 @@ fn handlers_route_by_name_and_trigger() {
         ]
     );
     assert_eq!(btn, btn, "target unchanged");
+}
+
+/// `<a href>` links: the link's span becomes a picked entity whose click
+/// emits the `open` signal carrying the href; the deepest-bound-element
+/// rule suppresses the parent block's own click hooks; a link without an
+/// href is plain text.
+#[test]
+fn links_emit_open_signals_with_the_href() {
+    let page = r#"<div id="outer" data-on-click="outer-click">
+  <p>See <a id="link" href="{{ href }}">the <b>docs</b></a> and
+     <a id="plain">not a link</a>.</p>
+</div>"#;
+    let mut ui = page_ui(
+        "signals-links",
+        page,
+        "a { color: #00ffff }",
+        TemplateContext::new().with("href", "https://example.com/page"),
+    );
+    ui.settle();
+    ui.update(1);
+
+    // The link's span is an entity with the bindings; the plain anchor is
+    // not (no href, as in browsers).
+    let root = ui.root();
+    let world = ui.world_mut();
+    let mut elements = world.query::<(Entity, &HtmlElement)>();
+    let link = elements
+        .iter(world)
+        .find(|(_, element)| element.id.as_deref() == Some("link"))
+        .map(|(entity, _)| entity)
+        .expect("link span entity");
+    assert!(
+        world.get::<ElementSignals>(link).is_some(),
+        "the link span carries its bindings"
+    );
+    assert!(
+        !elements
+            .iter(world)
+            .any(|(_, element)| element.id.as_deref() == Some("plain")),
+        "no href: the plain anchor stays entity-free styled text"
+    );
+
+    // Click the link text (the `b` inside it resolves through the link's
+    // spans): the `open` signal carries the href, and the outer block's
+    // own click hook is suppressed (deepest bound element wins). The
+    // link span has no `Node` of its own — its rect comes from the
+    // text block's layout, via the block's rect around the link's line.
+    let block = elements
+        .iter(world)
+        .find(|(_, element)| element.tag == "p")
+        .map(|(entity, _)| entity)
+        .expect("paragraph");
+    let rect = node_rect(world, block).expect("laid out");
+    let at = vec2(rect.min.x + 40.0, rect.center().y);
+    ui.click_at(at);
+    let clicks: Vec<ElementSignal> = ui
+        .take_signals()
+        .into_iter()
+        .filter(|signal| signal.trigger == SignalTrigger::Click)
+        .collect();
+    assert_eq!(clicks.len(), 1, "one click: the link's, not the block's");
+    assert_eq!(clicks[0].name.as_ref(), "open");
+    assert_eq!(clicks[0].target, link);
+    assert_eq!(clicks[0].element.tag, "a");
+    assert_eq!(
+        clicks[0].payload["href"].as_str(),
+        Some("https://example.com/page")
+    );
+
+    // The link's href updates in place: the bindings follow.
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("href", "https://example.com/other");
+    ui.settle();
+    ui.update(1);
+    ui.click_at(at);
+    let clicks: Vec<ElementSignal> = ui
+        .take_signals()
+        .into_iter()
+        .filter(|signal| signal.trigger == SignalTrigger::Click)
+        .collect();
+    assert_eq!(clicks.len(), 1, "still one click after the update");
+    assert_eq!(
+        clicks[0].payload["href"].as_str(),
+        Some("https://example.com/other"),
+        "the re-rendered href"
+    );
 }

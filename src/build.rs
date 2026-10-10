@@ -24,7 +24,7 @@ use crate::html::{
 };
 use crate::l10n::LocalizedText;
 use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
-use crate::signals::{self, ElementSignals, PseudoState, SignalBinding};
+use crate::signals::{self, ElementSignals, PseudoState, SignalBinding, SignalTrigger};
 use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
 use crate::template::{HtmlTemplate, decode_entities};
 
@@ -73,10 +73,15 @@ struct Run {
 }
 
 /// Run-level (non-inherited) properties of an inline element.
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 struct RunExtras {
     background: Option<Color>,
     decoration: DecorationDecl,
+    /// The `<a>` this run belongs to: its bindings (the `open` click signal
+    /// carrying the href, plus the element's own `data-on-*` hooks), its
+    /// element info, and its DOM node (for `:hover` state). Inherited by
+    /// the runs inside the element; `None` outside links.
+    link: Option<LinkRun>,
 }
 
 impl RunExtras {
@@ -88,8 +93,17 @@ impl RunExtras {
                 color: self.decoration.color.map(|color| faded(color, opacity)),
                 ..self.decoration
             },
+            link: self.link,
         }
     }
+}
+
+/// A link's identity for its spans: the click bindings and the element.
+#[derive(Clone, PartialEq)]
+struct LinkRun {
+    bindings: Vec<SignalBinding>,
+    element: HtmlElement,
+    handle: tl::NodeHandle,
 }
 
 /// An editable text field (ADR 0016): the initial text plus the cascade's
@@ -406,6 +420,7 @@ impl Styler<'_> {
         Some(RunExtras {
             background: declared.background,
             decoration: declared.text_decoration.unwrap_or_default(),
+            link: None,
         })
     }
 
@@ -959,6 +974,10 @@ struct SpanSpec {
     image: Option<ImageRun>,
     /// The `<img>`'s inline box size (see [`ImageRun::box_size`]).
     box_size: Option<Vec2>,
+    /// The link this span belongs to (`<a href>`): the span becomes a
+    /// picked entity carrying the bindings (ADR: links emit the `open`
+    /// signal).
+    link: Option<LinkRun>,
 }
 
 impl NodeSpec {
@@ -1087,6 +1106,14 @@ fn spawn_spans(spans: &mut ChildSpawnerCommands<'_>, text: TextSpec, pickable: b
         } else {
             spans.spawn((TextSpan::new(span.text), span.font, TextColor(span.color)))
         };
+        // A link span is a picked entity: bevy's per-section text picking
+        // resolves clicks to it, and its bindings emit the signals (the
+        // `open` click carries the href). `HtmlElement`/`DomNode` give it
+        // hover state (`a:hover`) and element identity.
+        if let Some(link) = span.link {
+            child.insert((ElementSignals(link.bindings), link.element, DomNode(link.handle)));
+            signals::observe_pointer_signals(&mut child);
+        }
         if let Some(background) = span.background {
             child.insert(TextBackgroundColor(background));
         }
@@ -1281,6 +1308,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
                         decoration_color: None,
                         box_size: image.box_size(styler.images),
                         image: Some(image),
+                        link: None,
                     },
                     None => SpanSpec {
                         text: run.text,
@@ -1292,6 +1320,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
                         decoration_color: run.extras.decoration.color,
                         image: None,
                         box_size: None,
+                        link: run.extras.link,
                     },
                 }
             })
@@ -1691,6 +1720,12 @@ fn update_spec(
             if kinds_match {
                 let pickable = spec.pickable;
                 for (span, spec) in children.into_iter().zip(text.spans) {
+                    // A span that becomes a link needs the click observers
+                    // (idempotent: the marker check skips existing ones).
+                    #[cfg_attr(not(feature = "text-input"), allow(clippy::used_underscore_binding))]
+                    if spec.link.is_some() {
+                        signals::observe_pointer_signals(&mut commands.entity(span));
+                    }
                     commands
                         .entity(span)
                         .queue(move |mut span: EntityWorldMut| {
@@ -1735,6 +1770,21 @@ fn update_spec(
                                     .flatten()
                                     .map(StrikethroughColor),
                             );
+                            // Link maintenance: bindings/identity on link
+                            // spans, a clean removal when a run stops
+                            // being a link.
+                            match &spec.link {
+                                Some(link) => {
+                                    put(&mut span, Some(ElementSignals(link.bindings.clone())));
+                                    put(&mut span, Some(link.element.clone()));
+                                    put(&mut span, Some(DomNode(link.handle)));
+                                }
+                                None => {
+                                    put::<ElementSignals>(&mut span, None);
+                                    put::<HtmlElement>(&mut span, None);
+                                    put::<DomNode>(&mut span, None);
+                                }
+                            }
                             put(&mut span, (!pickable).then_some(Pickable::IGNORE));
                         });
                 }
@@ -2214,12 +2264,12 @@ fn push_content_runs(
 ) {
     let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
         for node in nodes {
-            push_runs(fragment, *node, style, extras, runs);
+            push_runs(fragment, *node, style, extras.clone(), runs);
         }
     });
     if !translated {
         for child in tag.children().top().iter() {
-            push_runs(ctx, *child, style, extras, runs);
+            push_runs(ctx, *child, style, extras.clone(), runs);
         }
     }
 }
@@ -2274,9 +2324,16 @@ fn push_runs(
                 Some(tl::Node::Tag(tag)) => {
             
             if tag.name().as_utf8_str() == *"img" {
-                push_image_run(ctx, tag, style, runs);
+                push_image_run(ctx, tag, style, extras, runs);
                 return;
             }
+            // The tag's own interaction state (`:hover` on a link span, say):
+            // entities with `DomNode` carry it (the link spans do).
+            let state = ctx
+                .states
+                .and_then(|states| states.get(&handle))
+                .copied()
+                .unwrap_or_default();
             // An unmatched `data-l10n-name` element is plain text.
             let style = ctx
                 .element(tag)
@@ -2284,13 +2341,13 @@ fn push_runs(
                     || style.clone(),
                     |element| {
                         let inline = cascade::inline_style(tag);
-                        ctx.styler
-                            .style_of(&element, style, Pseudo::default(), inline.as_ref())
+                        ctx.styler.style_of(&element, style, state, inline.as_ref())
                     },
                 );
             // This element's `background`/`text-decoration` over the
             // subtree's running values, faded with its opacity.
-            let extras = ctx
+            let inherited_link = extras.link.clone();
+            let mut extras = ctx
                 .element(tag)
                 .and_then(|element| {
                     let inline = cascade::inline_style(tag);
@@ -2298,6 +2355,32 @@ fn push_runs(
                 })
                 .map(|extras| extras.faded(style.opacity))
                 .unwrap_or(extras);
+            // A link: its runs become picked span entities that emit the
+            // `open` signal with the href when clicked (plus the element's
+            // own `data-on-*` hooks). No href → plain styled text, as in
+            // browsers. Nested elements inherit the enclosing link (their
+            // own extras would otherwise replace it).
+            if tag.name().as_utf8_str() == *"a"
+                && let Some(href) = tag.attributes().get("href").flatten()
+            {
+                let href = decode_entities(&href.as_utf8_str());
+                if !href.is_empty() {
+                    let mut bindings = signals::signal_bindings(tag);
+                    bindings.push(SignalBinding {
+                        trigger: SignalTrigger::Click,
+                        name: "open".to_owned(),
+                        payload: serde_json::json!({ "href": href }),
+                    });
+                    extras.link = Some(LinkRun {
+                        bindings,
+                        element: element_of(tag),
+                        handle,
+                    });
+                    push_content_runs(ctx, handle, tag, &style, extras, runs);
+                    return;
+                }
+            }
+            extras.link = inherited_link;
             push_content_runs(ctx, handle, tag, &style, extras, runs);
         }
         Some(tl::Node::Comment(_)) | None => {}
@@ -2320,14 +2403,20 @@ fn attr_px(tag: &tl::HTMLTag, name: &str) -> Option<f32> {
 /// The `<img>` inline run: the image flows inline as an `InlineBox`/
 /// `InlineImage` child of the block's `Text`. Unsupported sources (URLs,
 /// data URIs) and a missing `src` attribute are skipped.
-fn push_image_run(ctx: &Ctx, tag: &tl::HTMLTag, style: &Style, runs: &mut Vec<Run>) {
+fn push_image_run(
+    ctx: &Ctx,
+    tag: &tl::HTMLTag,
+    style: &Style,
+    extras: RunExtras,
+    runs: &mut Vec<Run>,
+) {
     let Some(image) = ctx.styler.image_of(tag) else {
         return;
     };
     runs.push(Run {
         text: String::new(),
         style: style.clone(),
-        extras: RunExtras::default(),
+        extras,
         image: Some(image),
     });
 }
