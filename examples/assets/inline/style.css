@@ -126,6 +126,14 @@ p.hint {
   color: #e6e6e6;
 }
 
+/* Markdown-compiled elements carry class="markdown": images fill their
+ * container (`img.markdown`); the raw-HTML `<img>` seals in the page keep
+ * their own size. */
+img.markdown {
+  width: 100%;
+  border-radius: 8px;
+}
+
 .notes h1 {
   color: #f0b429;
   font-size: 22px;
@@ -133,11 +141,5 @@ p.hint {
 
 .notes li {
   color: #e6e6e6;
-}
-
-/* The notes' cat fills the panel's content width (aspect ratio kept). */
-.note-seal {
-  width: 100%;
-  border-radius: 8px;
 }
 

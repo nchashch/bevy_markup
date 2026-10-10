@@ -59,9 +59,13 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   font-relative `padding`/`border-width`/`gap` remain unsupported.
 - **Markdown templates and Fluent values.** A `.md`/`.markdown` template is
   Tera plus pulldown-cmark: the rendered output converts to HTML (CommonMark
-  + tables, strikethrough, task lists, footnotes) before parsing —
-  headings, emphasis, lists and `![images](…)` become the ordinary blocks,
-  and raw HTML passes through, so a Markdown page can embed real UI. Fluent
+  + tables, strikethrough, task lists, footnotes) before parsing — Markdown
+  every element it constructs carries `class="markdown"` — images included,
+  so documents style their Markdown content (say,
+  `img.markdown { width: 100% }`) apart from their raw-HTML `<img>` tags.
+  Headings, emphasis, lists
+  and `![images](…)` become the ordinary blocks, and raw HTML passes
+  through, so a Markdown page can embed real UI. Fluent
   bundles opt their message values into Markdown with the manifest's
   `markdown: bool` (default off — HTML-authored bundles keep their exact
   behavior). Autoescaping is forced for Markdown templates (Tera's default

@@ -99,9 +99,11 @@
 //! - **Markdown** ([`template`](mod@template)): a `.md`/`.markdown` template is
 //!   the same Tera machinery, and its rendered output converts to HTML
 //!   (CommonMark + tables, strikethrough, task lists, footnotes) before
-//!   parsing — headings, emphasis, lists and `![images](…)` come out as the
-//!   ordinary blocks and runs. Raw HTML passes through, so a Markdown page
-//!   can embed real UI (`data-on-click` buttons, containers). Fluent
+//!   parsing — headings, emphasis, lists and `![images](…)` come out as
+//!   ordinary elements carrying `class="markdown"` (so documents style
+//!   their Markdown content apart from raw-HTML `<img>` tags). Raw HTML
+//!   passes through, so a Markdown page can embed real UI (`data-on-click`
+//!   buttons, containers). Fluent
 //!   bundles opt their message values into Markdown with the manifest's
 //!   `markdown: bool` (default off).
 //! - **Interaction signals** ([`signals`]): elements declare hooks with

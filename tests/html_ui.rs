@@ -2216,8 +2216,9 @@ fn loaders_are_found_by_extension() {
 /// Markdown templates (ADR 0014): a `.md` page renders through Tera +
 /// pulldown-cmark into the same DOM model — headings, emphasis styled by
 /// CSS, lists, an `<img>`, and raw HTML with `data-on-click` passing
-/// through. Autoescaping is forced for `.md`: a context value's markup
-/// arrives as *text*, not tags.
+/// through unclassed while the constructed elements carry
+/// `class="markdown"`. Autoescaping is forced for `.md`: a context
+/// value's markup arrives as *text*, not tags.
 #[test]
 fn markdown_templates_render_and_escape() {
     let ui = TestUi::new(
@@ -2245,20 +2246,20 @@ fn markdown_templates_render_and_escape() {
     ui.settle().assert_dump(
         r#"
 html-ui
-  h1
+  h1.markdown
     "Journal" default 30px #ff0000
-  p
+  p.markdown
     "Hello " default 16px #ffffff
     "world" default 16px #00ff00
     " and <b>not tags</b>." default 16px #ffffff
-  ul
-    li margin=0,0,0,12
+  ul.markdown
+    li.markdown margin=0,0,0,12
       "• " default 16px #ffffff
       "first" default 16px #ffffff
-    li margin=0,0,0,12
+    li.markdown margin=0,0,0,12
       "• " default 16px #ffffff
       "second" default 16px #ffffff
-  p
+  p.markdown
     "frame.png" img 32x24
   div
     -

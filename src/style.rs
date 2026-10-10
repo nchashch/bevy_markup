@@ -9,7 +9,8 @@
 //! Markdown (ADR 0014) is a *source syntax*, styled by the same CSS: a
 //! `.md`/`.markdown` template or a `markdown: true` Fluent bundle converts
 //! to HTML first (`# …` → `h1`, `*x*` → `em`, `**x**` → `strong`, `- x` →
-//! `li`, `![x](p)` → `img`, tables → `table`/`tr`/`td`), so rules target the
+//! `li`, `![x](p)` → `img.markdown`, tables → `table`/`tr`/`td`), so
+//! rules target the
 //! generated tags exactly like hand-written HTML.
 //!
 //! Supported CSS (parsed with lightningcss; a syntax error fails the load):
