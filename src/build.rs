@@ -415,8 +415,13 @@ impl Styler<'_> {
     /// `text-decoration`); `None` when it declares neither. Not inherited:
     /// `push_runs` keeps the subtree's running values unless an element
     /// declares its own.
-    fn run_extras(&self, element: &HtmlElement, inline: Option<&InlineStyle>) -> Option<RunExtras> {
-        let declared = self.styles.get_with(element, Pseudo::default(), inline);
+    fn run_extras(
+        &self,
+        element: &HtmlElement,
+        state: Pseudo,
+        inline: Option<&InlineStyle>,
+    ) -> Option<RunExtras> {
+        let declared = self.styles.get_with(element, state, inline);
         if declared.background.is_none() && declared.text_decoration.is_none() {
             return None;
         }
@@ -808,23 +813,56 @@ pub(crate) fn build_html_ui(
         // own documents — their handles index those, not this one — so their
         // subtrees are skipped (the starting entity is the UI root itself).
         let mut states = HashMap::new();
-        let mut stack = vec![entity];
-        while let Some(current) = stack.pop() {
+        // A translated element's subtree is fragment-keyed (its spans'
+        // `DomNode` handles index the translation fragment, re-parsed per
+        // build), so those states are collected per fragment. The map holds
+        // the last build's states: a changed translation misses and styles
+        // unhovered until the next build's fresh map.
+        let mut fragments: HashMap<tl::NodeHandle, HashMap<tl::NodeHandle, Pseudo>> =
+            HashMap::new();
+        let pseudo = |state: Option<&PseudoState>| {
+            state.copied().map_or(Pseudo::default(), |state| Pseudo {
+                hover: state.hovered,
+                active: state.active,
+                focus: state.focused,
+                focus_visible: state.focus_visible,
+            })
+        };
+        let mut stack = vec![(entity, None)];
+        while let Some((current, fragment)) = stack.pop() {
             if let Ok((handle, state)) = dom_nodes.get(current) {
-                states.insert(
-                    **handle,
-                    state.copied().map_or(Pseudo::default(), |state| Pseudo {
-                        hover: state.hovered,
-                        active: state.active,
-                        focus: state.focused,
-                        focus_visible: state.focus_visible,
-                    }),
-                );
+                match fragment {
+                    Some(block) => {
+                        fragments
+                            .entry(block)
+                            .or_default()
+                            .insert(**handle, pseudo(state));
+                    }
+                    None => {
+                        states.insert(**handle, pseudo(state));
+                    }
+                }
             }
+            // A translated element starts its own fragment: its subtree's
+            // spans are spawned from the re-parsed translation, so their
+            // `DomNode` handles index the fragment. Only a document element
+            // starts one (fragments aren't localized again).
+            let fragment = match fragment {
+                Some(fragment) => Some(fragment),
+                None => dom_nodes.get(current).ok().and_then(|(handle, _)| {
+                    let handle = **handle;
+                    localized.0.contains_key(&handle).then_some(handle)
+                }),
+            };
             let nested_root =
                 current != entity && tree.get(current).is_ok_and(|(.., nested_ui)| nested_ui);
             if !nested_root && let Ok((children, ..)) = tree.get(current) {
-                stack.extend(children.iter().flat_map(|children| children.iter()));
+                stack.extend(
+                    children
+                        .iter()
+                        .flat_map(|children| children.iter())
+                        .map(|child| (child, fragment)),
+                );
             }
         }
 
@@ -859,9 +897,14 @@ pub(crate) fn build_html_ui(
         } else {
             match &*rendered {
                 RenderedHtml::Pending => continue,
-                RenderedHtml::Ready(document) => {
-                    collect_items(document.dom(), &localized.0, Some(&states), &styler, root)
-                }
+                RenderedHtml::Ready(document) => collect_items(
+                    document.dom(),
+                    &localized.0,
+                    Some(&states),
+                    &fragments,
+                    &styler,
+                    root,
+                ),
                 RenderedHtml::Failed(message) => vec![Item::Block(Block {
                     kind: BlockKind::Paragraph,
                     element: None,
@@ -2005,6 +2048,10 @@ struct Ctx<'a, 'p, 'buf> {
     /// The elements' `:hover`/`:active` state by DOM node (`None` inside a
     /// translation: fragment handles index the fragment, not the document).
     states: Option<&'a HashMap<tl::NodeHandle, Pseudo>>,
+    /// The translated fragments' element states, keyed by the translated
+    /// element's own DOM handle: a fragment re-parses per build, so its
+    /// spans' `DomNode` handles index the fragment, not the document.
+    fragments: Option<&'a HashMap<tl::NodeHandle, HashMap<tl::NodeHandle, Pseudo>>>,
     styler: &'a Styler<'a>,
     /// Inside a translation: the source element's `data-l10n-name`
     /// descendants, each usable once (fluent-dom's named overlays).
@@ -2059,12 +2106,15 @@ fn walk_translation(
         })
         .collect();
     let named = RefCell::new(named);
-    // Fragment handles index the fragment, not the source document.
+    // Fragment handles index the fragment, not the source document — the
+    // fragment gets its own states (collected per translated element by
+    // `build_html_ui`), and no translations of its own.
     let unlocalized = HashMap::default();
     let fragment_ctx = Ctx {
         parser: fragment.parser(),
         localized: &unlocalized,
-        states: None,
+        states: ctx.fragments.and_then(|fragments| fragments.get(&handle)),
+        fragments: None,
         styler: ctx.styler,
         named: Some(&named),
     };
@@ -2076,6 +2126,7 @@ fn collect_items(
     dom: &tl::VDom,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
     states: Option<&HashMap<tl::NodeHandle, Pseudo>>,
+    fragments: &HashMap<tl::NodeHandle, HashMap<tl::NodeHandle, Pseudo>>,
     styler: &Styler,
     root: Style,
 ) -> Vec<Item> {
@@ -2083,6 +2134,7 @@ fn collect_items(
         parser: dom.parser(),
         localized,
         states,
+        fragments: Some(fragments),
         styler,
         named: None,
     };
@@ -2425,7 +2477,7 @@ fn push_runs(
                 .element(tag)
                 .and_then(|element| {
                     let inline = cascade::inline_style(tag);
-                    ctx.styler.run_extras(&element, inline.as_ref())
+                    ctx.styler.run_extras(&element, state, inline.as_ref())
                 })
                 .map(|extras| extras.faded(style.opacity))
                 .unwrap_or(extras);

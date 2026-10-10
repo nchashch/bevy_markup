@@ -936,3 +936,125 @@ fn window_of(ui: &mut TestUi) -> Entity {
         .single(ui.world_mut())
         .expect("primary window")
 }
+
+/// A translated link (`<a>` inside a `data-l10n-id` message) hovers and
+/// recolors like a template link: both are picked spans whose `PseudoState`
+/// hover bit drives the `a:hover` restyle. Regression: translated links
+/// never showed their hover style.
+#[test]
+fn translated_links_hover_like_template_links() {
+    let page = r#"<div>
+  <p data-l10n-id="intro">Plain fallback.</p>
+  <p><a href="one://x">One</a></p>
+</div>"#;
+    let ftl = "intro = Notes live in the <a href=\"two://y\">journal</a>.\n";
+    let mut ui = page_ui(
+        "signals-translated-links",
+        page,
+        "a { color: #7fdbff } a:hover { color: #f0b429; background-color: #333333 }",
+        TemplateContext::new(),
+    );
+    ui.write(
+        "main.ftl.ron",
+        "(locale: \"en-US\", resources: [\"messages.ftl\"],)",
+    );
+    ui.write("messages.ftl", ftl);
+    ui = ui.locale("main.ftl.ron");
+    ui.settle();
+    ui.update(1);
+
+    // Both link spans: template and translated (document order puts the
+    // translated intro first).
+    let (translated_link, template_link) = {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement, Option<&ElementSignals>)>();
+        let links: Vec<Entity> = elements
+            .iter(world)
+            .filter(|(entity, element, signals)| {
+                element.tag == "a"
+                    && signals.is_some_and(|signals| signals.0.iter().any(|b| b.name == "open"))
+            })
+            .map(|(entity, _, _)| entity)
+            .collect();
+        assert_eq!(links.len(), 2, "two link spans");
+        (links[0], links[1])
+    };
+    // Hover each link's run: probe across its block's first line (the
+    // translated link ends the intro's line, the template link is the
+    // whole one-line paragraph). The hovered span must light up and
+    // recolor.
+    for (link, block) in [
+        (translated_link, translated_link),
+        (template_link, template_link),
+    ] {
+        let block = {
+            let world = ui.world_mut();
+            let mut current = link;
+            loop {
+                current = world
+                    .get::<ChildOf>(current)
+                    .map(|parent| parent.0)
+                    .expect("no block above the link");
+                if node_rect(world, current).is_some() {
+                    break current;
+                }
+            }
+        };
+        let rect = {
+            let world = ui.world_mut();
+            node_rect(world, block).expect("laid out")
+        };
+        let mut hovered = false;
+        for step in 1..=10 {
+            let at = Vec2::new(
+                rect.min.x + rect.width() * (step as f32 / 11.0),
+                rect.min.y + 10.0,
+            );
+            ui.move_pointer(at);
+            ui.update(2);
+            let state = {
+                let world = ui.world_mut();
+                world.get::<PseudoState>(link).copied()
+            };
+            if state.is_some_and(|state| state.hovered) {
+                hovered = true;
+                break;
+            }
+        }
+        assert!(hovered, "the link span hovers (block {block:?})");
+        // The hover restyle recolors the span (and hovering a plain-text
+        // run never does).
+        let color: bevy::color::Srgba = {
+            let world = ui.world_mut();
+            world
+                .get::<TextColor>(link)
+                .map(|c| c.0)
+                .expect("styled")
+                .into()
+        };
+        assert_eq!(color, HOVER_COLOR, "the hovered link recolors");
+        // The run-level properties follow the state too (`a:hover` may
+        // style a link's background).
+        let background: bevy::color::Srgba = {
+            let world = ui.world_mut();
+            world
+                .get::<TextBackgroundColor>(link)
+                .map(|c| c.0.into())
+                .expect("backgrounded")
+        };
+        assert_eq!(background, HOVER_BACKGROUND, "the hover background applies");
+        ui.move_pointer(Vec2::splat(-1000.0));
+        ui.update(2);
+    }
+}
+
+/// The hover rule's background (the test stylesheet's `a:hover`).
+const HOVER_BACKGROUND: bevy::color::Srgba = Srgba::new(0.2, 0.2, 0.2, 1.0);
+
+/// The hover rule's color (the test stylesheet's `a:hover`).
+const HOVER_COLOR: bevy::color::Srgba = Srgba::new(
+    0xF0 as f32 / 255.0,
+    0xB4 as f32 / 255.0,
+    0x29 as f32 / 255.0,
+    1.0,
+);

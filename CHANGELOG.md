@@ -8,6 +8,14 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Interaction styles on translated markup.** `:hover`/`:active`/`:focus`
+  never matched elements whose markup comes from a Fluent value (the
+  `links` example's inline links didn't highlight on hover, while the
+  template's links did). Translated fragments now style against their own
+  element states, and `a:hover { background-color }` /
+  `text-decoration` apply to link spans too.
+
 ### Added
 - **Three new examples:** `inputs` (text input fields with a live
   preview and reset buttons), `links` (`<a href>` opening as an `open`
