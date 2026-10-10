@@ -2,7 +2,7 @@ reader-tab-release = Release notes
 reader-tab-tutorial = Tutorial
 reader-language = Language: English
 reader-hint = Click, or <kbd>↑</kbd> <kbd>↓</kbd> / D-pad and <kbd>Enter</kbd> / A. <kbd>Q</kbd> <kbd>E</kbd> / bumpers switch pages, <kbd>Space</kbd> / Y switches the language.
-release-body = ## New in 0.5.2
+release-body = ## New in this release
 
   This release is about *reading* and *writing*: Markdown in templates and
   translations, inline styling on runs, and images **inside** your text.

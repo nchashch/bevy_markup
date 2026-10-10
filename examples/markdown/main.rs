@@ -44,7 +44,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
         .set_generic(GenericFamily::Serif, "System Serif")
         .set_generic(GenericFamily::Monospace, "System Mono");
 
-    commands.insert_resource(DefaultStylesheet::new(asset_server.load("markdown/style.css")));
+    commands.insert_resource(DefaultStylesheet::new(
+        asset_server.load("markdown/style.css"),
+    ));
 
     let languages: Vec<Handle<LocaleBundle>> = ["en-US", "de"]
         .iter()

@@ -2,7 +2,7 @@ reader-tab-release = Versionshinweise
 reader-tab-tutorial = Kurzanleitung
 reader-language = Sprache: Deutsch
 reader-hint = Klicken, oder <kbd>↑</kbd> <kbd>↓</kbd> / Steuerkreuz und <kbd>Enter</kbd> / A. <kbd>Q</kbd> <kbd>E</kbd> / Schultertasten wechseln die Seite, <kbd>Leertaste</kbd> / Y die Sprache.
-release-body = ## Neu in 0.5.2
+release-body = ## Neu in dieser Version
 
   Dieses Release dreht sich um *Lesen* und *Schreiben*: Markdown in
   Templates und Übersetzungen, Inline-Stil auf Textläufen und Bilder
