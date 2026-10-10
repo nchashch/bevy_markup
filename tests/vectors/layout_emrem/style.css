@@ -1,0 +1,12 @@
+/* Font-relative lengths: `em` resolves against the element's own font size
+   (inherited or set), `rem` against the root's. Padding, border widths and
+   gaps stay absolute-only, so none appear here. Default font only, ASCII
+   only, font sizes whose 1.2 line height is whole. */
+html { font-size: 20px }
+.stage { width: 400px; padding: 4px; }
+.em-width { width: 6em; }              /* em of the div (inherited 20) = 120px */
+.rem-box { width: 10rem; margin: 1rem 2rem; } /* 200px wide, margins 20/40px */
+.bigger { font-size: 1.5em; }          /* 30px, inherited into the p */
+.em-text { width: 3em; }               /* em of the p (30) = 90px */
+.grid { display: grid; grid-template-columns: 5em 2rem; }
+.cell { min-height: 24px; }

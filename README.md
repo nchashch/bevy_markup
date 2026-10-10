@@ -140,7 +140,8 @@ bevy_markup implements a useful subset of the web, not all of it:
   `:hover`/`:active`/`:focus`/`:focus-visible`; colors and fonts (inherited); flex and grid layout
   (`display`, `flex-direction`, `justify-content`, `align-items`, `gap`,
   `grid-template-columns`, `grid-column`, …); sizes, margins, padding,
-  `box-sizing`; `position` with `top`/`left`/…, `z-index`; borders with
+  `box-sizing`; font-relative `em`/`rem` lengths (resolved per element
+  like CSS); `position` with `top`/`left`/…, `z-index`; borders with
   colors and rounded corners, background colors; 9-slice frames through
   `border-image`; `outline`; `pointer-events: none`; `opacity`; inline
   `style="…"` attributes (templated values update in place). A template styles its

@@ -557,7 +557,7 @@ fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
 #[test]
 fn every_template_is_listed() {
     let assets = assets();
-    let mut on_disk: BTreeSet<String> = ["html", "htm", "md", "markdown"]
+    let on_disk: BTreeSet<String> = ["html", "htm", "md", "markdown"]
         .into_iter()
         .flat_map(|ext| content_files(&assets, ext))
         .collect();

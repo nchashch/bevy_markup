@@ -2207,7 +2207,7 @@ fn loaders_are_found_by_extension() {
 /// arrives as *text*, not tags.
 #[test]
 fn markdown_templates_render_and_escape() {
-    let mut ui = TestUi::new(
+    let ui = TestUi::new(
         "markdown",
         &[
             (

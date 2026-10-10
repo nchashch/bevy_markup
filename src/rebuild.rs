@@ -92,6 +92,13 @@ pub(crate) struct RebuildState {
 }
 
 impl RebuildState {
+    /// Queues a restyle for state the CSS maps onto that changed outside
+    /// the [`Frame`] inputs (Bevy's `RemSize`, synced to the root rule's
+    /// font-size — `Val::Rem`s re-resolve on the next restyle).
+    pub(crate) fn queue_restyle(&mut self) {
+        self.pending = Some(Update::Restyle);
+    }
+
     pub fn decide(&mut self, frame: Frame) -> Decision {
         let own_ready = frame.own == Some(Phase::Ready);
         let style = frame.own_changed

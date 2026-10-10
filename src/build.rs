@@ -175,6 +175,8 @@ enum Item {
         boxed: BoxStyle,
         /// The element's computed `pointer-events` (inherited).
         pointer_events: bool,
+        /// The element's computed font-size (for `EmSize`).
+        font_size: f32,
         children: Vec<Item>,
     },
 }
@@ -543,6 +545,7 @@ pub(crate) struct BuildAssets<'w> {
     server: Res<'w, AssetServer>,
     images: Res<'w, Assets<Image>>,
     templates: Res<'w, Assets<HtmlTemplate>>,
+    rem_size: Res<'w, RemSize>,
 }
 
 pub(crate) fn build_html_ui(
@@ -578,6 +581,7 @@ pub(crate) fn build_html_ui(
         server,
         images,
         templates,
+        rem_size,
     } = assets;
     // Removals aren't `Ref` changes, so they're read separately.
     let removed_outlines: HashSet<Entity> = removed_outlines.read().collect();
@@ -725,7 +729,7 @@ pub(crate) fn build_html_ui(
         commands
             .entity(entity)
             .queue(move |mut entity: EntityWorldMut| {
-                apply_root(&mut entity, root_box, root_pointer_events);
+                apply_root(&mut entity, root_box, root_pointer_events, root.size);
             });
 
         // The elements' interaction state by DOM node, so the collected
@@ -817,6 +821,17 @@ pub(crate) fn build_html_ui(
             .flat_map(|spec| spec.images.iter().cloned())
             .collect();
         commands.entity(entity).insert(InlineImages(inline_images));
+        // CSS `rem` resolves against the root font-size: keep Bevy's
+        // `RemSize` resource in sync. A change restyles this UI, so its
+        // `Val::Rem`s re-convert against the new value.
+        if **rem_size != root.size {
+            commands.insert_resource(RemSize(root.size));
+            commands.queue(move |world: &mut World| {
+                if let Some(mut state) = world.get_mut::<RebuildState>(entity) {
+                    state.queue_restyle();
+                }
+            });
+        }
         let mut connected = Vec::new();
         let spawned = update_children(&mut commands, entity, specs, &tree, entity, &mut connected);
         // After the spawns, before `HtmlUiBuilt`: its observers see what the
@@ -857,6 +872,9 @@ struct NodeSpec {
     pickable: bool,
     /// `position: fixed` (`FixedNode` component).
     fixed: bool,
+    /// The element's computed font-size (CSS `em` resolves against it via
+    /// Bevy's `EmSize`; `rem` against the synced `RemSize`).
+    font_size: f32,
     /// The `<img>` handles this subtree's blocks use (aggregated up for the
     /// UI's [`InlineImages`]).
     images: Vec<Handle<Image>>,
@@ -907,6 +925,7 @@ impl NodeSpec {
             outline: None,
             pickable: true,
             fixed: false,
+            font_size: DEFAULT_FONT_SIZE,
             images: Vec::new(),
             text: None,
             children: Vec::new(),
@@ -1053,7 +1072,8 @@ type Tree<'w, 's> = Query<
 >;
 
 fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
-    let (element, handle, signals, focus, custom, boxed, pointer_events, children) = match item {
+    let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children) =
+        match item {
         Item::Block(block) => return block_spec(styler, block),
         Item::Container {
             element,
@@ -1063,6 +1083,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
             custom,
             boxed,
             pointer_events,
+            font_size,
             children,
         } => (
             element,
@@ -1072,6 +1093,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
             custom,
             boxed,
             pointer_events,
+            font_size,
             children,
         ),
     };
@@ -1107,6 +1129,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
         z_index: boxed.z_index.map(ZIndex),
         pickable: pointer_events,
         fixed: boxed.layout.position == Some(CssPosition::Fixed),
+        font_size,
         images,
         children,
         ..NodeSpec::new(node)
@@ -1205,6 +1228,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             z_index: boxed.z_index.map(ZIndex),
             pickable: block.style.pointer_events,
             fixed: boxed.layout.position == Some(CssPosition::Fixed),
+            font_size: block.style.size,
             images,
             text: Some(text),
             ..NodeSpec::new(node)
@@ -1238,6 +1262,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         z_index: boxed.z_index.map(ZIndex),
         pickable: block.style.pointer_events,
         fixed: boxed.layout.position == Some(CssPosition::Fixed),
+        font_size: block.style.size,
         images,
         children: vec![NodeSpec {
             pickable: block.style.pointer_events,
@@ -1262,6 +1287,12 @@ fn spawn_spec(
     connected: &mut Vec<ElementConnected>,
 ) -> Entity {
     let mut entity = parent.spawn(spec.node);
+    // Non-text nodes get their `EmSize` from the cascade (text blocks have
+    // a `TextFont`, which Bevy derives it from). CSS `em` lengths on the
+    // node resolve against it.
+    if spec.text.is_none() {
+        entity.insert(EmSize(spec.font_size));
+    }
     let id = entity.id();
     if let Some(custom) = spec.custom {
         connected.push(ElementConnected {
@@ -1465,13 +1496,20 @@ fn update_spec(
         signals: bindings,
         background,
         image,
+        font_size,
         ..
     } = spec;
+    let is_text = spec.text.is_some();
     if !bindings.is_empty() {
         signals::observe_pointer_signals(&mut target);
     }
     target.queue(move |mut entity: EntityWorldMut| {
         put(&mut entity, Some(node));
+        // Non-text nodes get their `EmSize` from the cascade (text blocks
+        // have a `TextFont`, which Bevy derives it from).
+        if !is_text {
+            put(&mut entity, Some(EmSize(font_size)));
+        }
         if element.is_some() {
             put(&mut entity, element);
         }
@@ -1637,7 +1675,12 @@ fn put_marker<C: Component + Default>(entity: &mut EntityWorldMut, set: bool) {
 /// sibling roots too, as Bevy sorts roots by `GlobalZIndex` then `ZIndex`)
 /// and `pointer-events: none` as components. What it no longer declares goes
 /// back to the app's value ([`CssRoot`]).
-fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool) {
+fn apply_root(
+    entity: &mut EntityWorldMut,
+    boxed: BoxStyle,
+    pointer_events: bool,
+    root_size: f32,
+) {
     let state = entity.take::<CssRoot>();
     let Some(current) = entity.get::<Node>().cloned() else {
         return;
@@ -1662,6 +1705,10 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
     if node != current {
         entity.insert(node);
     }
+    // The root's font-size in concrete form: CSS `em` lengths on the root
+    // resolve against it. (The root has no `TextFont`, so Bevy wouldn't
+    // derive one.)
+    entity.insert(EmSize(root_size));
 
     let mut owned = state.map(|state| state.owned).unwrap_or_default();
     claim(
@@ -1951,6 +1998,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                     custom,
                     boxed,
                     pointer_events: style.pointer_events,
+                    font_size: style.size,
                     children,
                 });
             }

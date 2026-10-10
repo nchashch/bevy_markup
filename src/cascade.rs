@@ -1285,9 +1285,8 @@ fn min_breadth(breadth: &TrackBreadth) -> Option<MinTrackSizingFunction> {
             Val::VMin(v) => MinTrackSizingFunction::VMin(v),
             Val::VMax(v) => MinTrackSizingFunction::VMax(v),
             Val::Auto => MinTrackSizingFunction::Auto,
-            // `length_percentage_val` never produces these (em/rem fail
-            // `to_px` above); listed so the match stays exhaustive.
-            Val::Em(_) | Val::Rem(_) => return unsupported("font-relative track size"),
+            Val::Em(v) => MinTrackSizingFunction::Em(v),
+            Val::Rem(v) => MinTrackSizingFunction::Rem(v),
         },
         TrackBreadth::Auto => MinTrackSizingFunction::Auto,
         TrackBreadth::MinContent => MinTrackSizingFunction::MinContent,
@@ -1306,8 +1305,8 @@ fn max_breadth(breadth: &TrackBreadth) -> Option<MaxTrackSizingFunction> {
             Val::VMin(v) => MaxTrackSizingFunction::VMin(v),
             Val::VMax(v) => MaxTrackSizingFunction::VMax(v),
             Val::Auto => MaxTrackSizingFunction::Auto,
-            // See `min_breadth`: unreachable, keeps the match exhaustive.
-            Val::Em(_) | Val::Rem(_) => return unsupported("font-relative track size"),
+            Val::Em(v) => MaxTrackSizingFunction::Em(v),
+            Val::Rem(v) => MaxTrackSizingFunction::Rem(v),
         },
         TrackBreadth::Flex(fr) => MaxTrackSizingFunction::Fraction(*fr),
         TrackBreadth::Auto => MaxTrackSizingFunction::Auto,
@@ -1382,6 +1381,12 @@ fn length_percentage_val(value: &LengthPercentage) -> Option<Val> {
             LengthValue::Vh(vh) => Some(Val::Vh(*vh)),
             LengthValue::Vmin(v) => Some(Val::VMin(*v)),
             LengthValue::Vmax(v) => Some(Val::VMax(*v)),
+            // Bevy resolves `em` against the node's `EmSize` (which the
+            // build sets from the cascade's computed font-size) and `rem`
+            // against the `RemSize` resource (synced to the root rule's
+            // font-size).
+            LengthValue::Em(em) => Some(Val::Em(*em)),
+            LengthValue::Rem(rem) => Some(Val::Rem(*rem)),
             length => length
                 .to_px()
                 .map(Val::Px)
@@ -1861,7 +1866,7 @@ mod tests {
         assert_eq!(layout("max-height: 30px").max_height, Some(Val::Px(30.0)));
         assert_eq!(layout("max-width: none").max_width, Some(Val::Auto));
         assert_eq!(layout("width: min-content").width, None);
-        assert_eq!(layout("width: 2em").width, None);
+        assert_eq!(layout("width: 2em").width, Some(Val::Em(2.0)));
 
         assert_eq!(
             layout("margin-top: 1px").margin,
@@ -1953,10 +1958,16 @@ mod tests {
             Some(vec![GridTrack::fr(1.0)]),
             "names ignored"
         );
+        // Font-relative tracks map to taffy's `Em`/`Rem` sizing functions.
         assert_eq!(
             columns("1fr 2em"),
-            None,
-            "one unsupported track drops the list"
+            Some(vec![
+                GridTrack::fr(1.0),
+                GridTrack::minmax(
+                    MinTrackSizingFunction::Em(2.0),
+                    MaxTrackSizingFunction::Em(2.0)
+                )
+            ])
         );
         assert_eq!(
             layout("grid-template-rows: none").grid_template_rows,
@@ -2489,10 +2500,34 @@ mod tests {
             layout("border-top-left-radius: 25% 10px").border_radius[0],
             Some((Val::Percent(25.0), Val::Px(10.0)))
         );
-        // Relative lengths (em) stay unsupported, circular or not.
+        // Relative lengths map to Bevy's font-relative `Val`s (resolved
+        // against `EmSize`/`RemSize` at layout time).
         assert_eq!(
             layout("border-radius: 1em").border_radius,
-            [None, None, None, None]
+            [
+                Some((Val::Em(1.0), Val::Em(1.0))),
+                Some((Val::Em(1.0), Val::Em(1.0))),
+                Some((Val::Em(1.0), Val::Em(1.0))),
+                Some((Val::Em(1.0), Val::Em(1.0)))
+            ]
         );
+    }
+
+    /// Font-relative lengths map to `Val::Em`/`Val::Rem` (Bevy resolves
+    /// them against the node's `EmSize` and the `RemSize` resource).
+    #[test]
+    fn font_relative_lengths_map_to_em_rem() {
+        let layout = |css: &str| declared(css).layout;
+        assert_eq!(
+            layout("width: 1.5em; margin: 2rem; inset: 1em").inset[0],
+            Some(Val::Em(1.0))
+        );
+        assert_eq!(layout("width: 1.5em").width, Some(Val::Em(1.5)));
+        assert_eq!(
+            layout("margin: 2rem").margin,
+            [Some(Val::Rem(2.0)); 4]
+        );
+        // `ex`/`ch` have no Bevy counterpart.
+        assert_eq!(layout("width: 3ch").width, None);
     }
 }

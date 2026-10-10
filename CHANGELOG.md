@@ -12,6 +12,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ### Added
 
+- **Font-relative layout lengths.** `em` and `rem` now work for sizes,
+  margins, insets, border radii and grid tracks (Bevy 0.20's
+  `Val::Em`/`Val::Rem`): `em` resolves against the element's own computed
+  font-size, `rem` against the root rule's font-size (Bevy's `RemSize`
+  resource, synced by the build; a change restyles). `ex`/`ch` and
+  font-relative `padding`/`border-width`/`gap` remain unsupported.
 - **Markdown templates and Fluent values.** A `.md`/`.markdown` template is
   Tera plus pulldown-cmark: the rendered output converts to HTML (CommonMark
   + tables, strikethrough, task lists, footnotes) before parsing —

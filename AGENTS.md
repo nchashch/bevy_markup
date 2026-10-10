@@ -503,6 +503,14 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 
 ## Gotchas (verified)
 
+- **`RemSize` is global — HtmlUis with different root font-sizes fight.**
+  The build syncs Bevy's `RemSize` resource to each UI's `html` rule
+  font-size (CSS `rem` semantics) and queues a restyle when it changes.
+  Two `HtmlUi`s whose root font-sizes differ would flip `RemSize` on every
+  rebuild of the other. Keep root font-sizes equal across UIs, or use
+  explicit px/em.
+
+
 - **Markdown in FTL values: list/heading markers must be on indented
   continuation lines.** FTL reads a `-` at column 0 as an attribute key, a
   `#` as a comment, and a line-initial `*` (even `**bold**`) as a variant
@@ -1121,8 +1129,13 @@ Known limits (each skipped/ignored value is logged at `debug`):
 
 - **Layout:** flex and grid layout, sizes, margins and `box-sizing` work on
   blocks, containers and the root (see the CSS subset); `position: sticky`, `order`, named grid
-  lines or `grid-template-areas`, `place-*` shorthands, `gap` in `%`, or
-  font-relative lengths (`em`/`rem`) for layout. `absolute` resolves against
+  lines or `grid-template-areas`, `place-*` shorthands, `gap` in `%`,
+  font-relative `padding`/`border-width`/`gap`, or `ex`/`ch`.
+  `em`/`rem` work for sizes, margins, insets, radius and grid tracks
+  (Bevy's `Val::Em`/`Val::Rem`: `em` against each node's `EmSize` — the
+  build sets it from the cascade's computed font-size on non-text nodes —
+  and `rem` against the `RemSize` resource, synced to the root rule's
+  font-size; a change queues a restyle). `absolute` resolves against
   the parent (Bevy has no containing-block search); `fixed` resolves against
   the viewport (`FixedNode`). The `HtmlUi` node's default `Node` is a
   flex *row*: set `flex_direction: Column` on it or `html { flex-direction:

@@ -251,6 +251,10 @@ impl Plugin for BevyMarkupPlugin {
             .init_asset_loader::<l10n::LocaleBundleLoader>()
             .init_resource::<style::DefaultStylesheet>()
             .init_resource::<l10n::ActiveLocale>()
+            // CSS `rem` resolves against the root font-size: the build syncs
+            // this resource to the root rule's font-size. Registered here so
+            // minimal apps (no `TextPlugin`) have it too.
+            .init_resource::<RemSize>()
             .init_resource::<fonts::FontFamilies>()
             .init_resource::<custom_elements::CustomElements>()
             .add_message::<signals::ElementSignal>()

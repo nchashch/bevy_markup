@@ -62,7 +62,8 @@
 //!   `align-items`, `align-content`, `align-self`, `justify-items`,
 //!   `justify-self`, `flex-grow`, `flex-shrink`, `flex-basis`, `flex`;
 //!   `width`, `height`, `min-*`, `max-*` (px, `%`, `vw`/`vh`/`vmin`/`vmax`,
-//!   `auto`/`none`); `margin` (+ sides; px, `%`, `auto`); `box-sizing`;
+//!   `em`/`rem`, `auto`/`none`); `margin` (+ sides; px, `%`, `em`/`rem`,
+//!   `auto`); `box-sizing`;
 //!   `overflow` (+ `-x`/`-y`: `visible`, `hidden`, `clip`, `scroll`; `auto`
 //!   scrolls — Bevy has no scroll-if-needed). As
 //!   in CSS, sizes default to the content box. `position` (`static`,
@@ -70,9 +71,15 @@
 //!   padding box, Bevy's rule, i.e. as if every parent were positioned;
 //!   `fixed` positions against the viewport — Bevy's `FixedNode` — and does
 //!   not inherit the parent's clipping or transform) with `top` /
-//!   `right` / `bottom` / `left` / `inset` (px, `%`, viewport units, `auto`),
+//!   `right` / `bottom` / `left` / `inset` (px, `%`, viewport units,
+//!   `em`/`rem`, `auto`),
 //!   which apply only to `relative`/`absolute`/`fixed`, as in CSS;
-//!   `sticky` is skipped.
+//!   `sticky` is skipped. Font-relative lengths resolve like CSS: `em`
+//!   against the element's own computed font-size (each node's `EmSize`),
+//!   `rem` against the root rule's font-size (the `RemSize` resource,
+//!   kept in sync; a change restyles). Grid tracks take them too
+//!   (taffy's font-relative track sizing). `ex`/`ch`, font-relative
+//!   `padding`/`border-width`/`gap` and `calc()` are skipped.
 //!   Containers are flex columns unless `flex-direction` (or `display:
 //!   block`) says otherwise — `display: flex` alone keeps the column — and
 //!   neither containers nor blocks shrink by default (`flex-shrink: 0`).
