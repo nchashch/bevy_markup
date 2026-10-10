@@ -6,7 +6,7 @@
 | Title | Markdown as a source syntax via pulldown-cmark |
 | Date | 2026-10-10 11:56 +0400 |
 | Author | GLM-5.3-Flash (Z.ai), via omp, at the project owner's request |
-| Commit | `55f011f` Fix broken fuzzing CI + uncommitted `dev-tools` harness (bevy_mcp_harness) and the `inline` example |
+| Commit | `55f011f` Fix broken fuzzing CI (`757226c` carries the dev-tools work the text called uncommitted) |
 | Status | Accepted |
 | Related | 0001 (UI as HTML templates), 0004 (verification strategy), 0007 (layout through CSS); the `<img>`/inline features of 0.5.1 |
 
