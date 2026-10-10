@@ -429,11 +429,13 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `grid-area`; `GridLineDecl` pairs → `GridPlacement`). Named lines and
   `grid-template-areas` are skipped (Bevy places by number only). Bare
   `grid-auto-flow: dense` fails lightningcss's parser (UPSTREAM.md U10).
-  `position` (`CssPosition`: static/relative/absolute) + insets
-  (`top`/`right`/`bottom`/`left`/`inset`), and `border-radius` corners, are
+  `position` (`CssPosition`: static/relative/absolute/fixed) + insets
+  (`top`/`right`/`bottom`/`left`/`inset`), and `border-radius` corners
+  (circular or the CSS `h / v` elliptical syntax), are
   `LayoutDecl` too: `static`/undeclared leaves `PositionType::Relative` with
   insets at `auto` (CSS ignores insets there); Bevy places `absolute` in the
-  parent's padding box (every parent acts positioned).
+  parent's padding box (every parent acts positioned); `fixed` adds the
+  `FixedNode` component (CSS-owned: taken back when the declaration goes).
 - Element components (`build.rs` `apply_css_owned`): `border-color` →
   `BorderColor`, `z-index` → `ZIndex`, computed `pointer-events: none` →
   `Pickable::IGNORE` (also on a boxed block's inner text node, and on the
@@ -1079,10 +1081,11 @@ check its entries and drop workarounds upstream has made unnecessary.
 Known limits (each skipped/ignored value is logged at `debug`):
 
 - **Layout:** flex and grid layout, sizes, margins and `box-sizing` work on
-  blocks, containers and the root (see the CSS subset); `position: fixed`/`sticky`, `order`, named grid
+  blocks, containers and the root (see the CSS subset); `position: sticky`, `order`, named grid
   lines or `grid-template-areas`, `place-*` shorthands, `gap` in `%`, or
   font-relative lengths (`em`/`rem`) for layout. `absolute` resolves against
-  the parent (Bevy has no containing-block search). The `HtmlUi` node's default `Node` is a
+  the parent (Bevy has no containing-block search); `fixed` resolves against
+  the viewport (`FixedNode`). The `HtmlUi` node's default `Node` is a
   flex *row*: set `flex_direction: Column` on it or `html { flex-direction:
   column }` in CSS, or blocks sit side by side. The root rule has no
   `:hover`/`:focus` states (always `Pseudo::default()`).
@@ -1107,7 +1110,7 @@ Known limits (each skipped/ignored value is logged at `debug`):
   (`div p`, `>`), attribute selectors, other pseudo-classes or
   pseudo-elements.
 - **Properties:** no `text-align`, `line-height`, `letter-spacing`,
-  `text-decoration`, elliptical `border-radius`, border styles (every
+  `text-decoration`, border styles (every
   border is solid); `overflow: auto` scrolls always (Bevy has no
   scroll-if-needed). Lengths: px/em/rem/% for `font-size`, absolute only
   for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins.

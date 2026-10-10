@@ -28,8 +28,9 @@
 //!   `outline-offset` in px; drawn only with a visible style, `currentColor`
 //!   = the text color) → Bevy's `Outline`; `border-color` (+ `-top`/… sides; Bevy's
 //!   `BorderColor`, undeclared sides transparent — needs a `border-width`),
-//!   `border-radius` (+ the four corner longhands; circular corners only,
-//!   `%` of the node's smaller side as Bevy does), `z-index` (an integer →
+//!   `border-radius` (+ the four corner longhands; the CSS `h / v` slash
+//!   syntax gives elliptical corners, `%` per-axis against the node's
+//!   dimensions), `z-index` (an integer →
 //!   `ZIndex` among siblings; `auto` = 0). An app's own `BorderColor` /
 //!   `ZIndex` / `Pickable` is left alone unless a rule sets it.
 //! - `opacity` (a number or `%`): CSS group opacity, approximated by
@@ -46,11 +47,13 @@
 //!   `overflow` (+ `-x`/`-y`: `visible`, `hidden`, `clip`, `scroll`; `auto`
 //!   scrolls — Bevy has no scroll-if-needed). As
 //!   in CSS, sizes default to the content box. `position` (`static`,
-//!   `relative`, `absolute`; `absolute` is placed in its parent's padding
-//!   box, Bevy's rule, i.e. as if every parent were positioned) with `top` /
+//!   `relative`, `absolute`, `fixed`; `absolute` is placed in its parent's
+//!   padding box, Bevy's rule, i.e. as if every parent were positioned;
+//!   `fixed` positions against the viewport — Bevy's `FixedNode` — and does
+//!   not inherit the parent's clipping or transform) with `top` /
 //!   `right` / `bottom` / `left` / `inset` (px, `%`, viewport units, `auto`),
-//!   which apply only to `relative`/`absolute`, as in CSS; `fixed` and
-//!   `sticky` are skipped.
+//!   which apply only to `relative`/`absolute`/`fixed`, as in CSS;
+//!   `sticky` is skipped.
 //!   Containers are flex columns unless `flex-direction` (or `display:
 //!   block`) says otherwise — `display: flex` alone keeps the column — and
 //!   neither containers nor blocks shrink by default (`flex-shrink: 0`).

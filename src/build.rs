@@ -6,7 +6,9 @@ use bevy::asset::{AssetEvent, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
-use crate::cascade::{self, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue};
+use crate::cascade::{
+    self, CssPosition, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue,
+};
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
 use crate::fonts::FontFamilies;
@@ -244,6 +246,7 @@ struct RootOwned {
     z_index: Option<Option<ZIndex>>,
     pickable: Option<Option<Pickable>>,
     image: Option<Option<ImageNode>>,
+    fixed: Option<Option<FixedNode>>,
 }
 
 /// Computes styles from declared CSS + registered fonts.
@@ -689,6 +692,8 @@ struct NodeSpec {
     outline: Option<Outline>,
     /// `false` for `pointer-events: none` (`Pickable::IGNORE`).
     pickable: bool,
+    /// `position: fixed` (`FixedNode` component).
+    fixed: bool,
     /// `Text` nodes hold spans, never child nodes.
     text: Option<TextSpec>,
     children: Vec<NodeSpec>,
@@ -718,6 +723,7 @@ impl NodeSpec {
             z_index: None,
             outline: None,
             pickable: true,
+            fixed: false,
             text: None,
             children: Vec::new(),
         }
@@ -725,16 +731,18 @@ impl NodeSpec {
 }
 
 /// Which of an element's components its stylesheet set (and may therefore
-/// take back on a restyle): `BorderColor`, `ZIndex`, `Outline` and `Pickable` are also
-/// things an app sets itself, so a restyle without the declaration resets
-/// only what CSS set. `BorderColor`/`ZIndex` are `Node`'s required
-/// components: taking them back means resetting them to their defaults.
+/// take back on a restyle): `BorderColor`, `ZIndex`, `Outline`, `Pickable`
+/// and `FixedNode` are also things an app sets itself, so a restyle without
+/// the declaration resets only what CSS set. `BorderColor`/`ZIndex` are
+/// `Node`'s required components: taking them back means resetting them to
+/// their defaults.
 #[derive(Component, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CssOwned {
     border_color: bool,
     z_index: bool,
     outline: bool,
     pickable: bool,
+    fixed: bool,
 }
 
 /// Sets a node's CSS-owned components; on a restyle, resets the ones CSS set
@@ -745,12 +753,14 @@ fn apply_css_owned(
     z_index: Option<ZIndex>,
     outline: Option<Outline>,
     pickable: bool,
+    fixed: bool,
 ) {
     let owned = CssOwned {
         border_color: border_color.is_some(),
         z_index: z_index.is_some(),
         outline: outline.is_some(),
         pickable: !pickable,
+        fixed,
     };
     target.queue(move |mut entity: EntityWorldMut| {
         let before = entity.get::<CssOwned>().copied().unwrap_or_default();
@@ -775,6 +785,13 @@ fn apply_css_owned(
             put(&mut entity, Some(Pickable::IGNORE));
         } else if before.pickable {
             put::<Pickable>(&mut entity, None);
+        }
+        if owned.fixed {
+            if !entity.contains::<FixedNode>() {
+                entity.insert(FixedNode);
+            }
+        } else if before.fixed && entity.contains::<FixedNode>() {
+            entity.remove::<FixedNode>();
         }
         put(&mut entity, (owned != CssOwned::default()).then_some(owned));
     });
@@ -849,6 +866,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
         outline: boxed.drawn_outline,
         z_index: boxed.z_index.map(ZIndex),
         pickable: pointer_events,
+        fixed: boxed.layout.position == Some(CssPosition::Fixed),
         children: children
             .into_iter()
             .map(|child| item_spec(styler, child, default_gap))
@@ -917,6 +935,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             outline: boxed.drawn_outline,
             z_index: boxed.z_index.map(ZIndex),
             pickable: block.style.pointer_events,
+            fixed: boxed.layout.position == Some(CssPosition::Fixed),
             text: Some(text),
             ..NodeSpec::new(node)
         };
@@ -948,6 +967,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         outline: boxed.drawn_outline,
         z_index: boxed.z_index.map(ZIndex),
         pickable: block.style.pointer_events,
+        fixed: boxed.layout.position == Some(CssPosition::Fixed),
         children: vec![NodeSpec {
             pickable: block.style.pointer_events,
             text: Some(text),
@@ -1006,6 +1026,7 @@ fn spawn_spec(
         spec.z_index,
         spec.outline,
         spec.pickable,
+        spec.fixed,
     );
     match spec.text {
         Some(text) => {
@@ -1208,6 +1229,7 @@ fn update_spec(
         spec.z_index,
         spec.outline,
         spec.pickable,
+        spec.fixed,
     );
     match spec.text {
         Some(text) => {
@@ -1337,6 +1359,11 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
         (!pointer_events).then_some(Pickable::IGNORE),
         &mut owned.pickable,
     );
+    claim(
+        entity,
+        (boxed.layout.position == Some(CssPosition::Fixed)).then_some(FixedNode),
+        &mut owned.fixed,
+    );
     claim(entity, boxed.sliced_image(), &mut owned.image);
 
     let declares_node = boxed
@@ -1350,6 +1377,7 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
         || owned.border_color.is_some()
         || owned.z_index.is_some()
         || owned.pickable.is_some()
+        || owned.fixed.is_some()
         || owned.image.is_some();
     if declares_node || owns_component {
         entity.insert(CssRoot {

@@ -717,7 +717,9 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
             )
             .unwrap();
         }
-        if node.position_type == PositionType::Absolute {
+        if entity_ref.contains::<FixedNode>() {
+            write!(line, " pos=fixed").unwrap();
+        } else if node.position_type == PositionType::Absolute {
             write!(line, " pos=abs").unwrap();
         }
         let inset = [node.top, node.right, node.bottom, node.left];
@@ -727,12 +729,19 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         let radius = node.border_radius;
         if radius != BorderRadius::DEFAULT {
             let corners = [
-                radius.top_left.x,
-                radius.top_right.x,
-                radius.bottom_right.x,
-                radius.bottom_left.x,
+                radius.top_left,
+                radius.top_right,
+                radius.bottom_right,
+                radius.bottom_left,
             ];
-            write!(line, " radius={}", corners.map(val).join(",")).unwrap();
+            let radius_of = |corner: &CornerRadius| match corner.y {
+                // Circular: CSS sets both components equal; `y: auto` only
+                // shows up on defaults and app-written values.
+                Val::Auto => val(corner.x),
+                elliptical if elliptical == corner.x => val(corner.x),
+                elliptical => format!("{}/{}", val(corner.x), val(elliptical)),
+            };
+            write!(line, " radius={}", corners.map(|c| radius_of(&c)).join(",")).unwrap();
         }
     }
     if let Some(colors) = entity_ref.get::<BorderColor>()

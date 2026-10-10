@@ -7,3 +7,7 @@ html { font-size: 20px }
 .far { position: absolute; right: 5%; bottom: 0px }
 .nudged { position: relative; top: 7px; left: 11px }
 .still { position: static; top: 50px; left: 50px }
+/* Fixed: against the viewport, not the stage (the stage's border moves it). */
+.fixed { position: fixed; top: 20px; right: 30px; width: 90px; background-color: #00ff00 }
+/* Elliptical radius (and a circular one): must not move anything. */
+.oval { border-radius: 20px 8px / 10px 25%; background-color: #0000ff }

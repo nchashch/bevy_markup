@@ -133,10 +133,11 @@ pub(crate) struct LayoutDecl {
     /// `position`.
     pub position: Option<CssPosition>,
     /// `top`/`right`/`bottom`/`left` (`[top, right, bottom, left]`); they
-    /// only apply to a `relative`/`absolute` element, as in CSS.
+    /// only apply to a `relative`/`absolute`/`fixed` element, as in CSS.
     pub inset: [Option<Val>; 4],
-    /// `[top-left, top-right, bottom-right, bottom-left]` radii.
-    pub border_radius: [Option<Val>; 4],
+    /// `[top-left, top-right, bottom-right, bottom-left]` radii as
+    /// `[x, y]` pairs (CSS `border-radius: h / v`).
+    pub border_radius: [Option<(Val, Val)>; 4],
     /// `overflow-x`, `overflow-y` (and the `overflow` shorthand).
     pub overflow: [Option<OverflowAxis>; 2],
 }
@@ -148,6 +149,9 @@ pub(crate) enum CssPosition {
     Static,
     Relative,
     Absolute,
+    /// Bevy's `FixedNode`: positioned against the viewport like CSS's
+    /// `position: fixed`, not the parent; no inherited clipping.
+    Fixed,
 }
 
 impl LayoutDecl {
@@ -197,7 +201,9 @@ impl LayoutDecl {
         set(&mut node.overflow.x, &self.overflow[0]);
         set(&mut node.overflow.y, &self.overflow[1]);
         let position_type = match self.position {
-            Some(CssPosition::Absolute) => PositionType::Absolute,
+            // `fixed` positions against the viewport (via the `FixedNode`
+            // component, added by the build), with absolute-style insets.
+            Some(CssPosition::Absolute | CssPosition::Fixed) => PositionType::Absolute,
             Some(CssPosition::Relative) => PositionType::Relative,
             // Static: insets are ignored (CSS), so they stay `auto`.
             Some(CssPosition::Static) | None => return,
@@ -877,9 +883,8 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 css_position::Position::Static => Some(CssPosition::Static),
                 css_position::Position::Relative => Some(CssPosition::Relative),
                 css_position::Position::Absolute => Some(CssPosition::Absolute),
-                css_position::Position::Sticky(_) | css_position::Position::Fixed => {
-                    unsupported("position sticky/fixed")
-                }
+                css_position::Position::Fixed => Some(CssPosition::Fixed),
+                css_position::Position::Sticky(_) => unsupported("position sticky"),
             };
         }
         Property::Top(value) => style.layout.inset[0] = auto_val(value),
@@ -1375,15 +1380,13 @@ fn outline_visible(style: &lightningcss::properties::outline::OutlineStyle) -> b
     )
 }
 
-/// One `border-*-radius` corner: Bevy has one radius per corner, so an
-/// elliptical corner (different horizontal and vertical radii) is
-/// unsupported. `%` is Bevy's (of the node's smaller side), not CSS's
-/// per-axis percentage.
-fn corner_radius(radius: &Size2D<LengthPercentage>) -> Option<Val> {
-    if radius.0 != radius.1 {
-        return unsupported("elliptical border radius");
-    }
-    length_percentage_val(&radius.0)
+/// One `border-*-radius` corner as CSS's `[horizontal, vertical]` pair.
+/// `%` resolves per-axis against the node's dimensions, as CSS does.
+fn corner_radius(radius: &Size2D<LengthPercentage>) -> Option<(Val, Val)> {
+    Some((
+        length_percentage_val(&radius.0)?,
+        length_percentage_val(&radius.1)?,
+    ))
 }
 
 /// `padding` in px; `auto`, `%` and `calc()` are unsupported.
@@ -2281,7 +2284,8 @@ mod tests {
     }
 
     /// `position` and the insets: shorthand and longhands, `static` kept as
-    /// such (it ignores insets), `fixed`/`sticky` unsupported.
+    /// such (it ignores insets), `sticky` unsupported, `fixed` mapped to
+    /// absolute insets (the `FixedNode` component is the build's).
     #[test]
     fn position_and_insets() {
         let layout = |css: &str| declared(css).layout;
@@ -2297,7 +2301,8 @@ mod tests {
             layout("position: static").position,
             Some(CssPosition::Static)
         );
-        assert_eq!(layout("position: fixed").position, None);
+        assert_eq!(layout("position: fixed").position, Some(CssPosition::Fixed));
+        assert_eq!(layout("position: sticky").position, None);
         assert_eq!(
             layout("inset: 1px 2% auto 4px").inset,
             [
@@ -2323,6 +2328,14 @@ mod tests {
             (node.position_type, node.top, node.left),
             (PositionType::Absolute, Val::Px(5.0), Val::Px(6.0))
         );
+        // `fixed` uses the same inset mapping (its `FixedNode` component
+        // makes the viewport the containing block).
+        let mut node = Node::default();
+        layout("position: fixed; top: 5px; left: 6px").apply_to(&mut node);
+        assert_eq!(
+            (node.position_type, node.top, node.left),
+            (PositionType::Absolute, Val::Px(5.0), Val::Px(6.0))
+        );
         // `static` (and no `position`): insets don't apply, as in CSS.
         for css in ["position: static; top: 5px", "top: 5px"] {
             let mut node = Node::default();
@@ -2335,8 +2348,8 @@ mod tests {
         }
     }
 
-    /// `border-radius` per corner (circular only), `border-color` per side,
-    /// `z-index` and `pointer-events`.
+    /// `border-radius` per corner as `[x, y]` pairs, `border-color` per
+    /// side, `z-index` and `pointer-events`.
     #[test]
     fn radius_border_color_z_index_and_pointer_events() {
         assert_eq!(
@@ -2344,26 +2357,29 @@ mod tests {
                 .layout
                 .border_radius,
             [
-                Some(Val::Px(1.0)),
-                Some(Val::Px(2.0)),
-                Some(Val::Px(3.0)),
-                Some(Val::Percent(50.0))
+                Some((Val::Px(1.0), Val::Px(1.0))),
+                Some((Val::Px(2.0), Val::Px(2.0))),
+                Some((Val::Px(3.0), Val::Px(3.0))),
+                Some((Val::Percent(50.0), Val::Percent(50.0)))
             ]
         );
         assert_eq!(
             declared("border-top-right-radius: 7px")
                 .layout
                 .border_radius[1],
-            Some(Val::Px(7.0))
+            Some((Val::Px(7.0), Val::Px(7.0)))
         );
         assert_eq!(
             declared("border-radius: 4px / 8px").layout.border_radius[0],
-            None,
+            Some((Val::Px(4.0), Val::Px(8.0))),
             "elliptical"
         );
         let mut node = Node::default();
         declared("border-radius: 9px").layout.apply_to(&mut node);
-        assert_eq!(node.border_radius, BorderRadius::all(Val::Px(9.0)));
+        assert_eq!(
+            node.border_radius,
+            BorderRadius::all((Val::Px(9.0), Val::Px(9.0)))
+        );
 
         let colors =
             declared("border-color: #ff0000 green; border-left-color: #0000ff").border_color;
@@ -2387,10 +2403,47 @@ mod tests {
 
         assert_eq!(declared("pointer-events: none").pointer_events, Some(false));
         assert_eq!(declared("pointer-events: AUTO").pointer_events, Some(true));
-        assert_eq!(
-            declared("pointer-events: visiblePainted").pointer_events,
+        assert_eq!(declared("pointer-events: visiblePainted").pointer_events,
             None
         );
         assert_eq!(declared("color: red").pointer_events, None);
+    }
+
+    /// Elliptical `border-radius`: the `h / v` shorthand and per-corner
+    /// longhands keep both radii.
+    #[test]
+    fn elliptical_border_radius() {
+        let layout = |css: &str| declared(css).layout;
+        // One pair: all four corners share it.
+        assert_eq!(
+            layout("border-radius: 10px / 20px").border_radius,
+            [
+                Some((Val::Px(10.0), Val::Px(20.0))),
+                Some((Val::Px(10.0), Val::Px(20.0))),
+                Some((Val::Px(10.0), Val::Px(20.0))),
+                Some((Val::Px(10.0), Val::Px(20.0)))
+            ]
+        );
+        // Per-corner pairs.
+        assert_eq!(
+            layout("border-radius: 1px 2px / 3px 4px").border_radius,
+            [
+                Some((Val::Px(1.0), Val::Px(3.0))),
+                Some((Val::Px(2.0), Val::Px(4.0))),
+                Some((Val::Px(1.0), Val::Px(3.0))),
+                Some((Val::Px(2.0), Val::Px(4.0)))
+            ]
+        );
+        // Longhand with mixed units; `%` resolves per-axis against the
+        // node's dimensions.
+        assert_eq!(
+            layout("border-top-left-radius: 25% 10px").border_radius[0],
+            Some((Val::Percent(25.0), Val::Px(10.0)))
+        );
+        // Relative lengths (em) stay unsupported, circular or not.
+        assert_eq!(
+            layout("border-radius: 1em").border_radius,
+            [None, None, None, None]
+        );
     }
 }

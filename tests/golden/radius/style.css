@@ -1,0 +1,11 @@
+/* Golden scene: `border-radius` over backgrounds and a border — circular,
+   elliptical (`h / v`), per-corner pairs and percentages. */
+html { color: #ffffff; font-size: 14px; gap: 10px; padding: 8px }
+div { border-style: solid; border-width: 2px; border-color: #ff5f5f }
+.round { border-radius: 20px; background-color: #1c9c48; padding: 6px }
+.oval { border-radius: 30px / 8px; background-color: #3b6fd4; padding: 6px }
+.mixed {
+  border-radius: 24px 6px / 6px 24px;
+  background-color: #8a4fd0; padding: 6px;
+}
+.percent { border-radius: 25% / 50%; background-color: #d09a2f; padding: 6px }

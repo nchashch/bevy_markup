@@ -755,11 +755,13 @@ fn restyle_keeps_an_apps_image_on_an_element() {
 /// app's own `ZIndex` on another element survives.
 #[test]
 fn positioning_radius_border_color_z_index_and_pointer_events() {
-    let page = r#"<div class="overlay"><p id="tip">Tip</p></div><div id="static"></div><div id="app"></div>"#;
+    let page = r#"<div class="overlay"><p id="tip">Tip</p></div><div id="static"></div><div id="app"></div><div class="pinned"></div><div class="oval"></div>"#;
     let css =
         ".overlay { position: absolute; top: 4px; left: 8px; z-index: 5; pointer-events: none; \
                border-radius: 3px; border-width: 1px; border-color: #ff0000 }
-               #static { position: static; top: 9px }";
+               #static { position: static; top: 9px }
+               .pinned { position: fixed; top: 5px; left: 6px }
+               .oval { border-radius: 20px 8px / 10px 25% }";
     let mut ui = TestUi::new(
         "positioning",
         &[
@@ -779,6 +781,8 @@ html-ui
       "Tip" default 16px #ffffff
   div#static
   div#app
+  div.pinned pos=fixed inset=5,auto,auto,6
+  div.oval radius=20/10,8/Percent(25.0),20/10,8/Percent(25.0)
 "#,
     );
     let world = ui.world_mut();
@@ -801,6 +805,8 @@ html-ui
       "Tip" default 16px #ffffff
   div#static
   div#app z=2
+  div.pinned
+  div.oval
 "#,
     );
 }
@@ -1295,7 +1301,10 @@ fn root_rule_styles_the_html_ui_entity() {
         UiRect::all(Val::Px(3.0)),
         "the `html` rule applies too"
     );
-    assert_eq!(node.border_radius.top_left, Val::Px(4.0).into());
+    assert_eq!(
+        node.border_radius.top_left,
+        (Val::Px(4.0), Val::Px(4.0)).into()
+    );
     assert_eq!(
         world.get::<BackgroundColor>(root).unwrap().0,
         Color::srgba(1.0, 0.0, 0.0, 0.5),

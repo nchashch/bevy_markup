@@ -54,7 +54,7 @@ struct Scene {
     background: Color,
 }
 
-const SCENES: [Scene; 3] = [
+const SCENES: [Scene; 4] = [
     Scene {
         name: "text",
         size: UVec2::new(320, 240),
@@ -69,6 +69,11 @@ const SCENES: [Scene; 3] = [
         name: "l10n",
         size: UVec2::new(300, 180),
         background: Color::srgb_u8(0x22, 0x1e, 0x1a),
+    },
+    Scene {
+        name: "radius",
+        size: UVec2::new(160, 190),
+        background: Color::srgb_u8(0x30, 0x30, 0x30),
     },
 ];
 

@@ -8,6 +8,20 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Elliptical `border-radius`.** The CSS `h / v` slash syntax
+  (`border-radius: 20px / 8px`, and the four corner longhands, including
+  per-corner `25% 10px` pairs) now draws elliptical corners; `%` resolves
+  per-axis against the node's dimensions, as CSS does. Previously a corner
+  whose two radii differed dropped the whole `border-radius` declaration.
+- **`position: fixed`.** Positions against the viewport (Bevy 0.20's
+  `FixedNode`) instead of the parent, and does not inherit the parent's
+  clipping or transform — like CSS's `position: fixed`. The insets apply
+  against the viewport. (For `absolute`, nothing changed: still placed in
+  the parent's padding box, as Bevy has no containing-block search.)
+  `position: sticky` remains unsupported.
+
 ## [0.5.0] - 2026-10-10
 
 ### Changed
