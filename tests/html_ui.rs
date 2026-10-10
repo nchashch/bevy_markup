@@ -120,6 +120,61 @@ html-ui
     );
 }
 
+/// Inline elements: `background` → a `TextBackgroundColor` on the span,
+/// `text-decoration` → `Strikethrough` (+ declared color), and `<img>` → an
+/// `InlineBox`/`InlineImage` flowing in the block's text (the fixture image
+/// is 32x24; a `width` attribute keeps the aspect ratio). A restyle that
+/// drops the background takes the component back in place.
+#[test]
+fn inline_backgrounds_decorations_and_images() {
+    let ui = TestUi::new(
+        "inline-runs",
+        &[
+            (
+                "page.html",
+                "<p>Plain <span class=\"hl\">highlight</span> and \
+                 <img src=\"frame.png\" width=\"16\"> then <del>struck</del>.</p>",
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff } .hl { background-color: #ffee00 } \
+                 del { text-decoration: line-through #ff4040 }",
+            ),
+        ],
+    );
+    let mut ui = ui
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "Plain " default 16px #ffffff
+    "highlight" default 16px #ffffff bg=#ffee00
+    " and " default 16px #ffffff
+    "frame.png" img 16x12
+    " then " default 16px #ffffff
+    "struck" default 16px #ffffff line-through=#ff4040
+    "." default 16px #ffffff
+"#,
+    );
+    // A restyle without the declarations: the span components go, the
+    // entities stay.
+    let plain = ui.load::<Stylesheet>("plain.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(plain);
+    ui.settle_quiet();
+    ui.update(10);
+    ui.assert_dump(
+        r#"
+html-ui
+  p
+    "Plain highlight and " default 16px #ffffff
+    "frame.png" img 16x12
+    " then struck." default 16px #ffffff
+"#,
+    );
+}
+
 /// CSS: specificity (id > class > type, compound counts), inheritance into
 /// inline elements, font faces from weight/style, missing-face fallback,
 /// generic family, em/rem/% sizes, unknown family keeps the inherited one.

@@ -2,12 +2,15 @@
 
 use std::cell::RefCell;
 
-use bevy::asset::{AssetEvent, LoadState};
+use bevy::asset::{AssetEvent, AssetPath, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use bevy::text::{InlineBox, InlineBoxKind};
+use bevy::ecs::system::SystemParam;
 
 use crate::cascade::{
-    self, CssPosition, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue,
+    self, CssPosition, DecorationDecl, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo,
+    SliceValue,
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
@@ -19,7 +22,7 @@ use crate::l10n::LocalizedText;
 use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
 use crate::signals::{self, ElementSignals, PseudoState, SignalBinding};
 use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
-use crate::template::decode_entities;
+use crate::template::{HtmlTemplate, decode_entities};
 
 /// Values when no stylesheet rule applies (white suits the dark UIs Bevy
 /// apps usually draw on; 16px is the CSS initial size).
@@ -51,11 +54,67 @@ pub(crate) fn faded(color: Color, opacity: f32) -> Color {
     }
 }
 
-/// A stretch of text in one style.
+/// A stretch of text in one style, or an inline `<img>` (empty `text`).
 struct Run {
     text: String,
     style: Style,
+    /// The owning inline element's `background-color` and `text-decoration`
+    /// (not inherited in CSS, but propagated down the inline subtree here;
+    /// a nested element's own declaration replaces them).
+    extras: RunExtras,
+    /// `Some` for an `<img>`: rendered as an inline box in the block's text.
+    image: Option<ImageRun>,
 }
+
+/// Run-level (non-inherited) properties of an inline element.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct RunExtras {
+    background: Option<Color>,
+    decoration: DecorationDecl,
+}
+
+impl RunExtras {
+    /// Fades every color with the element's computed `opacity`.
+    fn faded(self, opacity: f32) -> Self {
+        Self {
+            background: self.background.map(|color| faded(color, opacity)),
+            decoration: DecorationDecl {
+                color: self.decoration.color.map(|color| faded(color, opacity)),
+                ..self.decoration
+            },
+        }
+    }
+}
+
+/// An `<img>`: the loaded image and its `width`/`height` attributes (px;
+/// `None` keeps the image's size, one `None` preserves the aspect ratio).
+#[derive(Clone)]
+struct ImageRun {
+    image: Handle<Image>,
+    width: Option<f32>,
+    height: Option<f32>,
+}
+
+impl ImageRun {
+    /// The inline box's size: the attributes over the image's pixel size,
+    /// aspect ratio preserved when one is missing. `None` while the image
+    /// is still loading (its load restyles the UI, which sizes the box).
+    fn box_size(&self, images: &Assets<Image>) -> Option<Vec2> {
+        let size = images.get(&self.image)?.size().as_vec2();
+        Some(match (self.width, self.height) {
+            (Some(w), Some(h)) => Vec2::new(w, h),
+            (Some(w), None) => Vec2::new(w, size.y * (w / size.x)),
+            (None, Some(h)) => Vec2::new(size.x * (h / size.y), h),
+            (None, None) => size,
+        })
+    }
+}
+
+/// The `<img>` images a UI's current build uses: their loads restyle the UI
+/// so the inline boxes take their sizes (Bevy's own `AssetChanged`-driven
+/// sizer races the asset events here, so bevy_markup sizes the boxes).
+#[derive(Component, Deref, Default)]
+pub(crate) struct InlineImages(pub Vec<Handle<Image>>);
 
 enum BlockKind {
     Heading,
@@ -258,6 +317,10 @@ pub(crate) struct Styler<'a> {
     /// For `border-image` sources.
     pub(crate) sheet: Option<&'a Stylesheet>,
     pub(crate) images: &'a Assets<Image>,
+    /// For `<img src>` resolution and loads.
+    pub(crate) server: &'a AssetServer,
+    /// The template's asset path: `<img src="…">` resolves against it.
+    pub(crate) template: Option<AssetPath<'static>>,
 }
 
 impl Styler<'_> {
@@ -288,6 +351,57 @@ impl Styler<'_> {
             pointer_events: declared.pointer_events.unwrap_or(inherited.pointer_events),
             opacity: inherited.opacity * declared.opacity.unwrap_or(1.0),
         }
+    }
+
+    /// The inline element's run-level properties (`background-color`,
+    /// `text-decoration`); `None` when it declares neither. Not inherited:
+    /// `push_runs` keeps the subtree's running values unless an element
+    /// declares its own.
+    fn run_extras(
+        &self,
+        element: &HtmlElement,
+        inline: Option<&InlineStyle>,
+    ) -> Option<RunExtras> {
+        let declared = self.styles.get_with(element, Pseudo::default(), inline);
+        if declared.background.is_none() && declared.text_decoration.is_none() {
+            return None;
+        }
+        Some(RunExtras {
+            background: declared.background,
+            decoration: declared.text_decoration.unwrap_or_default(),
+        })
+    }
+
+    /// An `<img>`'s handle and `width`/`height` attributes: `src` resolves
+    /// relative to the template (like `{% include %}`), `/` from the asset
+    /// root. URLs and data URIs are unsupported.
+    fn image_of(&self, tag: &tl::HTMLTag) -> Option<ImageRun> {
+        let src = tag
+            .attributes()
+            .get("src")
+            .flatten()
+            .map(|src| decode_entities(&src.as_utf8_str()))?;
+        let template = match &self.template {
+            Some(template) => template,
+            None => {
+                debug!("html img: {src} skipped (no template path)");
+                return None;
+            }
+        };
+        if src.contains("://") || src.starts_with("data:") {
+            debug!("html img: {src} — only asset paths are supported; skipped");
+            return None;
+        }
+        let resolved = template.resolve_embed_str(&src).inspect_err(|error| {
+            debug!("html img: {src} skipped ({error})");
+        }).ok()?;
+        let width = attr_px(tag, "width");
+        let height = attr_px(tag, "height");
+        Some(ImageRun {
+            image: self.server.load(resolved),
+            width,
+            height,
+        })
     }
 
     fn text_font(&self, style: Style) -> TextFont {
@@ -381,6 +495,7 @@ pub(crate) fn root_style(
     styles: &HtmlStyles,
     fonts: &FontFamilies,
     images: &Assets<Image>,
+    server: &AssetServer,
     root: &HtmlElement,
     inline: Option<&InlineStyle>,
 ) -> Style {
@@ -399,6 +514,8 @@ pub(crate) fn root_style(
         root_size: DEFAULT_FONT_SIZE,
         sheet: None,
         images,
+        server,
+        template: None,
     }
     .style_of(root, defaults, Pseudo::default(), inline)
 }
@@ -417,13 +534,21 @@ pub(crate) fn root_element(dom: &tl::VDom) -> (HtmlElement, Option<InlineStyle>)
         )
 }
 
+/// The system's asset params, bundled: Bevy's `SystemParam` tuples end at
+/// 16, and `build_html_ui` has more.
+#[derive(SystemParam)]
+pub(crate) struct BuildAssets<'w> {
+    sheets: Res<'w, Assets<Stylesheet>>,
+    server: Res<'w, AssetServer>,
+    images: Res<'w, Assets<Image>>,
+    templates: Res<'w, Assets<HtmlTemplate>>,
+}
+
 pub(crate) fn build_html_ui(
     mut commands: Commands,
     mut sheet_events: MessageReader<AssetEvent<Stylesheet>>,
     mut image_events: MessageReader<AssetEvent<Image>>,
-    sheets: Res<Assets<Stylesheet>>,
-    server: Res<AssetServer>,
-    images: Res<Assets<Image>>,
+    assets: BuildAssets<'_>,
     default_sheet: Res<DefaultStylesheet>,
     fonts: Res<FontFamilies>,
     mut views: Query<
@@ -433,6 +558,8 @@ pub(crate) fn build_html_ui(
             Ref<LocalizedText>,
             Option<Ref<HtmlStylesheet>>,
             Option<Ref<HtmlDebugOutline>>,
+            &HtmlUi,
+            Option<&InlineImages>,
             &mut RebuildState,
         ),
         With<HtmlUi>,
@@ -445,6 +572,12 @@ pub(crate) fn build_html_ui(
     mut removed_outlines: RemovedComponents<HtmlDebugOutline>,
     mut removed_sheets: RemovedComponents<HtmlStylesheet>,
 ) {
+    let BuildAssets {
+        sheets,
+        server,
+        images,
+        templates,
+    } = assets;
     // Removals aren't `Ref` changes, so they're read separately.
     let removed_outlines: HashSet<Entity> = removed_outlines.read().collect();
     let removed_sheets: HashSet<Entity> = removed_sheets.read().collect();
@@ -496,7 +629,7 @@ pub(crate) fn build_html_ui(
     // First pass: the decision per UI. Nested UIs need the whole set before
     // anything acts (see the suppression below).
     let mut decisions: Vec<(Entity, Decision)> = Vec::new();
-    for (entity, rendered, localized, own_sheet, outline, mut rebuild) in &mut views {
+    for (entity, rendered, localized, own_sheet, outline, _ui, used_images, mut rebuild) in &mut views {
         let frame = Frame {
             own: own_sheet.as_ref().map(|own| phase(&own.0)),
             default: default_sheet.0.as_ref().map(phase),
@@ -508,6 +641,12 @@ pub(crate) fn build_html_ui(
             default_changed,
             fonts_changed: fonts.is_changed(),
             state_changed: state_restyle.contains(&entity),
+            images_changed: used_images.is_some_and(|images| {
+                images
+                    .0
+                    .iter()
+                    .any(|handle| loaded_images.contains(&handle.id()))
+            }),
             content_changed: rendered.is_changed()
                 || localized.is_changed()
                 || removed_outlines.contains(&entity)
@@ -527,7 +666,9 @@ pub(crate) fn build_html_ui(
             Decision::Build(source) => (source, false),
             Decision::Restyle(source) => (source, true),
         };
-        let Ok((_, rendered, localized, own_sheet, outline, _rebuild)) = views.get(entity) else {
+        let Ok((_, rendered, localized, own_sheet, outline, ui, _used_images, _rebuild)) =
+            views.get(entity)
+        else {
             continue;
         };
         let css = match source {
@@ -547,15 +688,24 @@ pub(crate) fn build_html_ui(
             &styles,
             &fonts,
             &images,
+            &server,
             &root_element,
             root_inline.as_ref(),
         );
+        let template = match (&*rendered, ui) {
+            (RenderedHtml::Ready(_), HtmlUi(template)) => templates.get(template).map(|template| {
+                AssetPath::parse(&template.name).clone_owned()
+            }),
+            _ => None,
+        };
         let styler = Styler {
             styles: &styles,
             fonts: &fonts,
             root_size: root.size,
             sheet: css,
             images: &images,
+            server: &server,
+            template,
         };
 
         let mut root_box = styler.box_of(&root_element, Pseudo::default(), root_inline.as_ref());
@@ -622,7 +772,12 @@ pub(crate) fn build_html_ui(
                 custom: None,
                 style,
                 boxed: BoxStyle::default(),
-                runs: vec![Run { text, style }],
+                runs: vec![Run {
+                    text,
+                    style,
+                    extras: RunExtras::default(),
+                    image: None,
+                }],
             })]
         } else {
             match &*rendered {
@@ -642,6 +797,8 @@ pub(crate) fn build_html_ui(
                     runs: vec![Run {
                         text: format!("failed to render: {message}"),
                         style: root,
+                        extras: RunExtras::default(),
+                        image: None,
                     }],
                 })],
             }
@@ -654,6 +811,11 @@ pub(crate) fn build_html_ui(
         // Content changes and restyles alike update the existing children in
         // place where they still match, spawning and despawning only what
         // differs.
+        let inline_images: Vec<Handle<Image>> = specs
+            .iter()
+            .flat_map(|spec| spec.images.iter().cloned())
+            .collect();
+        commands.entity(entity).insert(InlineImages(inline_images));
         let mut connected = Vec::new();
         let spawned = update_children(&mut commands, entity, specs, &tree, entity, &mut connected);
         // After the spawns, before `HtmlUiBuilt`: its observers see what the
@@ -694,6 +856,9 @@ struct NodeSpec {
     pickable: bool,
     /// `position: fixed` (`FixedNode` component).
     fixed: bool,
+    /// The `<img>` handles this subtree's blocks use (aggregated up for the
+    /// UI's [`InlineImages`]).
+    images: Vec<Handle<Image>>,
     /// `Text` nodes hold spans, never child nodes.
     text: Option<TextSpec>,
     children: Vec<NodeSpec>,
@@ -705,7 +870,24 @@ struct TextSpec {
     font: TextFont,
     color: Color,
     no_wrap: bool,
-    spans: Vec<(String, TextFont, Color)>,
+    spans: Vec<SpanSpec>,
+}
+
+/// One inline child of the block's `Text`: a styled run, or an `<img>`
+/// (`image.is_some()`; its `text` is empty).
+struct SpanSpec {
+    text: String,
+    font: TextFont,
+    color: Color,
+    /// The owning inline element's `background-color` → `TextBackgroundColor`.
+    background: Option<Color>,
+    /// `text-decoration` → `Underline`/`Strikethrough`.
+    underline: bool,
+    line_through: bool,
+    decoration_color: Option<Color>,
+    image: Option<ImageRun>,
+    /// The `<img>`'s inline box size (see [`ImageRun::box_size`]).
+    box_size: Option<Vec2>,
 }
 
 impl NodeSpec {
@@ -724,6 +906,7 @@ impl NodeSpec {
             outline: None,
             pickable: true,
             fixed: false,
+            images: Vec::new(),
             text: None,
             children: Vec::new(),
         }
@@ -805,6 +988,54 @@ fn apply_css_owned(
 #[derive(Component, PartialEq)]
 pub(crate) struct CssFrame;
 
+/// Spawns a block's inline children: one entity per run — a `TextSpan`
+/// with its `TextBackgroundColor`/decoration components, or an inline
+/// `<img>` (`InlineBox` + `InlineImage`; Bevy sizes the box from the image
+/// when the attributes don't set one). Spans and images carry the block's
+/// `pointer-events: none` (bevy_picking resolves text-section hits against
+/// the span entity, so an ignored block must ignore its spans too — or the
+/// ignored block stays clickable).
+fn spawn_spans(spans: &mut ChildSpawnerCommands<'_>, text: TextSpec, pickable: bool) {
+    for span in text.spans {
+        let mut child = if let Some(image) = span.image {
+            spans.spawn((
+                InlineBox {
+                    kind: InlineBoxKind::InFlow,
+                    size: span.box_size.unwrap_or_default(),
+                },
+                InlineImage {
+                    image: image.image,
+                    width: image.width,
+                    height: image.height,
+                    ..default()
+                },
+            ))
+        } else {
+            spans.spawn((TextSpan::new(span.text), span.font, TextColor(span.color)))
+        };
+        if let Some(background) = span.background {
+            child.insert(TextBackgroundColor(background));
+        }
+        if span.underline {
+            child.insert(Underline);
+        }
+        if span.line_through {
+            child.insert(Strikethrough);
+        }
+        // A declared decoration color applies to whichever lines exist
+        // (`currentColor` otherwise).
+        if let Some(color) = span.decoration_color {
+            child.insert(UnderlineColor(color));
+        }
+        if let Some(color) = span.line_through.then_some(span.decoration_color).flatten() {
+            child.insert(StrikethroughColor(color));
+        }
+        if !pickable {
+            child.insert(Pickable::IGNORE);
+        }
+    }
+}
+
 /// The existing children's structure and identity, for [`update_children`].
 type Tree<'w, 's> = Query<
     'w,
@@ -854,6 +1085,14 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
         ..default()
     };
     boxed.layout.apply_to(&mut node);
+    let children: Vec<NodeSpec> = children
+        .into_iter()
+        .map(|child| item_spec(styler, child, default_gap))
+        .collect();
+    let images = children
+        .iter()
+        .flat_map(|spec| spec.images.iter().cloned())
+        .collect();
     NodeSpec {
         element: Some(element),
         signals,
@@ -867,10 +1106,8 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
         z_index: boxed.z_index.map(ZIndex),
         pickable: pointer_events,
         fixed: boxed.layout.position == Some(CssPosition::Fixed),
-        children: children
-            .into_iter()
-            .map(|child| item_spec(styler, child, default_gap))
-            .collect(),
+        images,
+        children,
         ..NodeSpec::new(node)
     }
 }
@@ -913,10 +1150,41 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             .into_iter()
             .map(|run| {
                 let color = faded(run.style.color, run.style.opacity);
-                (run.text, styler.text_font(run.style), color)
+                match run.image {
+                    Some(image) => SpanSpec {
+                        text: String::new(),
+                        font: TextFont::default(),
+                        color,
+                        background: None,
+                        underline: false,
+                        line_through: false,
+                        decoration_color: None,
+                        box_size: image.box_size(styler.images),
+                        image: Some(image),
+                    },
+                    None => SpanSpec {
+                        text: run.text,
+                        font: styler.text_font(run.style),
+                        color,
+                        background: run.extras.background,
+                        underline: run.extras.decoration.underline,
+                        line_through: run.extras.decoration.line_through,
+                        decoration_color: run.extras.decoration.color,
+                        image: None,
+                        box_size: None,
+                    },
+                }
             })
             .collect(),
     };
+    // For the UI's `InlineImages`: their loads restyle the UI (sizing the
+    // inline boxes).
+    let images: Vec<Handle<Image>> = text
+        .spans
+        .iter()
+        .filter_map(|span| span.image.as_ref())
+        .map(|image| image.image.clone())
+        .collect();
 
     if boxed.is_empty() {
         let mut node = Node {
@@ -936,6 +1204,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             z_index: boxed.z_index.map(ZIndex),
             pickable: block.style.pointer_events,
             fixed: boxed.layout.position == Some(CssPosition::Fixed),
+            images,
             text: Some(text),
             ..NodeSpec::new(node)
         };
@@ -968,6 +1237,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         z_index: boxed.z_index.map(ZIndex),
         pickable: block.style.pointer_events,
         fixed: boxed.layout.position == Some(CssPosition::Fixed),
+        images,
         children: vec![NodeSpec {
             pickable: block.style.pointer_events,
             text: Some(text),
@@ -1030,7 +1300,11 @@ fn spawn_spec(
     );
     match spec.text {
         Some(text) => {
-            entity.insert((Text::new(text.prefix), text.font, TextColor(text.color)));
+            entity.insert((
+                Text::new(text.prefix),
+                text.font.clone(),
+                TextColor(text.color),
+            ));
             if text.no_wrap {
                 entity.insert(TextLayout::no_wrap());
             }
@@ -1038,12 +1312,7 @@ fn spawn_spec(
             // entity, so the block's `pointer-events: none` must be on the
             // spans too (or the ignored block stays clickable).
             entity.with_children(|spans| {
-                for (span, font, color) in text.spans {
-                    let mut span = spans.spawn((TextSpan::new(span), font, TextColor(color)));
-                    if !spec.pickable {
-                        span.insert(Pickable::IGNORE);
-                    }
-                }
+                spawn_spans(spans, text, spec.pickable);
             });
         }
         None => {
@@ -1239,7 +1508,8 @@ fn update_spec(
             } else {
                 TextLayout::default()
             };
-            let (prefix, font, color) = (text.prefix, text.font, text.color);
+            let (prefix, color) = (text.prefix, text.color);
+            let font = text.font.clone();
             target.queue(move |mut entity: EntityWorldMut| {
                 put(&mut entity, Some(Text::new(prefix)));
                 put(&mut entity, Some(font));
@@ -1253,22 +1523,61 @@ fn update_spec(
                 }
             });
             // Spans carry the block's `pointer-events: none` (see
-            // `spawn_spec`); an update without it takes it back.
-            if children.len() == text.spans.len() {
+            // `spawn_spec`); an update without it takes it back. An image
+            // span (an `InlineBox` child) can't become a `TextSpan` in
+            // place: any kind mismatch respawns every span.
+            let kinds_match = children.len() == text.spans.len()
+                && children.iter().zip(&text.spans).all(|(child, span)| {
+                    tree.get(*child)
+                        .is_ok_and(|(_, _, is_span, ..)| is_span == span.image.is_none())
+                });
+            if kinds_match {
                 let pickable = spec.pickable;
-                for (span, (content, font, color)) in children.into_iter().zip(text.spans) {
+                for (span, spec) in children.into_iter().zip(text.spans) {
                     commands
                         .entity(span)
                         .queue(move |mut span: EntityWorldMut| {
-                            // `TextSpan` has no `PartialEq`: compare the text.
-                            if span
-                                .get::<TextSpan>()
-                                .is_none_or(|current| **current != content)
-                            {
-                                span.insert(TextSpan::new(content));
+                            if spec.image.is_none() {
+                                let content = spec.text;
+                                // `TextSpan` has no `PartialEq`: compare the text.
+                                if span
+                                    .get::<TextSpan>()
+                                    .is_none_or(|current| **current != content)
+                                {
+                                    span.insert(TextSpan::new(content));
+                                }
+                                put(&mut span, Some(spec.font));
+                                put(&mut span, Some(TextColor(spec.color)));
+                            } else {
+                                let image = spec.image.unwrap();
+                                put(
+                                    &mut span,
+                                    Some(InlineBox {
+                                        kind: InlineBoxKind::InFlow,
+                                        size: spec.box_size.unwrap_or_default(),
+                                    }),
+                                );
+                                put(
+                                    &mut span,
+                                    Some(InlineImage {
+                                        image: image.image,
+                                        width: image.width,
+                                        height: image.height,
+                                        ..default()
+                                    }),
+                                );
                             }
-                            put(&mut span, Some(font));
-                            put(&mut span, Some(TextColor(color)));
+                            put(&mut span, spec.background.map(TextBackgroundColor));
+                            put_marker::<Underline>(&mut span, spec.underline);
+                            put(&mut span, spec.decoration_color.map(UnderlineColor));
+                            put_marker::<Strikethrough>(&mut span, spec.line_through);
+                            put(
+                                &mut span,
+                                spec.line_through
+                                    .then_some(spec.decoration_color)
+                                    .flatten()
+                                    .map(StrikethroughColor),
+                            );
                             put(&mut span, (!pickable).then_some(Pickable::IGNORE));
                         });
                 }
@@ -1277,13 +1586,7 @@ fn update_spec(
                     commands.entity(span).despawn();
                 }
                 commands.entity(entity).with_children(|spans| {
-                    for (content, font, color) in text.spans {
-                        let mut span =
-                            spans.spawn((TextSpan::new(content), font, TextColor(color)));
-                        if !spec.pickable {
-                            span.insert(Pickable::IGNORE);
-                        }
-                    }
+                    spawn_spans(spans, text, spec.pickable);
                 });
             }
             false
@@ -1310,6 +1613,19 @@ fn put<C: Component<Mutability = bevy::ecs::component::Mutable> + PartialEq>(
             entity.remove::<C>();
         }
         (None, None) => {}
+    }
+}
+
+/// Sets or removes a marker component: an unchanged marker keeps its change
+/// tick. (Markers like `Underline` have no `PartialEq` for [`put`].)
+fn put_marker<C: Component + Default>(entity: &mut EntityWorldMut, set: bool) {
+    if set == entity.contains::<C>() {
+        return;
+    }
+    if set {
+        entity.insert(C::default());
+    } else {
+        entity.remove::<C>();
     }
 }
 
@@ -1539,7 +1855,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
         tl::Node::Raw(_) => {
             // Anonymous block: inherits the container's style.
             let mut runs = Vec::new();
-            push_runs(ctx, handle, inherited, &mut runs);
+            push_runs(ctx, handle, inherited, RunExtras::default(), &mut runs);
             let runs = collapse_runs(runs);
             if !runs.is_empty() {
                 items.push(Item::Block(Block {
@@ -1643,7 +1959,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
     // A missing translation falls back to the element's own content.
     let preformatted = matches!(kind, BlockKind::Preformatted);
     let mut runs = Vec::new();
-    push_content_runs(ctx, handle, tag, style, &mut runs);
+    push_content_runs(ctx, handle, tag, style, RunExtras::default(), &mut runs);
     items.push(Item::Block(Block {
         kind,
         element: Some(element),
@@ -1692,16 +2008,17 @@ fn push_content_runs(
     handle: tl::NodeHandle,
     tag: &tl::HTMLTag,
     style: Style,
+    extras: RunExtras,
     runs: &mut Vec<Run>,
 ) {
     let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
         for node in nodes {
-            push_runs(fragment, *node, style, runs);
+            push_runs(fragment, *node, style, extras, runs);
         }
     });
     if !translated {
         for child in tag.children().top().iter() {
-            push_runs(ctx, *child, style, runs);
+            push_runs(ctx, *child, style, extras, runs);
         }
     }
 }
@@ -1725,30 +2042,87 @@ fn finish_runs(mut runs: Vec<Run>, preformatted: bool) -> Vec<Run> {
         let trimmed = last.text.trim_end_matches(is_html_whitespace).len();
         last.text.truncate(trimmed);
     }
-    runs.retain(|run| !run.text.is_empty());
+    runs.retain(|run| !run.text.is_empty() || run.image.is_some());
     runs
 }
 
-fn push_runs(ctx: &Ctx, handle: tl::NodeHandle, style: Style, runs: &mut Vec<Run>) {
+fn push_runs(
+    ctx: &Ctx,
+    handle: tl::NodeHandle,
+    style: Style,
+    extras: RunExtras,
+    runs: &mut Vec<Run>,
+) {
     match handle.get(ctx.parser) {
         Some(tl::Node::Raw(text)) => {
             let text = decode_entities(&text.as_utf8_str());
             match runs.last_mut() {
-                Some(last) if last.style == style => last.text.push_str(&text),
-                _ => runs.push(Run { text, style }),
+                Some(last)
+                    if last.style == style && last.extras == extras && last.image.is_none() =>
+                {
+                    last.text.push_str(&text);
+                }
+                _ => runs.push(Run {
+                    text,
+                    style,
+                    extras,
+                    image: None,
+                }),
             }
         }
         Some(tl::Node::Tag(tag)) => {
+            if tag.name().as_utf8_str() == *"img" {
+                push_image_run(ctx, tag, style, runs);
+                return;
+            }
             // An unmatched `data-l10n-name` element is plain text.
             let style = ctx.element(tag).map_or(style, |element| {
                 let inline = cascade::inline_style(tag);
                 ctx.styler
                     .style_of(&element, style, Pseudo::default(), inline.as_ref())
             });
-            push_content_runs(ctx, handle, tag, style, runs);
+            // This element's `background`/`text-decoration` over the
+            // subtree's running values, faded with its opacity.
+            let extras = ctx
+                .element(tag)
+                .and_then(|element| {
+                    let inline = cascade::inline_style(tag);
+                    ctx.styler.run_extras(&element, inline.as_ref())
+                })
+                .map(|extras| extras.faded(style.opacity))
+                .unwrap_or(extras);
+            push_content_runs(ctx, handle, tag, style, extras, runs);
         }
         Some(tl::Node::Comment(_)) | None => {}
     }
+}
+
+/// An `<img>` attribute in px (`width`/`height`); `%` and other units are
+/// unsupported (Bevy's `InlineImage` takes logical pixels).
+fn attr_px(tag: &tl::HTMLTag, name: &str) -> Option<f32> {
+    let value = tag.attributes().get(name).flatten()?;
+    let value = decode_entities(&value.as_utf8_str());
+    let trimmed = value.trim();
+    if trimmed.ends_with('%') {
+        debug!("html img: {name}={value:?} — percentages are unsupported; skipped");
+        return None;
+    }
+    trimmed.parse().ok()
+}
+
+/// The `<img>` inline run: the image flows inline as an `InlineBox`/
+/// `InlineImage` child of the block's `Text`. Unsupported sources (URLs,
+/// data URIs) and a missing `src` attribute are skipped.
+fn push_image_run(ctx: &Ctx, tag: &tl::HTMLTag, style: Style, runs: &mut Vec<Run>) {
+    let Some(image) = ctx.styler.image_of(tag) else {
+        return;
+    };
+    runs.push(Run {
+        text: String::new(),
+        style,
+        extras: RunExtras::default(),
+        image: Some(image),
+    });
 }
 
 /// HTML whitespace (space, tab, LF, FF, CR): what collapsing and trimming
@@ -1765,6 +2139,18 @@ fn collapse_runs(runs: Vec<Run>) -> Vec<Run> {
     // Start as if after a space so the block's leading whitespace is dropped.
     let mut after_space = true;
     for run in runs {
+        if let Some(image) = run.image {
+            // An inline image ends the whitespace sequence: spaces beside it
+            // are significant, like around a word.
+            out.push(Run {
+                text: String::new(),
+                style: run.style,
+                extras: run.extras,
+                image: Some(image),
+            });
+            after_space = false;
+            continue;
+        }
         let mut text = String::with_capacity(run.text.len());
         for c in run.text.chars() {
             if is_html_whitespace(c) {
@@ -1781,10 +2167,12 @@ fn collapse_runs(runs: Vec<Run>) -> Vec<Run> {
             out.push(Run {
                 text,
                 style: run.style,
+                extras: run.extras,
+                image: None,
             });
         }
     }
-    if let Some(last) = out.last_mut() {
+    if let Some(last) = out.last_mut().filter(|last| last.image.is_none()) {
         let trimmed = last.text.trim_end_matches(is_html_whitespace).len();
         last.text.truncate(trimmed);
         if last.text.is_empty() {

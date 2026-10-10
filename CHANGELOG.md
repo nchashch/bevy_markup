@@ -21,6 +21,18 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   against the viewport. (For `absolute`, nothing changed: still placed in
   the parent's padding box, as Bevy has no containing-block search.)
   `position: sticky` remains unsupported.
+- **Inline styling.** `background-color` on an inline element paints behind
+  its text run (Bevy 0.20's `TextBackgroundColor`), and `text-decoration`
+  (`underline`/`line-through` via `-line`, plus `text-decoration-color`;
+  `overline`/`blink`/`-thickness`/`-style` are unsupported) draws on it.
+  Borders, frames and padding on inline elements remain unsupported (Bevy
+  `TextSpan` has no box).
+- **`<img src="…" width height>`.** An image flowing inline with the text
+  (Bevy 0.20's `InlineBox`/`InlineImage`). `src` is an asset path relative
+  to the template, like `{% include %}` (`/` from the asset root; URLs and
+  data URIs are unsupported); `width`/`height` are px attributes, keeping
+  the image's aspect ratio when one is unset. The image's load restyles the
+  UI and its reload re-sizes the box.
 
 ## [0.5.0] - 2026-10-10
 

@@ -50,6 +50,9 @@ pub(crate) struct Frame {
     /// An element's `:hover`/`:active` state changed: restyle (the styles
     /// are state-dependent, the structure isn't).
     pub state_changed: bool,
+    /// An `<img>` inline image of this UI loaded (or reloaded): restyle so
+    /// its inline box takes the image's size.
+    pub images_changed: bool,
     /// Structure: template output, translations or the debug outline changed.
     pub content_changed: bool,
 }
@@ -94,7 +97,8 @@ impl RebuildState {
         let style = frame.own_changed
             || (!own_ready && frame.default_changed)
             || frame.fonts_changed
-            || frame.state_changed;
+            || frame.state_changed
+            || frame.images_changed;
         let change = if frame.content_changed {
             Some(Update::Build)
         } else if style {
@@ -366,7 +370,7 @@ mod tests {
             phase(),
             phase(),
             prop::bool::weighted(0.8),
-            prop::array::uniform5(any::<bool>()),
+            prop::array::uniform6(any::<bool>()),
         )
             .prop_map(
                 |(
@@ -378,6 +382,7 @@ mod tests {
                         default_changed,
                         fonts_changed,
                         state_changed,
+                        images_changed,
                         content_changed,
                     ],
                 )| {
@@ -389,6 +394,7 @@ mod tests {
                         default_changed,
                         fonts_changed,
                         state_changed,
+                        images_changed,
                         content_changed,
                     }
                 },
@@ -411,6 +417,7 @@ mod tests {
                 waiting_style |= frame.own_changed
                     || frame.fonts_changed
                     || frame.state_changed
+                    || frame.images_changed
                     || (frame.own != Some(Phase::Ready) && frame.default_changed);
                 let decision = state.decide(*frame);
                 match expected_source(frame.own, frame.default) {

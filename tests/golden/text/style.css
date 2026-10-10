@@ -7,3 +7,7 @@ h1 { font-size: 25px; color: #ff6a3d }
 .accent { color: #ffd23f }
 .big { font-size: 30px; color: #7ee081; background-color: #3a3f6b }
 pre { color: #c0c0c0; background-color: #000000 }
+.inline { color: #e8e8e8 }
+.hl { background-color: #d4a017; color: #ffffff }
+.uline { text-decoration: underline; text-decoration-color: #7ee081 }
+.strike { text-decoration: line-through; text-decoration-color: #ff6a3d }

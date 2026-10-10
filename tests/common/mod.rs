@@ -13,7 +13,7 @@ use bevy::image::{CompressedImageFormats, ImageLoader};
 use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
-use bevy::text::{FontSize, FontSource};
+use bevy::text::{FontSize, FontSource, InlineBox};
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent, WindowRef};
 use bevy_markup::prelude::*;
 
@@ -821,12 +821,41 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
                 child.get::<TextFont>(),
                 child.get::<TextColor>(),
             ) {
-                writeln!(out, "{indent}  {:?} {}", span.0, style_label(font, color)).unwrap();
+                let mut label = format!("{:?} {}", span.0, style_label(font, color));
+                // The run's own `background-color` and `text-decoration`.
+                if let Some(background) = child.get::<TextBackgroundColor>() {
+                    write!(label, " bg={}", hex(background.0)).unwrap();
+                }
+                if child.contains::<Underline>() {
+                    match child.get::<UnderlineColor>() {
+                        Some(color) => write!(label, " underline={}", hex(color.0)).unwrap(),
+                        None => label += " underline",
+                    }
+                }
+                if child.contains::<Strikethrough>() {
+                    match child.get::<StrikethroughColor>() {
+                        Some(color) => write!(label, " line-through={}", hex(color.0)).unwrap(),
+                        None => label += " line-through",
+                    }
+                }
+                writeln!(out, "{indent}  {label}").unwrap();
+            } else if let Some(image) = child.get::<InlineImage>() {
+                let path = image
+                    .image
+                    .path()
+                    .map(|path| path.path().display().to_string())
+                    .unwrap_or_default();
+                let size = child
+                    .get::<InlineBox>()
+                    .map_or(Vec2::ZERO, |box_| box_.size);
+                writeln!(out, "{indent}  {path:?} img {}x{}", size.x, size.y).unwrap();
             }
         }
     }
     for child in children {
-        if world.entity(child).contains::<TextSpan>() {
+        if world.entity(child).contains::<TextSpan>()
+            || world.entity(child).contains::<InlineImage>()
+        {
             continue;
         }
         dump_entity(world, child, depth + 1, out);

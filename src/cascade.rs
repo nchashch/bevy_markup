@@ -18,6 +18,7 @@ use lightningcss::properties::border_image::{
 };
 use lightningcss::properties::custom::CustomPropertyName;
 use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
+use lightningcss::properties::text::TextDecorationLine;
 use lightningcss::properties::flex as css_flex;
 use lightningcss::properties::font::{
     AbsoluteFontSize, AbsoluteFontWeight, FontFamily, FontSize, FontStyle, FontWeight,
@@ -393,8 +394,20 @@ pub(crate) struct ElementStyle {
     pub opacity: Option<f32>,
     /// `outline` (shorthand and longhands, `outline-offset`).
     pub outline: OutlineDecl,
+    /// `text-decoration` (`underline`/`line-through` and its color;
+    /// `overline`, `blink` and the thickness/style are skipped).
+    pub text_decoration: Option<DecorationDecl>,
     /// Flex, size and margin properties (containers and blocks).
     pub layout: LayoutDecl,
+}
+
+/// Declared `text-decoration` of an inline element.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct DecorationDecl {
+    pub underline: bool,
+    pub line_through: bool,
+    /// `text-decoration-color`; `None` = `currentColor` (the text color).
+    pub color: Option<Color>,
 }
 
 /// Declared `outline` parts (each optional so longhands override parts of
@@ -724,6 +737,21 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             if let Some(color) = to_color(color) {
                 style.background = Some(color);
             }
+        }
+        Property::TextDecoration(decoration, _) => {
+            style.text_decoration = Some(decoration_decl(decoration.line, Some(&decoration.color)));
+        }
+        Property::TextDecorationLine(line, _) => {
+            let mut declared = style.text_decoration.take().unwrap_or_default();
+            let next = decoration_decl(*line, None);
+            declared.underline = next.underline;
+            declared.line_through = next.line_through;
+            style.text_decoration = Some(declared);
+        }
+        Property::TextDecorationColor(color, _) => {
+            let mut declared = style.text_decoration.take().unwrap_or_default();
+            declared.color = to_color(color);
+            style.text_decoration = Some(declared);
         }
         Property::FontFamily(families) => {
             let list: Vec<FamilyRef> = families.iter().filter_map(family_ref).collect();
@@ -1387,6 +1415,17 @@ fn corner_radius(radius: &Size2D<LengthPercentage>) -> Option<(Val, Val)> {
         length_percentage_val(&radius.0)?,
         length_percentage_val(&radius.1)?,
     ))
+}
+
+/// `text-decoration-line` bits (and the shorthand's color): Bevy draws
+/// underline and line-through; `overline`, `blink` and the spelling/grammar
+/// decorations have no Bevy counterpart and are skipped.
+fn decoration_decl(line: TextDecorationLine, color: Option<&CssColor>) -> DecorationDecl {
+    DecorationDecl {
+        underline: line.contains(TextDecorationLine::Underline),
+        line_through: line.contains(TextDecorationLine::LineThrough),
+        color: color.and_then(to_color),
+    }
 }
 
 /// `padding` in px; `auto`, `%` and `calc()` are unsupported.

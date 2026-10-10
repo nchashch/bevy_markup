@@ -1116,9 +1116,15 @@ Known limits (each skipped/ignored value is logged at `debug`):
   for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins.
 - **border-image:** center always drawn, `-width`/`-outset` ignored, one
   repeat mode for all sides (Bevy `TextureSlicer` limits).
-- **Inline:** no inline boxes — `background`, borders, frames and padding on
-  inline elements are ignored (Bevy `TextSpan` has no box); inline elements
-  have no entity, so `HtmlElements` can't find them (only blocks/containers).
+- **Inline:** no inline boxes with content — `background-color` paints the
+  run (`TextBackgroundColor`) and `text-decoration` (`underline`,
+  `line-through`, a declared `text-decoration-color`) draws on the run, but
+  borders, frames and padding on inline elements are ignored (Bevy
+  `TextSpan` has no box). `<img>` (asset paths, `width`/`height` in px)
+  flows inline (`InlineBox`/`InlineImage`); other inline content keeps no
+  entity, so `HtmlElements` can't find it (only blocks/containers), and
+  `display: inline-block` with widget children isn't supported (Bevy
+  reserves the space but doesn't place content in it).
 - **Interactivity:** declarative only: `data-on-<trigger>`/`data-with` emit
   [`ElementSignal`] messages (`signals.rs`; click/auxclick/press/release via
   picking observers — one per event type per element, mapping the pointer
