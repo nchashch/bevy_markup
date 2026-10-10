@@ -8,6 +8,8 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-10
+
 ### Added
 
 - **Markdown templates and Fluent values.** A `.md`/`.markdown` template is
@@ -195,7 +197,8 @@ and that update in place every frame.
   into native Bevy UI entities. Stylesheets, translations and fonts can be
   switched at runtime.
 
-[Unreleased]: https://github.com/nchashch/bevy_markup/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/nchashch/bevy_markup/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/nchashch/bevy_markup/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/nchashch/bevy_markup/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/nchashch/bevy_markup/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nchashch/bevy_markup/compare/v0.3.0...v0.4.0

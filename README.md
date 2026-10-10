@@ -344,8 +344,9 @@ their time testing rather than compiling Bevy.
 
 ```
 src/            the library
-examples/       quickstart, grid, menu, live, world, inline and demo, one
-                directory and README each (+ shared/input.rs, shared/harness.rs)
+examples/       quickstart, grid, menu, live, world, inline, markdown and
+                demo, one directory and README each
+                (+ shared/input.rs, shared/harness.rs)
 tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in
                 honggfuzz/, fuzzcheck/, test-fuzz/)

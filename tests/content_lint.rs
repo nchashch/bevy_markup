@@ -134,6 +134,11 @@ fn inline_contexts() -> Vec<Value> {
     ]
 }
 
+/// `examples/markdown/main.rs`: both reader pages.
+fn markdown_contexts() -> Vec<Value> {
+    vec![json!({ "active_tab": "release" }), json!({ "active_tab": "tutorial" })]
+}
+
 /// `examples/grid/main.rs`: both page layouts (the status message selects on
 /// `layout`); items as in `ITEMS`.
 fn grid_contexts() -> Vec<Value> {
@@ -320,6 +325,27 @@ const PAGES: &[Page] = &[
         contexts: inline_contexts,
         stylesheets: &["inline/style.css"],
         locales: "inline/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "markdown/reader.md",
+        contexts: markdown_contexts,
+        stylesheets: &["markdown/style.css"],
+        locales: "markdown/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "markdown/release.md",
+        contexts: markdown_contexts,
+        stylesheets: &["markdown/style.css"],
+        locales: "markdown/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "markdown/tutorial.md",
+        contexts: markdown_contexts,
+        stylesheets: &["markdown/style.css"],
+        locales: "markdown/locales",
         unlocalized: None,
     },
     Page {

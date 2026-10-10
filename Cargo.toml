@@ -1,9 +1,9 @@
 [package]
 name = "bevy_markup"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "HTML templates (Tera), CSS and Fluent localization as native Bevy UI"
+description = "Markdown+HTML templates (Tera), CSS and Fluent localization as native Bevy UI"
 repository = "https://github.com/nchashch/bevy_markup"
 readme = "README.md"
 keywords = ["bevy", "ui", "html", "css", "localization"]

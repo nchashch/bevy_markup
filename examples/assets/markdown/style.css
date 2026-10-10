@@ -1,0 +1,106 @@
+/* The reader's chrome. The document content is Markdown (converted to
+   HTML), so the rules target the generated tags — exactly like
+   hand-written HTML. */
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-width: 16px;
+}
+
+.reader {
+  width: 640px;
+  margin: 24px auto;
+  padding: 16px 24px;
+  gap: 12px;
+  /* Elliptical corners: horizontal radii twice the vertical ones. */
+  border-radius: 24px 24px 24px 24px / 12px 12px 12px 12px;
+  background-color: #14141c;
+}
+
+/* The raw-HTML tabs inside the Markdown page. */
+.tabs {
+  gap: 8px;
+}
+
+.tab {
+  color: #9a9a9a;
+  padding: 4px 14px;
+}
+
+.tab.active {
+  color: #f0b429;
+  background-color: #2a2418;
+}
+
+.tab:focus-visible,
+.action:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
+/* Generated document tags, styled like hand-written HTML. */
+h1 {
+  color: #f0b429;
+  font-size: 40px;
+  font-weight: bold;
+}
+
+h2 {
+  color: #f0b429;
+  font-size: 30px;
+  font-weight: bold;
+}
+
+em {
+  color: #9fd0ff;
+  font-style: italic;
+}
+
+strong {
+  color: #ffffff;
+  font-weight: bold;
+}
+
+li {
+  color: #e6e6e6;
+}
+
+pre {
+  color: #7fdbff;
+  font-family: monospace;
+  background-color: #000000;
+  padding: 8px;
+}
+
+/* A Markdown blockquote: its paragraph's wrapper block, dimmed and
+   indented by the rule below. */
+blockquote {
+  border-style: solid;
+  border-width: 0 0 0 3px;
+  border-color: #4a4a4a;
+  padding: 2px 12px;
+}
+
+blockquote p {
+  color: #9a9a9a;
+  font-style: italic;
+}
+
+.action {
+  color: #f0b429;
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 4px 16px;
+}
+
+.foot {
+  gap: 8px;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}

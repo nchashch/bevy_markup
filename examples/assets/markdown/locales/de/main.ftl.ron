@@ -1,0 +1,8 @@
+(
+    locale: "de",
+    resources: [
+        "reader.ftl",
+    ],
+    // The documents are Markdown (ADR 0014).
+    markdown: true,
+)

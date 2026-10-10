@@ -158,6 +158,11 @@ examples/
                    strikethrough), `<img>` seals in the text, an elliptical
                    `border-radius` quest panel, a `position: fixed` ribbon;
                    Language button, Space / Y
+  markdown/        localized Markdown documents (ADR 0014): a `.md` shell
+                   includes the pages, the tabs and buttons are raw HTML
+                   inside the Markdown, the prose is Fluent values in
+                   Markdown (`markdown: true`); Q / E + bumpers switch
+                   pages, Language button, Space / Y
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    `is="content-slot"` viewports filled once per slot, contexts),
                    controls.rs (language/theme selection; L / Y, T / X hotkeys), consts.rs (fonts);
@@ -264,6 +269,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   world/           plate.html, hud.html, style.css, locales/{en-US,de}
   inline/          page.html, notes.md (Markdown template), style.css,
                    locales/{en-US,de} (`markdown: true` — journal + notes values)
+  markdown/        reader.md (+ release.md, tutorial.md), style.css,
+                   locales/{en-US,de} (`markdown: true` — the documents)
   ui/frame.png     256x256 frame; frame_transparent.png (clear center; the
                    parchment/terminal panels frame themselves with it)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;
@@ -497,13 +504,17 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 ## Gotchas (verified)
 
 - **Markdown in FTL values: list/heading markers must be on indented
-  continuation lines.** FTL reads a `-` at column 0 as an attribute key and
-  a `#` as a comment, so a `markdown: true` bundle writes its lists as
-  two-space-indented continuations (`notes-body = The *bridge* is out.\n\n
-  - first item`); the blank line makes the newline a Markdown paragraph
-  break. Also: string args are HTML-escaped (no markup injection) but their
-  characters are still Markdown — a value interpolating `{{ name }}` into
-  emphasis reads the name's `*`/`_` as syntax.
+  continuation lines.** FTL reads a `-` at column 0 as an attribute key, a
+  `#` as a comment, and a line-initial `*` (even `**bold**`) as a variant
+  marker — everything from it to the message's end becomes Junk. So
+  `markdown: true` values write their lists as two-space-indented
+  continuations (`notes-body = The *bridge* is out.\n\n  - first item`),
+  never start a line with `*`, and escape literal braces as `{"{"}` /
+  `{"}"}` (a `{{ Tera }}` placeholder shown in the doc is exactly that).
+  The blank line makes the newline a Markdown paragraph break. Also:
+  string args are HTML-escaped (no markup injection) but their characters
+  are still Markdown — a value interpolating `{{ name }}` into emphasis
+  reads the name's `*`/`_` as syntax.
 
 - **App-written `Node` fields don't survive on elements, only on the root.**
   An in-place restyle or update writes an element's whole `Node` from its
