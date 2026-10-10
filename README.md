@@ -11,11 +11,17 @@ Write game UI the way you'd write a web page, and get native
 > own; read [CHANGELOG.md](CHANGELOG.md) before you do. Bug reports and
 > feedback are very welcome.
 
-bevy_markup is a Bevy 0.20 library. You describe a piece of UI as an HTML template,
-style it with CSS, and translate it with [Fluent](https://projectfluent.org);
-bevy_markup turns that into ordinary Bevy UI entities (`Node`, `Text`, `TextSpan`,
-`ImageNode`). No browser, no web view: the result is plain Bevy UI that lays
-out with Bevy's own flexbox and renders like everything else in your game.
+bevy_markup is a Bevy 0.20 library. You describe a piece of UI as an HTML
+template (or Markdown), style it with CSS, and translate it with
+[Fluent](https://projectfluent.org); bevy_markup turns that into ordinary
+Bevy UI entities (`Node`, `Text`, `TextSpan`, `ImageNode`). No browser, no
+web view: the result is plain Bevy UI that lays out with Bevy's own flexbox
+and renders like everything else in your game.
+
+Text fields, links, forms, focus and gamepad navigation, tooltips, custom
+elements, overlays — the interactive parts are built in and declared in the
+template, so a settings screen or a shop menu is markup plus a few small
+systems on your side.
 
 ```html
 <!-- examples/assets/quickstart/hello.html -->
@@ -40,7 +46,8 @@ html {
   border-width: 16px;
   padding: 20px 32px;
 }
-h1 { color: #f0b429; font-size: 44px; font-weight: bold; }
+.action { color: #f0b429; }             /* plus a 9-slice background */
+.action:focus-visible { outline: 3px solid #7fdbff; }
 ```
 
 ```ftl
@@ -76,57 +83,53 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
 }
 ```
 
-Clicks (or Enter / gamepad A on the focused button) arrive as `ElementSignal`
-messages named after `data-on-click`. Change `coins` in the entity's
-`TemplateContext` and the UI updates in place. Swap
-`DefaultStylesheet` and you have a new theme; swap `ActiveLocale` and the
-whole UI switches language. Changed or reloaded templates, stylesheets and
-translations are picked up too, so with Bevy's asset hot-reloading
-(`file_watcher` feature) you can edit the UI while the game runs.
+## How you work with it
 
-## How it works
+**Interaction is declared in the template.** `data-on-click="buy"` sends a
+`buy` message when the element is clicked — or activated with Enter / gamepad
+A while focused. `data-on-auxclick` (middle/right), `-press`, `-release`,
+`-enter` and `-leave` work the same way, and `data-with` carries JSON data
+rendered with the template's context. Route the messages with
+`app.on_html_click("buy", system)` (or drain them yourself); each one says
+what produced it — the pointer and button with its position, or the key or
+gamepad button that activated the element. Nested buttons: the deepest one
+under the pointer wins, like the DOM.
 
-Every `HtmlUi` entity goes through a small pipeline, run by Bevy systems in
-`PostUpdate`:
+**Focus is browser-style, and the gamepad comes along.** Elements with
+`data-on-click` or `tabindex` are focusable; `autofocus` takes the initial
+focus; `:focus` / `:focus-visible` (with `outline`) style it; modal roots
+confine it; focus survives updates by `id`. bevy_markup moves focus and
+activates — you bind the actual input (arrows, D-pad, Enter, A) in a couple
+of lines, and the examples ship a ready-made binding
+(`examples/shared/input.rs`).
 
-```mermaid
-flowchart LR
-  T[HTML template] -->|Tera + TemplateContext| H[HTML document]
-  H -->|Fluent: data-l10n-id| L[localized document]
-  L --> B[build]
-  C[CSS stylesheet] -->|cascade| B
-  B --> U[Bevy UI entities]
-```
+**Data flows one way: the context.** `TemplateContext` holds the Tera
+variables (`{{ player }}`, `{% if %}`, loops, includes); change a value and
+the template re-renders, updating the existing UI in place — elements keep
+their entities, hover and focus state, and whatever your code attached. Swap
+`DefaultStylesheet` for a new theme, `ActiveLocale` for a language — both
+update in place too. With Bevy's asset hot-reloading (`file_watcher`
+feature), edited templates, stylesheets and translations are picked up
+while the game runs.
 
-1. **Render.** The template is a [Tera](https://keats.github.io/tera/) template
-   (loops, conditionals, filters, includes). It's rendered with the entity's
-   `TemplateContext` and parsed as HTML.
-2. **Localize.** Elements with a `data-l10n-id` get their content replaced by
-   the Fluent translation from the active locale, with `data-l10n-args` as
-   arguments, following the same conventions as Mozilla's `fluent-dom`.
-   Translations may contain inline markup (`<b>`, `<em>`, …), which is
-   styled like the rest of the page. An element's own content is the
-   fallback when a message is missing.
-3. **Style.** The CSS is parsed with
-   [lightningcss](https://lightningcss.dev) and cascaded the way a browser
-   would: specificity, `!important`, source order and inheritance.
-4. **Build.** Block elements (`p`, `h1`–`h6`, `li`, `pre`) become `Text`
-   nodes with one `TextSpan` per styled run of text; containers (`div`,
-   `section`, `ul`, …) become flex nodes. Each carries an `HtmlElement`
-   component (tag, id, classes), so your code can find them with the
-   `HtmlElements` system parameter. Behaviour is declared in the template:
-   `data-on-click="buy"` sends a `buy` message when the element is clicked
-   (or activated by keyboard/gamepad), and an element with
-   `is="health-bar"` runs the system you registered under that name each
-   time it's spawned, like a browser's customized built-in elements.
+**Forms.** `<form data-on-submit="login">` collects its named inputs:
+clicking a `<button type="submit">` in the form emits the form's `Submit`
+signal with a JSON object of their live values (`{name: value}`; unnamed
+inputs excluded) — the app decides what submitting means, bevy_markup has no
+HTTP client.
 
-Updates are in place: when the context or locale changes, the new document is
-reconciled with the existing entities (matched by `id`, else by position), so
-elements keep their entities, hover and focus state, and whatever your code
-attached; only what appeared or disappeared is spawned or despawned. Styling
-changes (a new theme, a reloaded stylesheet) restyle the same entities.
+**Text fields.** `<input type="text">` renders Bevy's editable-text widget
+(behind the `text-input` cargo feature): typed text, cursor and selection,
+focused through the crate's own focus system. The value is app state — read
+the entity's `EditableText`; reset it by writing one.
 
-### What's supported
+**Links.** `<a href>` becomes a picked inline run that emits the `open`
+signal with the href when clicked — the app decides what opening means. In
+Markdown, compiled images and elements carry `class="markdown"` (so
+`img.markdown { width: 100% }` styles document images apart from the
+hand-written `<img>` tags in the same page).
+
+## What's supported
 
 bevy_markup implements a useful subset of the web, not all of it:
 
@@ -135,67 +138,118 @@ bevy_markup implements a useful subset of the web, not all of it:
 - **Markdown:** `.md`/`.markdown` templates and `markdown: true` Fluent
   bundles convert to the same HTML (CommonMark + tables, strikethrough,
   task lists, footnotes) — Markdown for prose documents, HTML for
-  interactive UI, mixed freely (raw HTML passes through).
+  interactive UI, mixed freely (raw HTML passes through unclassed; the
+  compiled elements carry `class="markdown"`).
 - **CSS:** type, class, id and compound selectors (`p.note`, `h1#title`),
-  `:hover`/`:active`/`:focus`/`:focus-visible`; colors and fonts (inherited); flex and grid layout
-  (`display`, `flex-direction`, `justify-content`, `align-items`, `gap`,
-  `grid-template-columns`, `grid-column`, …); sizes, margins, padding,
-  `box-sizing`; font-relative `em`/`rem` lengths (resolved per element
-  like CSS); `position` with `top`/`left`/…, `z-index`; borders with
-  colors and rounded corners, background colors; 9-slice frames through
-  `border-image`; `outline`; `pointer-events: none`; `opacity`; inline
-  `style="…"` attributes (templated values update in place). A template styles its
-  own root with `<html class="…">` (placement, stacking, pickability);
-  whatever CSS doesn't declare stays as your code set it. Combinators (`.panel p`) and
+  `:hover`/`:active`/`:focus`/`:focus-visible`; colors and fonts
+  (inherited); flex and grid layout (`display`, `flex-direction`,
+  `justify-content`, `align-items`, `gap`, `grid-template-columns`,
+  `grid-column`, …); sizes, margins, padding, `box-sizing`; font-relative
+  `em`/`rem` lengths (resolved per element like CSS); `position` with
+  `top`/`left`/…, `z-index`; borders with colors and rounded corners
+  (including elliptical `h / v` radii), background colors; 9-slice frames
+  through `border-image`; `outline`; `pointer-events: none`; `opacity`;
+  inline `style="…"` attributes (templated values update in place). Images
+  size through the CSS `width`/`height` (`px`, or `%` of the containing
+  block — `width: 100%` fits a panel). A template styles its own root with
+  `<html class="…">` (placement, stacking, pickability); whatever CSS
+  doesn't declare stays as your code set it. Combinators (`.panel p`) and
   `calc()` aren't supported yet; unsupported CSS is skipped, never guessed.
-  One deliberate difference from browsers: elements don't shrink below their
-  content unless a rule says `flex-shrink: 1` (a scrolling panel needs it on
-  every level down to the panel).
-- **Focus:** browser-style focus for gamepad and keyboard UIs: `data-on-click`
-  and `tabindex` elements are focusable, `autofocus`, `:focus` /
-  `:focus-visible` with `outline`, modal roots, and focus kept across
-  updates. You bind the input; bevy_markup moves focus and activates.
-- **Links:** `<a href>` emits an `open` signal with the href when clicked
-  (the app decides what that means — open a URL, navigate, …); the text
-  styles through the cascade.
-- **Text input:** `<input type="text">` renders Bevy 0.20's editable-text
-  widget behind the `text-input` cargo feature — typed text, cursor and
-  selection; the value is app state, focusing through the crate's focus
-  system.
-- **Interaction signals:** `app.on_html_click("buy", system)` runs a system
-  per click on `data-on-click="buy"` elements (or read the messages).
-  `data-on-click` (primary button, or activation by
-  keyboard/gamepad), `data-on-auxclick` (middle/right), `-press`,
-  `-release`, `-enter`, `-leave`. Each message says what produced it: the
-  pointer (mouse, touch, a VR laser…) and button with the position, or the
-  key or gamepad button that activated the element.
-- **Forms:** `<form data-on-submit="login">` collects its named
-  `<input>`s: clicking a `<button type="submit">` in the form emits the
-  form's `Submit` signal with a JSON object of their live values (the app
-  decides what submitting means — bevy_markup has no HTTP client).
-- **Tooltips:** `data-tooltip="shop-buy-tooltip"` on any element shows your
-  tooltip template beside it while it's hovered (with `data-tooltip-args`
-  and `data-tooltip-placement`), like a browser's `title`.
+  One deliberate difference from browsers: elements don't shrink below
+  their content unless a rule says `flex-shrink: 1` (a scrolling panel
+  needs it on every level down to the panel).
+- **Focus:** as above — `data-on-click`/`tabindex` focusable, `autofocus`,
+  `:focus`/`:focus-visible`, modal roots, focus kept across updates.
+- **Text input:** the `text-input` feature, as above (fields, cursor and
+  selection, live values for form submits).
+- **Tooltips:** `data-tooltip="shop-buy-tooltip"` shows your tooltip
+  template beside the hovered element (with `data-tooltip-args` and
+  `data-tooltip-placement`), like a browser's `title`.
 - **Custom elements:** `<div is="gcd-ring" data-slot="2">` runs your
-  `define_html_element("gcd-ring", system)` with the element and its `data-*`
-  attributes whenever it's built — attach materials, images or markers
-  without looking elements up by id.
+  `define_html_element("gcd-ring", system)` with the element and its
+  `data-*` attributes whenever it's built — attach materials, images or
+  markers without looking elements up by id.
 - **Anchored overlays:** `HtmlAnchor` keeps a tooltip or popover beside an
   element — following it, kept on screen, gone when the element goes — and
-  `HtmlWorldAnchor` keeps one over a 3D entity (nameplates, markers).
+  `HtmlWorldAnchor` keeps one over a 3D entity (nameplates, markers), with
+  distance fade.
 - **Template composition:** `{% extends %}`, `{% include %}` and Tera 2
-  `{% component %}`s across files, by relative paths — keep your buttons and
-  panels in one component library and call `{{ <ui.button … /> }}`.
-- **Fluent:** messages, arguments, plurals and selectors, inline markup.
+  `{% component %}`s across files, by relative paths — keep your buttons
+  and panels in one component library and call `{{ <ui.button … /> }}`.
+- **Fluent:** messages, arguments, plurals and selectors, inline markup;
+  per-bundle `markdown: true` for Markdown-authored values.
 - **Fonts:** you register font files under CSS family names
   (`FontFamilies`), including bold and italic faces and the generic
   families (`serif`, `monospace`, …). A `font-family` list becomes a
   per-glyph fallback chain (Bevy 0.20's `FontSource`), so mixed scripts
-  render from different installed fonts.
+  render from different fonts without bundling — and with the
+  `system_fonts` feature, the OS's fonts join the chain.
 
-The crate documentation (`cargo doc --open`) is the full guide.
+The crate documentation (`cargo doc --open`) is the full guide, including
+the exact CSS subset.
 
-## Bevy compatibility
+### Not built yet
+
+- CSS combinators (`.panel p`, `>`), `calc()`, named grid lines and areas;
+- form controls beyond text fields and buttons (no selects, checkboxes, …);
+  Enter-in-a-field doesn't submit a form;
+- scrollbars as a built-in widget (the demo builds its own from HTML and
+  CSS);
+- performance for large documents: any change re-renders and re-styles the
+  whole template (unchanged elements are not rewritten, but the work to
+  find them grows with the document).
+
+## Examples
+
+```sh
+cargo run --example quickstart   # the code above, plus buttons the keyboard and a gamepad reach too
+cargo run --example grid         # CSS grid: three screens (auto-fill slots, a paper doll, a quest board)
+cargo run --example menu         # focus, a slider and a stepper, modal dialog, data-tooltip, a component library
+cargo run --example inputs       # text fields with a live preview and reset buttons (needs --features text-input)
+cargo run --example links        # <a href>: clicking and keyboard cycling, the open signal, a status line
+cargo run --example forms        # a signup form: Submit with the fields' values, a receipt panel
+cargo run --example live         # data rendered every frame, updated in place; inline styles, opacity
+cargo run --example world        # styled, localized nameplates over 3D units (HtmlWorldAnchor)
+cargo run --example inline       # inline styling, text decoration, images, elliptical corners, position: fixed
+cargo run --example markdown     # localized Markdown documents
+cargo run --example demo         # themes, languages, scrolling, 9-slice frames, DOM outlines
+```
+
+Every example works with mouse, keyboard and gamepad alike: arrows / D-pad /
+left stick move focus, Enter / A press, and each shortcut has a gamepad
+button (shown on screen). bevy_markup owns focus and activation; the
+examples bind the input (`examples/shared/input.rs`).
+
+Each example lives in its own directory with a README showing a screenshot
+and explaining what it shows and how to drive it. Their templates,
+stylesheets, translations and images are in `examples/assets/`. Text uses
+the fonts installed on your system (CSS `serif`, `sans-serif` and
+`monospace`, via Bevy's `system_font_discovery`), so no font files ship with
+the repository.
+
+With `--features dev-tools`, the examples also serve a localhost agent/QA
+tool surface (`bevy_mcp_harness`): BRP on 127.0.0.1:15702 and MCP on
+127.0.0.1:15710/mcp — screenshots (`game/screenshot`), the laid-out UI tree
+(`game/ui`), and mocked keyboard/gamepad/mouse input — so an agent can
+playtest them. Off by default; the examples run unchanged without it.
+
+## Installation
+
+```sh
+cargo add bevy_markup
+```
+
+The crate depends on a minimal slice of Bevy (`ui_api`, `default_font`,
+`bevy_log`, `bevy_picking`); rendering, windowing, input and everything else
+remain your app's choice. Optional features:
+
+| feature | what it does |
+|---|---|
+| `text-input` | `<input type="text">` renders Bevy's editable-text widget (fields, form values) |
+| `system_fonts` | the OS's installed fonts join the font fallback chain |
+| `dev-tools` | examples-only: the localhost agent/QA surface (BRP + MCP) |
+
+### Bevy compatibility
 
 | bevy_markup | Bevy |
 |---|---|
@@ -207,13 +261,12 @@ The crate documentation (`cargo doc --open`) is the full guide.
 
 ### Recommended: patched fluent-syntax
 
-The fluent-syntax version `fluent` 0.16 (fluent-bundle 0.15) uses
-(0.11) has two bugs that a malformed translation file can
-trigger: a panic on a broken unicode escape, and a stack
-overflow (process abort) on deeply nested expressions. Until
-upstream fixes are released, add this to your app's
-`Cargo.toml` (cargo applies `[patch]` only in the top-level
-project, so bevy_markup can't do it for you):
+The fluent-syntax version `fluent` 0.16 (fluent-bundle 0.15) uses (0.11)
+has two bugs that a malformed translation file can trigger: a panic on a
+broken unicode escape, and a stack overflow (process abort) on deeply nested
+expressions. Until upstream fixes are released, add this to your app's
+`Cargo.toml` (cargo applies `[patch]` only in the top-level project, so
+bevy_markup can't do it for you):
 
 ```toml
 [patch.crates-io]
@@ -222,137 +275,100 @@ fluent-syntax = { git = "https://github.com/nchashch/fluent-rs", branch = "fix/f
 
 It matters most if players can load their own translations or mods.
 
-## Running the examples
+---
 
-```sh
-cargo run --example quickstart   # the code above, plus buttons that the keyboard and a gamepad reach too
-cargo run --example grid         # CSS grid: three screens (auto-fill slots, a paper doll, a quest board)
-cargo run --example menu         # focus, a slider and a stepper, modal dialog, data-tooltip, a component library, routed signals
-cargo run --example live         # data rendered every frame, updated in place; inline styles, opacity
-cargo run --example world        # styled, localized nameplates over 3D units (HtmlWorldAnchor)
-cargo run --example demo         # themes, languages, scrolling, 9-slice frames, DOM outlines
+## Under the hood
+
+A short version of the design; the crate documentation (`cargo doc --open`)
+is the full guide.
+
+**The pipeline.** Every `HtmlUi` entity goes through three steps, run by
+Bevy systems in `PostUpdate`:
+
+```mermaid
+flowchart LR
+  T[HTML / Markdown template] -->|Tera + TemplateContext| H[HTML document]
+  H -->|Fluent: data-l10n-id| L[localized document]
+  L --> B[build]
+  C[CSS stylesheet] -->|cascade| B
+  B --> U[Bevy UI entities]
 ```
 
-Every example works with mouse, keyboard and gamepad alike: arrows / D-pad /
-left stick move focus, Enter / A press, and each shortcut has a gamepad button
-(shown on screen). bevy_markup owns focus and activation; the examples bind
-the input (`examples/shared/input.rs`).
+1. **Render.** The template is a [Tera](https://keats.github.io/tera/)
+   template; a `.md` page converts to HTML first (CommonMark + GFM tables,
+   strikethrough, task lists, footnotes, via pulldown-cmark).
+2. **Localize.** `data-l10n-id` elements get the Fluent translation of the
+   active locale, `data-l10n-args` as arguments, following the conventions
+   of Mozilla's `fluent-dom`. Translations may carry inline markup, styled
+   like the rest of the page; the element's own content is the fallback
+   when a message is missing.
+3. **Style + build.** The CSS is parsed with
+   [lightningcss](https://lightningcss.dev) and cascaded the way a browser
+   would (specificity, `!important`, source order, inheritance), then built
+   into Bevy UI entities: blocks become `Text` nodes with one `TextSpan`
+   per styled run, containers become flex nodes, each carrying an
+   `HtmlElement` component your code can find with the `HtmlElements`
+   system parameter. `data-on-*` hooks become observers;
+   `is="health-bar"` runs the system you registered, like a browser's
+   customized built-in elements.
 
-Each example lives in its own directory with a README showing a screenshot
-and explaining what it shows and how to drive it (`examples/<name>/README.md`). Their templates,
-stylesheets, translations and images are in `examples/assets/`. Text uses the fonts installed on your system (CSS
-`serif`, `sans-serif` and `monospace`, via Bevy's `system_font_discovery`),
-so no font files ship with the repository.
+Updates are in place: the new document is reconciled with the existing
+entities (matched by `id`, else by position), so elements keep their
+entities, hover and focus state, and whatever your code attached; only what
+appeared or disappeared is spawned or despawned. Styling changes restyle
+the same entities.
 
-With `--features dev-tools`, the examples also serve a localhost
-agent/QA tool surface (`bevy_mcp_harness`): BRP on 127.0.0.1:15702 and MCP on
-127.0.0.1:15710/mcp — screenshots (`game/screenshot`), the laid-out UI tree
-(`game/ui`), and mocked keyboard/gamepad/mouse input — so an agent can
-playtest them. Off by default; the examples run unchanged without it.
+**Dependencies.** The library needs only a minimal slice of Bevy; the
+examples get the full thing through dev-dependencies, so nothing the
+examples use leaks into your app's requirements.
 
-## Testing
+## Testing and quality
 
-A UI library is easy to get subtly wrong: a rule that applies in the wrong
-order, a translation that never updates, a layout that's a few pixels off,
-or a crash on input nobody thought of. bevy_markup checks itself in layers, each
-catching a different kind of mistake.
+A UI library is easy to get subtly wrong, so bevy_markup checks itself in
+layers, each catching a different kind of mistake:
 
-**Examples, written down.** Unit tests cover the small pieces (CSS value
-mapping, the cascade, the rebuild logic). Test *vectors* are complete small
-pages in `tests/vectors/`: HTML, CSS, sometimes translations, plus the
-expected result. A headless test harness runs bevy_markup inside a real Bevy app
-without a window and compares a text dump of the resulting UI tree with the
-expected one.
-
-**Compared against the real thing.** For vectors, the expected results don't
-come from bevy_markup itself. Two *oracles* produce them independently:
-
-- headless Chrome computes the CSS (styles and layout positions) of every
-  vector, and bevy_markup's output must match what the browser does;
-- Mozilla's own `@fluent/dom` translates the Fluent vectors, and bevy_markup must
-  produce the same text.
-
-Both reference outputs are committed, and CI checks nightly that the current
-Chrome still agrees with them.
-
-**Generated inputs.** Hand-written examples only test what someone thought
-of. *Property tests* generate thousands of random stylesheets, documents
-and translations and check rules that must always hold: for example that
-restyling in place gives exactly what a fresh build would, or that
-generated flex layouts obey the guarantees of the CSS flexbox spec (a
-`row-reverse` row mirrors a `row`, for instance). A *state machine*
-test drives a running UI through random sequences of changes (templates,
-contexts, stylesheets, languages, reloads, in any order) and checks after
-every step that the UI matches a simple model of what it should show.
-
-**Fuzzing.** Fuzzers feed malformed and adversarial input (broken HTML,
-garbage CSS, pathological translations) to the parsing and translation code
-to find crashes and hangs. Four fuzzing engines run against the same
-harnesses (libFuzzer, honggfuzz, fuzzcheck and AFL++). The inputs that
-reached new code are kept as committed seeds in `fuzz/seeds/`, and CI fuzzes
-every night, carrying its corpus over from one night to the next.
-
-**Content lint.** For the shipped game content, a lint renders every
-template and checks that every translation key exists, that no text is
-hard-coded instead of translated, that CSS image paths resolve, and that
-the UI survives *pseudo-localization* (artificially longer, accented
-translations, as real languages often are).
-
-**Golden images.** A few scenes are rendered for real (on a software GPU)
-and compared with reference screenshots, to catch problems only visible in
-pixels: font rasterization, text wrapping, 9-slice drawing.
-
-**Testing the tests.** Two tools check that the tests themselves are good
-enough:
-
-- *Mutation testing* ([cargo-mutants](https://mutants.rs)) makes hundreds
-  of small deliberate bugs in the library, one at a time (flips a
-  condition, deletes a line, returns a wrong value) and checks that some
-  test fails for each. A "mutant" that survives points at code no test
-  really checks. Every survivor gets a new test or a written explanation of
-  why the change can't affect behaviour.
-- *Coverage* measures which lines of the library each testing layer
-  actually runs, and which lines nothing runs at all (`scripts/coverage.py`;
-  CI publishes a report every night).
-
-Coverage shows that code ran; mutation testing shows that its result was
-checked. Together they point at gaps the other layers leave.
-
-**Bugs found so far.** Every real defect found this way is written up in
-`docs/agents/bugs/` (reproduction, cause, fix and the regression test that
-now guards it). 28 reports so far, from wrong cascade order and layout
-differences against the browser to crashes deep inside dependencies. Bugs
-in third-party crates are fixed locally where possible and tracked in
-`docs/agents/bugs/UPSTREAM.md` so they can be reported upstream.
-
-### Running the tests
+- **Test vectors** — small complete pages in `tests/vectors/` with the
+  expected UI tree, run through a headless Bevy app and compared as text
+  dumps.
+- **Oracles** — the expected results don't come from bevy_markup itself:
+  headless Chrome computes the CSS (styles and layout) of every vector, and
+  Mozilla's `@fluent/dom` translates the Fluent vectors; bevy_markup must
+  agree with both, and CI re-checks that nightly against the current
+  Chrome.
+- **Property tests** — thousands of generated stylesheets, documents and
+  translations, checked against rules that must always hold (restyling in
+  place equals a fresh build; generated flex layouts obey the CSS flexbox
+  guarantees), plus a state-machine test driving a UI through random
+  sequences of changes against a model.
+- **Fuzzing** — four engines (libFuzzer, honggfuzz, fuzzcheck, AFL++)
+  feed malformed HTML, CSS and translations to the parsers nightly; crashes
+  found this way are fixed (in dependencies, locally patched where
+  upstream hasn't fixed them).
+- **Content lint** — the shipped example content is rendered and checked:
+  every translation key resolves in every locale, nothing hard-coded, CSS
+  paths exist, and the UI survives pseudo-localization (longer, accented
+  translations).
+- **Golden images** — a few scenes rendered on a software GPU and compared
+  with reference screenshots, for problems only visible in pixels.
+- **Mutation testing and coverage** — cargo-mutants plants hundreds of
+  deliberate bugs and expects a test to catch each; coverage shows which
+  lines no layer reaches. Every real defect found this way is written up
+  with its fix and regression test (`docs/agents/bugs/`, 30 reports so
+  far).
 
 ```sh
 cargo test                                  # unit tests, vectors, properties, state machine
-cargo test --lib --features fuzzing         # the fuzz harnesses' own tests
 scripts/fuzz-libfuzzer.sh html 60           # fuzz one target for a minute (nightly Rust)
 scripts/mutants.sh                          # mutation testing
 scripts/coverage.py --html                  # coverage per testing layer
-scripts/browser_oracle.py                   # regenerate the Chrome references
-scripts/golden.sh                           # golden images
 ```
 
-`docs/agents/skills/testing.md` explains every layer in detail: when to use
-which, how to add a vector or a property, how the oracles work, and how a
-bug is filed.
-
-### Continuous integration
-
-- **Every push and pull request:** the library must build without warnings
-  in every configuration, all tests must pass, the docs must build, and the
-  committed Fluent references must be current.
-- **Nightly:** golden images, the Chrome oracle against the current
-  browser, 15 minutes of fuzzing per target (continuing from the previous
-  night), and a coverage report you can download as a browsable HTML page.
-- **Twice a week:** a full mutation-testing run, split over four parallel jobs.
-
-Dependency builds are cached and shared between jobs, so most jobs spend
-their time testing rather than compiling Bevy.
+CI runs the warning-free build, all tests and the docs on every push;
+nightly it renders the golden images, re-checks the oracles against the
+current Chrome, fuzzes each target for 15 minutes and publishes a coverage
+report; twice a week it runs the full mutation-testing campaign. Dependency
+builds are cached between jobs. `docs/agents/skills/testing.md` explains
+every layer in detail.
 
 ## Project layout
 
@@ -369,20 +385,6 @@ docs/agents/    developer docs: design decisions (ADRs), testing guide, bug repo
 CHANGELOG.md    what changed in each release
 AGENTS.md       detailed project notes: architecture, conventions, gotchas
 ```
-
-## Status
-
-Early development, on Bevy 0.20. The API is unstable and changes often (see
-the warning at the top and [CHANGELOG.md](CHANGELOG.md)). What exists is
-tested heavily (above), but large areas aren't built yet, among them:
-
-- CSS combinators (`.panel p`, `>`), `calc()`, named grid lines and areas;
-- text input and other form controls;
-- scrollbars as a built-in widget (the demo builds its own from HTML and
-  CSS);
-- performance work for large documents: any change re-renders and re-styles
-  the whole template (unchanged elements are not rewritten, but the work to
-  find them grows with the document).
 
 ## License
 
