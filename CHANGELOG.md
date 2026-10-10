@@ -8,6 +8,8 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-10
+
 ### Changed
 
 - **Breaking:** bevy_markup now depends on Bevy 0.20 (was 0.19), following
@@ -146,7 +148,8 @@ and that update in place every frame.
   into native Bevy UI entities. Stylesheets, translations and fonts can be
   switched at runtime.
 
-[Unreleased]: https://github.com/nchashch/bevy_markup/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/nchashch/bevy_markup/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nchashch/bevy_markup/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nchashch/bevy_markup/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nchashch/bevy_markup/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nchashch/bevy_markup/releases/tag/v0.2.0

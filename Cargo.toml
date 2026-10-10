@@ -1,6 +1,6 @@
 [package]
 name = "bevy_markup"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "HTML templates (Tera), CSS and Fluent localization as native Bevy UI"
@@ -30,13 +30,13 @@ fuzzing = ["dep:wgpu-types"]
 # Only what the library's code uses; the app picks rendering, windowing,
 # platform and everything else. Check with `cargo check --lib`.
 bevy = { version = "0.20.0", default-features = false, features = [
-	# Node, ImageNode, Text/TextSpan (bevy_ui + bevy_text), assets, ECS.
-	"ui_api",
-	# Fallback when the CSS names no registered font family.
-	"default_font",
-	"bevy_log",
-	# `data-on-*` interaction signals (bevy_picking events and hover map).
-	"bevy_picking",
+    # Node, ImageNode, Text/TextSpan (bevy_ui + bevy_text), assets, ECS.
+    "ui_api",
+    # Fallback when the CSS names no registered font family.
+    "default_font",
+    "bevy_log",
+    # `data-on-*` interaction signals (bevy_picking events and hover map).
+    "bevy_picking",
 ] }
 # 9-slice style manifests (*.slice.ron).
 ron = "0.12.1"

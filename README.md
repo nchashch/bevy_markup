@@ -181,7 +181,7 @@ The crate documentation (`cargo doc --open`) is the full guide.
 
 | bevy_markup | Bevy |
 |---|---|
-| Unreleased | 0.20 |
+| 0.5 | 0.20 |
 | 0.4 | 0.19 |
 | 0.3 | 0.19 |
 | 0.2 | 0.19 |
