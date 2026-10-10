@@ -9,6 +9,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Added
+- **Three new examples:** `inputs` (text input fields with a live
+  preview and reset buttons), `links` (`<a href>` opening as an `open`
+  signal, with keyboard cycling) and `forms` (form submission to a receipt
+  panel, including a non-submitting `type="button"`). Run with
+  `--features text-input` for the fields.
 - **Form submission.** A `<form data-on-submit="name">` whose
   `<button type="submit">` is clicked emits the form's `Submit`
   [`ElementSignal`](src/signals.rs) with a JSON object of the named

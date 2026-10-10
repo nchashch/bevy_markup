@@ -1,0 +1,95 @@
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-width: 16px;
+  padding: 20px 32px;
+}
+
+h1 {
+  color: #f0b429;
+  font-size: 40px;
+  font-weight: bold;
+}
+
+h2 {
+  color: #b8ddb8;
+  font-size: 30px;
+  font-weight: bold;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}
+
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+form {
+  gap: 14px;
+}
+
+.field {
+  gap: 4px;
+}
+
+.label {
+  color: #7fdbff;
+  font-size: 0.8em;
+}
+
+input {
+  font-family: serif;
+  color: #ffffff;
+  background-color: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  border-radius: 6px;
+  padding: 6px 14px;
+  width: 360px;
+}
+
+input:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+  border-color: #7fdbff;
+}
+
+/* A button is a block element: boxes, frames and the focus ring all work. */
+button {
+  font-family: serif;
+  color: #f0b429;
+  background-color: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  border-radius: 8px;
+  padding: 8px 24px;
+}
+
+button:hover {
+  border-color: #f0b429;
+}
+
+button:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
+.actions {
+  gap: 12px;
+}
+
+.receipt {
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 12px 16px;
+  background-color: #1a1a1a;
+  gap: 8px;
+}
+
+p.action {
+  color: #f0b429;
+}

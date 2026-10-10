@@ -156,6 +156,7 @@ fn navigate(
     time: Res<Time>,
     arrows: Arrows,
     elements: Query<&HtmlElement>,
+    #[cfg(feature = "text-input")] text_fields: Query<(), With<bevy::ui_widgets::TextInput>>,
     mut repeat: Local<(Repeat, Repeat)>,
     mut steps: MessageWriter<SettingStep>,
     mut focus: HtmlFocus,
@@ -164,6 +165,18 @@ fn navigate(
         x: horizontal,
         y: vertical,
     } = arrows.axes();
+    // While a text field holds the focus, left/right move its caret (the
+    // widget reads the arrow keys through `FocusedInput`), so they don't
+    // navigate; up/down still leave the field.
+    #[cfg(feature = "text-input")]
+    let horizontal = if focus
+        .focused()
+        .is_some_and(|entity| text_fields.contains(entity))
+    {
+        0
+    } else {
+        horizontal
+    };
     let now = time.elapsed_secs();
     let (horizontal_repeat, vertical_repeat) = &mut *repeat;
     match vertical_repeat.update(vertical, now) {

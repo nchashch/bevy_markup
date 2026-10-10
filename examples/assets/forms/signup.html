@@ -1,0 +1,26 @@
+<h1 data-l10n-id="signup-title">Join the expedition</h1>
+<p class="hint" data-l10n-id="signup-hint">Fill in the two fields, then press <kbd>Enter</kbd> / A on the submit button. This app doesn't send anything anywhere — it shows you what a form submit signal carries.</p>
+
+{% if submitted %}
+<div class="receipt">
+  <h2 data-l10n-id="signup-done-title">Welcome aboard!</h2>
+  <p data-l10n-id="signup-done-name" data-l10n-args='{"name": "{{ submitted.name }}"}'>Signed up as {{ submitted.name }}</p>
+  <p data-l10n-id="signup-done-role" data-l10n-args='{"role": "{{ submitted.role }}"}'>Role: {{ submitted.role }}</p>
+  <p id="again" class="action" data-on-click="edit-again" data-l10n-id="signup-again">Edit again</p>
+</div>
+{% else %}
+<form id="signup" data-on-submit="signup">
+  <div class="field">
+    <p class="label" data-l10n-id="signup-name-label">Name</p>
+    <input type="text" name="name" value="{{ name }}" autofocus>
+  </div>
+  <div class="field">
+    <p class="label" data-l10n-id="signup-role-label">Role</p>
+    <input type="text" name="role" value="Cartographer">
+  </div>
+  <div class="actions">
+    <button type="submit" id="submit" class="action" data-l10n-id="signup-submit">Sign up</button>
+    <button type="button" id="clear" class="action" data-on-click="clear-form" data-l10n-id="signup-clear">Clear fields</button>
+  </div>
+</form>
+{% endif %}

@@ -1,0 +1,10 @@
+signup-title = Join the expedition
+signup-hint = Fill in the two fields, then press <kbd>Enter</kbd> / A on the submit button. This app doesn't send anything anywhere — it shows you what a form submit signal carries.
+signup-done-title = Welcome aboard!
+signup-done-name = Signed up as <b>{ $name }</b>
+signup-done-role = Role: { $role }
+signup-again = Edit again
+signup-name-label = Name
+signup-role-label = Role
+signup-submit = Sign up
+signup-clear = Clear fields

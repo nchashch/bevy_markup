@@ -1,0 +1,49 @@
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-width: 16px;
+  padding: 20px 32px;
+}
+
+h1 {
+  color: #f0b429;
+  font-size: 40px;
+  font-weight: bold;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}
+
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+/* A link is an inline run: only text properties reach it (no boxes), like
+ * a browser's inline element — a `color` change is the whole feedback
+ * surface. `a` matches the link's own tag, `.big` the standalone ones. */
+a {
+  color: #7fdbff;
+}
+
+a:hover {
+  color: #f0b429;
+}
+
+/* The app moves the keyboard focus between the links (`InputFocus` on the
+ * link's span entity); the focused one lights up like a hovered one. */
+a:focus-visible {
+  color: #f0b429;
+}
+
+p.status {
+  color: #b8ddb8;
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 6px 16px;
+}

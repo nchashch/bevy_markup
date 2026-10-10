@@ -134,9 +134,50 @@ fn inline_contexts() -> Vec<Value> {
     ]
 }
 
+/// `examples/inputs/main.rs`: the fields' initial values and the preview
+/// following them (empty, half typed, both set).
+fn inputs_contexts() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "Ada", "title": "Cartographer",
+            "live_name": "Ada", "live_title": "Cartographer",
+        }),
+        json!({
+            "name": "Ada", "title": "Cartographer",
+            "live_name": "", "live_title": "",
+        }),
+        json!({
+            "name": "Ada", "title": "Cartographer",
+            "live_name": "Ada", "live_title": "",
+        }),
+    ]
+}
+
+/// `examples/links/main.rs`: the status line before and after opening.
+fn links_contexts() -> Vec<Value> {
+    // "never" selects the not-yet branch of the status selector; any other
+    // value is the last opened href.
+    vec![
+        json!({ "opened": "never" }),
+        json!({ "opened": "atlas://north-shelf" }),
+    ]
+}
+
+/// `examples/forms/main.rs`: the form (no submission) and the receipt panel
+/// (with submitted values).
+fn forms_contexts() -> Vec<Value> {
+    vec![
+        json!({ "name": "Ada" }),
+        json!({ "name": "Ada", "submitted": { "name": "Ada", "role": "Cartographer" } }),
+    ]
+}
+
 /// `examples/markdown/main.rs`: both reader pages.
 fn markdown_contexts() -> Vec<Value> {
-    vec![json!({ "active_tab": "release" }), json!({ "active_tab": "tutorial" })]
+    vec![
+        json!({ "active_tab": "release" }),
+        json!({ "active_tab": "tutorial" }),
+    ]
 }
 
 /// `examples/grid/main.rs`: both page layouts (the status message selects on
@@ -318,6 +359,27 @@ const PAGES: &[Page] = &[
         contexts: inline_contexts,
         stylesheets: &["inline/style.css"],
         locales: "inline/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "inputs/profile.html",
+        contexts: inputs_contexts,
+        stylesheets: &["inputs/style.css"],
+        locales: "inputs/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "links/report.html",
+        contexts: links_contexts,
+        stylesheets: &["links/style.css"],
+        locales: "links/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "forms/signup.html",
+        contexts: forms_contexts,
+        stylesheets: &["forms/style.css"],
+        locales: "forms/locales",
         unlocalized: None,
     },
     Page {

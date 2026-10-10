@@ -164,6 +164,28 @@ examples/
                    inside the Markdown, the prose is Fluent values in
                    Markdown (`markdown: true`); Q / E + bumpers switch
                    pages, Language button, Space / Y
+  inputs/          text input fields (ADR 0016, `--features text-input`):
+                   name/title fields (first `autofocus`), the app reads the
+                   fields' `EditableText` into the context so a preview
+                   paragraph follows every keystroke, reset buttons write a
+                   fresh `EditableText` (by id via `HtmlElements`); arrows
+                   / D-pad move between fields, ← → move the caret while a
+                   field holds focus (shared input.rs is input-aware);
+                   Language button, Space / Y
+  links/           `<a href>` links (ADR 0011): two inline in the intro
+                   (from the Fluent value), three standalone; a click (or
+                   activation) emits the `open` signal and the status line
+                   re-renders with the href; link runs aren't `Focusable`
+                   blocks (no box), so the app cycles them itself (← → / LB
+                   RB over `HtmlElements::by_tag("a")` spans, `InputFocus`
+                   + `:focus-visible` recolor, Enter / A activates); Space /
+                   Y = language
+  forms/           form submission: a `<form data-on-submit>` with two
+                   fields and a `type="submit"` button (plus a
+                   `type="button"` clear); the `Submit` payload goes into
+                   the context and Tera `{% if submitted %}` swaps the form
+                   for a receipt; "edit again" clears it; Space / Y =
+                   language
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    `is="content-slot"` viewports filled once per slot, contexts),
                    controls.rs (language/theme selection; L / Y, T / X hotkeys), consts.rs (fonts);
@@ -272,6 +294,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
                    locales/{en-US,de} (`markdown: true` — journal + notes values)
   markdown/        reader.md (+ release.md, tutorial.md), style.css,
                    locales/{en-US,de} (`markdown: true` — the documents)
+  inputs/          profile.html, style.css (input + focus ring), locales/{en-US,de}
+  links/           report.html, style.css (a:hover/:focus-visible), locales/{en-US,de}
+  forms/           signup.html, style.css, locales/{en-US,de}
   ui/frame.png     256x256 frame; frame_transparent.png (clear center; the
                    parchment/terminal panels frame themselves with it)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;

@@ -1,0 +1,10 @@
+signup-title = Komm an Bord der Expedition
+signup-hint = Fülle die beiden Felder aus und drücke <kbd>Enter</kbd> / A auf dem Absende-Knopf. Diese App schickt nichts irgendwohin — sie zeigt dir, was ein Formular-Signal trägt.
+signup-done-title = Willkommen an Bord!
+signup-done-name = Angemeldet als <b>{ $name }</b>
+signup-done-role = Rolle: { $role }
+signup-again = Weiter bearbeiten
+signup-name-label = Name
+signup-role-label = Rolle
+signup-submit = Anmelden
+signup-clear = Felder leeren
