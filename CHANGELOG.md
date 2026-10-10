@@ -8,6 +8,17 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** `<img>` sizes come from the CSS `width`/`height`
+  properties instead of the `width`/`height` attributes (the attributes
+  are removed). `width: 100%` fills the containing block's content box —
+  this is what keeps a large image inside a fixed-width panel (the
+  `inline` example's notes cat); one dimension unset keeps the aspect
+  ratio; undeclared, the image keeps its intrinsic size. Sizes resolve at
+  layout time (percentages against the containing block's used content
+  box), so templated values (like every CSS property) update in place on
+  re-render.
+
 ### Fixed
 - **`repair_focus` cleared focus the app set on an activation target.**
   An entity with signals (a link span — no `Focusable`, no `Node`) was

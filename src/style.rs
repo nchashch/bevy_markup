@@ -45,13 +45,15 @@
 //!   `-thickness`/`-style` skipped) → `Underline`/`Strikethrough`; the
 //!   color defaults to the text's (`currentColor`). Other box properties on
 //!   inline elements stay ignored.
-//! - `<img src="…" width height>`: an image flowing inline with the text
+//! - `<img src="…">`: an image flowing inline with the text
 //!   (`InlineBox`/`InlineImage`; the CSS `background`/`border` boxes don't
 //!   apply to it). `src` is an asset path relative to the template (like
 //!   `{% include %}`; `/` from the asset root; URLs and data URIs
-//!   unsupported); `width`/`height` are px attributes, aspect ratio kept
-//!   when one is unset; the image's load restyles the UI, and its reload
-//!   (hot reload) re-sizes the box.
+//!   unsupported); the CSS `width`/`height` size it (px, `%` of the
+//!   containing block's content box — resolved at layout time; other units
+//!   skipped), one unset dimension keeps the aspect ratio; without a
+//!   declaration the image keeps its intrinsic size, and its load restyles
+//!   the UI (a hot reload re-sizes it).
 //! - `opacity` (a number or `%`): CSS group opacity, approximated by
 //!   multiplying the alpha of every color in the element's subtree (text,
 //!   backgrounds, borders, outlines, `border-image` tint) by the product of

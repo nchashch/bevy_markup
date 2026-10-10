@@ -1199,8 +1199,12 @@ Known limits (each skipped/ignored value is logged at `debug`):
   run (`TextBackgroundColor`) and `text-decoration` (`underline`,
   `line-through`, a declared `text-decoration-color`) draws on the run, but
   borders, frames and padding on inline elements are ignored (Bevy
-  `TextSpan` has no box). `<img>` (asset paths, `width`/`height` in px)
-  flows inline (`InlineBox`/`InlineImage`); `<a href>` spans become picked
+  `TextSpan` has no box). `<img>` (asset paths) flows inline
+  (`InlineBox`/`InlineImage`), sized by the CSS `width`/`height` (px or
+  `%` of the containing block's *used* content box — resolved at layout
+  time by `size_images`; other units skipped; one dimension preserves the
+  aspect ratio, both stretch; undeclared keeps the intrinsic size —
+  the `width`/`height` attributes are gone); `<a href>` spans become picked
   entities carrying the bindings — clicking emits the `open` signal with
   the href payload, the deepest-bound-element rule applies (a link inside
   a `data-on-click` block suppresses it), `HtmlElements` finds them, and

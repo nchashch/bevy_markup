@@ -123,8 +123,8 @@ html-ui
 /// Inline elements: `background` → a `TextBackgroundColor` on the span,
 /// `text-decoration` → `Strikethrough` (+ declared color), and `<img>` → an
 /// `InlineBox`/`InlineImage` flowing in the block's text (the fixture image
-/// is 32x24; a `width` attribute keeps the aspect ratio). A restyle that
-/// drops the background takes the component back in place.
+/// is 32x24; a CSS `width` keeps the aspect ratio). A restyle that drops
+/// the background takes the component back in place.
 #[test]
 fn inline_backgrounds_decorations_and_images() {
     let ui = TestUi::new(
@@ -133,18 +133,18 @@ fn inline_backgrounds_decorations_and_images() {
             (
                 "page.html",
                 "<p>Plain <span class=\"hl\">highlight</span> and \
-                 <img src=\"frame.png\" width=\"16\"> then <del>struck</del>.</p>",
+                 <img class=\"small\" src=\"frame.png\"> then <del>struck</del>.</p>",
             ),
             (
                 "style.css",
                 "html { color: #ffffff } .hl { background-color: #ffee00 } \
-                 del { text-decoration: line-through #ff4040 }",
+                 img.small { width: 16px } del { text-decoration: line-through #ff4040 }",
             ),
         ],
     );
-    let mut ui = ui
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut ui =
+        ui.stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -158,8 +158,9 @@ html-ui
     "." default 16px #ffffff
 "#,
     );
-    // A restyle without the declarations: the span components go, the
-    // entities stay.
+    // A restyle without the declarations (the sheet failed): the span
+    // components go, the entities stay — and the image, whose CSS width
+    // was in the sheet, falls back to its intrinsic size.
     let plain = ui.load::<Stylesheet>("plain.css");
     ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(plain);
     ui.settle_quiet();
@@ -169,7 +170,7 @@ html-ui
 html-ui
   p
     "Plain highlight and " default 16px #ffffff
-    "frame.png" img 16x12
+    "frame.png" img 32x24
     " then struck." default 16px #ffffff
 "#,
     );
@@ -400,7 +401,11 @@ fn template_render_failure_shows_the_error_and_recovers() {
         let world = ui.world_mut();
         let mut elements = world.query::<(Entity, &bevy_markup::html::HtmlElement)>();
         for (entity, element) in elements.iter(world) {
-            eprintln!("probe: tag={} node={}", element.tag, world.entity(entity).get::<Node>().is_some());
+            eprintln!(
+                "probe: tag={} node={}",
+                element.tag,
+                world.entity(entity).get::<Node>().is_some()
+            );
         }
     }
     ui.settle();
@@ -2230,15 +2235,13 @@ fn markdown_templates_render_and_escape() {
             ),
         ],
     );
-    let mut ui = ui
-        .stylesheet("style.css")
-        .spawn(
-            "page.md",
-            TemplateContext::new()
-                .with("title", "Journal")
-                .with("value", "<b>not tags</b>"),
-            Node::default(),
-        );
+    let mut ui = ui.stylesheet("style.css").spawn(
+        "page.md",
+        TemplateContext::new()
+            .with("title", "Journal")
+            .with("value", "<b>not tags</b>"),
+        Node::default(),
+    );
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -2293,10 +2296,9 @@ fn markdown_bundles_opt_in_per_manifest() {
     .stylesheet("style.css")
     .locale("md.ftl.ron")
     .spawn("page.html", TemplateContext::new(), Node::default());
-    ui.world_mut().resource_mut::<FontFamilies>().insert(
-        "System Serif",
-        FontFaces::new(FontSource::serif()),
-    );
+    ui.world_mut()
+        .resource_mut::<FontFamilies>()
+        .insert("System Serif", FontFaces::new(FontSource::serif()));
     ui.world_mut()
         .resource_mut::<FontFamilies>()
         .set_generic(GenericFamily::Serif, "System Serif");
@@ -2400,7 +2402,6 @@ html-ui
 /// autoescaping from the `.html` name).
 #[test]
 fn template_is_named_after_its_asset_path() {
-
     let mut ui = TestUi::new("template-name", &[("ui/page.html", "<p>x</p>")]);
     let handle = ui.load::<HtmlTemplate>("ui/page.html");
     for _ in 0..3000 {
@@ -3424,4 +3425,63 @@ html-ui
         ui.world_mut().get_entity(inner).is_ok(),
         "the nested UI survived the outer restyle"
     );
+}
+
+/// An `<img>`'s CSS `width`/`height` sizes the inline box against the
+/// containing block's content box at layout time: one dimension scales
+/// with the aspect ratio preserved (the fixture is 32×24), both stretch,
+/// and padding insets the resolution. Without a declaration the image
+/// keeps its intrinsic size.
+#[test]
+fn layout_image_css_sizes() {
+    let page = r#"<div id="root">
+  <p id="half"><img class="half" src="frame.png"></p>
+  <p id="padded"><img class="full" src="frame.png"></p>
+  <p id="stretched"><img class="stretch" src="frame.png"></p>
+  <p id="tall"><img class="tall" src="frame.png"></p>
+  <p id="intrinsic"><img src="frame.png"></p>
+</div>"#;
+    let css = "img.half { width: 50% } img.full { width: 100% } \
+padded { padding: 10px } p#padded { padding: 10px } img.stretch { width: 100%; height: 50% } img.tall { height: 50% }";
+    let mut ui = TestUi::with_layout(
+        "image-css-sizes",
+        &[("page.html", page), ("style.css", css)],
+        UVec2::new(400, 600),
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new(),
+        Node {
+            width: Val::Px(400.0),
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+    );
+    ui.settle();
+    ui.update(4);
+
+    // The image box: the span's `InlineBox`, sized by the layout pass.
+    let world = ui.world_mut();
+    let mut boxes = world.query::<(&bevy::text::InlineBox, &bevy::ui::widget::InlineImage)>();
+    let sized: Vec<Vec2> = boxes.iter(world).map(|(box_, _)| box_.size).collect();
+    // The paragraphs are root-width blocks (400 content); the padded one
+    // has 10px padding per side, so its content box is 380.
+    let expected = vec![
+        Vec2::new(200.0, 150.0), // half: 50% of 400, aspect 32:24
+        Vec2::new(380.0, 285.0), // full: 100% of 380
+        Vec2::new(400.0, 300.0), // stretch: both dimensions
+        Vec2::new(400.0, 300.0), // tall: 50% of 600, aspect preserved
+        Vec2::new(32.0, 24.0),   // intrinsic (no declaration)
+    ];
+    let mut actual = sized.clone();
+    actual.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap().then(a.y.total_cmp(&b.y)));
+    let mut expected_sorted = expected.clone();
+    expected_sorted.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap().then(a.y.total_cmp(&b.y)));
+    for (actual, expected) in actual.iter().zip(&expected_sorted) {
+        assert!(
+            (actual - expected).max_element() <= LAYOUT_TOLERANCE,
+            "image box {actual:?} != {expected:?} (all {sized:?})"
+        );
+    }
 }

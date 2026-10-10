@@ -1,7 +1,7 @@
-/* The inline features of 0.5.1:
+/* The inline features:
    - `background-color` on inline elements paints behind the text run;
    - `text-decoration` draws under/through it (`-color` included);
-   - `<img>` flows inline, sized by its `width` attribute;
+   - `<img>` flows inline, sized by the CSS `width`/`height` (px, `%` of the containing block);
    - `border-radius: h / v` gives the panels elliptical corners;
    - `position: fixed` pins the ribbon to the viewport's top-right corner,
      ignoring the framed page (and anything else). */
@@ -9,9 +9,12 @@ html {
   color: #e6e6e6;
   font-family: serif;
   font-size: 24px;
-  border-image: url("../ui/frame.png") 16 fill stretch;
-  border-width: 16px;
-  padding: 20px 32px;
+  background-color: #161616;
+  border-style: solid;
+  border-width: 2px;
+  border-color: #3a3a3a;
+  border-radius: 16px;
+  padding: 24px 32px;
   gap: 14px;
 }
 
@@ -55,6 +58,7 @@ kbd {
 }
 
 .seal {
+  width: 24px;
   margin-right: 8px;
 }
 
@@ -86,9 +90,12 @@ kbd {
    ring (a mouse press hides it again). */
 .action {
   color: #f0b429;
-  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
-  border-width: 12px;
-  padding: 4px 16px;
+  background-color: #262626;
+  border-style: solid;
+  border-width: 2px;
+  border-color: #3a3a3a;
+  border-radius: 8px;
+  padding: 6px 16px;
 }
 
 .action:focus-visible {
@@ -109,10 +116,12 @@ p.hint {
 /* The Markdown side panel (`notes.md`): a second HtmlUi the app positions;
    the page declares no `html` rule, so the app's placement stays. */
 .notes {
-  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
-  border-width: 12px;
-  padding: 12px 16px;
-  background-color: #1a1a1a;
+  background-color: #1f1f1f;
+  border-style: solid;
+  border-width: 2px;
+  border-color: #3a3a3a;
+  border-radius: 12px;
+  padding: 14px 18px;
   gap: 8px;
   color: #e6e6e6;
 }
@@ -124,5 +133,11 @@ p.hint {
 
 .notes li {
   color: #e6e6e6;
+}
+
+/* The notes' cat fills the panel's content width (aspect ratio kept). */
+.note-seal {
+  width: 100%;
+  border-radius: 8px;
 }
 

@@ -10,10 +10,10 @@
 <section class="quests">
   {# Each quest is clickable (data-on-click makes it focusable): clicking
      marks it done — the name is struck through, the author's ink turns grey.
-     The seals are plain <img> elements, sized by their width attribute. #}
+     The seals are the cat, sized by their CSS `width`. #}
   {% for quest in quests %}
   <p class="quest{% if quest %} done{% endif %}" data-on-click="toggle-quest-{{ loop.index0 }}">
-    <img class="seal" src="../ui/frame.png" width="20">
+    <img class="seal" src="../ui/cat.png">
     <span data-l10n-id="journal-quest-{{ loop.index0 }}">Quest {{ loop.index0 }}</span>
   </p>
   {% endfor %}

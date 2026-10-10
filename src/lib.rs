@@ -323,6 +323,9 @@ impl Plugin for BevyMarkupPlugin {
                     anchor::place_anchored
                         .after(HtmlUiSystems::Build)
                         .before(UiSystems::Prepare),
+                    build::size_images
+                        .after(HtmlUiSystems::Build)
+                        .before(UiSystems::Prepare),
                 ),
             );
         focus::plugin(app);

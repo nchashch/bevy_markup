@@ -121,25 +121,55 @@ struct TextInputSpec {
 
 /// An `<img>`: the loaded image and its `width`/`height` attributes (px;
 /// `None` keeps the image's size, one `None` preserves the aspect ratio).
+/// Percentages resolve against the containing block's content box at
+/// layout time (see [`size_images`]).
 #[derive(Clone)]
 struct ImageRun {
     image: Handle<Image>,
-    width: Option<f32>,
-    height: Option<f32>,
+    width: Option<ImageSize>,
+    height: Option<ImageSize>,
 }
 
+/// An `<img>`'s `width`/`height` attribute value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ImageSize {
+    /// Logical pixels.
+    Px(f32),
+    /// A fraction of the containing block's content box (`width="50%"`).
+    Percent(f32),
+}
+
+impl ImageSize {
+    fn px(self) -> Option<f32> {
+        match self {
+            ImageSize::Px(px) => Some(px),
+            ImageSize::Percent(_) => None,
+        }
+    }
+}
+
+/// An `<img>` with a CSS-declared `width`/`height` (px or `%`): its inline
+/// box is sized against the containing block's content box (the last
+/// frame's layout) by [`size_images`]. The box spawns at 0 and is sized in
+/// the same frame, before `UiSystems::Prepare`.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InlineImageSized {
+    /// The declared `width`, if any.
+    width: Option<ImageSize>,
+    /// The declared `height`, if any.
+    height: Option<ImageSize>,
+}
 impl ImageRun {
-    /// The inline box's size: the attributes over the image's pixel size,
-    /// aspect ratio preserved when one is missing. `None` while the image
-    /// is still loading (its load restyles the UI, which sizes the box).
+    /// The inline box's size: the image's intrinsic size, unless a CSS
+    /// `width`/`height` is declared (then [`size_images`] sizes the box at
+    /// layout time). `None` also while the image is still loading (its load
+    /// restyles the UI, which sizes the box).
     fn box_size(&self, images: &Assets<Image>) -> Option<Vec2> {
         let size = images.get(&self.image)?.size().as_vec2();
-        Some(match (self.width, self.height) {
-            (Some(w), Some(h)) => Vec2::new(w, h),
-            (Some(w), None) => Vec2::new(w, size.y * (w / size.x)),
-            (None, Some(h)) => Vec2::new(size.x * (h / size.y), h),
-            (None, None) => size,
-        })
+        match (self.width, self.height) {
+            (None, None) => Some(size),
+            _ => None,
+        }
     }
 }
 
@@ -432,10 +462,17 @@ impl Styler<'_> {
         })
     }
 
-    /// An `<img>`'s handle and `width`/`height` attributes: `src` resolves
+    /// An `<img>`'s handle and CSS `width`/`height`: `src` resolves
     /// relative to the template (like `{% include %}`), `/` from the asset
-    /// root. URLs and data URIs are unsupported.
-    fn image_of(&self, tag: &tl::HTMLTag) -> Option<ImageRun> {
+    /// root. URLs and data URIs are unsupported. Sizes come from the
+    /// cascade (px, `%`; other units skipped); without a declaration the
+    /// image keeps its intrinsic size.
+    fn image_of(
+        &self,
+        tag: &tl::HTMLTag,
+        element: &HtmlElement,
+        state: Pseudo,
+    ) -> Option<ImageRun> {
         let src = tag
             .attributes()
             .get("src")
@@ -458,12 +495,22 @@ impl Styler<'_> {
                 debug!("html img: {src} skipped ({error})");
             })
             .ok()?;
-        let width = attr_px(tag, "width");
-        let height = attr_px(tag, "height");
+        let inline = cascade::inline_style(tag);
+        let declared = self.styles.get_with(element, state, inline.as_ref());
+        let size = |val: Option<Val>, name: &str| {
+            val.and_then(|val| match val {
+                Val::Px(px) => Some(ImageSize::Px(px)),
+                Val::Percent(fraction) => Some(ImageSize::Percent(fraction / 100.0_f32)),
+                val => {
+                    debug!("html img: {name}: {val:?} — unsupported for images; skipped");
+                    None
+                }
+            })
+        };
         Some(ImageRun {
             image: self.server?.load(resolved),
-            width,
-            height,
+            width: size(declared.layout.width, "width"),
+            height: size(declared.layout.height, "height"),
         })
     }
 
@@ -1148,18 +1195,27 @@ pub(crate) struct CssFrame;
 fn spawn_spans(spans: &mut ChildSpawnerCommands<'_>, text: TextSpec, pickable: bool) {
     for span in text.spans {
         let mut child = if let Some(image) = span.image {
-            spans.spawn((
+            let mut child = spans.spawn((
                 InlineBox {
                     kind: InlineBoxKind::InFlow,
                     size: span.box_size.unwrap_or_default(),
                 },
                 InlineImage {
                     image: image.image,
-                    width: image.width,
-                    height: image.height,
+                    width: image.width.and_then(ImageSize::px),
+                    height: image.height.and_then(ImageSize::px),
                     ..default()
                 },
-            ))
+            ));
+            // A CSS-declared image is sized against its containing block
+            // by the layout pass, not from its attributes.
+            if image.width.is_some() || image.height.is_some() {
+                child.insert(InlineImageSized {
+                    width: image.width,
+                    height: image.height,
+                });
+            }
+            child
         } else {
             spans.spawn((TextSpan::new(span.text), span.font, TextColor(span.color)))
         };
@@ -1832,9 +1888,18 @@ fn update_spec(
                                     &mut span,
                                     Some(InlineImage {
                                         image: image.image,
-                                        width: image.width,
-                                        height: image.height,
+                                        width: image.width.and_then(ImageSize::px),
+                                        height: image.height.and_then(ImageSize::px),
                                         ..default()
+                                    }),
+                                );
+                                put(
+                                    &mut span,
+                                    (image.width.is_some() || image.height.is_some()).then(|| {
+                                        InlineImageSized {
+                                            width: image.width,
+                                            height: image.height,
+                                        }
                                     }),
                                 );
                             }
@@ -2251,6 +2316,29 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
     // submit button submits the enclosing form (the marker is on the
     // spawn path, behind the `text-input` feature — without it the
     // Submit signal's payload is just empty).
+    // An `<img>` directly in a container (raw HTML or Markdown): an
+    // anonymous block carrying its image run — the same treatment a text
+    // piece gets. In a block, `push_runs` handles it inline instead.
+    if element.tag == "img" {
+        let mut runs = Vec::new();
+        push_runs(ctx, handle, inherited, RunExtras::default(), &mut runs);
+        if !runs.is_empty() {
+            items.push(Item::Block(Block {
+                kind: BlockKind::Paragraph,
+                element: None,
+                handle: None,
+                signals: Vec::new(),
+                focus: None,
+                custom: None,
+                submit: false,
+                style: inherited.clone(),
+                boxed: BoxStyle::default(),
+                runs,
+            }));
+        }
+        return;
+    }
+
     let is_button = element.tag == "button";
     let kind = match element.tag.as_str() {
         "button" => {
@@ -2451,10 +2539,6 @@ fn push_runs(
             }
         }
         Some(tl::Node::Tag(tag)) => {
-            if tag.name().as_utf8_str() == *"img" {
-                push_image_run(ctx, tag, style, extras, runs);
-                return;
-            }
             // The tag's own interaction state (`:hover` on a link span, say):
             // entities with `DomNode` carry it (the link spans do).
             let state = ctx
@@ -2462,6 +2546,11 @@ fn push_runs(
                 .and_then(|states| states.get(&handle))
                 .copied()
                 .unwrap_or_default();
+            if tag.name().as_utf8_str() == *"img" {
+                let element = ctx.element(tag);
+                push_image_run(ctx, tag, &element, state, style, extras, runs);
+                return;
+            }
             // An unmatched `data-l10n-name` element is plain text.
             let style = ctx.element(tag).map_or_else(
                 || style.clone(),
@@ -2515,28 +2604,22 @@ fn push_runs(
 
 /// An `<img>` attribute in px (`width`/`height`); `%` and other units are
 /// unsupported (Bevy's `InlineImage` takes logical pixels).
-fn attr_px(tag: &tl::HTMLTag, name: &str) -> Option<f32> {
-    let value = tag.attributes().get(name).flatten()?;
-    let value = decode_entities(&value.as_utf8_str());
-    let trimmed = value.trim();
-    if trimmed.ends_with('%') {
-        debug!("html img: {name}={value:?} — percentages are unsupported; skipped");
-        return None;
-    }
-    trimmed.parse().ok()
-}
-
 /// The `<img>` inline run: the image flows inline as an `InlineBox`/
 /// `InlineImage` child of the block's `Text`. Unsupported sources (URLs,
 /// data URIs) and a missing `src` attribute are skipped.
 fn push_image_run(
     ctx: &Ctx,
     tag: &tl::HTMLTag,
+    element: &Option<HtmlElement>,
+    state: Pseudo,
     style: &Style,
     extras: RunExtras,
     runs: &mut Vec<Run>,
 ) {
-    let Some(image) = ctx.styler.image_of(tag) else {
+    let Some(image) = element
+        .as_ref()
+        .and_then(|element| ctx.styler.image_of(tag, element, state))
+    else {
         return;
     };
     runs.push(Run {
@@ -2545,6 +2628,70 @@ fn push_image_run(
         extras,
         image: Some(image),
     });
+}
+
+/// Sizes an `<img>` with a CSS-declared `width`/`height`
+/// ([`InlineImageSized`]) against its containing block's content box (the
+/// last frame's layout — the same slot
+/// [`place_anchored`](crate::anchor::place_anchored) reads). Percentages
+/// resolve against the content box; one dimension scales with the aspect
+/// ratio preserved; both stretch. Runs every frame but writes only
+/// changes, so a settled layout stops touching the entities (and
+/// `width: 100%` of an image-sized container is the CSS cyclic case: it
+/// converges when the container's width comes from elsewhere — a fixed
+/// root or a sibling — and may thrash otherwise).
+pub(crate) fn size_images(
+    mut images: Query<(
+        &ChildOf,
+        &mut InlineBox,
+        &mut InlineImage,
+        &InlineImageSized,
+    )>,
+    blocks: Query<&ComputedNode>,
+    assets: Res<Assets<Image>>,
+) {
+    for (parent, mut box_, mut image, sized) in &mut images {
+        // Percentages resolve against the containing block's *used* content
+        // box (`size` minus borders and padding — `content_size` is the
+        // content-driven size, which is 0 for a block stretched by flex and
+        // would fix `width: 100%` at zero).
+        let Some(block) = blocks.get(parent.0).ok() else {
+            continue;
+        };
+        // `size` is the border box; the insets (`min_inset` carries the
+        // resolved border and padding per edge) come out of it.
+        let inset = block.border + block.padding;
+        let content = Vec2::new(
+            (block.size.x - inset.min_inset.x - inset.max_inset.x).max(0.0),
+            (block.size.y - inset.min_inset.y - inset.max_inset.y).max(0.0),
+        );
+        let Some(intrinsic) = assets.get(&image.image).map(|image| image.size().as_vec2()) else {
+            continue;
+        };
+        let resolve = |size: ImageSize, base: f32| match size {
+            ImageSize::Px(px) => px,
+            ImageSize::Percent(fraction) => fraction * base,
+        };
+        let target = match (sized.width, sized.height) {
+            (Some(w), Some(h)) => Vec2::new(resolve(w, content.x), resolve(h, content.y)),
+            (Some(w), None) => {
+                let width = resolve(w, content.x);
+                Vec2::new(width, width * intrinsic.y / intrinsic.x)
+            }
+            (None, Some(h)) => {
+                let height = resolve(h, content.y);
+                Vec2::new(height * intrinsic.x / intrinsic.y, height)
+            }
+            (None, None) => continue,
+        };
+        if box_.size != target {
+            box_.size = target;
+        }
+        if image.width != Some(target.x) || image.height != Some(target.y) {
+            image.width = Some(target.x);
+            image.height = Some(target.y);
+        }
+    }
 }
 
 /// HTML whitespace (space, tab, LF, FF, CR): what collapsing and trimming
