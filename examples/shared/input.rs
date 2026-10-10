@@ -78,17 +78,17 @@ impl Hotkeys<'_, '_> {
 /// Hold-to-repeat for one axis: fires on press, then after [`Self::DELAY`]
 /// every [`Self::INTERVAL`] while held.
 #[derive(Default)]
-struct Repeat {
+pub struct Repeat {
     held: i32,
     next: f32,
 }
 
 impl Repeat {
-    const DELAY: f32 = 0.35;
-    const INTERVAL: f32 = 0.08;
+    pub const DELAY: f32 = 0.35;
+    pub const INTERVAL: f32 = 0.08;
 
     /// `direction` is -1, 0 or 1 this frame; returns the direction to act on.
-    fn update(&mut self, direction: i32, now: f32) -> i32 {
+    pub fn update(&mut self, direction: i32, now: f32) -> i32 {
         if direction == 0 {
             self.held = 0;
             return 0;

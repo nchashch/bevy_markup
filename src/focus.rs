@@ -229,6 +229,21 @@ fn remember_focus(
     memory.id = element.id.clone();
 }
 
+/// The visible modal root in scope, if any (Bevy's order of UI roots:
+/// `GlobalZIndex`, then `ZIndex` — CSS `z-index` on the root rule).
+fn active_modal(
+    roots_in_scope: &Query<ScopeRoot, (With<HtmlUi>, Without<HtmlNoFocus>)>,
+    visibility: &Query<&Visibility>,
+    parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    let visible = |entity| visible_in_hierarchy(entity, visibility, parents);
+    roots_in_scope
+        .iter()
+        .filter(|&(entity, modal, ..)| modal && visible(entity))
+        .max_by_key(|(_, _, global, local)| (global.map_or(0, |z| z.0), local.map_or(0, |z| z.0)))
+        .map(|(entity, ..)| entity)
+}
+
 /// Keeps `PseudoState`'s focus bits in step with `InputFocus` /
 /// `InputFocusVisible` (a change restyles in place).
 fn update_focus_states(
@@ -273,13 +288,7 @@ fn sync_navigation(
     mut commands: Commands,
 ) {
     let visible = |entity| visible_in_hierarchy(entity, &visibility, &parents);
-    let modal = roots_in_scope
-        .iter()
-        .filter(|&(entity, modal, ..)| modal && visible(entity))
-        // Bevy's order of UI roots: `GlobalZIndex`, then `ZIndex` (CSS
-        // `z-index` on the root rule).
-        .max_by_key(|(_, _, global, local)| (global.map_or(0, |z| z.0), local.map_or(0, |z| z.0)))
-        .map(|(entity, ..)| entity);
+    let modal = active_modal(&roots_in_scope, &visibility, &parents);
     for (entity, navigable) in &elements {
         let wanted = html_root(entity, &parents, &roots).is_some_and(|root| match modal {
             Some(modal) => root == modal,
@@ -309,13 +318,28 @@ fn repair_focus(
     memory: Res<FocusMemory>,
     navigable: Query<(Entity, &HtmlElement, &Focusable), With<AutoDirectionalNavigation>>,
     markup: Query<(), With<Focusable>>,
+    targets: Query<(), With<ElementSignals>>,
     ui_nodes: Query<(), With<Node>>,
+    roots_in_scope: Query<ScopeRoot, (With<HtmlUi>, Without<HtmlNoFocus>)>,
+    visibility: Query<&Visibility>,
     parents: Query<&ChildOf>,
     roots: Query<(), With<HtmlUi>>,
 ) {
     let current = focus.get();
+    // An activation target the app focused itself (a link span, which has
+    // bindings but no box to navigate by) keeps the focus — but only in
+    // scope: an open modal takes it, like it takes a navigable element's.
+    let in_scope = |entity| {
+        visible_in_hierarchy(entity, &visibility, &parents)
+            && html_root(entity, &parents, &roots).is_some_and(|root| {
+                active_modal(&roots_in_scope, &visibility, &parents)
+                    .is_none_or(|modal| root == modal)
+            })
+    };
     if current.is_some_and(|entity| {
-        navigable.contains(entity) || (ui_nodes.contains(entity) && !markup.contains(entity))
+        navigable.contains(entity)
+            || (ui_nodes.contains(entity) && !markup.contains(entity))
+            || (targets.contains(entity) && in_scope(entity))
     }) {
         return;
     }

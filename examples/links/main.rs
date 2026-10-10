@@ -15,6 +15,10 @@ use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 
+#[path = "../shared/input.rs"]
+mod input;
+use input::{Arrows, Repeat};
+
 #[path = "../shared/harness.rs"]
 mod harness;
 
@@ -87,6 +91,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
 /// the focus machinery needs: the focused span gets `:focus-visible`
 /// styling, and activation reads its bindings.
 fn cycle_links(
+    time: Res<Time>,
+    arrows: Arrows,
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
     root: Query<Entity, With<HtmlUi>>,
@@ -95,14 +101,26 @@ fn cycle_links(
     mut focus: ResMut<InputFocus>,
     mut visible: ResMut<InputFocusVisible>,
     mut last: Local<usize>,
+    mut repeat: Local<(Repeat, Repeat)>,
 ) {
-    let step = if keys.just_pressed(KeyCode::ArrowRight)
+    // All four directions cycle the links (they're one linear list):
+    // arrows / D-pad / left stick with hold-to-repeat, LB / RB one step.
+    let axes = arrows.axes();
+    let now = time.elapsed_secs();
+    let (horizontal, vertical) = &mut *repeat;
+    // Down the list is "next", so the (up-positive) vertical axis is
+    // inverted; right stays "next".
+    let step = if horizontal.update(axes.x, now) != 0 {
+        axes.x
+    } else if vertical.update(-axes.y, now) != 0 {
+        -axes.y
+    } else if keys.just_pressed(KeyCode::KeyE)
         || gamepads
             .iter()
             .any(|pad| pad.just_pressed(GamepadButton::RightTrigger))
     {
         1
-    } else if keys.just_pressed(KeyCode::ArrowLeft)
+    } else if keys.just_pressed(KeyCode::KeyQ)
         || gamepads
             .iter()
             .any(|pad| pad.just_pressed(GamepadButton::LeftTrigger))

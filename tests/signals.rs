@@ -13,6 +13,7 @@ use bevy::ecs::message::Messages;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::Key;
 use bevy::input::keyboard::KeyboardInput;
+use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
 use bevy::math::Vec2;
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
@@ -1058,3 +1059,55 @@ const HOVER_COLOR: bevy::color::Srgba = Srgba::new(
     0x29 as f32 / 255.0,
     1.0,
 );
+
+/// Focus the app set on a link span survives repair: the span has bindings
+/// (an activation target) but no `Focusable` and no `Node`, which
+/// `repair_focus` used to treat as stale and clear every frame — keyboard
+/// cycling in the `links` example flashed for one frame and died.
+#[test]
+fn repair_keeps_focus_on_link_spans() {
+    let page = r#"<div>
+  <p><a href="one://x">One</a></p>
+</div>"#;
+    let mut ui = page_ui(
+        "signals-link-repair",
+        page,
+        "a { color: #7fdbff } a:focus-visible { color: #f0b429 }",
+        TemplateContext::new(),
+    );
+    ui.settle();
+    ui.update(1);
+
+    let link = {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement)>();
+        elements
+            .iter(world)
+            .find(|(_, element)| element.tag == "a")
+            .map(|(entity, _)| entity)
+            .expect("a link span")
+    };
+    // The app's own cycle: focus the span and show the ring.
+    {
+        let world = ui.world_mut();
+        world
+            .resource_mut::<InputFocus>()
+            .set(link, FocusCause::Navigated);
+        world.resource_mut::<InputFocusVisible>().0 = true;
+    }
+    ui.update(2);
+    let focused = |ui: &mut TestUi| {
+        let world = ui.world_mut();
+        (
+            world.resource::<InputFocus>().get(),
+            world.get::<PseudoState>(link).copied(),
+        )
+    };
+    let (focus, state) = focused(&mut ui);
+    assert_eq!(focus, Some(link), "focus survives repair");
+    assert!(state.is_some_and(|state| state.focused && state.focus_visible));
+    // And the next frame: repair runs again, the focus stays.
+    ui.update(2);
+    let (focus, _) = focused(&mut ui);
+    assert_eq!(focus, Some(link), "focus survives another repair");
+}

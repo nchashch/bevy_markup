@@ -9,6 +9,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Fixed
+- **`repair_focus` cleared focus the app set on an activation target.**
+  An entity with signals (a link span — no `Focusable`, no `Node`) was
+  treated as stale every frame, so app-driven keyboard focus on links (as
+  in the `links` example) died instantly. Repair now keeps the focus.
 - **Interaction styles on translated markup.** `:hover`/`:active`/`:focus`
   never matched elements whose markup comes from a Fluent value (the
   `links` example's inline links didn't highlight on hover, while the

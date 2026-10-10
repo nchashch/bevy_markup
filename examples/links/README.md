@@ -19,7 +19,8 @@ href.
 | Input | Action |
 |---|---|
 | Click a link | "Open" it — the status line shows the href |
-| ← → / LB RB | Cycle the keyboard focus through the links |
+| ← → ↑ ↓ / D-pad / left stick | Cycle the keyboard focus through the links (hold to repeat) |
+| Q / E, LB RB | Cycle one link |
 | Enter / gamepad A | Open the focused link |
 | Space / gamepad Y | Switch the language (English ↔ German) |
 
