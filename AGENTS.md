@@ -38,7 +38,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
 | `ActiveLocale(Option<Handle<LocaleBundle>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
 | `FontFamilies` / `FontFaces` / `GenericFamily` | Resource + types | CSS `font-family` name → faces: font files or system families (any `FontSource`; for system families bold/italic are requested via `TextFont` weight/style), + generic keyword mapping |
-| `HtmlTemplate`, `Stylesheet`, `NineSlice`, `LocaleBundle` | Assets | `.html`/`.htm`, `.css`, `*.slice.ron`, `*.ftl.ron` |
+| `HtmlTemplate`, `Stylesheet`, `NineSlice`, `LocaleBundle` | Assets | `.html`/`.htm`/`.md`/`.markdown`, `.css`, `*.slice.ron`, `*.ftl.ron` |
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `HtmlCustomElementsExt::define_html_element(name, system)`, `ElementConnected { entity, root, name, dataset }` | App ext, system input | `is="<name>"` customized built-ins: the system (`In<ElementConnected>`, `data-*` attributes as `dataset`) runs on every spawn of the element, in document order, before `HtmlUiBuilt`; not on restyles |
 | `HtmlWorldAnchor { target, offset, pivot, camera }`, `HtmlWorldAnchorView { distance, on_screen }` | Component | keeps a UI root's `pivot` (fraction of its size, default bottom center) over `target`'s translation + `offset` projected through `camera` / its `UiTargetCamera` / the default UI camera; owns its `Visibility` (hidden behind the camera, off screen, or over an invisible target); despawned with `target`; `place_world_anchored`, `PostUpdate` before `UiSystems::Prepare` (last frame's transforms) |
@@ -262,7 +262,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
                    (every root's rule), locales/{en-US,de}
   live/            party.html, stats.html, style.css, locales/{en-US,de}
   world/           plate.html, hud.html, style.css, locales/{en-US,de}
-  inline/          page.html, style.css, locales/{en-US,de}
+  inline/          page.html, notes.md (Markdown template), style.css,
+                   locales/{en-US,de} (`markdown: true` — journal + notes values)
   ui/frame.png     256x256 frame; frame_transparent.png (clear center; the
                    parchment/terminal panels frame themselves with it)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;
@@ -370,13 +371,19 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 ## Pipeline
 
 ```
-.html (Tera) --render(TemplateContext)--> HTML --tl--> DOM            [Render]
+.html/.md (Tera) --render(TemplateContext)--> HTML --tl--> DOM       [Render]
     --data-l10n-id × ActiveLocale--> LocalizedText                     [Localize]
     --CSS (HtmlStylesheet | DefaultStylesheet) × FontFamilies--> UI    [Build] → HtmlUiBuilt
 ```
 
 - Templates: compiled at load (syntax errors fail the load); name = asset path,
-  so `.html` gets Tera HTML autoescaping. Plain HTML renders to itself.
+  so `.html` gets Tera HTML autoescaping (the loader forces `.md`/`.markdown`
+  into the autoescape list). Plain HTML renders to itself; Markdown
+  (`src/md.rs::to_html`, pulldown-cmark: CommonMark + tables, strikethrough,
+  task lists, footnotes; raw HTML passes through) converts in
+  `render_templates` before the identical-render check. Fluent bundles set
+  `markdown: true` in the manifest to convert message values at localize
+  time.
 - Update triggers: rebuild on template/context change or reload when the
   rendered HTML differs from the previous render (`render_templates` compares
   `HtmlDocument::source`; an identical render leaves `RenderedHtml`
@@ -488,6 +495,15 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   message. Every visible string in `l10n.html` and the demo shell has a key.
 
 ## Gotchas (verified)
+
+- **Markdown in FTL values: list/heading markers must be on indented
+  continuation lines.** FTL reads a `-` at column 0 as an attribute key and
+  a `#` as a comment, so a `markdown: true` bundle writes its lists as
+  two-space-indented continuations (`notes-body = The *bridge* is out.\n\n
+  - first item`); the blank line makes the newline a Markdown paragraph
+  break. Also: string args are HTML-escaped (no markup injection) but their
+  characters are still Markdown — a value interpolating `{{ name }}` into
+  emphasis reads the name's `*`/`_` as syntax.
 
 - **App-written `Node` fields don't survive on elements, only on the root.**
   An in-place restyle or update writes an element's whole `Node` from its

@@ -2071,7 +2071,8 @@ fn push_runs(
                 }),
             }
         }
-        Some(tl::Node::Tag(tag)) => {
+                Some(tl::Node::Tag(tag)) => {
+            
             if tag.name().as_utf8_str() == *"img" {
                 push_image_run(ctx, tag, style, runs);
                 return;

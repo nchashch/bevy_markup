@@ -36,7 +36,9 @@ fn fake_frame() -> Image {
 }
 
 /// Tera compile + render with a JSON context, then `tl` parse + outline +
-/// entity decoding: the whole Render stage on arbitrary sources.
+/// entity decoding: the whole Render stage on arbitrary sources. The same
+/// bytes also run through the Markdown path (ADR 0014): the conversion and
+/// its parse must not panic either.
 pub fn render_html(source: &str, context_json: &str) -> Result<String, String> {
     let name = "fuzz/template.html";
     let mut tera = tera::Tera::new();
@@ -50,7 +52,20 @@ pub fn render_html(source: &str, context_json: &str) -> Result<String, String> {
         name: name.to_owned(),
     };
     let document = template.render(&context).map_err(|err| err.to_string())?;
-    Ok(document.outline(&LocalizedText::default()))
+    let outline = document.outline(&LocalizedText::default());
+
+    let md_name = "fuzz/template.md";
+    let mut tera = tera::Tera::new();
+    tera.add_raw_template(md_name, source)
+        .map_err(|err| err.to_string())?;
+    let template = HtmlTemplate {
+        tera,
+        name: md_name.to_owned(),
+    };
+    let document = template.render(&context).map_err(|err| err.to_string())?;
+    let _ = document.outline(&LocalizedText::default());
+
+    Ok(outline)
 }
 
 /// lightningcss parse + cascade over synthetic elements + the `html` root

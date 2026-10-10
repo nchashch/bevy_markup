@@ -105,3 +105,24 @@ p.hint {
   font-size: 0.75em;
   font-style: italic;
 }
+
+/* The Markdown side panel (`notes.md`): a second HtmlUi the app positions;
+   the page declares no `html` rule, so the app's placement stays. */
+.notes {
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 12px 16px;
+  background-color: #1a1a1a;
+  gap: 8px;
+  color: #e6e6e6;
+}
+
+.notes h1 {
+  color: #f0b429;
+  font-size: 22px;
+}
+
+.notes li {
+  color: #e6e6e6;
+}
+

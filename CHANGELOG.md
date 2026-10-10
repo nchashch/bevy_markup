@@ -10,6 +10,17 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ### Added
 
+- **Markdown templates and Fluent values.** A `.md`/`.markdown` template is
+  Tera plus pulldown-cmark: the rendered output converts to HTML (CommonMark
+  + tables, strikethrough, task lists, footnotes) before parsing —
+  headings, emphasis, lists and `![images](…)` become the ordinary blocks,
+  and raw HTML passes through, so a Markdown page can embed real UI. Fluent
+  bundles opt their message values into Markdown with the manifest's
+  `markdown: bool` (default off — HTML-authored bundles keep their exact
+  behavior). Autoescaping is forced for Markdown templates (Tera's default
+  list doesn't include `.md`); Markdown's per-bundle opt-in mirrors ADR
+  0014.
+
 - **`dev-tools` feature** for the examples: `--features dev-tools` serves
   the example over localhost BRP + MCP (`bevy_mcp_harness`) so an agent can
   playtest it — screenshots, the laid-out UI tree (`data-on-click` elements

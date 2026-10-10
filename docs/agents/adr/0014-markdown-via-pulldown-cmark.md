@@ -52,11 +52,15 @@ Four decisions, one per concern:
    `{{ value }}` in a `.md` template silently injects raw text into the
    HTML (a behavior *and* injection difference from every `.html`
    template). The loader sets the extension list explicitly.
-4. **Markdown in Fluent values.** Each message value is converted through
-   the same `md::to_html` at localize time (`src/l10n.rs`, where
-   `LocalizedText` stores translation strings). FTL's escaping rules stand
-   unchanged (`{"{"}` for braces, `&lt;` for literal `<`); Markdown's own
-   escaping (`\*`) covers its punctuation.
+4. **Markdown in Fluent values, per bundle.** Each message value converts
+   through the same `md::to_html` at localize time (`src/l10n.rs`, where
+   `LocalizedText` stores translation strings) — **opt-in per locale
+   bundle**: the `*.ftl.ron` manifest gains `markdown: bool` (default
+   off). Blanket conversion would mangle existing HTML-authored bundles
+   (e.g. quickstart's `+ Add a coin` — a `+` at line start is a Markdown
+   list marker). FTL's escaping rules stand unchanged (`{"{"}` for braces,
+   `&lt;` for literal `<`); Markdown's own escaping (`\*`) covers its
+   punctuation.
 
 Raw HTML passes through everywhere (CommonMark inline HTML → the DOM as
 usual): a `.md` file may embed real UI — `data-on-click` buttons,

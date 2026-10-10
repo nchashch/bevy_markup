@@ -3,7 +3,7 @@
 //! Write UI as HTML templates; get Bevy UI nodes.
 //!
 //! ```text
-//! .html (Tera template) ──render(TemplateContext)──▶ HTML ──tl──▶ DOM
+//! .html/.md (Tera template) ──render(TemplateContext)──▶ HTML ──tl──▶ DOM
 //!   ──Fluent (data-l10n-id, ActiveLocale)──▶ localized DOM
 //!   ──CSS (DefaultStylesheet / HtmlStylesheet, FontFamilies)──▶ Bevy UI nodes
 //! ```
@@ -96,6 +96,14 @@
 //!   template's file, and an included file's `{% component %}`s are usable
 //!   in the whole template (`{{ <ui.button … /> }}`) — include a component
 //!   library to share widgets.
+//! - **Markdown** ([`template`](mod@template)): a `.md`/`.markdown` template is
+//!   the same Tera machinery, and its rendered output converts to HTML
+//!   (CommonMark + tables, strikethrough, task lists, footnotes) before
+//!   parsing — headings, emphasis, lists and `![images](…)` come out as the
+//!   ordinary blocks and runs. Raw HTML passes through, so a Markdown page
+//!   can embed real UI (`data-on-click` buttons, containers). Fluent
+//!   bundles opt their message values into Markdown with the manifest's
+//!   `markdown: bool` (default off).
 //! - **Interaction signals** ([`signals`]): elements declare hooks with
 //!   `data-on-click`/`-auxclick`/`-press`/`-release`/`-enter`/`-leave`
 //!   naming an app-side signal (`click` is the primary button, `auxclick`
@@ -172,6 +180,7 @@ pub mod focus;
 pub mod fonts;
 pub mod html;
 pub mod l10n;
+pub(crate) mod md;
 pub mod nine_slice;
 mod rebuild;
 pub mod signals;
@@ -206,7 +215,7 @@ pub mod prelude {
     pub use crate::{BevyMarkupPlugin, HtmlUiSystems};
 }
 
-/// Adds the asset loaders (`.html`, `.css`, `*.slice.ron`, `*.ftl.ron`), the
+/// Adds the asset loaders (`.html`/`.md`, `.css`, `*.slice.ron`, `*.ftl.ron`), the
 /// [`DefaultStylesheet`](style::DefaultStylesheet),
 /// [`ActiveLocale`](l10n::ActiveLocale) and
 /// [`FontFamilies`](fonts::FontFamilies) resources, and the systems that turn
@@ -233,6 +242,7 @@ impl Plugin for BevyMarkupPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<template::HtmlTemplate>()
             .init_asset_loader::<template::HtmlTemplateLoader>()
+            .init_asset_loader::<template::MarkdownTemplateLoader>()
             .init_asset::<style::Stylesheet>()
             .init_asset_loader::<style::StylesheetLoader>()
             .init_asset::<nine_slice::NineSlice>()

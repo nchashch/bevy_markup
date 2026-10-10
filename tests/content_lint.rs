@@ -316,6 +316,13 @@ const PAGES: &[Page] = &[
         unlocalized: None,
     },
     Page {
+        template: "inline/notes.md",
+        contexts: inline_contexts,
+        stylesheets: &["inline/style.css"],
+        locales: "inline/locales",
+        unlocalized: None,
+    },
+    Page {
         template: "grid/grid.html",
         contexts: grid_contexts,
         stylesheets: &["grid/style.css"],
@@ -524,7 +531,10 @@ fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
 #[test]
 fn every_template_is_listed() {
     let assets = assets();
-    let on_disk: BTreeSet<String> = content_files(&assets, "html").into_iter().collect();
+    let mut on_disk: BTreeSet<String> = ["html", "htm", "md", "markdown"]
+        .into_iter()
+        .flat_map(|ext| content_files(&assets, ext))
+        .collect();
     // Component libraries are rendered as part of the pages including them.
     let libraries: BTreeSet<String> = PAGES
         .iter()

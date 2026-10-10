@@ -59,6 +59,10 @@ fluent = "0.16.0"
 unic-langid = { version = "0.9", features = ["serde"] }
 # CSS. `into_owned`: parsed StyleSheet<'i> → StyleSheet<'static> for storing as an asset.
 lightningcss = { version = "1.0.0-alpha.72", features = ["into_owned"] }
+# Markdown as a source syntax (ADR 0014): `.md` templates and Markdown in
+# Fluent values convert to the HTML the pipeline already parses. `html`
+# renders to HTML; no CLI parser (`getopts`).
+pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
 # Only for the `fuzzing` harness: `Image::new_fill` needs wgpu texture types,
 # which bevy_image does not re-export.
 wgpu-types = { version = "30.0.1", optional = true }

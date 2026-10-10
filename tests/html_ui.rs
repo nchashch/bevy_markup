@@ -2152,6 +2152,8 @@ fn loaders_are_found_by_extension() {
             ("a.css", "p { color: red }"),
             ("b.html", "<p>b</p>"),
             ("c.htm", "<p>c</p>"),
+            ("e.md", "# md\n"),
+            ("f.markdown", "md\n"),
             (
                 "d.slice.ron",
                 r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1))"#,
@@ -2162,6 +2164,8 @@ fn loaders_are_found_by_extension() {
         ("a.css", TypeId::of::<Stylesheet>()),
         ("b.html", TypeId::of::<HtmlTemplate>()),
         ("c.htm", TypeId::of::<HtmlTemplate>()),
+        ("e.md", TypeId::of::<HtmlTemplate>()),
+        ("f.markdown", TypeId::of::<HtmlTemplate>()),
         (
             "d.slice.ron",
             TypeId::of::<bevy_markup::nine_slice::NineSlice>(),
@@ -2196,10 +2200,129 @@ fn loaders_are_found_by_extension() {
     }
 }
 
+/// Markdown templates (ADR 0014): a `.md` page renders through Tera +
+/// pulldown-cmark into the same DOM model — headings, emphasis styled by
+/// CSS, lists, an `<img>`, and raw HTML with `data-on-click` passing
+/// through. Autoescaping is forced for `.md`: a context value's markup
+/// arrives as *text*, not tags.
+#[test]
+fn markdown_templates_render_and_escape() {
+    let mut ui = TestUi::new(
+        "markdown",
+        &[
+            (
+                "page.md",
+                "# {{ title }}\n\nHello *world* and {{ value }}.\n\n- first\n- second\n\n![seal](frame.png)\n\n<div data-on-click=\"buy\">Buy</div>\n",
+            ),
+            (
+                "style.css",
+                "h1 { color: #ff0000; font-size: 30px }\n\
+                 em { color: #00ff00 }\n\
+                 li { color: #ffffff }",
+            ),
+        ],
+    );
+    let mut ui = ui
+        .stylesheet("style.css")
+        .spawn(
+            "page.md",
+            TemplateContext::new()
+                .with("title", "Journal")
+                .with("value", "<b>not tags</b>"),
+            Node::default(),
+        );
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  h1
+    "Journal" default 30px #ff0000
+  p
+    "Hello " default 16px #ffffff
+    "world" default 16px #00ff00
+    " and <b>not tags</b>." default 16px #ffffff
+  ul
+    li margin=0,0,0,12
+      "• " default 16px #ffffff
+      "first" default 16px #ffffff
+    li margin=0,0,0,12
+      "• " default 16px #ffffff
+      "second" default 16px #ffffff
+  p
+    "frame.png" img 32x24
+  div
+    -
+      "Buy" default 16px #ffffff
+"#,
+    );
+}
+
+/// Markdown in Fluent values (ADR 0014): a bundle whose manifest sets
+/// `markdown: true` converts its values (`**bold**` → `<strong>`); without
+/// the flag, values stay HTML as written.
+#[test]
+fn markdown_bundles_opt_in_per_manifest() {
+    let mut ui = TestUi::new(
+        "markdown-l10n",
+        &[
+            ("page.html", "<p data-l10n-id=\"m\">fallback</p>"),
+            (
+                "md.ftl.ron",
+                "(locale: \"en-US\", resources: [\"m.ftl\"], markdown: true)",
+            ),
+            (
+                "plain.ftl.ron",
+                "(locale: \"en-US\", resources: [\"m.ftl\"])",
+            ),
+            ("m.ftl", "m = struck **hard** with *flair*.\n"),
+            (
+                "style.css",
+                "html { color: #ffffff; font-family: serif }\n\
+                 strong { font-weight: bold }\n\
+                 em { font-style: italic }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .locale("md.ftl.ron")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.world_mut().resource_mut::<FontFamilies>().insert(
+        "System Serif",
+        FontFaces::new(FontSource::serif()),
+    );
+    ui.world_mut()
+        .resource_mut::<FontFamilies>()
+        .set_generic(GenericFamily::Serif, "System Serif");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "struck " Serif 16px #ffffff
+    "hard" Serif 16px #ffffff bold
+    " with " Serif 16px #ffffff
+    "flair" Serif 16px #ffffff italic
+    "." Serif 16px #ffffff
+"#,
+    );
+    // The same resource without the manifest flag: the value is HTML as
+    // written (the `**` are text).
+    let plain = ui.load::<LocaleBundle>("plain.ftl.ron");
+    ui.world_mut().resource_mut::<ActiveLocale>().0 = Some(plain);
+    ui.settle_quiet();
+    ui.update(10);
+    ui.assert_dump(
+        r#"
+html-ui
+  p
+    "struck **hard** with *flair*." Serif 16px #ffffff
+"#,
+    );
+}
+
 /// A loaded template is named after its asset path (Tera picks HTML
 /// autoescaping from the `.html` name).
 #[test]
 fn template_is_named_after_its_asset_path() {
+
     let mut ui = TestUi::new("template-name", &[("ui/page.html", "<p>x</p>")]);
     let handle = ui.load::<HtmlTemplate>("ui/page.html");
     for _ in 0..3000 {

@@ -132,6 +132,10 @@ bevy_markup implements a useful subset of the web, not all of it:
 
 - **HTML:** headings, paragraphs, lists, `pre`, inline elements, and
   containers as nested flex nodes.
+- **Markdown:** `.md`/`.markdown` templates and `markdown: true` Fluent
+  bundles convert to the same HTML (CommonMark + tables, strikethrough,
+  task lists, footnotes) — Markdown for prose documents, HTML for
+  interactive UI, mixed freely (raw HTML passes through).
 - **CSS:** type, class, id and compound selectors (`p.note`, `h1#title`),
   `:hover`/`:active`/`:focus`/`:focus-visible`; colors and fonts (inherited); flex and grid layout
   (`display`, `flex-direction`, `justify-content`, `align-items`, `gap`,

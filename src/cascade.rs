@@ -2285,6 +2285,16 @@ mod tests {
         assert_eq!(declared("font-weight: 501").bold, Some(true));
     }
 
+    /// A `strong` type selector matches the element by tag: translation
+    /// markup (fluent) and Markdown (`**x**` → `<strong>`) rely on it.
+    #[test]
+    fn strong_type_selector_matches() {
+        let sheet = owned_sheet("strong { font-weight: bold }");
+        let style =
+            HtmlStyles::from_sheet(&sheet).get(&element("strong", None, &[]), Pseudo::default());
+        assert_eq!(style.bold, Some(true));
+    }
+
     /// Each CSS generic family keyword maps to its own `GenericFamily`.
     #[test]
     fn generic_family_keywords_map_one_to_one() {

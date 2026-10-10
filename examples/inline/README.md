@@ -38,6 +38,10 @@ everything, wherever the window goes.
 - **Inline images** — `<img src="…" width="20">` flows an image into the
   text like a word: the quest seals. `src` resolves relative to the template
   (like `{% include %}`), the aspect ratio is kept.
+- **Markdown** — the **Loose notes** panel is a Markdown template
+  (`notes.md`: Tera + pulldown-cmark → HTML), and the bundles set
+  `markdown: true` so message values are Markdown too: the notes' list and
+  emphasis are written as `- list` / `**bold**` in the `.ftl`.
 - **Elliptical corners** — `border-radius: 28px … / 14px …` (the CSS `h / v`
   syntax) on the quest panel; the ribbon rounds one corner elliptically into
   the screen edge.
@@ -58,6 +62,7 @@ module is the `dev-tools` harness.
 |---|---|
 | `main.rs` | The app: fonts, stylesheet, locales, the `HtmlUi`, input and signal handling |
 | `../assets/inline/page.html` | The template |
+| `../assets/inline/notes.md` | The Markdown side panel |
 | `../assets/inline/style.css` | The stylesheet (the features are commented) |
 | `../assets/inline/locales/{en-US,de}/` | Fluent bundles |
 | `../assets/ui/frame.png` | 9-slice frame of the page, and the seals' image |

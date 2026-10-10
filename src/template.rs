@@ -25,9 +25,13 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::l10n::LocalizedText;
+use crate::md;
 
-/// A compiled Tera template loaded from an `.html`/`.htm` file. Use it via
-/// [`HtmlUi`](crate::html::HtmlUi).
+/// A compiled Tera template loaded from an `.html`/`.htm` file — or a
+/// Markdown `.md`/`.markdown` file ([ADR 0014]), which renders to HTML
+/// before parsing. Use it via [`HtmlUi`](crate::html::HtmlUi).
+///
+/// [ADR 0014]: docs/agents/adr/0014-markdown-via-pulldown-cmark.md
 #[derive(Asset, TypePath)]
 pub struct HtmlTemplate {
     pub(crate) tera: tera::Tera,
@@ -41,7 +45,15 @@ impl HtmlTemplate {
         &self,
         context: &tera::Context,
     ) -> Result<HtmlDocument, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(HtmlDocument::parse(self.render_source(context)?)?)
+        let source = self.render_source(context)?;
+        // Markdown renders to the HTML the pipeline parses; HTML templates
+        // pass through untouched.
+        let source = if md::is_markdown(&self.name) {
+            md::to_html(&source)
+        } else {
+            source
+        };
+        Ok(HtmlDocument::parse(source)?)
     }
 
     /// Renders with `context` to HTML text, without parsing it.
@@ -237,43 +249,80 @@ impl AssetLoader for HtmlTemplateLoader {
     async fn load(
         &self,
         reader: &mut dyn Reader,
-        _settings: &(),
+        settings: &(),
         load_context: &mut LoadContext<'_>,
     ) -> Result<HtmlTemplate, BevyError> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
-        let source = String::from_utf8(bytes)?;
-
-        // The template and everything it includes, extends or imports, by
-        // resolved asset path: one Tera instance renders them together.
-        // Reading them through the load context makes them dependencies:
-        // editing one reloads every template that uses it.
-        let root = load_context.path().clone_owned();
-        let name = root.to_string();
-        let mut templates: Vec<(String, String)> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut pending = vec![(root, source)];
-        while let Some((path, source)) = pending.pop() {
-            if !seen.insert(path.to_string()) {
-                continue;
-            }
-            let (source, references) = resolve_references(&path, &source)?;
-            for reference in references {
-                if !seen.contains(&reference.to_string()) {
-                    let bytes = load_context.read_asset_bytes(reference.clone()).await?;
-                    pending.push((reference, String::from_utf8(bytes)?));
-                }
-            }
-            templates.push((path.to_string(), source));
-        }
-        let mut tera = tera::Tera::new();
-        tera.add_raw_templates(templates)?;
-        Ok(HtmlTemplate { tera, name })
+        load_template(reader, settings, load_context).await
     }
 
     fn extensions(&self) -> &[&str] {
         &["html", "htm"]
     }
+}
+
+/// Loads Markdown templates: the same Tera machinery (includes, extends,
+/// one Tera set per template); [`HtmlTemplate::render`] converts the output
+/// to HTML.
+#[derive(Default, TypePath)]
+pub(crate) struct MarkdownTemplateLoader;
+
+impl AssetLoader for MarkdownTemplateLoader {
+    type Asset = HtmlTemplate;
+    type Settings = ();
+    type Error = BevyError;
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        settings: &(),
+        load_context: &mut LoadContext<'_>,
+    ) -> Result<HtmlTemplate, BevyError> {
+        load_template(reader, settings, load_context).await
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["md", "markdown"]
+    }
+}
+
+/// The shared loader body: the template and everything it includes, extends
+/// or imports, by resolved asset path — one Tera instance renders them
+/// together. Reading them through the load context makes them dependencies:
+/// editing one reloads every template that uses it. Autoescaping is forced
+/// on Markdown too (Tera's default list is `.html`/`.htm`/`.xml` only):
+/// without it, `{{ value }}` in a `.md` template would inject raw text into
+/// the HTML.
+async fn load_template(
+    reader: &mut dyn Reader,
+    _settings: &(),
+    load_context: &mut LoadContext<'_>,
+) -> Result<HtmlTemplate, BevyError> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).await?;
+    let source = String::from_utf8(bytes)?;
+
+    let root = load_context.path().clone_owned();
+    let name = root.to_string();
+    let mut templates: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![(root, source)];
+    while let Some((path, source)) = pending.pop() {
+        if !seen.insert(path.to_string()) {
+            continue;
+        }
+        let (source, references) = resolve_references(&path, &source)?;
+        for reference in references {
+            if !seen.contains(&reference.to_string()) {
+                let bytes = load_context.read_asset_bytes(reference.clone()).await?;
+                pending.push((reference, String::from_utf8(bytes)?));
+            }
+        }
+        templates.push((path.to_string(), source));
+    }
+    let mut tera = tera::Tera::new();
+    tera.autoescape_on([".html", ".htm", ".xml", ".md", ".markdown"]);
+    tera.add_raw_templates(templates)?;
+    Ok(HtmlTemplate { tera, name })
 }
 
 #[cfg(test)]

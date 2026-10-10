@@ -78,6 +78,23 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
             ..default()
         },
     ));
+
+    // The journal's loose notes: a Markdown template (`inline/notes.md`) —
+    // Tera + Markdown + the same `markdown: true` bundle. The panel has no
+    // `html` CSS rule, so the app's placement survives every restyle.
+    commands.spawn((
+        HtmlUi::new(asset_server.load("inline/notes.md")),
+        TemplateContext::new(),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(24.0),
+            top: Val::Px(24.0),
+            width: Val::Px(320.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            ..default()
+        },
+    ));
 }
 
 /// Keyboard and gamepad navigation, as in the quickstart example.

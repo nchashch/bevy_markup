@@ -6,6 +6,12 @@
 //! runtime (themes); the UI isn't built while its stylesheet is still loading,
 //! so it never flashes unstyled.
 //!
+//! Markdown (ADR 0014) is a *source syntax*, styled by the same CSS: a
+//! `.md`/`.markdown` template or a `markdown: true` Fluent bundle converts
+//! to HTML first (`# …` → `h1`, `*x*` → `em`, `**x**` → `strong`, `- x` →
+//! `li`, `![x](p)` → `img`, tables → `table`/`tr`/`td`), so rules target the
+//! generated tags exactly like hand-written HTML.
+//!
 //! Supported CSS (parsed with lightningcss; a syntax error fails the load):
 //! - selectors: compound selectors — a type (or `*`) plus any `.class` /
 //!   `#id` parts: `p`, `.note`, `#title`, `p.note`, `.a.b`, `h1#x.big` — incl.

@@ -55,6 +55,27 @@
 //! edited `.ftl` file (a manual `AssetServer::reload` must name the bundle).
 //! A resource with syntax errors still loads — Fluent keeps its valid
 //! messages — with the errors logged.
+//!
+//! # Markdown values
+//!
+//! The manifest's `markdown: bool` opts the bundle's message values into
+//! Markdown (ADR 0014): the formatted value converts to HTML
+//! (`md::to_html`, CommonMark + tables/strikethrough/task lists/footnotes)
+//! before the walk parses it as markup. Off by default — HTML-authored
+//! bundles must not flip it (Markdown would read their literal `+`/`-`/`#`
+//! line starts as syntax). Note the interplay: string args are HTML-escaped
+//! (they can't inject markup) but their characters are still Markdown, so a
+//! value like `{{ name }} is here` would emphasize a name that starts with
+//! `*`. FTL continuation lines are indented (FTL syntax), so a Markdown
+//! list starts at two spaces.
+//!
+//! ```ron
+//! (
+//!     locale: "en-US",
+//!     resources: ["journal.ftl"],
+//!     markdown: true,
+//! )
+//! ```
 
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::platform::collections::HashMap;
@@ -65,13 +86,16 @@ use std::{borrow::Borrow, ops::Deref, sync::Arc};
 use unic_langid::LanguageIdentifier;
 
 use crate::html::RenderedHtml;
+use crate::md;
 use crate::template::decode_entities;
 
 /// The Fluent resources of one locale, loaded from a `*.ftl.ron` manifest
 /// (see the [locale bundles](self#locale-bundles) section). Use it via
-/// [`ActiveLocale`].
+/// [`ActiveLocale`]. The manifest's `markdown: bool` (default off) opts the
+/// bundle's message values into Markdown: the formatted value converts to
+/// HTML (`md::to_html`) before the walk parses it as markup.
 #[derive(Asset, Clone, TypePath)]
-pub struct LocaleBundle(Arc<ConcurrentBundle>);
+pub struct LocaleBundle(Arc<ConcurrentBundle>, pub(crate) bool);
 
 /// A [`FluentBundle`] over shared resources: an asset must be `Send + Sync`,
 /// so the concurrent memoizer.
@@ -90,6 +114,9 @@ impl Deref for LocaleBundle {
 struct LocaleBundleDescriptor {
     locale: LanguageIdentifier,
     resources: Vec<String>,
+    /// Message values are Markdown (ADR 0014). Default: plain HTML markup.
+    #[serde(default)]
+    markdown: bool,
 }
 
 #[derive(Default, TypePath)]
@@ -136,7 +163,7 @@ impl AssetLoader for LocaleBundleLoader {
                 }
             }
         }
-        Ok(LocaleBundle(Arc::new(bundle)))
+        Ok(LocaleBundle(Arc::new(bundle), manifest.markdown))
     }
 
     fn extensions(&self) -> &[&str] {
@@ -204,14 +231,16 @@ pub(crate) fn localize(
         let RenderedHtml::Ready(document) = &*rendered else {
             continue;
         };
-        localized.0 = resolve_all(document.dom(), &**bundle);
+        localized.0 = resolve_all(document.dom(), &**bundle, bundle.1);
     }
 }
 
-/// Resolves every `data-l10n-id` element in `dom` against `bundle`.
+/// Resolves every `data-l10n-id` element in `dom` against `bundle`. With
+/// `markdown`, each formatted value converts to HTML first (`md::to_html`).
 fn resolve_all<R, M>(
     dom: &tl::VDom,
     bundle: &FluentBundle<R, M>,
+    markdown: bool,
 ) -> HashMap<tl::NodeHandle, Result<String, String>>
 where
     R: Borrow<FluentResource>,
@@ -230,7 +259,15 @@ where
                 let args = attributes.get("data-l10n-args").flatten();
                 let id = decode_entities(&id.as_utf8_str());
                 let args = args.map(|args| decode_entities(&args.as_utf8_str()));
-                out.insert(handle, translate(bundle, &id, args.as_deref()));
+                let text = translate(bundle, &id, args.as_deref());
+                out.insert(
+                    handle,
+                    if markdown {
+                        text.map(|text| md::to_html(&text))
+                    } else {
+                        text
+                    },
+                );
             }
             // Translated elements replace their children, so only descend
             // into untranslated ones.

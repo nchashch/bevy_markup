@@ -3,4 +3,6 @@
     resources: [
         "journal.ftl",
     ],
+    // Message values are Markdown (the journal's notes are prose).
+    markdown: true,
 )
