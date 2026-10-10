@@ -9,9 +9,12 @@
 
 mod common;
 
+#[cfg(feature = "text-input")]
 use bevy::ecs::message::Messages;
 use bevy::input::ButtonState;
+#[cfg(feature = "text-input")]
 use bevy::input::keyboard::Key;
+#[cfg(feature = "text-input")]
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
 use bevy::math::Vec2;
@@ -930,6 +933,7 @@ fn form_submit_collects_named_inputs() {
 }
 
 /// The harness's primary window entity (the keyboard event's target).
+#[cfg(feature = "text-input")]
 fn window_of(ui: &mut TestUi) -> Entity {
     use bevy::window::PrimaryWindow;
     ui.world_mut()
@@ -971,7 +975,7 @@ fn translated_links_hover_like_template_links() {
         let mut elements = world.query::<(Entity, &HtmlElement, Option<&ElementSignals>)>();
         let links: Vec<Entity> = elements
             .iter(world)
-            .filter(|(entity, element, signals)| {
+            .filter(|(_, element, signals)| {
                 element.tag == "a"
                     && signals.is_some_and(|signals| signals.0.iter().any(|b| b.name == "open"))
             })
@@ -984,10 +988,7 @@ fn translated_links_hover_like_template_links() {
     // translated link ends the intro's line, the template link is the
     // whole one-line paragraph). The hovered span must light up and
     // recolor.
-    for (link, block) in [
-        (translated_link, translated_link),
-        (template_link, template_link),
-    ] {
+    for link in [translated_link, template_link] {
         let block = {
             let world = ui.world_mut();
             let mut current = link;
