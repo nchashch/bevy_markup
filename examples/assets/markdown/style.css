@@ -88,7 +88,7 @@ blockquote p {
 
 .action {
   color: #f0b429;
-  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
   border-width: 12px;
   padding: 4px 16px;
 }

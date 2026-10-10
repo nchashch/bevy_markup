@@ -2,7 +2,7 @@ html {
   color: #e6e6e6;
   font-family: serif;
   font-size: 24px;
-  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-image: url("../shared/frame.png") 16 fill stretch;
   border-width: 16px;
   padding: 20px 32px;
 }
@@ -44,7 +44,7 @@ a:focus-visible {
 /* The language button, styled like the other examples' buttons. */
 p.action {
   color: #f0b429;
-  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
   border-width: 12px;
   padding: 4px 16px;
 }
@@ -56,7 +56,7 @@ p.action:focus-visible {
 
 p.status {
   color: #b8ddb8;
-  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
   border-width: 12px;
   padding: 6px 16px;
 }

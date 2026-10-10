@@ -13,7 +13,7 @@
      The seals are the cat, sized by their CSS `width`. #}
   {% for quest in quests %}
   <p class="quest{% if quest %} done{% endif %}" data-on-click="toggle-quest-{{ loop.index0 }}">
-    <img class="seal" src="../ui/cat.png">
+    <img class="seal" src="../shared/cat.png">
     <span data-l10n-id="journal-quest-{{ loop.index0 }}">Quest {{ loop.index0 }}</span>
   </p>
   {% endfor %}

@@ -103,7 +103,7 @@ kbd {
   grid-template-rows: 1fr auto;
   justify-items: center;
   align-items: center;
-  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
   border-width: 10px;
   padding: 4px 8px;
 }
@@ -137,7 +137,7 @@ kbd {
   display: grid;
   grid-template-rows: 1fr auto auto 1fr;
   justify-items: center;
-  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-image: url("../shared/frame.png") 16 fill stretch;
   border-width: 12px;
 }
 .figure-name {

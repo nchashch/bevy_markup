@@ -54,5 +54,5 @@ action.
 | `../assets/world/plate.html`, `hud.html` | Templates |
 | `../assets/world/style.css` | The stylesheet |
 | `../assets/world/locales/{en-US,de}/` | Fluent bundles |
-| `../assets/ui/frame.png` | The hostile plates' 9-slice frame |
+| `../assets/shared/frame.png` | The hostile plates' 9-slice frame |
 | `../shared/input.rs` | Keyboard / gamepad focus navigation shared by the examples |

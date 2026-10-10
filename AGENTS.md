@@ -297,8 +297,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   inputs/          profile.html, style.css (input + focus ring), locales/{en-US,de}
   links/           report.html, style.css (a:hover/:focus-visible), locales/{en-US,de}
   forms/           signup.html, style.css, locales/{en-US,de}
-  ui/frame.png     256x256 frame; frame_transparent.png (clear center; the
-                   parchment/terminal panels frame themselves with it)
+  shared/          images reused across examples: frame.png (256x256
+                   9-slice frame), frame_transparent.png (clear center; the
+                   parchment/terminal panels frame themselves with it),
+                   cat.png (the examples' seal/cat icon)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;
                    each carries the identical `Demo chrome` block styling the shell's panels/buttons/viewports
   ui/content/      test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent; ends

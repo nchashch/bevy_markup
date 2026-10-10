@@ -2,7 +2,7 @@ html {
   color: #e6e6e6;
   font-family: serif;
   font-size: 24px;
-  border-image: url("../ui/frame.png") 16 fill stretch;
+  border-image: url("../shared/frame.png") 16 fill stretch;
   border-width: 16px;
   padding: 20px 32px;
 }
@@ -83,7 +83,7 @@ button:focus-visible {
 }
 
 .receipt {
-  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
   border-width: 12px;
   padding: 12px 16px;
   background-color: #1a1a1a;

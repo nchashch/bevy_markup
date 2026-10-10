@@ -60,4 +60,4 @@ button. Submitting replaces the form with a receipt showing the values, and
 | `../assets/forms/signup.html` | The template |
 | `../assets/forms/style.css` | The stylesheet |
 | `../assets/forms/locales/{en-US,de}/` | Fluent bundles |
-| `../assets/ui/frame.png`, `frame_transparent.png` | 9-slice frame images |
+| `../assets/shared/frame.png`, `frame_transparent.png` | 9-slice frame images |

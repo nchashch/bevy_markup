@@ -65,7 +65,7 @@ module is the `dev-tools` harness.
 | `../assets/inline/notes.md` | The Markdown side panel |
 | `../assets/inline/style.css` | The stylesheet (the features are commented) |
 | `../assets/inline/locales/{en-US,de}/` | Fluent bundles |
-| `../assets/ui/frame.png` | 9-slice frame of the page, and the seals' image |
+| `../assets/shared/frame.png` | 9-slice frame of the page, and the seals' image |
 
 With the `dev-tools` feature, the example also serves the localhost
 BRP/MCP tool surface (`bevy_mcp_harness`), so an agent can playtest it —

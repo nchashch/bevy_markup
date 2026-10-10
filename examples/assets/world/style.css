@@ -42,7 +42,7 @@ i {
 /* Hostile: the red brushed 9-slice frame (corners at image size; the black
  * center is drawn too). */
 .card.hostile {
-  border-image: url("../ui/frame.png") 16 stretch;
+  border-image: url("../shared/frame.png") 16 stretch;
   border-width: 12px;
   padding: 0px 6px 2px 6px;
 }

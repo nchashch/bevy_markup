@@ -51,7 +51,7 @@ use `examples/shared/input.rs`), so it can be read top to bottom.
 | `../assets/quickstart/hello.html` | The template |
 | `../assets/quickstart/style.css` | The stylesheet |
 | `../assets/quickstart/locales/{en-US,de}/` | Fluent bundles |
-| `../assets/ui/frame.png`, `frame_transparent.png` | 9-slice frame images |
+| `../assets/shared/frame.png`, `frame_transparent.png` | 9-slice frame images |
 
 The examples share one asset root (`examples/assets/`, set with
 `AssetPlugin::file_path`), so each example's templates live in its own

@@ -55,4 +55,4 @@ two reset buttons.
 | `../assets/inputs/profile.html` | The template |
 | `../assets/inputs/style.css` | The stylesheet |
 | `../assets/inputs/locales/{en-US,de}/` | Fluent bundles |
-| `../assets/ui/frame.png`, `frame_transparent.png` | 9-slice frame images |
+| `../assets/shared/frame.png`, `frame_transparent.png` | 9-slice frame images |

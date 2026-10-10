@@ -9,7 +9,7 @@
 
   <article data-l10n-id="notes-body">fallback</article>
 
-  ![cat](../ui/cat.png)
+  ![cat](../shared/cat.png)
 
   <div class="action" data-on-click="switch-language" data-l10n-id="journal-language">Language</div>
 </div>

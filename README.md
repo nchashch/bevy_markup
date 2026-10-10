@@ -42,7 +42,7 @@ html {
   color: #e6e6e6;
   font-family: serif;
   font-size: 24px;
-  border-image: url("../ui/frame.png") 16 fill stretch; /* a 9-slice frame */
+  border-image: url("../shared/frame.png") 16 fill stretch; /* a 9-slice frame */
   border-width: 16px;
   padding: 20px 32px;
 }

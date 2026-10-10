@@ -114,7 +114,7 @@ em {
 }
 
 .panel {
-  border-image: url("../frame.png") 16 fill / 16px stretch;
+  border-image: url("../../shared/frame.png") 16 fill / 16px stretch;
   border-width: 16px;
   padding: 4px 12px;
   row-gap: 10px;
