@@ -15,7 +15,8 @@ Bevy 0.20 library: HTML templates (Tera) + Fluent + CSS → Bevy UI, with
 
 The library depends on `bevy` with `default-features = false` and only the
 features its code uses (`ui_api`, `default_font`, `bevy_log`, `bevy_picking`
-for interaction signals and `:hover`/`:active`; see `Cargo.toml`). Rendering,
+for interaction signals and `:hover`/`:active`, `bevy_ui_widgets` behind the
+`text-input` cargo feature; see `Cargo.toml`). Rendering,
 windowing, picking backends, widgets and image formats are the
 app's choice. Examples get full Bevy via `[dev-dependencies]`, whose features
 never reach library users. A missing feature shows up in `cargo check --lib`.
@@ -37,7 +38,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
 | `ActiveLocale(Option<Handle<LocaleBundle>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
-| `FontFamilies` / `FontFaces` / `GenericFamily` | Resource + types | CSS `font-family` name → faces: font files or system families (any `FontSource`; for system families bold/italic are requested via `TextFont` weight/style), + generic keyword mapping |
+| `FontFamilies` / `FontFaces` / `GenericFamily` | Resource + types | CSS `font-family` name → faces: font files or system families (any `FontSource`; for system families bold/italic are requested via `TextFont` weight/style), + generic keyword mapping. A CSS list resolves to every registered family in order and composes Bevy 0.20's per-glyph fallback list (ADR 0015) |
 | `HtmlTemplate`, `Stylesheet`, `NineSlice`, `LocaleBundle` | Assets | `.html`/`.htm`/`.md`/`.markdown`, `.css`, `*.slice.ron`, `*.ftl.ron` |
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `HtmlCustomElementsExt::define_html_element(name, system)`, `ElementConnected { entity, root, name, dataset }` | App ext, system input | `is="<name>"` customized built-ins: the system (`In<ElementConnected>`, `data-*` attributes as `dataset`) runs on every spawn of the element, in document order, before `HtmlUiBuilt`; not on restyles |
@@ -428,8 +429,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   other pseudo-classes skipped at `debug`), matched per element (`HtmlElement`
   tag/id/classes + `PseudoState`, cached per combination) with CSS
   precedence: `!important`, then specificity (ids,
-  classes, type), then source order. Inherited `color`, `font-family` (first name registered in
-  `FontFamilies`, generics via `set_generic`; no registered name → Bevy's
+  classes, type), then source order. Inherited `color`, `font-family` (the
+  whole list chains into Bevy 0.20's per-glyph fallback list over registered
+  families, generics via `set_generic`; nothing registered → Bevy's
   default font, as browsers do), `font-size` (`px`, `em`/`%`, `rem`, keywords
   with medium = 16px, `smaller`/`larger`), `font-weight` (bold above 500, CSS
   font matching), `font-style`, `pointer-events` (`none`/`auto`; arrives as
@@ -1177,7 +1179,11 @@ Known limits (each skipped/ignored value is logged at `debug`):
   entity, so `HtmlElements` can't find it (only blocks/containers), and
   `display: inline-block` with widget children isn't supported (Bevy
   reserves the space but doesn't place content in it).
-- **Interactivity:** declarative only: `data-on-<trigger>`/`data-with` emit
+- **Interactivity:** text input behind the `text-input` feature
+  (`<input type="text" value maxlength>` → Bevy 0.20's `EditableText` +
+  `TextInput`; the value is app state — read the entity's `EditableText`, a
+  re-render sets the text only when the attribute changes). Declaratively
+  (always): `data-on-<trigger>`/`data-with` emit
   [`ElementSignal`] messages (`signals.rs`; click/auxclick/press/release via
   picking observers — one per event type per element, mapping the pointer
   button to the trigger and reporting it in `SignalSource::Pointer` — enter/leave via hover tracking that survives rebuilds — the
@@ -1304,6 +1310,14 @@ Next steps (roughly in order of value):
   --all-targets`, `cargo doc --no-deps`. `cargo test` must pass: cascade unit
   tests, the headless test vectors, and the `no_run` doc examples (see
   Testing). Library changes that alter the mapping need a vector.
+- The test harness shuffles schedule order (`ScheduleBuildSettings::
+  shuffle_seed`, via the dev-dependency `bevy/debug` feature): every
+  `cargo test` run gets a fresh seed (printed to the failing test's output),
+  so an ordering that only holds by luck — 0.20 made the `UiSystems` sets
+  weakly ordered (`chain_weak`) — fails in CI instead of in the wild. If a
+  shuffle-dependent failure appears, pin the ordering explicitly (`.before`
+  / `.after` in `src/lib.rs`'s `BevyMarkupPlugin` system wiring) rather than
+  trusting the default order.
 - Visual changes: run an example and capture an in-app screenshot. The
   dev-tools feature serves every example over localhost BRP + MCP
   (`bevy_mcp_harness`, see `examples/shared/harness.rs`): run

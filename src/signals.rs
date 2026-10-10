@@ -606,6 +606,12 @@ pub(crate) fn update_pseudo_states(
             active: active.contains(&entity),
             ..current
         };
+        // An all-default state on an element without the component is the
+        // same as no component (CSS matching treats both as unhovered):
+        // inserting it would only fire a spurious change on first build.
+        if desired == PseudoState::default() && state.is_none() {
+            continue;
+        }
         if state.copied() != Some(desired) {
             // `try_`: an app system may despawn the UI this frame, its
             // commands applied before these (bug_0021).

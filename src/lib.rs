@@ -256,9 +256,20 @@ impl Plugin for BevyMarkupPlugin {
             // minimal apps (no `TextPlugin`) have it too.
             .init_resource::<RemSize>()
             .init_resource::<fonts::FontFamilies>()
-            .init_resource::<custom_elements::CustomElements>()
-            .add_message::<signals::ElementSignal>()
-            .add_systems(
+            .init_resource::<custom_elements::CustomElements>();
+            #[cfg(feature = "text-input")]
+            {
+                if !app.is_plugin_added::<bevy::ui_widgets::TextInputPlugin>() {
+                    app.add_plugins(bevy::ui_widgets::TextInputPlugin);
+                }
+                // The widget's systems read these; a real app has them via
+                // `WindowPlugin`/`UiScale`, but headless apps don't.
+                app.add_message::<bevy::window::Ime>()
+                    .add_message::<bevy::picking::events::PointerRelease>()
+                    .init_resource::<bevy::ui::UiScale>();
+            }
+            app.add_message::<signals::ElementSignal>()
+                .add_systems(
                 Update,
                 (
                     signals::hover_signals,

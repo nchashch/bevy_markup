@@ -31,5 +31,7 @@ as `[INFERENCE]`.
 | [0012](./0012-template-composition-and-examples.md) | Template composition: one Tera set per template, Tera 2 components as the widget library | Accepted |
 | [0013](./0013-own-the-fluent-bundle-asset.md) | Own the Fluent bundle asset instead of bevy_fluent | Accepted |
 | [0014](./0014-markdown-via-pulldown-cmark.md) | Markdown as a source syntax via pulldown-cmark | Accepted |
+| [0015](./0015-font-fallback-lists.md) | Font fallback lists via Bevy 0.20's `FontSource` | Accepted |
+| [0016](./0016-text-input.md) | Text input as `<input type="text">` via Bevy 0.20's `TextInput` | Accepted |
 
 Add new records to this index in the same commit that adds the file.

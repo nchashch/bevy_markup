@@ -6,6 +6,10 @@ use bevy::asset::{AssetEvent, AssetPath, LoadState};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::text::{InlineBox, InlineBoxKind};
+#[cfg(feature = "text-input")]
+use bevy::text::EditableText;
+#[cfg(feature = "text-input")]
+use bevy::ui_widgets::TextInput;
 use bevy::ecs::system::SystemParam;
 
 use crate::cascade::{
@@ -30,11 +34,13 @@ const DEFAULT_COLOR: Color = Color::WHITE;
 const DEFAULT_FONT_SIZE: f32 = 16.0;
 
 /// Computed (inherited) text style.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct Style {
     pub(crate) color: Color,
-    /// Index into [`FontFamilies`]; `None` = Bevy's default font.
-    pub(crate) family: Option<usize>,
+    /// The CSS `font-family` chain resolved to registered family indexes
+    /// (ADR 0015): the text font composes the chain into Bevy 0.20's
+    /// fallback list per weight/style. `None` = Bevy's default font.
+    pub(crate) family: Option<Vec<usize>>,
     pub(crate) size: f32,
     pub(crate) bold: bool,
     pub(crate) italic: bool,
@@ -84,6 +90,17 @@ impl RunExtras {
             },
         }
     }
+}
+
+/// An editable text field (ADR 0016): the initial text plus the cascade's
+/// text styling (the widget's `EditableText` requires `TextFont`/`TextColor`,
+/// whose cascade values the field's text styles with).
+#[cfg(feature = "text-input")]
+#[derive(Clone)]
+struct TextInputSpec {
+    initial: String,
+    font: TextFont,
+    color: Color,
 }
 
 /// An `<img>`: the loaded image and its `width`/`height` attributes (px;
@@ -178,6 +195,19 @@ enum Item {
         /// The element's computed font-size (for `EmSize`).
         font_size: f32,
         children: Vec<Item>,
+    },
+    /// An `<input type="text">` (the `text-input` feature).
+    #[cfg(feature = "text-input")]
+    TextInput {
+        element: HtmlElement,
+        handle: Option<tl::NodeHandle>,
+        signals: Vec<SignalBinding>,
+        focus: Option<Focusable>,
+        custom: Option<CustomElement>,
+        boxed: BoxStyle,
+        pointer_events: bool,
+        font_size: f32,
+        value: TextInputSpec,
     },
 }
 
@@ -333,24 +363,28 @@ impl Styler<'_> {
     pub(crate) fn style_of(
         &self,
         element: &HtmlElement,
-        inherited: Style,
+        inherited: &Style,
         pseudo: Pseudo,
         inline: Option<&InlineStyle>,
     ) -> Style {
         let declared = self.styles.get_with(element, pseudo, inline);
+        let bold = declared.bold.unwrap_or(inherited.bold);
+        let italic = declared.italic.unwrap_or(inherited.italic);
         Style {
             color: declared.color.unwrap_or(inherited.color),
             // A declared list with no registered family falls back to the
             // default font (as in browsers), not to the inherited family.
+            // The whole chain resolves (not just the first hit): Bevy 0.20
+            // composes it into a per-glyph fallback list (ADR 0015).
             family: match declared.font_family.as_deref() {
-                Some(list) => self.fonts.resolve(list),
-                None => inherited.family,
+                Some(list) => Some(self.fonts.resolve_chain(list)),
+                None => inherited.family.clone(),
             },
             size: declared.font_size.map_or(inherited.size, |size| {
                 size.resolve(inherited.size, self.root_size)
             }),
-            bold: declared.bold.unwrap_or(inherited.bold),
-            italic: declared.italic.unwrap_or(inherited.italic),
+            bold,
+            italic,
             pointer_events: declared.pointer_events.unwrap_or(inherited.pointer_events),
             opacity: inherited.opacity * declared.opacity.unwrap_or(1.0),
         }
@@ -407,12 +441,25 @@ impl Styler<'_> {
         })
     }
 
-    fn text_font(&self, style: Style) -> TextFont {
-        let font = style
-            .family
-            .and_then(|family| self.fonts.faces(family))
-            .map(|faces| faces.face(style.bold, style.italic))
-            .unwrap_or_default();
+    fn text_font(&self, style: &Style) -> TextFont {
+        // The chain composes per weight/style: each family's face for the
+        // request, in CSS order — one face stays a single source, several
+        // become Bevy 0.20's fallback list (fontique picks per glyph).
+        let font = match &style.family {
+            Some(chain) => {
+                let faces: Vec<FontSource> = chain
+                    .iter()
+                    .filter_map(|index| self.fonts.faces(*index))
+                    .map(|faces| faces.face(style.bold, style.italic))
+                    .collect();
+                match faces.len() {
+                    0 => FontSource::default(),
+                    1 => faces.into_iter().next().unwrap(),
+                    _ => FontSource::list(faces),
+                }
+            }
+            None => FontSource::default(),
+        };
         let mut text_font = TextFont::default().with_font_size(style.size);
         // A file is one face (its weight and style are baked in); a system
         // family is many, and the system picks by the requested weight/style.
@@ -520,7 +567,7 @@ pub(crate) fn root_style(
         server,
         template: None,
     }
-    .style_of(root, defaults, Pseudo::default(), inline)
+    .style_of(root, &defaults, Pseudo::default(), inline)
 }
 
 /// The element the `HtmlUi` node itself is styled as, with its `style`
@@ -725,11 +772,12 @@ pub(crate) fn build_html_ui(
                 }
             }),
         };
+        let root_size = root.size;
         let root_pointer_events = root.pointer_events;
         commands
             .entity(entity)
             .queue(move |mut entity: EntityWorldMut| {
-                apply_root(&mut entity, root_box, root_pointer_events, root.size);
+                apply_root(&mut entity, root_box, root_pointer_events, root_size);
             });
 
         // The elements' interaction state by DOM node, so the collected
@@ -767,7 +815,7 @@ pub(crate) fn build_html_ui(
                 }
                 RenderedHtml::Failed(message) => format!("failed to render: {message}"),
             };
-            let style = styler.style_of(&element_tag("pre"), root, Pseudo::default(), None);
+            let style = styler.style_of(&element_tag("pre"), &root, Pseudo::default(), None);
             vec![Item::Block(Block {
                 kind: BlockKind::Paragraph,
                 element: None,
@@ -775,14 +823,14 @@ pub(crate) fn build_html_ui(
                 signals: Vec::new(),
                 focus: None,
                 custom: None,
-                style,
-                boxed: BoxStyle::default(),
                 runs: vec![Run {
                     text,
-                    style,
+                    style: style.clone(),
                     extras: RunExtras::default(),
                     image: None,
                 }],
+                boxed: BoxStyle::default(),
+                style,
             })]
         } else {
             match &*rendered {
@@ -797,14 +845,14 @@ pub(crate) fn build_html_ui(
                     signals: Vec::new(),
                     focus: None,
                     custom: None,
-                    style: root,
-                    boxed: BoxStyle::default(),
                     runs: vec![Run {
                         text: format!("failed to render: {message}"),
-                        style: root,
+                        style: root.clone(),
                         extras: RunExtras::default(),
                         image: None,
                     }],
+                    style: root,
+                    boxed: BoxStyle::default(),
                 })],
             }
         };
@@ -824,8 +872,8 @@ pub(crate) fn build_html_ui(
         // CSS `rem` resolves against the root font-size: keep Bevy's
         // `RemSize` resource in sync. A change restyles this UI, so its
         // `Val::Rem`s re-convert against the new value.
-        if **rem_size != root.size {
-            commands.insert_resource(RemSize(root.size));
+        if **rem_size != root_size {
+            commands.insert_resource(RemSize(root_size));
             commands.queue(move |world: &mut World| {
                 if let Some(mut state) = world.get_mut::<RebuildState>(entity) {
                     state.queue_restyle();
@@ -875,6 +923,10 @@ struct NodeSpec {
     /// The element's computed font-size (CSS `em` resolves against it via
     /// Bevy's `EmSize`; `rem` against the synced `RemSize`).
     font_size: f32,
+    /// `<input type="text">` (the `text-input` feature): an editable text
+    /// field. `Some` = initial text and the cascade's font/color.
+    #[cfg(feature = "text-input")]
+    text_input: Option<TextInputSpec>,
     /// The `<img>` handles this subtree's blocks use (aggregated up for the
     /// UI's [`InlineImages`]).
     images: Vec<Handle<Image>>,
@@ -926,6 +978,8 @@ impl NodeSpec {
             pickable: true,
             fixed: false,
             font_size: DEFAULT_FONT_SIZE,
+            #[cfg(feature = "text-input")]
+            text_input: None,
             images: Vec::new(),
             text: None,
             children: Vec::new(),
@@ -1075,6 +1129,48 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
     let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children) =
         match item {
         Item::Block(block) => return block_spec(styler, block),
+        #[cfg(feature = "text-input")]
+        Item::TextInput {
+            element,
+            handle,
+            signals,
+            focus,
+            custom,
+            boxed,
+            pointer_events,
+            font_size,
+            value,
+        } => {
+            // Returns directly: the other arms feed the shared tuple tail.
+            let mut node = Node {
+                flex_direction: FlexDirection::Column,
+                flex_shrink: 0.0,
+                box_sizing: BoxSizing::ContentBox,
+                border: rect_over(UiRect::DEFAULT, boxed.border),
+                padding: rect_over(UiRect::DEFAULT, boxed.padding),
+                ..default()
+            };
+            boxed.layout.apply_to(&mut node);
+            return NodeSpec {
+                element: Some(element),
+                signals,
+                focus,
+                custom,
+                handle,
+                border_color: boxed.border_color(),
+                background: boxed.background,
+                image: boxed.sliced_image(),
+                outline: boxed.drawn_outline,
+                z_index: boxed.z_index.map(ZIndex),
+                pickable: pointer_events,
+                fixed: boxed.layout.position == Some(CssPosition::Fixed),
+                font_size,
+                #[cfg(feature = "text-input")]
+                text_input: Some(value),
+                children: Vec::new(),
+                ..NodeSpec::new(node)
+            };
+        }
         Item::Container {
             element,
             handle,
@@ -1166,7 +1262,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             BlockKind::ListItem => "• ",
             _ => "",
         },
-        font: styler.text_font(block.style),
+        font: styler.text_font(&block.style),
         color: faded(block.style.color, block.style.opacity),
         no_wrap: matches!(block.kind, BlockKind::Preformatted),
         spans: block
@@ -1188,7 +1284,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
                     },
                     None => SpanSpec {
                         text: run.text,
-                        font: styler.text_font(run.style),
+                        font: styler.text_font(&run.style),
                         color,
                         background: run.extras.background,
                         underline: run.extras.decoration.underline,
@@ -1289,11 +1385,33 @@ fn spawn_spec(
     let mut entity = parent.spawn(spec.node);
     // Non-text nodes get their `EmSize` from the cascade (text blocks have
     // a `TextFont`, which Bevy derives it from). CSS `em` lengths on the
-    // node resolve against it.
-    if spec.text.is_none() {
+    // node resolve against it. (Text inputs: `EditableText` requires a
+    // `Node`, and their `EmSize` comes from their `TextFont`.)
+    #[cfg(feature = "text-input")]
+    let is_text_input = spec.text_input.is_some();
+    #[cfg(not(feature = "text-input"))]
+    let is_text_input = false;
+    if spec.text.is_none() && !is_text_input {
         entity.insert(EmSize(spec.font_size));
     }
     let id = entity.id();
+    #[cfg(feature = "text-input")]
+    if is_text_input {
+        // The editable text field (ADR 0016): the widget's editing behavior
+        // keys off Bevy's `InputFocus` — the crate's focus (press-to-focus,
+        // navigation, `HtmlModal`) drives it. The field's text styles from
+        // the cascade via `TextFont`/`TextColor` (required by
+        // `EditableText`), and the box from CSS on the node.
+        let input = spec.text_input.unwrap();
+        entity.insert((
+            EditableText::new(input.initial),
+            input.font,
+            TextColor(input.color),
+            TextInput,
+        ));
+    }
+    #[cfg(not(feature = "text-input"))]
+    let _ = is_text_input;
     if let Some(custom) = spec.custom {
         connected.push(ElementConnected {
             entity: id,
@@ -1889,12 +2007,12 @@ fn collect_items(
     };
     let mut items = Vec::new();
     for handle in dom.children() {
-        collect_node(&ctx, *handle, root, &mut items);
+        collect_node(&ctx, *handle, &root, &mut items);
     }
     items
 }
 
-fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut Vec<Item>) {
+fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mut Vec<Item>) {
     let Some(node) = handle.get(ctx.parser) else {
         return;
     };
@@ -1913,7 +2031,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
                     signals: Vec::new(),
                     focus: None,
                     custom: None,
-                    style: inherited,
+                    style: inherited.clone(),
                     boxed: BoxStyle::default(),
                     runs,
                 }));
@@ -1942,7 +2060,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
     // The `<html>` element is what the root style was computed from:
     // re-applying it would square its `opacity`.
     let style = if element.tag == "html" {
-        inherited
+        inherited.clone()
     } else {
         ctx.styler
             .style_of(&element, inherited, state, inline.as_ref())
@@ -1950,6 +2068,40 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
     let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref());
     boxed.drawn_outline = boxed.outline(style.color);
     boxed.fade(style.opacity);
+    #[cfg(feature = "text-input")]
+    if element.tag == "input"
+        && element
+            .dataset
+            .get("type")
+            .is_none_or(|kind| kind == "text")
+    {
+        // An editable text field (ADR 0016): a block with the widget's
+        // components; its content is the field's state, not walked markup.
+        let value = tag
+            .attributes()
+            .get("value")
+            .flatten()
+            .map(|value| decode_entities(&value.as_utf8_str()).to_string());
+        let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref());
+        boxed.drawn_outline = boxed.outline(style.color);
+        boxed.fade(style.opacity);
+        items.push(Item::TextInput {
+            element,
+            handle: Some(handle),
+            signals,
+            focus,
+            custom,
+            boxed,
+            pointer_events: style.pointer_events,
+            font_size: style.size,
+            value: TextInputSpec {
+                initial: value.unwrap_or_default(),
+                font: ctx.styler.text_font(&style),
+                color: faded(style.color, style.opacity),
+            },
+        });
+        return;
+    }
     let kind = match element.tag.as_str() {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
         "p" => BlockKind::Paragraph,
@@ -1981,12 +2133,12 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
             };
             let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
                 for node in nodes {
-                    collect_node(fragment, *node, style, target);
+                    collect_node(fragment, *node, &style, target);
                 }
             });
             if !translated {
                 for child in tag.children().top().iter() {
-                    collect_node(ctx, *child, style, target);
+                    collect_node(ctx, *child, &style, target);
                 }
             }
             if container {
@@ -2008,7 +2160,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: Style, items: &mut
     // A missing translation falls back to the element's own content.
     let preformatted = matches!(kind, BlockKind::Preformatted);
     let mut runs = Vec::new();
-    push_content_runs(ctx, handle, tag, style, RunExtras::default(), &mut runs);
+    push_content_runs(ctx, handle, tag, &style, RunExtras::default(), &mut runs);
     items.push(Item::Block(Block {
         kind,
         element: Some(element),
@@ -2056,7 +2208,7 @@ fn push_content_runs(
     ctx: &Ctx,
     handle: tl::NodeHandle,
     tag: &tl::HTMLTag,
-    style: Style,
+    style: &Style,
     extras: RunExtras,
     runs: &mut Vec<Run>,
 ) {
@@ -2098,7 +2250,7 @@ fn finish_runs(mut runs: Vec<Run>, preformatted: bool) -> Vec<Run> {
 fn push_runs(
     ctx: &Ctx,
     handle: tl::NodeHandle,
-    style: Style,
+    style: &Style,
     extras: RunExtras,
     runs: &mut Vec<Run>,
 ) {
@@ -2107,13 +2259,13 @@ fn push_runs(
             let text = decode_entities(&text.as_utf8_str());
             match runs.last_mut() {
                 Some(last)
-                    if last.style == style && last.extras == extras && last.image.is_none() =>
+                    if last.style == *style && last.extras == extras && last.image.is_none() =>
                 {
                     last.text.push_str(&text);
                 }
                 _ => runs.push(Run {
                     text,
-                    style,
+                    style: style.clone(),
                     extras,
                     image: None,
                 }),
@@ -2126,11 +2278,16 @@ fn push_runs(
                 return;
             }
             // An unmatched `data-l10n-name` element is plain text.
-            let style = ctx.element(tag).map_or(style, |element| {
-                let inline = cascade::inline_style(tag);
-                ctx.styler
-                    .style_of(&element, style, Pseudo::default(), inline.as_ref())
-            });
+            let style = ctx
+                .element(tag)
+                .map_or_else(
+                    || style.clone(),
+                    |element| {
+                        let inline = cascade::inline_style(tag);
+                        ctx.styler
+                            .style_of(&element, style, Pseudo::default(), inline.as_ref())
+                    },
+                );
             // This element's `background`/`text-decoration` over the
             // subtree's running values, faded with its opacity.
             let extras = ctx
@@ -2141,7 +2298,7 @@ fn push_runs(
                 })
                 .map(|extras| extras.faded(style.opacity))
                 .unwrap_or(extras);
-            push_content_runs(ctx, handle, tag, style, extras, runs);
+            push_content_runs(ctx, handle, tag, &style, extras, runs);
         }
         Some(tl::Node::Comment(_)) | None => {}
     }
@@ -2163,13 +2320,13 @@ fn attr_px(tag: &tl::HTMLTag, name: &str) -> Option<f32> {
 /// The `<img>` inline run: the image flows inline as an `InlineBox`/
 /// `InlineImage` child of the block's `Text`. Unsupported sources (URLs,
 /// data URIs) and a missing `src` attribute are skipped.
-fn push_image_run(ctx: &Ctx, tag: &tl::HTMLTag, style: Style, runs: &mut Vec<Run>) {
+fn push_image_run(ctx: &Ctx, tag: &tl::HTMLTag, style: &Style, runs: &mut Vec<Run>) {
     let Some(image) = ctx.styler.image_of(tag) else {
         return;
     };
     runs.push(Run {
         text: String::new(),
-        style,
+        style: style.clone(),
         extras: RunExtras::default(),
         image: Some(image),
     });

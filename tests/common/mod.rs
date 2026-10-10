@@ -12,6 +12,7 @@ use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
 use bevy::image::{CompressedImageFormats, ImageLoader};
 use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
+use bevy::ecs::schedule::ScheduleBuildSettings;
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource, InlineBox};
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent, WindowRef};
@@ -171,12 +172,54 @@ impl TestUi {
             },
             ImagePlugin::default(),
             BevyMarkupPlugin,
-        ))
+        ));
+        // The text-input widget's systems read picking state and messages;
+        // register them headlessly (the full picking plugins would run
+        // systems that keep the build from settling without a camera).
+        // Gated: with them present, the hover-driven systems engage in
+        // every test, changing when builds restyle.
+        #[cfg(feature = "text-input")]
+        {
+            // Only what the widget's systems read (autoscroll needs
+            // `PointerState`, the IME path reads the messages); NOT the
+            // `HoverMap` — with it present, the hover/pseudo systems engage
+            // in every headless test, overwriting direct `PseudoState`
+            // inserts. The hover tests inject their own maps.
+            app.init_resource::<bevy::picking::events::PointerState>()
+                .add_message::<bevy::picking::events::PointerRelease>()
+                .add_message::<bevy::picking::events::PointerPress>()
+                .add_message::<bevy::picking::events::PointerMove>();
+        }
         // bevy_render normally registers the image loader.
-        .register_asset_loader(ImageLoader::new(CompressedImageFormats::empty()))
+        app.register_asset_loader(ImageLoader::new(CompressedImageFormats::empty()))
         .init_resource::<Builds>()
         .add_observer(|_: On<HtmlUiBuilt>, mut builds: ResMut<Builds>| builds.0 += 1)
         .add_observer(|_: On<HtmlUiRestyled>, mut builds: ResMut<Builds>| builds.0 += 1);
+        // Shuffle each schedule's ambiguous systems (Bevy's `debug` feature,
+        // a dev-dependency): an ordering that only holds by luck fails here
+        // instead of in the wild. The seed is printed for reproduction.
+        let seed = std::env::var("BEVY_MARKUP_SHUFFLE_SEED")
+            .ok()
+            .and_then(|seed| seed.parse().ok())
+            .unwrap_or(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .subsec_nanos() as u64,
+            );
+        eprintln!("test-ui: shuffling schedules with seed={seed}");
+        app.edit_schedule(Update, |schedule| {
+            schedule.set_build_settings(ScheduleBuildSettings {
+                shuffle_seed: Some(seed),
+                ..default()
+            });
+        });
+        app.edit_schedule(PostUpdate, |schedule| {
+            schedule.set_build_settings(ScheduleBuildSettings {
+                shuffle_seed: Some(seed),
+                ..default()
+            });
+        });
 
         match viewport {
             Some(size) => {
@@ -806,6 +849,19 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         .get::<Children>()
         .map(|children| children.to_vec())
         .unwrap_or_default();
+    // Editable text (the `text-input` feature) renders through bevy_text's
+    // editing pipeline, not `Text`: print the editor's text.
+    #[cfg(feature = "text-input")]
+    if let (Some(editable), Some(font), Some(color)) = (
+        entity_ref.get::<bevy::text::EditableText>(),
+        entity_ref.get::<TextFont>(),
+        entity_ref.get::<TextColor>(),
+    ) {
+        let text: String = editable.editor.text().to_string();
+        if !text.is_empty() {
+            writeln!(out, "{indent}  {:?} {}", text, style_label(font, color)).unwrap();
+        }
+    }
     if let (Some(text), Some(font), Some(color)) = (
         entity_ref.get::<Text>(),
         entity_ref.get::<TextFont>(),

@@ -12,6 +12,19 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ### Added
 
+- **Text input.** `<input type="text" value maxlength>` renders an editable
+  text field (Bevy 0.20's `EditableText` + `TextInput` behind the new
+  `text-input` cargo feature): typed text, cursor and selection from the
+  widget, focusing through the crate's own focus system (press-to-focus,
+  `HtmlFocus` navigation, `HtmlModal`), the text styled by the cascade and
+  the box by CSS. The app reads the value from the entity's `EditableText`.
+  Without the feature `<input>` stays an unknown tag.
+- **Font fallback lists.** A CSS `font-family` list resolves to *every*
+  registered family in order (not just the first hit), and the text composes
+  them into Bevy 0.20's fallback list — fontique picks the first face
+  covering each glyph, so Latin and CJK render from different fonts without
+  bundling (with the `system_fonts` feature, the OS's fonts join the
+  chain). Weight/style selection stays per family.
 - **Font-relative layout lengths.** `em` and `rem` now work for sizes,
   margins, insets, border radii and grid tracks (Bevy 0.20's
   `Val::Em`/`Val::Rem`): `em` resolves against the element's own computed

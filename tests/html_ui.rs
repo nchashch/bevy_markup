@@ -395,6 +395,14 @@ fn template_render_failure_shows_the_error_and_recovers() {
     )
     .stylesheet("style.css")
     .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.update(30);
+    {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &bevy_markup::html::HtmlElement)>();
+        for (entity, element) in elements.iter(world) {
+            eprintln!("probe: tag={} node={}", element.tag, world.entity(entity).get::<Node>().is_some());
+        }
+    }
     ui.settle();
     let root = ui.root();
     let failed = match ui.world_mut().get::<RenderedHtml>(root) {
@@ -2314,6 +2322,41 @@ html-ui
 html-ui
   p
     "struck **hard** with *flair*." Serif 16px #ffffff
+"#,
+    );
+}
+
+/// `<input type="text">` (the `text-input` feature): a block element with
+/// Bevy 0.20's editable-text widget — the initial value from the `value`
+/// attribute, `maxlength` → `max_characters`, the text styled by the
+/// cascade, the box by CSS. The element is focusable (press-to-focus,
+/// navigation).
+#[cfg(feature = "text-input")]
+#[test]
+fn text_input_element_maps_to_the_widget() {
+    let mut ui = TestUi::new(
+        "text-input",
+        &[
+            (
+                "page.html",
+                r#"<input type="text" value="hello" maxlength="12" class="field">"#,
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff; font-family: serif; font-size: 20px }\n\
+                 .field { width: 200px; padding: 4px; background-color: #222222 }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    // `settle()` never stabilizes here: the widget's cursor/edit systems
+    // mark the text changed every frame. Bounded updates instead.
+    ui.update(30).assert_dump(
+        r#"
+html-ui
+  input.field padding=4,4,4,4 bg=#222222
+    "hello" default 20px #ffffff
 "#,
     );
 }

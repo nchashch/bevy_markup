@@ -155,6 +155,10 @@ bevy_markup implements a useful subset of the web, not all of it:
   and `tabindex` elements are focusable, `autofocus`, `:focus` /
   `:focus-visible` with `outline`, modal roots, and focus kept across
   updates. You bind the input; bevy_markup moves focus and activates.
+- **Text input:** `<input type="text">` renders Bevy 0.20's editable-text
+  widget behind the `text-input` cargo feature — typed text, cursor and
+  selection; the value is app state, focusing through the crate's focus
+  system.
 - **Interaction signals:** `app.on_html_click("buy", system)` runs a system
   per click on `data-on-click="buy"` elements (or read the messages).
   `data-on-click` (primary button, or activation by
@@ -178,7 +182,9 @@ bevy_markup implements a useful subset of the web, not all of it:
 - **Fluent:** messages, arguments, plurals and selectors, inline markup.
 - **Fonts:** you register font files under CSS family names
   (`FontFamilies`), including bold and italic faces and the generic
-  families (`serif`, `monospace`, …).
+  families (`serif`, `monospace`, …). A `font-family` list becomes a
+  per-glyph fallback chain (Bevy 0.20's `FontSource`), so mixed scripts
+  render from different installed fonts.
 
 The crate documentation (`cargo doc --open`) is the full guide.
 

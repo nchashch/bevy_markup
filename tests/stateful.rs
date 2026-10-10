@@ -338,7 +338,10 @@ impl ModelState for UiModel {
                     self.entered = false;
                     out.push(("leave".to_owned(), LEAVE));
                 }
-                if !was_live && self.over_button() {
+                // The move can also bring the stationary pointer INTO the
+                // button (a swap back restores its position): enter then,
+                // whether or not the button was live before.
+                if self.over_button() && !self.entered {
                     self.entered = true;
                     out.push(("enter".to_owned(), ENTER));
                 }

@@ -1,8 +1,12 @@
 //! Font families for CSS `font-family`.
 //!
-//! Register each family's faces in the [`FontFamilies`] resource; CSS then
-//! picks the first registered name in a `font-family` list, and the face by
-//! `font-weight`/`font-style`. Changing the resource rebuilds every `HtmlUi`.
+//! Register each family's faces in the [`FontFamilies`] resource; a CSS
+//! `font-family` list resolves to every registered family in order (not
+//! just the first hit), and each family's face is picked by
+//! `font-weight`/`font-style`. The chain composes into Bevy 0.20's
+//! fallback list: fontique picks the first face that covers a glyph, so
+//! mixed scripts (Latin + CJK) render from different fonts without
+//! bundling. Changing the resource rebuilds every `HtmlUi`.
 //!
 //! A face is any [`FontSource`]: a loaded font file, or a family resolved
 //! from the fonts installed on the system (a name like `"DejaVu Serif"` or a
@@ -131,16 +135,21 @@ impl FontFamilies {
             .position(|(family, _)| family.eq_ignore_ascii_case(name))
     }
 
-    /// The first family in a CSS `font-family` list that's registered.
-    pub(crate) fn resolve(&self, list: &[FamilyRef]) -> Option<usize> {
-        list.iter().find_map(|family| match family {
-            FamilyRef::Named(name) => self.index_of(name),
-            FamilyRef::Generic(generic) => self.index_of(self.generics.get(generic)?),
-        })
-    }
-
     pub(crate) fn faces(&self, index: usize) -> Option<&FontFaces> {
         self.families.get(index).map(|(_, faces)| faces)
+    }
+
+    /// The CSS `font-family` list resolved to registered family indexes, in
+    /// CSS order (generics through their mapped names, unregistered names
+    /// skipped): the text font composes the chain into Bevy 0.20's
+    /// per-glyph fallback list (ADR 0015).
+    pub(crate) fn resolve_chain(&self, list: &[FamilyRef]) -> Vec<usize> {
+        list.iter()
+            .filter_map(|family| match family {
+                FamilyRef::Named(name) => self.index_of(name),
+                FamilyRef::Generic(generic) => self.index_of(self.generics.get(generic)?),
+            })
+            .collect()
     }
 }
 
@@ -222,21 +231,23 @@ mod tests {
     /// The *list* order decides, not registration order; names match ASCII
     /// case-insensitively (CSS family names are case-insensitive).
     #[test]
-    fn first_registered_name_in_list_wins() {
+    fn registered_names_resolve_in_list_order() {
         let families = families();
-        let spectral = families.resolve(&[named("spectral")]);
-        let iosevka = families.resolve(&[named("IOSEVKA SLAB")]);
-        assert!(spectral.is_some() && iosevka.is_some() && spectral != iosevka);
+        let spectral = families.resolve_chain(&[named("spectral")]);
+        let iosevka = families.resolve_chain(&[named("IOSEVKA SLAB")]);
+        assert!(!spectral.is_empty() && !iosevka.is_empty() && spectral != iosevka);
+        // Case-insensitive; the first hit no longer shadows later names —
+        // the whole chain resolves (ADR 0015's per-glyph fallback).
         assert_eq!(
-            families.resolve(&[named("Iosevka Slab"), named("Spectral")]),
-            iosevka
+            families.resolve_chain(&[named("Iosevka Slab"), named("Spectral")]),
+            [iosevka[0], spectral[0]]
         );
         assert_eq!(
-            families.resolve(&[named("Nope"), named("Spectral")]),
+            families.resolve_chain(&[named("Nope"), named("Spectral")]),
             spectral
         );
         assert_eq!(
-            families.faces(spectral.unwrap()).unwrap().regular,
+            families.faces(spectral[0]).unwrap().regular,
             font(1).into()
         );
     }
@@ -247,16 +258,30 @@ mod tests {
     #[test]
     fn unresolvable_entries_are_skipped() {
         let families = families();
-        let iosevka = families.resolve(&[named("Iosevka Slab")]);
+        let iosevka = families.resolve_chain(&[named("Iosevka Slab")]);
         let serif = FamilyRef::Generic(GenericFamily::Serif);
         let cursive = FamilyRef::Generic(GenericFamily::Cursive);
         let mono = FamilyRef::Generic(GenericFamily::Monospace);
         assert_eq!(
-            families.resolve(&[serif.clone(), cursive.clone(), mono]),
+            families.resolve_chain(&[serif.clone(), cursive.clone(), mono]),
             iosevka
         );
-        assert_eq!(families.resolve(&[named("Nope"), serif, cursive]), None);
-        assert_eq!(families.resolve(&[]), None);
+        assert!(families.resolve_chain(&[named("Nope"), serif, cursive]).is_empty());
+        assert!(families.resolve_chain(&[]).is_empty());
+    }
+
+    /// The chain keeps every registered family in CSS order — the fallback
+    /// list fontique resolves per glyph (ADR 0015) — with duplicates
+    /// deduplicated by the registry's in-place replace.
+    #[test]
+    fn chains_keep_all_registered_families() {
+        let families = families();
+        let chain = families.resolve_chain(&[
+            named("Spectral"),
+            named("Nope"),
+            FamilyRef::Generic(GenericFamily::Monospace),
+        ]);
+        assert_eq!(chain.len(), 2, "{chain:?}");
     }
 
     /// Re-registering a name (in any case) replaces its faces in place:
@@ -264,9 +289,9 @@ mod tests {
     #[test]
     fn insert_replaces_case_insensitively() {
         let mut families = families();
-        let before = families.resolve(&[named("Spectral")]);
+        let before = families.resolve_chain(&[named("Spectral")]);
         families.insert("SPECTRAL", FontFaces::new(font(9)));
-        assert_eq!(families.resolve(&[named("Spectral")]), before);
+        assert_eq!(families.resolve_chain(&[named("Spectral")]), before);
         assert_eq!(families.get("spectral").unwrap().regular, font(9).into());
         assert_eq!(
             families.get("Iosevka Slab").unwrap().regular,
