@@ -5,8 +5,6 @@ html {
   color: #e6e6e6;
   font-family: serif;
   font-size: 24px;
-  border-image: url("../ui/frame.png") 16 fill stretch;
-  border-width: 16px;
 }
 
 .reader {
