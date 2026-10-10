@@ -41,6 +41,19 @@ a:focus-visible {
   color: #f0b429;
 }
 
+/* The language button, styled like the other examples' buttons. */
+p.action {
+  color: #f0b429;
+  border-image: url("../ui/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 4px 16px;
+}
+
+p.action:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
 p.status {
   color: #b8ddb8;
   border-image: url("../ui/frame_transparent.png") 16 fill stretch;

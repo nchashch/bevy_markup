@@ -13,15 +13,16 @@ cargo run --example links
 ## What you see
 
 A framed field-notes panel: an intro paragraph with two inline links, three
-standalone links of their own, and a status line that shows the last opened
-href.
+standalone links of their own, a status line that shows the last opened
+href, and the Language button.
 
 | Input | Action |
 |---|---|
 | Click a link | "Open" it — the status line shows the href |
-| ← → ↑ ↓ / D-pad / left stick | Cycle the keyboard focus through the links (hold to repeat) |
+| ← → ↑ ↓ / D-pad / left stick | Cycle the keyboard focus through the links and the Language button (hold to repeat) |
 | Q / E, LB RB | Cycle one link |
 | Enter / gamepad A | Open the focused link |
+| Click / Enter / A on **Language** | Switch the language (English ↔ German) |
 | Space / gamepad Y | Switch the language (English ↔ German) |
 
 ## What it shows
@@ -41,7 +42,8 @@ href.
   one, and `HtmlFocus::activate` sends the focused link's signal.
 - **Signals** — click and activation arrive as one `open` `ElementSignal`;
   the app writes the href into the `TemplateContext` and the status line
-  re-renders in place.
+  re-renders in place. The Language button is an ordinary
+  `data-on-click` element routed in the same reader.
 
 ## Files
 

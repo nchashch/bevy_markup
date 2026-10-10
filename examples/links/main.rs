@@ -44,7 +44,7 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (cycle_links, activate_link, open_links, switch_language),
+            (cycle_links, activate_link, handle_signals, switch_language),
         )
         .run();
 }
@@ -97,14 +97,15 @@ fn cycle_links(
     gamepads: Query<&Gamepad>,
     root: Query<Entity, With<HtmlUi>>,
     elements: HtmlElements,
-    spans: Query<&ElementSignals>,
+    targets: Query<&ElementSignals>,
     mut focus: ResMut<InputFocus>,
     mut visible: ResMut<InputFocusVisible>,
     mut last: Local<usize>,
     mut repeat: Local<(Repeat, Repeat)>,
 ) {
-    // All four directions cycle the links (they're one linear list):
-    // arrows / D-pad / left stick with hold-to-repeat, LB / RB one step.
+    // All four directions cycle the document's activation targets (the
+    // links and the Language button — they're one linear list): arrows /
+    // D-pad / left stick with hold-to-repeat, LB / RB one step.
     let axes = arrows.axes();
     let now = time.elapsed_secs();
     let (horizontal, vertical) = &mut *repeat;
@@ -132,14 +133,20 @@ fn cycle_links(
     let Ok(root) = root.single() else {
         return;
     };
-    // The link runs in document order.
+    // The activation targets in document order: link runs and blocks with
+    // click bindings (the Language button). Enter / A emits the focused
+    // target's bindings, whichever kind it is.
     let order: Vec<Entity> = elements
-        .by_tag(root, "a")
-        .filter(|entity| {
-            spans
-                .get(*entity)
-                .is_ok_and(|signals| signals.0.iter().any(|binding| binding.name == "open"))
+        .iter(root)
+        .filter(|(entity, _)| {
+            targets.get(*entity).is_ok_and(|signals| {
+                signals
+                    .0
+                    .iter()
+                    .any(|binding| binding.trigger == SignalTrigger::Click)
+            })
         })
+        .map(|(entity, _)| entity)
         .collect();
     if order.is_empty() {
         return;
@@ -175,17 +182,26 @@ fn activate_link(
 /// Clicks (and activations) on a link arrive as the `open` signal with the
 /// href; the app records it in the context, and the status paragraph
 /// re-renders.
-fn open_links(
+fn handle_signals(
     mut signals: MessageReader<ElementSignal>,
     mut contexts: Query<&mut TemplateContext>,
+    languages: Res<Languages>,
+    mut active: ResMut<ActiveLocale>,
 ) {
     for signal in signals.read() {
-        if signal.name == "open"
-            && let Some(href) = signal.payload.get("href").and_then(|href| href.as_str())
-        {
-            for mut context in &mut contexts {
-                context.insert("opened", href);
+        match signal.name.as_ref() {
+            // The click (or activation) on a link carries the href; the app
+            // records it and the status line re-renders.
+            "open" => {
+                if let Some(href) = signal.payload.get("href").and_then(|href| href.as_str()) {
+                    for mut context in &mut contexts {
+                        context.insert("opened", href);
+                    }
+                }
             }
+            // The Language button: the same switch Space / Y does.
+            "switch-language" => next_language(&languages, &mut active),
+            _ => {}
         }
     }
 }
