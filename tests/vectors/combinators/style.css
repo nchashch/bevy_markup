@@ -1,0 +1,40 @@
+/* Combinators: descendant and child chains; the classes mark which rule
+   matched (a later, equal-specificity rule wins ties). */
+html {
+  color: #000000;
+}
+
+/* Any descendant of a page. */
+.page .deep {
+  color: #800080;
+}
+
+/* A direct child of a panel beats the descendant rule (higher specificity). */
+.panel > .direct {
+  color: #006000;
+}
+
+/* A descendant rule through a middle class: applies to the inner's child
+   too, but the child rule below beats it there (more specific compound +
+   same importance, later source order). */
+.panel .deep {
+  color: #c06000;
+}
+
+/* Child of a child: only the inner's paragraph. */
+.panel > .inner > .direct {
+  color: #000080;
+}
+
+/* Type + class compound in a chain. */
+section.panel > .direct {
+  color: #800000;
+}
+
+/* An equal-specificity tie: source order decides. */
+.panel > p.direct {
+  color: #008000;
+}
+.panel > p.direct {
+  color: #6020c0;
+}

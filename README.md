@@ -140,8 +140,10 @@ bevy_markup implements a useful subset of the web, not all of it:
   task lists, footnotes) — Markdown for prose documents, HTML for
   interactive UI, mixed freely (raw HTML passes through unclassed; the
   compiled elements carry `class="markdown"`).
-- **CSS:** type, class, id and compound selectors (`p.note`, `h1#title`),
-  `:hover`/`:active`/`:focus`/`:focus-visible`; colors and fonts
+- **CSS:** type, class, id and compound selectors (`p.note`, `h1#title`)
+  joined by descendant and child combinators (`.panel p`, `.panel > p` —
+  checked against Chrome), `:hover`/`:active`/`:focus`/`:focus-visible`
+  (ancestors' pseudo-classes work too); colors and fonts
   (inherited); flex and grid layout (`display`, `flex-direction`,
   `justify-content`, `align-items`, `gap`, `grid-template-columns`,
   `grid-column`, …); sizes, margins, padding, `box-sizing`; font-relative
@@ -190,7 +192,9 @@ the exact CSS subset.
 
 ### Not built yet
 
-- CSS combinators (`.panel p`, `>`), `calc()`, named grid lines and areas;
+- CSS sibling combinators (`+`, `~`), `calc()` (the same-unit subset is
+  realistic next; mixed-unit needs newer Bevy), named grid lines and
+  areas;
 - form controls beyond text fields and buttons (no selects, checkboxes, …);
   Enter-in-a-field doesn't submit a form;
 - scrollbars as a built-in widget (the demo builds its own from HTML and

@@ -480,6 +480,122 @@ pub(crate) struct Pseudo {
     pub focus_visible: bool,
 }
 
+/// An ancestor for selector matching: its identity plus its interaction
+/// state (for pseudo-classes in a compound selector), nearest first.
+#[derive(Clone, Debug)]
+pub(crate) struct Ancestor {
+    pub element: HtmlElement,
+    pub pseudo: Pseudo,
+}
+
+/// How a compound selector relates to the next one to its right.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Combinator {
+    /// Whitespace: any ancestor.
+    Descendant,
+    /// `>`: the direct parent.
+    Child,
+}
+
+/// A selector: compound selectors joined by combinators (only descendant
+/// and child are supported). The rightmost compound is the subject.
+#[derive(Clone, Debug)]
+struct Selector {
+    /// Left to right; the last one matches the element itself.
+    compounds: Vec<Compound>,
+    /// `compounds.len() - 1` combinators; `combinators[i]` joins
+    /// `compounds[i]` to `compounds[i + 1]`.
+    combinators: Vec<Combinator>,
+}
+
+impl Selector {
+    /// `None` for anything unsupported (attributes, other pseudo-classes,
+    /// other combinators, non-ASCII idents): the whole rule is skipped.
+    fn parse(selector: &str) -> Option<Self> {
+        let mut compounds = Vec::new();
+        let mut combinators = Vec::new();
+        let mut pending = Combinator::Descendant;
+        let mut rest = selector.trim();
+        while !rest.is_empty() {
+            let end = rest
+                .find(|c: char| c.is_whitespace() || c == '>')
+                .unwrap_or(rest.len());
+            compounds.push(Compound::parse(&rest[..end])?);
+            if !combinators.is_empty() || compounds.len() > 1 {
+                combinators.push(pending);
+            }
+            rest = &rest[end..];
+            let whitespace = rest.len() - rest.trim_start().len();
+            rest = &rest[whitespace..];
+            if rest.starts_with('>') {
+                pending = Combinator::Child;
+                rest = &rest[1..];
+                rest = &rest[rest.len() - rest.trim_start().len()..];
+            } else if !rest.is_empty() {
+                pending = Combinator::Descendant;
+            }
+        }
+        if compounds.is_empty() {
+            return None;
+        }
+        Some(Self {
+            compounds,
+            combinators,
+        })
+    }
+
+    /// CSS specificity: (ids, classes, types), summed over the compounds.
+    fn specificity(&self) -> (u32, u32, u32) {
+        self.compounds.iter().fold((0, 0, 0), |mut sum, compound| {
+            let (ids, classes, tags) = compound.specificity();
+            sum.0 += ids;
+            sum.1 += classes;
+            sum.2 += tags;
+            sum
+        })
+    }
+
+    /// `element` (with its `pseudo`) against the subject compound, then the
+    /// rest against `ancestors` (nearest first).
+    fn matches(&self, element: &HtmlElement, pseudo: Pseudo, ancestors: &[Ancestor]) -> bool {
+        let Some(last) = self.compounds.last() else {
+            return false;
+        };
+        if !last.matches(element, pseudo) {
+            return false;
+        }
+        self.matches_rest(self.compounds.len() - 1, ancestors)
+    }
+
+    /// Matches `compounds[..index]` against `ancestors` (nearest first).
+    fn matches_rest(&self, index: usize, ancestors: &[Ancestor]) -> bool {
+        if index == 0 {
+            return true;
+        }
+        let combinator = self.combinators[index - 1];
+        let compound = &self.compounds[index - 1];
+        match combinator {
+            Combinator::Child => {
+                let Some(parent) = ancestors.first() else {
+                    return false;
+                };
+                compound.matches(&parent.element, parent.pseudo)
+                    && self.matches_rest(index - 1, &ancestors[1..])
+            }
+            Combinator::Descendant => {
+                for (i, ancestor) in ancestors.iter().enumerate() {
+                    if compound.matches(&ancestor.element, ancestor.pseudo)
+                        && self.matches_rest(index - 1, &ancestors[i + 1..])
+                    {
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+    }
+}
+
 /// A compound selector: optional type (or `*`), then any number of `.class`
 /// and `#id` parts, e.g. `p.note`, `.a.b`, `#title`; optionally qualified
 /// by `:hover` / `:active` / `:focus` / `:focus-visible`.
@@ -606,7 +722,7 @@ pub(crate) fn inline_style(tag: &tl::HTMLTag) -> Option<InlineStyle> {
 
 /// One selector of a style rule with one importance level's declarations.
 struct Rule<'a> {
-    selector: Compound,
+    selector: Selector,
     /// Sort key: importance, then specificity, then source order.
     rank: (bool, (u32, u32, u32), usize),
     declarations: &'a [Property<'static>],
@@ -617,7 +733,7 @@ struct Rule<'a> {
 #[derive(Default)]
 pub(crate) struct HtmlStyles<'a> {
     rules: Vec<Rule<'a>>,
-    cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo), ElementStyle>>,
+    cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo, u64), ElementStyle>>,
 }
 
 impl<'a> HtmlStyles<'a> {
@@ -631,11 +747,11 @@ impl<'a> HtmlStyles<'a> {
                 let Ok(text) = selector.to_css_string(PrinterOptions::default()) else {
                     continue;
                 };
-                let Some(compound) = Compound::parse(&text) else {
+                let Some(selector) = Selector::parse(&text) else {
                     debug!("html css: skipping unsupported selector `{text}`");
                     continue;
                 };
-                let specificity = compound.specificity();
+                let specificity = selector.specificity();
                 for (important, declarations) in [
                     (false, &rule.declarations.declarations),
                     (true, &rule.declarations.important_declarations),
@@ -644,7 +760,7 @@ impl<'a> HtmlStyles<'a> {
                         continue;
                     }
                     rules.push(Rule {
-                        selector: compound.clone(),
+                        selector: selector.clone(),
                         rank: (important, specificity, order),
                         declarations,
                     });
@@ -661,12 +777,30 @@ impl<'a> HtmlStyles<'a> {
 
     /// The declared style for `element` in the given interaction state:
     /// every matching rule's declarations, applied in cascade order.
-    pub fn get(&self, element: &HtmlElement, pseudo: Pseudo) -> ElementStyle {
+    /// `ancestors` (nearest first) backs descendant and child combinators;
+    /// rules without them ignore it. The cache folds the ancestor chain
+    /// into its key, since matching depends on it.
+    pub fn get(
+        &self,
+        element: &HtmlElement,
+        pseudo: Pseudo,
+        ancestors: &[Ancestor],
+    ) -> ElementStyle {
         let key = (
             element.tag.clone(),
             element.id.clone(),
             element.classes.clone(),
             pseudo,
+            ancestors.iter().fold(0u64, |mut hash, ancestor| {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                ancestor.element.tag.hash(&mut hasher);
+                ancestor.element.id.hash(&mut hasher);
+                ancestor.element.classes.hash(&mut hasher);
+                ancestor.pseudo.hash(&mut hasher);
+                hash = hash.wrapping_mul(31).wrapping_add(hasher.finish());
+                hash
+            }),
         );
         if let Some(style) = self.cache.borrow().get(&key) {
             return style.clone();
@@ -675,7 +809,7 @@ impl<'a> HtmlStyles<'a> {
         for rule in self
             .rules
             .iter()
-            .filter(|rule| rule.selector.matches(element, pseudo))
+            .filter(|rule| rule.selector.matches(element, pseudo, ancestors))
         {
             for declaration in rule.declarations {
                 apply(&mut style, declaration);
@@ -694,15 +828,16 @@ impl<'a> HtmlStyles<'a> {
         element: &HtmlElement,
         pseudo: Pseudo,
         inline: Option<&InlineStyle>,
+        ancestors: &[Ancestor],
     ) -> ElementStyle {
         let Some(InlineStyle(block)) = inline else {
-            return self.get(element, pseudo);
+            return self.get(element, pseudo, ancestors);
         };
         let mut style = ElementStyle::default();
         let matching: Vec<&Rule> = self
             .rules
             .iter()
-            .filter(|rule| rule.selector.matches(element, pseudo))
+            .filter(|rule| rule.selector.matches(element, pseudo, ancestors))
             .collect();
         // `rules` is sorted by rank, whose first key is importance.
         let (important, normal): (Vec<&Rule>, Vec<&Rule>) =
@@ -1547,7 +1682,9 @@ mod tests {
 
     fn color_with(css: &'static str, element: &HtmlElement, pseudo: Pseudo) -> Option<Color> {
         let sheet = sheet(css);
-        HtmlStyles::from_sheet(&sheet).get(element, pseudo).color
+        HtmlStyles::from_sheet(&sheet)
+            .get(element, pseudo, &[])
+            .color
     }
 
     #[test]
@@ -1806,9 +1943,132 @@ mod tests {
         );
     }
 
+    /// THROWAWAY-TO-KEEP: combinator matching.
+    fn selector(text: &str) -> Selector {
+        Selector::parse(text).expect(text)
+    }
+
+    fn ancestor(tag: &str, classes: &[&str]) -> Ancestor {
+        Ancestor {
+            element: element(tag, None, classes),
+            pseudo: Pseudo::default(),
+        }
+    }
+
+    /// `.panel p` matches a paragraph under a `.panel` at any depth, and
+    /// nothing when the panel isn't an ancestor.
+    #[test]
+    fn descendant_combinator_matches_at_any_depth() {
+        let selector = selector(".panel p");
+        let ancestors = vec![ancestor("div", &["panel"]), ancestor("section", &["page"])];
+        assert!(
+            selector.matches(&element("p", None, &[]), Pseudo::default(), &ancestors),
+            "the panel is an ancestor"
+        );
+        assert!(
+            !selector.matches(&element("p", None, &[]), Pseudo::default(), &[]),
+            "no ancestors"
+        );
+        assert!(
+            !selector.matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[ancestor("div", &["page"])]
+            ),
+            "the wrong ancestor"
+        );
+    }
+
+    /// `.panel > p` matches only a direct child of a `.panel`.
+    #[test]
+    fn child_combinator_needs_the_direct_parent() {
+        let selector = selector(".panel > p");
+        let direct = vec![ancestor("div", &["panel"]), ancestor("section", &["page"])];
+        assert!(
+            selector.matches(&element("p", None, &[]), Pseudo::default(), &direct),
+            "the panel is the parent"
+        );
+        let deep = vec![ancestor("div", &["other"]), ancestor("div", &["panel"])];
+        assert!(
+            !selector.matches(&element("p", None, &[]), Pseudo::default(), &deep),
+            "the panel is a grandparent"
+        );
+        assert!(
+            !selector.matches(&element("p", None, &[]), Pseudo::default(), &[]),
+            "no parent"
+        );
+    }
+
+    /// A descendant compound may match a non-nearest ancestor; the walk
+    /// continues above it.
+    #[test]
+    fn descendant_picks_the_matching_ancestor() {
+        let selector = selector(".a .b p");
+        let ancestors = vec![
+            ancestor("div", &["b"]),
+            ancestor("section", &["a"]),
+            ancestor("main", &["outer"]),
+        ];
+        assert!(
+            selector.matches(&element("p", None, &[]), Pseudo::default(), &ancestors),
+            ".b is the parent, .a is above it"
+        );
+        // .b and .a are the other way round: no chain satisfies both.
+        let wrong_order = vec![ancestor("div", &["a"]), ancestor("section", &["b"])];
+        assert!(
+            !selector.matches(&element("p", None, &[]), Pseudo::default(), &wrong_order),
+            ".a must be above .b"
+        );
+    }
+
+    /// Pseudo-classes work on ancestors too (`.panel:hover p`).
+    #[test]
+    fn pseudo_classes_work_on_ancestors() {
+        let selector = selector(".panel:hover p");
+        let hovered = Ancestor {
+            element: element("div", None, &["panel"]),
+            pseudo: Pseudo {
+                hover: true,
+                ..Pseudo::default()
+            },
+        };
+        assert!(selector.matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            std::slice::from_ref(&hovered)
+        ));
+        assert!(!selector.matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[ancestor("div", &["panel"])]
+        ));
+    }
+
+    /// Specificity sums over the compounds (`.panel p` beats `p`).
+    #[test]
+    fn specificity_sums_over_compounds() {
+        assert_eq!(selector(".panel p").specificity(), (0, 1, 1));
+        assert_eq!(selector("#a .b > p").specificity(), (1, 1, 1));
+        assert_eq!(selector("p").specificity(), (0, 0, 1));
+    }
+
+    /// Unsupported selectors skip the whole rule: sibling combinators,
+    /// attributes, and other pseudo-classes.
+    #[test]
+    fn unsupported_selectors_are_skipped() {
+        assert!(Selector::parse(".a + p").is_none());
+        assert!(Selector::parse(".a ~ p").is_none());
+        assert!(Selector::parse("p[attr]").is_none());
+        assert!(Selector::parse("p:focus-within").is_none());
+        assert!(
+            Selector::parse(".a > p b").is_some(),
+            "chains of any length"
+        );
+    }
+
     fn declared(declarations: &str) -> ElementStyle {
         let sheet = owned_sheet(&format!("p {{ {declarations} }}"));
-        HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), Pseudo::default())
+        HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), Pseudo::default(), &[])
     }
 
     /// Every supported layout property and value maps onto the Bevy value
@@ -2330,8 +2590,11 @@ mod tests {
     #[test]
     fn strong_type_selector_matches() {
         let sheet = owned_sheet("strong { font-weight: bold }");
-        let style =
-            HtmlStyles::from_sheet(&sheet).get(&element("strong", None, &[]), Pseudo::default());
+        let style = HtmlStyles::from_sheet(&sheet).get(
+            &element("strong", None, &[]),
+            Pseudo::default(),
+            &[],
+        );
         assert_eq!(style.bold, Some(true));
     }
 

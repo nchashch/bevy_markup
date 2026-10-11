@@ -1194,10 +1194,14 @@ Known limits (each skipped/ignored value is logged at `debug`):
   the vectors against plain browser defaults.
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
   hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
-- **Selectors:** compound only (type/`*` + `.class` + `#id`, plus the
-  interaction pseudo-classes `:hover`/`:active`); no combinators
-  (`div p`, `>`), attribute selectors, other pseudo-classes or
-  pseudo-elements.
+- **Selectors:** compound selectors (type/`*` + `.class` + `#id`) joined by
+  descendant/child combinators (`.panel p`, `.panel > p` — matched against
+  the ancestor chain the walk threads through the cascade; the
+  per-element style cache folds a chain hash into its key; specificity
+  sums over the compounds), plus the interaction pseudo-classes
+  (`:hover`/`:active`/`:focus`/`:focus-visible`, on ancestors too); no
+  sibling combinators (`+`, `~`), attribute selectors, other
+  pseudo-classes or pseudo-elements (a selector with one skips the rule).
 - **Properties:** no `text-align`, `line-height`, `letter-spacing`,
   `text-decoration`, border styles (every
   border is solid); `overflow: auto` scrolls always (Bevy has no
@@ -1276,8 +1280,10 @@ Known limits (each skipped/ignored value is logged at `debug`):
 Next steps (roughly in order of value):
 
 1. ~~Flex layout from CSS~~ (done: flex, sizes, margins, `box-sizing`).
-2. Descendant/child combinators (`.panel p`, `.panel > p`) — needs the
-   ancestor chain during matching; specificity sums.
+2. ~~Descendant/child combinators (`.panel p`, `.panel > p`)~~ (done:
+   the walk threads an `Ancestor` chain (element + pseudo) through the
+   cascade; specificity sums; the style cache folds a chain hash into its
+   key; `tests/vectors/combinators/` is checked against Chrome).
 3. ~~`:hover` / `:active` via `Interaction` or picking, re-styling without a
    full rebuild~~ (done: `PseudoState` from the picking hover map +
    pressed entities; a state change is a `Restyle` — in place; `:focus` /

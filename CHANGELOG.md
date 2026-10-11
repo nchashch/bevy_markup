@@ -39,7 +39,14 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `text-decoration` apply to link spans too.
 
 ### Added
-
+- **CSS combinators.** Selectors join compound selectors with descendant
+  and child combinators: `.panel p`, `.panel > p`, `.a .b > .c` — matched
+  against the ancestor chain, with specificity summed over the compounds
+  and ancestor pseudo-classes working (`.panel:hover p`). Sibling
+  combinators (`+`, `~`), attribute selectors and other pseudo-classes
+  still skip the rule. This also activates CSS the crate silently skipped
+  before — the `inline` example's `.quest.done span` (strike-through a
+  done quest's own span) now applies.
 - **Text input.** `<input type="text" value maxlength>` renders an editable
   text field (Bevy 0.20's `EditableText` + `TextInput` behind the new
   `text-input` cargo feature): typed text, cursor and selection from the

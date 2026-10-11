@@ -13,8 +13,8 @@ use bevy::text::{InlineBox, InlineBoxKind};
 use bevy::ui_widgets::TextInput;
 
 use crate::cascade::{
-    self, CssPosition, DecorationDecl, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo,
-    SliceValue,
+    self, Ancestor, CssPosition, DecorationDecl, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl,
+    Pseudo, SliceValue,
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
@@ -417,8 +417,9 @@ impl Styler<'_> {
         inherited: &Style,
         pseudo: Pseudo,
         inline: Option<&InlineStyle>,
+        ancestors: &[Ancestor],
     ) -> Style {
-        let declared = self.styles.get_with(element, pseudo, inline);
+        let declared = self.styles.get_with(element, pseudo, inline, ancestors);
         let bold = declared.bold.unwrap_or(inherited.bold);
         let italic = declared.italic.unwrap_or(inherited.italic);
         Style {
@@ -450,8 +451,9 @@ impl Styler<'_> {
         element: &HtmlElement,
         state: Pseudo,
         inline: Option<&InlineStyle>,
+        ancestors: &[Ancestor],
     ) -> Option<RunExtras> {
-        let declared = self.styles.get_with(element, state, inline);
+        let declared = self.styles.get_with(element, state, inline, ancestors);
         if declared.background.is_none() && declared.text_decoration.is_none() {
             return None;
         }
@@ -472,6 +474,7 @@ impl Styler<'_> {
         tag: &tl::HTMLTag,
         element: &HtmlElement,
         state: Pseudo,
+        ancestors: &[Ancestor],
     ) -> Option<ImageRun> {
         let src = tag
             .attributes()
@@ -496,7 +499,9 @@ impl Styler<'_> {
             })
             .ok()?;
         let inline = cascade::inline_style(tag);
-        let declared = self.styles.get_with(element, state, inline.as_ref());
+        let declared = self
+            .styles
+            .get_with(element, state, inline.as_ref(), ancestors);
         let size = |val: Option<Val>, name: &str| {
             val.and_then(|val| match val {
                 Val::Px(px) => Some(ImageSize::Px(px)),
@@ -555,8 +560,9 @@ impl Styler<'_> {
         element: &HtmlElement,
         pseudo: Pseudo,
         inline: Option<&InlineStyle>,
+        ancestors: &[Ancestor],
     ) -> BoxStyle {
-        let declared = self.styles.get_with(element, pseudo, inline);
+        let declared = self.styles.get_with(element, pseudo, inline, ancestors);
         let image = declared.border_image.as_ref().and_then(|decl| {
             let url = decl.source.as_ref()?.as_ref()?;
             let handle = self.sheet?.image(url)?;
@@ -640,7 +646,7 @@ pub(crate) fn root_style(
         server,
         template: None,
     }
-    .style_of(root, &defaults, Pseudo::default(), inline)
+    .style_of(root, &defaults, Pseudo::default(), inline, &[])
 }
 
 /// The element the `HtmlUi` node itself is styled as, with its `style`
@@ -835,7 +841,8 @@ pub(crate) fn build_html_ui(
             template,
         };
 
-        let mut root_box = styler.box_of(&root_element, Pseudo::default(), root_inline.as_ref());
+        let mut root_box =
+            styler.box_of(&root_element, Pseudo::default(), root_inline.as_ref(), &[]);
         root_box.fade(root.opacity);
         // Nested containers space their children like the root does.
         let default_gap = match root_box.row_gap {
@@ -923,7 +930,7 @@ pub(crate) fn build_html_ui(
                 }
                 RenderedHtml::Failed(message) => format!("failed to render: {message}"),
             };
-            let style = styler.style_of(&element_tag("pre"), &root, Pseudo::default(), None);
+            let style = styler.style_of(&element_tag("pre"), &root, Pseudo::default(), None, &[]);
             vec![Item::Block(Block {
                 kind: BlockKind::Paragraph,
                 element: None,
@@ -2218,12 +2225,18 @@ fn collect_items(
     };
     let mut items = Vec::new();
     for handle in dom.children() {
-        collect_node(&ctx, *handle, &root, &mut items);
+        collect_node(&ctx, *handle, &root, &mut items, &[]);
     }
     items
 }
 
-fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mut Vec<Item>) {
+fn collect_node(
+    ctx: &Ctx,
+    handle: tl::NodeHandle,
+    inherited: &Style,
+    items: &mut Vec<Item>,
+    chain: &[Ancestor],
+) {
     let Some(node) = handle.get(ctx.parser) else {
         return;
     };
@@ -2232,7 +2245,14 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
         tl::Node::Raw(_) => {
             // Anonymous block: inherits the container's style.
             let mut runs = Vec::new();
-            push_runs(ctx, handle, inherited, RunExtras::default(), &mut runs);
+            push_runs(
+                ctx,
+                handle,
+                inherited,
+                RunExtras::default(),
+                &mut runs,
+                chain,
+            );
             let runs = collapse_runs(runs);
             if !runs.is_empty() {
                 items.push(Item::Block(Block {
@@ -2264,20 +2284,31 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
     let Some(element) = ctx.element(tag) else {
         // Unmatched `data-l10n-name` in a translation: content only.
         for child in tag.children().top().iter() {
-            collect_node(ctx, *child, inherited, items);
+            collect_node(ctx, *child, inherited, items, chain);
         }
         return;
     };
     let inline = cascade::inline_style(tag);
+    // This element becomes the nearest ancestor for everything inside it.
+    let own = Ancestor {
+        element: element.clone(),
+        pseudo: state,
+    };
+    let child_chain = {
+        let mut child_chain = Vec::with_capacity(chain.len() + 1);
+        child_chain.push(own);
+        child_chain.extend(chain.iter().cloned());
+        child_chain
+    };
     // The `<html>` element is what the root style was computed from:
     // re-applying it would square its `opacity`.
     let style = if element.tag == "html" {
         inherited.clone()
     } else {
         ctx.styler
-            .style_of(&element, inherited, state, inline.as_ref())
+            .style_of(&element, inherited, state, inline.as_ref(), chain)
     };
-    let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref());
+    let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), chain);
     boxed.drawn_outline = boxed.outline(style.color);
     boxed.fade(style.opacity);
     #[cfg(feature = "text-input")]
@@ -2304,7 +2335,7 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
             .get("name")
             .flatten()
             .map(|name| decode_entities(&name.as_utf8_str()).to_string());
-        let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref());
+        let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), chain);
         boxed.drawn_outline = boxed.outline(style.color);
         boxed.fade(style.opacity);
         items.push(Item::TextInput {
@@ -2334,7 +2365,14 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
     // piece gets. In a block, `push_runs` handles it inline instead.
     if element.tag == "img" {
         let mut runs = Vec::new();
-        push_runs(ctx, handle, inherited, RunExtras::default(), &mut runs);
+        push_runs(
+            ctx,
+            handle,
+            inherited,
+            RunExtras::default(),
+            &mut runs,
+            &child_chain,
+        );
         if !runs.is_empty() {
             items.push(Item::Block(Block {
                 kind: BlockKind::Paragraph,
@@ -2388,12 +2426,12 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
             };
             let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
                 for node in nodes {
-                    collect_node(fragment, *node, &style, target);
+                    collect_node(fragment, *node, &style, target, &child_chain);
                 }
             });
             if !translated {
                 for child in tag.children().top().iter() {
-                    collect_node(ctx, *child, &style, target);
+                    collect_node(ctx, *child, &style, target, &child_chain);
                 }
             }
             if container {
@@ -2422,7 +2460,15 @@ fn collect_node(ctx: &Ctx, handle: tl::NodeHandle, inherited: &Style, items: &mu
             .map(|kind| kind.as_utf8_str())
             .is_none_or(|kind| kind == "submit");
     let mut runs = Vec::new();
-    push_content_runs(ctx, handle, tag, &style, RunExtras::default(), &mut runs);
+    push_content_runs(
+        ctx,
+        handle,
+        tag,
+        &style,
+        RunExtras::default(),
+        &mut runs,
+        &child_chain,
+    );
     items.push(Item::Block(Block {
         kind,
         element: Some(element),
@@ -2491,15 +2537,16 @@ fn push_content_runs(
     style: &Style,
     extras: RunExtras,
     runs: &mut Vec<Run>,
+    chain: &[Ancestor],
 ) {
     let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
         for node in nodes {
-            push_runs(fragment, *node, style, extras.clone(), runs);
+            push_runs(fragment, *node, style, extras.clone(), runs, chain);
         }
     });
     if !translated {
         for child in tag.children().top().iter() {
-            push_runs(ctx, *child, style, extras.clone(), runs);
+            push_runs(ctx, *child, style, extras.clone(), runs, chain);
         }
     }
 }
@@ -2533,6 +2580,7 @@ fn push_runs(
     style: &Style,
     extras: RunExtras,
     runs: &mut Vec<Run>,
+    chain: &[Ancestor],
 ) {
     match handle.get(ctx.parser) {
         Some(tl::Node::Raw(text)) => {
@@ -2559,27 +2607,41 @@ fn push_runs(
                 .and_then(|states| states.get(&handle))
                 .copied()
                 .unwrap_or_default();
+            // The element, computed once: `element` consumes a named
+            // overlay's entry (each usable once), so all uses share it.
+            let element = ctx.element(tag);
+            // This element becomes the nearest ancestor for its content.
+            let child_chain = {
+                let mut child_chain = Vec::with_capacity(chain.len() + 1);
+                child_chain.push(Ancestor {
+                    element: element.clone().unwrap_or_default(),
+                    pseudo: state,
+                });
+                child_chain.extend(chain.iter().cloned());
+                child_chain
+            };
             if tag.name().as_utf8_str() == *"img" {
-                let element = ctx.element(tag);
-                push_image_run(ctx, tag, &element, state, style, extras, runs);
+                push_image_run(ctx, tag, &element, state, style, extras, runs, chain);
                 return;
             }
             // An unmatched `data-l10n-name` element is plain text.
-            let style = ctx.element(tag).map_or_else(
+            let style = element.as_ref().map_or_else(
                 || style.clone(),
                 |element| {
                     let inline = cascade::inline_style(tag);
-                    ctx.styler.style_of(&element, style, state, inline.as_ref())
+                    ctx.styler
+                        .style_of(element, style, state, inline.as_ref(), chain)
                 },
             );
             // This element's `background`/`text-decoration` over the
             // subtree's running values, faded with its opacity.
             let inherited_link = extras.link.clone();
-            let mut extras = ctx
-                .element(tag)
+            let mut extras = element
+                .as_ref()
                 .and_then(|element| {
                     let inline = cascade::inline_style(tag);
-                    ctx.styler.run_extras(&element, state, inline.as_ref())
+                    ctx.styler
+                        .run_extras(&element, state, inline.as_ref(), chain)
                 })
                 .map(|extras| extras.faded(style.opacity))
                 .unwrap_or(extras);
@@ -2604,12 +2666,12 @@ fn push_runs(
                         element: element_of(tag),
                         handle,
                     });
-                    push_content_runs(ctx, handle, tag, &style, extras, runs);
+                    push_content_runs(ctx, handle, tag, &style, extras, runs, &child_chain);
                     return;
                 }
             }
             extras.link = inherited_link;
-            push_content_runs(ctx, handle, tag, &style, extras, runs);
+            push_content_runs(ctx, handle, tag, &style, extras, runs, &child_chain);
         }
         Some(tl::Node::Comment(_)) | None => {}
     }
@@ -2628,10 +2690,11 @@ fn push_image_run(
     style: &Style,
     extras: RunExtras,
     runs: &mut Vec<Run>,
+    ancestors: &[Ancestor],
 ) {
     let Some(image) = element
         .as_ref()
-        .and_then(|element| ctx.styler.image_of(tag, element, state))
+        .and_then(|element| ctx.styler.image_of(tag, element, state, ancestors))
     else {
         return;
     };

@@ -15,7 +15,10 @@
 //!
 //! Supported CSS (parsed with lightningcss; a syntax error fails the load):
 //! - selectors: compound selectors — a type (or `*`) plus any `.class` /
-//!   `#id` parts: `p`, `.note`, `#title`, `p.note`, `.a.b`, `h1#x.big` — incl.
+//!   `#id` parts: `p`, `.note`, `#title`, `p.note`, `.a.b`, `h1#x.big` — joined
+//!   by descendant (a space) or child (`>`) combinators: `.panel p`,
+//!   `.panel > p`, `.a .b > .c` (ancestors match by their tag/class/id and
+//!   their own pseudo-state; specificity sums over the compounds) — incl.
 //!   comma lists, plus the pseudo-classes `:hover`, `:active`, `:focus` and
 //!   `:focus-visible` (see [`crate::focus`]) (each adds class-level
 //!   specificity; the rule applies while the element's
