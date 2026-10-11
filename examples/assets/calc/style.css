@@ -1,0 +1,141 @@
+/* A fluid column: every width here is calc() over mixed units (% + px,
+   % / n, px + em), so bevy_markup resolves them per frame — % against
+   the containing block's content box, em against the element's own font
+   size. Stepping a setting re-renders and re-resolves in place. */
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  padding: 20px 28px;
+}
+
+h1 {
+  color: #f0b429;
+  font-size: 40px;
+  font-weight: bold;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}
+
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+code {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+.layout {
+  flex-direction: row;
+  gap: 12px;
+}
+
+.sidebar {
+  /* The width comes from the template as an inline style (the context
+     value is only known there). */
+  background-color: #26306b;
+  border-image: url("../shared/frame.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 12px;
+  align-items: center;
+  justify-content: center;
+}
+
+p.label {
+  color: #b8c2ff;
+  font-size: 0.7em;
+  text-align: center;
+}
+
+.content {
+  /* The whole point: the column's width = the parent's width minus the
+     sidebar (templated px) minus the layout gap — the width itself is an
+     inline style (see page.html). */
+  flex-direction: column;
+  row-gap: 12px;
+}
+
+h2.headline {
+  color: #f0b429;
+  font-size: 26px;
+  font-weight: bold;
+  /* The margin is an inline style: em resolves against the headline's
+     own font size, px is templated — mixed units, resolved per frame. */
+}
+
+p.formula {
+  color: #7fdbff;
+  font-family: monospace;
+  font-size: 0.6em;
+}
+
+.cards {
+  flex-direction: row;
+  gap: 8px;
+}
+
+.card {
+  /* The width (an inline style) shares the column out over the cards:
+     % divided by the count, minus the gap each card gives up. */
+  height: 90px;
+  background-color: #31407f;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
+  border-width: 10px;
+  padding: 4px 10px;
+  align-items: center;
+  justify-content: center;
+}
+
+p.count {
+  color: #ffffff;
+  font-size: 0.8em;
+}
+
+.setting-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.arrow {
+  width: 44px;
+  align-items: center;
+  justify-content: center;
+  background-color: #31407f;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
+  border-width: 10px;
+}
+
+.arrow:hover {
+  background-color: #3e509b;
+}
+
+.arrow:active {
+  background-color: #4a5eb2;
+}
+
+.value {
+  min-width: 150px;
+  align-items: center;
+  background-color: #26306b;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
+  border-width: 10px;
+  padding: 2px 12px;
+}
+
+.value:hover {
+  background-color: #2d3878;
+}
+
+/* Keyboard/gamepad focus shows a ring; a mouse press hides it again. */
+.arrow:focus-visible,
+.value:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}

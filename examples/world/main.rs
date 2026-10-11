@@ -38,47 +38,35 @@ use bevy_markup::prelude::*;
 
 #[path = "../shared/input.rs"]
 mod input;
-use input::{ExampleInputPlugin, Hotkeys};
+use input::Hotkeys;
 
 #[path = "../shared/harness.rs"]
 mod harness;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            // The example assets live beside the examples, not in ./assets.
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: "examples/assets".into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "bevy_markup: world anchors".into(),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-            BevyMarkupPlugin,
-            harness::HarnessPlugin,
-            ExampleInputPlugin,
-        ))
-        .add_message::<Action>()
-        .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
-        .insert_resource(PlatesShown(true))
-        .add_systems(Startup, (setup, spawn_units).chain())
-        .add_systems(
-            Update,
-            (
-                orbit_camera,
-                walk,
-                blink,
-                (hotkeys, buttons, act).chain(),
-                show_plates,
-                show_hud,
-            ),
-        )
-        .run();
+    harness::run(
+        harness::ExampleWindow {
+            title: "bevy_markup: world anchors",
+            ..Default::default()
+        },
+        |app| {
+            app.add_message::<Action>()
+                .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
+                .insert_resource(PlatesShown(true))
+                .add_systems(Startup, (setup, spawn_units).chain())
+                .add_systems(
+                    Update,
+                    (
+                        orbit_camera,
+                        walk,
+                        blink,
+                        (hotkeys, buttons, act).chain(),
+                        show_plates,
+                        show_hud,
+                    ),
+                );
+        },
+    );
 }
 
 /// A unit: who it is, its health (0–100) and hits taken, and the circle it

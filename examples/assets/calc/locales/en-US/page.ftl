@@ -1,0 +1,9 @@
+calc-title = A fluid column
+calc-hint = The content column and the cards are sized with <code>calc()</code>. Click the − / + buttons, or focus a value and press <kbd>←</kbd> <kbd>→</kbd> / D-pad to step it. <kbd>L</kbd> / Y switches the language.
+calc-sidebar = Sidebar { $sidebar }px
+calc-headline = Indented by { $indent }px + 1em
+calc-formula-content = width: calc(100% − { $sidebar }px − 12px)
+calc-formula-card = calc(100% / { $cards } − 8px)
+calc-setting-sidebar = sidebar: { $value }
+calc-setting-cards = cards: { $value }
+calc-setting-indent = indent: { $value }

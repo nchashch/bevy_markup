@@ -15,37 +15,24 @@ use bevy_markup::prelude::*;
 
 #[path = "../shared/input.rs"]
 mod input;
-use input::ExampleInputPlugin;
 
 #[path = "../shared/harness.rs"]
 mod harness;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            // The example assets live beside the examples, not in ./assets.
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: "examples/assets".into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "bevy_markup: text inputs".into(),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-            BevyMarkupPlugin,
-            ExampleInputPlugin,
-            harness::HarnessPlugin,
-        ))
-        .add_systems(Startup, (setup, warn_without_feature))
-        .add_systems(
-            Update,
-            (read_fields_into_preview, handle_signals, switch_language),
-        )
-        .run();
+    harness::run(
+        harness::ExampleWindow {
+            title: "bevy_markup: text inputs",
+            ..Default::default()
+        },
+        |app| {
+            app.add_systems(Startup, (setup, warn_without_feature))
+                .add_systems(
+                    Update,
+                    (read_fields_into_preview, handle_signals, switch_language),
+                );
+        },
+    );
 }
 
 /// Both locales, preloaded so switching is immediate.

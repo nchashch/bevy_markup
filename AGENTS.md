@@ -110,10 +110,18 @@ examples/
                    `Arrows` SystemParam (held axes from arrows / D-pad / left stick); `Hotkeys`
                    SystemParam (`just_pressed(key, gamepad_button)`)
   shared/harness.rs (not an example; `#[path]`-included; `dev-tools` feature)
-                   HarnessPlugin: adds bevy_mcp_harness's localhost BRP + MCP
+                   HarnessPlugin + the examples' launcher (`harness::run`):
+                   adds bevy_mcp_harness's localhost BRP + MCP
                    surfaces to the example (screenshots, `game/ui` with the
                    `data-on-click` `clickable` hook, input mocks); compiles
-                   away without the feature
+                   away without the feature. `run` picks the composition
+                   from the command line: windowed (default), `--no-render`
+                   (render-less headless: no winit/wgpu, `ScheduleRunner`
+                   drives frames, `game/ui` + input mocks work, screenshots
+                   error) and `--offscreen` (windowed rendering minus winit
+                   into the harness's offscreen texture: real screenshots
+                   without a window). Headless exists because a windowed
+                   run stops ticking when its window is unfocused
   quickstart/      fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, two `data-on-click`
                    buttons (add a coin, language) in a column, with an inline minimal `navigate` (arrows / D-pad, all four directions,
                    Enter / A; kept self-contained); Space / Y = language
@@ -127,6 +135,13 @@ examples/
                    each grid, the details panel follows the focused cell (`selected` = its
                    id: `slot-`/`gear-`/`quest-`); small grids in slots/stats; Language
                    button, L / Y
+  calc/            CSS calc() in layout: a sidebar (templated px) + a fluid content column
+                   (`style="width: calc(100% - {{ sidebar }}px - 12px)"` — inline styles carry
+                   the context values), cards dividing the column (`calc(100% / {{ cards }} -
+                   8px)`), a headline indent `calc({{ indent }}px + 1em)`; three `data-setting`
+                   steppers (− / + buttons, ← → on a focused value) update the context every
+                   frame (`show_settings`) and the expressions re-resolve in place; the live
+                   formulas are l10n'd text; L / Y language
   menu/            focus/navigation (shared/input.rs; autofocus, :focus-visible ring), a volume slider (focusable
                    `tabindex="0"` bar: ← → step it while focused; `is="slider"` observes picking
                    press/drag to set it at the pointer; ◀ ▶ mouse-only `tabindex="-1"` step
@@ -284,6 +299,8 @@ test-fuzz/
                      `cargo test` runs)
 examples/assets/   the examples' content (AssetPlugin file_path; no fonts: system fonts)
   src/             artwork sources (frame.kra) for the UI images
+  calc/            page.html, style.css (the calc() widths + the steppers' chrome),
+                   locales/{en-US,de}
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
   grid/            grid.html, style.css (all of the grid example's layout), locales/{en-US,de}
   menu/            menu.html, dialog.html, tooltip.html, components.html (ui.button), style.css

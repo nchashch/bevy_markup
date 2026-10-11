@@ -27,6 +27,7 @@ examples bind the input (`shared/input.rs`).
 | <img src="screenshots/links.png" width="240"> | [`links`](links/) — `cargo run --example links`<br><br>`<a href>` links: clicks (and keyboard activation) emit the `open` signal with the href, recorded in a status line; ← → ↑ ↓ / LB RB cycle the links and the Language button, with `:focus-visible` styling. |
 | <img src="screenshots/grid-names.png" width="240"> | [`grid-names`](grid-names/) — `cargo run --example grid-names`<br><br>Named grid lines and areas: a board grid whose panels place by their area's name (`grid-area: portrait`, one spanning two rows) and a supply list placing between named column lines (`grid-column: left / right`); clicking parts checks them off in place. |
 | <img src="screenshots/combinators.png" width="240"> | [`combinators`](combinators/) — `cargo run --example combinators`<br><br>CSS combinators: selecting a group flips its class, and two rules reach different depths — `.selected p` highlights every paragraph inside, `.selected > p` only the direct ones (the nested one stays dim). |
+| <img src="screenshots/calc.png" width="240"> | [`calc`](calc/) — `cargo run --example calc`<br><br>CSS `calc()` in layout: a fluid content column (`calc(100% - {{ sidebar }}px - 12px)`), a card row dividing it (`calc(100% / {{ cards }} - 8px)`), and an `em`-based indent — steppers change the numbers and the expressions re-resolve in place. |
 | <img src="screenshots/menu.png" width="240"> | [`menu`](menu/) — `cargo run --example menu`<br><br>A settings menu for mouse, keyboard and gamepad: focus with a `:focus-visible` ring, a volume slider, a difficulty stepper, `data-tooltip`, an `HtmlModal` confirm dialog, signals routed to systems and a Tera 2 component library. |
 | <img src="screenshots/grid.png" width="240"> | [`grid`](grid/) — `cargo run --example grid`<br><br>CSS grid layout, three ways: responsive `auto-fill` slots with spanning and dense packing, a fixed paper-doll grid placed by line numbers, and equal columns of nested card grids — tabs switch between them. |
 | <img src="screenshots/inline.png" width="240"> | [`inline`](inline/) — `cargo run --example inline`<br><br>Inline styling: `background-color` and `text-decoration` on text runs, CSS-sized `<img>` images, elliptical `border-radius`, and a `position: fixed` ribbon. |
@@ -42,9 +43,23 @@ examples bind the input (`shared/input.rs`).
   alone), Enter / A activate, and `Hotkeys` maps a shortcut key to a
   gamepad button.
 - `shared/harness.rs` — the `dev-tools` feature's agent/QA surface
-  (`bevy_mcp_harness`); compiles away without the feature.
+  (`bevy_mcp_harness`) and the examples' launcher (`harness::run`), which
+  picks the app composition from the command line; compiles away without
+  the feature.
 
 With `--features dev-tools`, every example also serves a localhost agent/QA
 tool surface: BRP on 127.0.0.1:15702 and MCP on 127.0.0.1:15710/mcp —
 screenshots (`game/screenshot`), the laid-out UI tree (`game/ui`), and
-mocked keyboard/gamepad/mouse input.
+mocked keyboard/gamepad/mouse input. For agent QA without a display (a
+windowed run stops ticking when its window is unfocused), two headless
+compositions exist:
+
+- `--no-render` — render-less: no window, no winit, no wgpu. UI layout,
+  picking, `game/ui` and the input mocks all work; `game/screenshot`
+  returns a clean error (nothing renders).
+- `--offscreen` — windowed rendering minus winit: every camera renders
+  into the harness's offscreen texture, so `game/screenshot` captures
+  real frames (needs a GPU or lavapipe).
+
+Both drive frames from `ScheduleRunnerPlugin`, so nothing ever waits for
+window focus.

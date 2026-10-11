@@ -28,52 +28,40 @@ use bevy_markup::prelude::*;
 mod harness;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            // The example assets live beside the examples, not in ./assets.
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: "examples/assets".into(),
-                    ..default()
-                })
-                // Wide enough for the shell's 420px panels (3 across the
-                // bottom, two columns on top).
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        resolution: bevy::window::WindowResolution::new(1600, 900),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-            BevyMarkupPlugin,
-            harness::HarnessPlugin,
-            input::ExampleInputPlugin,
-        ))
-        // Left / right move focus, up / down scroll (`shell::scroll_focused`).
-        .insert_resource(input::ArrowMode::Linear)
-        .insert_resource(ClearColor(Color::srgb_u8(20, 24, 32)))
-        .add_systems(Startup, (setup, controls::spawn, shell::spawn))
-        .define_html_element("content-slot", shell::fill_content_slot)
-        .define_html_element("scroll-column", shell::scroll_column)
-        .define_html_element("scrollbar", shell::scrollbar)
-        .init_resource::<shell::DraggedThumb>()
-        .add_observer(shell::drag_thumb)
-        .add_observer(shell::start_thumb_drag)
-        .add_observer(shell::end_thumb_drag)
-        .add_observer(shell::press_track)
-        .add_systems(
-            Update,
-            (
-                controls::read_signals,
-                controls::hotkeys,
-                shell::scroll_focused,
-                shell::scroll_focus_into_view,
-                shell::update_scrollbars,
-                controls::apply_locale_selection,
-                controls::apply_theme_selection,
-            ),
-        )
-        .run();
+    harness::run(
+        harness::ExampleWindow {
+            title: "bevy_markup: demo",
+            // Wide enough for the shell's 420px panels (3 across the
+            // bottom, two columns on top).
+            resolution: (1600, 900),
+        },
+        |app| {
+            // Left / right move focus, up / down scroll (`shell::scroll_focused`).
+            app.insert_resource(input::ArrowMode::Linear)
+                .insert_resource(ClearColor(Color::srgb_u8(20, 24, 32)))
+                .add_systems(Startup, (setup, controls::spawn, shell::spawn))
+                .define_html_element("content-slot", shell::fill_content_slot)
+                .define_html_element("scroll-column", shell::scroll_column)
+                .define_html_element("scrollbar", shell::scrollbar)
+                .init_resource::<shell::DraggedThumb>()
+                .add_observer(shell::drag_thumb)
+                .add_observer(shell::start_thumb_drag)
+                .add_observer(shell::end_thumb_drag)
+                .add_observer(shell::press_track)
+                .add_systems(
+                    Update,
+                    (
+                        controls::read_signals,
+                        controls::hotkeys,
+                        shell::scroll_focused,
+                        shell::scroll_focus_into_view,
+                        shell::update_scrollbars,
+                        controls::apply_locale_selection,
+                        controls::apply_theme_selection,
+                    ),
+                );
+        },
+    );
 }
 
 fn setup(mut commands: Commands, mut fonts: ResMut<FontFamilies>) {

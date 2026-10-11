@@ -32,46 +32,34 @@ use bevy_markup::prelude::*;
 
 #[path = "../shared/input.rs"]
 mod input;
-use input::{ExampleInputPlugin, Hotkeys};
+use input::Hotkeys;
 
 #[path = "../shared/harness.rs"]
 mod harness;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            // The example assets live beside the examples, not in ./assets.
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: "examples/assets".into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "bevy_markup: live data".into(),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-            BevyMarkupPlugin,
-            harness::HarnessPlugin,
-            ExampleInputPlugin,
-        ))
-        .define_html_element("badge", badge)
-        .add_message::<Action>()
-        .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
-        .insert_resource(Party::new())
-        .init_resource::<Stats>()
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (
-                ((hotkeys, buttons), act, simulate, show_party, show_stats).chain(),
-                spin_badges,
-            ),
-        )
-        .add_observer(count_party_updates)
-        .run();
+    harness::run(
+        harness::ExampleWindow {
+            title: "bevy_markup: live data",
+            ..Default::default()
+        },
+        |app| {
+            app.define_html_element("badge", badge)
+                .add_message::<Action>()
+                .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
+                .insert_resource(Party::new())
+                .init_resource::<Stats>()
+                .add_systems(Startup, setup)
+                .add_systems(
+                    Update,
+                    (
+                        ((hotkeys, buttons), act, simulate, show_party, show_stats).chain(),
+                        spin_badges,
+                    ),
+                )
+                .add_observer(count_party_updates);
+        },
+    );
 }
 
 const NAMES: [&str; 8] = ["Ada", "Bo", "Cy", "Dee", "Eli", "Fay", "Gus", "Hal"];

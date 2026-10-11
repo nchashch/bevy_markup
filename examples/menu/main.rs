@@ -50,73 +50,61 @@ use bevy_markup::prelude::*;
 
 #[path = "../shared/input.rs"]
 mod input;
-use input::{ExampleInputPlugin, Hotkeys, SettingStep};
+use input::{Hotkeys, SettingStep};
 
 #[path = "../shared/harness.rs"]
 mod harness;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            // The example assets live beside the examples, not in ./assets.
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: "examples/assets".into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "bevy_markup: menu".into(),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-            BevyMarkupPlugin,
-            harness::HarnessPlugin,
-            ExampleInputPlugin,
-        ))
-        .define_html_element("icon", icon)
-        .define_html_element("slider", slider)
-        .on_html_click(
-            "volume-up",
-            |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
-                settings.step_volume(1);
-            },
-        )
-        .on_html_click(
-            "volume-down",
-            |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
-                settings.step_volume(-1);
-            },
-        )
-        .on_html_click(
-            "difficulty-up",
-            |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
-                settings.step("difficulty", 1);
-            },
-        )
-        .on_html_click(
-            "difficulty-down",
-            |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
-                settings.step("difficulty", -1);
-            },
-        )
-        .on_html_click("reset", open_dialog)
-        .on_html_click("dialog", answer_dialog)
-        .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
-        .init_resource::<Settings>()
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (
-                apply_setting_steps,
-                record_last_input,
-                close_dialog_on_escape,
-                switch_language,
-                show_settings,
-            ),
-        )
-        .run();
+    harness::run(
+        harness::ExampleWindow {
+            title: "bevy_markup: menu",
+            ..Default::default()
+        },
+        |app| {
+            app.define_html_element("icon", icon)
+                .define_html_element("slider", slider)
+                .on_html_click(
+                    "volume-up",
+                    |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
+                        settings.step_volume(1);
+                    },
+                )
+                .on_html_click(
+                    "volume-down",
+                    |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
+                        settings.step_volume(-1);
+                    },
+                )
+                .on_html_click(
+                    "difficulty-up",
+                    |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
+                        settings.step("difficulty", 1);
+                    },
+                )
+                .on_html_click(
+                    "difficulty-down",
+                    |_: In<ElementSignal>, mut settings: ResMut<Settings>| {
+                        settings.step("difficulty", -1);
+                    },
+                )
+                .on_html_click("reset", open_dialog)
+                .on_html_click("dialog", answer_dialog)
+                .insert_resource(ClearColor(Color::srgb_u8(0x10, 0x10, 0x14)))
+                .init_resource::<Settings>()
+                .add_systems(Startup, setup)
+                .add_systems(
+                    Update,
+                    (
+                        apply_setting_steps,
+                        record_last_input,
+                        close_dialog_on_escape,
+                        switch_language,
+                        show_settings,
+                    ),
+                );
+        },
+    );
 }
 
 const DIFFICULTIES: [&str; 3] = ["easy", "normal", "hard"];

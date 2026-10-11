@@ -12,34 +12,21 @@ use bevy_markup::prelude::*;
 
 #[path = "../shared/input.rs"]
 mod input;
-use input::ExampleInputPlugin;
 
 #[path = "../shared/harness.rs"]
 mod harness;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            // The example assets live beside the examples, not in ./assets.
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: "examples/assets".into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "bevy_markup: CSS combinators".into(),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-            BevyMarkupPlugin,
-            ExampleInputPlugin,
-            harness::HarnessPlugin,
-        ))
-        .add_systems(Startup, setup)
-        .add_systems(Update, (handle_signals, switch_language))
-        .run();
+    harness::run(
+        harness::ExampleWindow {
+            title: "bevy_markup: CSS combinators",
+            ..Default::default()
+        },
+        |app| {
+            app.add_systems(Startup, setup)
+                .add_systems(Update, (handle_signals, switch_language));
+        },
+    );
 }
 
 /// Both locales, preloaded so switching is immediate.

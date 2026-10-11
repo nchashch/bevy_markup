@@ -23,30 +23,18 @@ use input::{Arrows, Repeat};
 mod harness;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            // The example assets live beside the examples, not in ./assets.
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: "examples/assets".into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "bevy_markup: links".into(),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-            BevyMarkupPlugin,
-            harness::HarnessPlugin,
-        ))
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (cycle_links, activate_link, handle_signals, switch_language),
-        )
-        .run();
+    harness::run(
+        harness::ExampleWindow {
+            title: "bevy_markup: links",
+            ..Default::default()
+        },
+        |app| {
+            app.add_systems(Startup, setup).add_systems(
+                Update,
+                (cycle_links, activate_link, handle_signals, switch_language),
+            );
+        },
+    );
 }
 
 /// Both locales, preloaded so switching is immediate.

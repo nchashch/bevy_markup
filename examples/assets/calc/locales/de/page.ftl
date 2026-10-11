@@ -1,0 +1,9 @@
+calc-title = Eine flexible Spalte
+calc-hint = Die Inhaltsspalte und die Karten werden mit <code>calc()</code> bemessen. Klicke auf − / +, oder fokussiere einen Wert und drücke <kbd>←</kbd> <kbd>→</kbd> / Steuerkreuz, um ihn zu verstellen. <kbd>L</kbd> / Y wechselt die Sprache.
+calc-sidebar = Seitenleiste { $sidebar }px
+calc-headline = Eingerückt um { $indent }px + 1em
+calc-formula-content = width: calc(100% − { $sidebar }px − 12px)
+calc-formula-card = calc(100% / { $cards } − 8px)
+calc-setting-sidebar = Seitenleiste: { $value }
+calc-setting-cards = Karten: { $value }
+calc-setting-indent = Einrückung: { $value }

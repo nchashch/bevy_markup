@@ -174,6 +174,22 @@ fn forms_contexts() -> Vec<Value> {
 
 /// `examples/grid-names/main.rs`: the board's picks (nothing checked,
 /// everything checked) and the supply list.
+/// `examples/calc/main.rs`: the steppers at their defaults, their
+/// minimum and their maximum (the calc() formulas change with them).
+fn calc_contexts() -> Vec<Value> {
+    vec![
+        json!({
+            "settings": { "sidebar": 160, "cards": 3, "indent": 8 },
+        }),
+        json!({
+            "settings": { "sidebar": 80, "cards": 2, "indent": 0 },
+        }),
+        json!({
+            "settings": { "sidebar": 280, "cards": 5, "indent": 48 },
+        }),
+    ]
+}
+
 fn grid_names_contexts() -> Vec<Value> {
     vec![
         json!({
@@ -431,6 +447,13 @@ const PAGES: &[Page] = &[
         contexts: grid_names_contexts,
         stylesheets: &["grid-names/style.css"],
         locales: "grid-names/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "calc/page.html",
+        contexts: calc_contexts,
+        stylesheets: &["calc/style.css"],
+        locales: "calc/locales",
         unlocalized: None,
     },
     Page {
