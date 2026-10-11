@@ -210,6 +210,8 @@ the exact CSS subset.
 ```sh
 cargo run --example quickstart   # the code above, plus buttons the keyboard and a gamepad reach too
 cargo run --example grid         # CSS grid: three screens (auto-fill slots, a paper doll, a quest board)
+cargo run --example grid-names   # named grid lines and areas: a board whose panels place by name
+cargo run --example combinators  # descendant and child combinators: two rules reaching different depths
 cargo run --example menu         # focus, a slider and a stepper, modal dialog, data-tooltip, a component library
 cargo run --example inputs       # text fields with a live preview and reset buttons (needs --features text-input)
 cargo run --example links        # <a href>: clicking and keyboard cycling, the open signal, a status line
@@ -381,9 +383,10 @@ every layer in detail.
 
 ```
 src/            the library
-examples/       quickstart, grid, menu, live, world, inline, markdown,
-                inputs, links, forms and demo, one directory and README
-                each (+ shared/input.rs, shared/harness.rs)
+examples/       quickstart, grid, grid-names, combinators, menu, live,
+                world, inline, markdown, inputs, links, forms and demo,
+                one directory and README each
+                (+ shared/input.rs, shared/harness.rs)
 tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in
                 honggfuzz/, fuzzcheck/, test-fuzz/)

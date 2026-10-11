@@ -1,0 +1,86 @@
+/* Combinators: descendant (a space) and child (`>`) chains. Selecting a
+   group flips its `selected` class, and two rules reach different
+   depths: the descendant rule hits every paragraph inside; the child
+   rule hits only the group's direct children. */
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  padding: 20px 28px;
+}
+
+h1 {
+  color: #f0b429;
+  font-size: 40px;
+  font-weight: bold;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}
+
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+code {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+/* The groups: focusable panels, side by side. */
+.group {
+  background-color: #1f1f1f;
+  border-style: solid;
+  border-width: 2px;
+  border-color: #3a3a3a;
+  border-radius: 10px;
+  padding: 12px 16px;
+  gap: 10px;
+}
+
+.group h2 {
+  color: #f0b429;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.group:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
+/* The nested block: a plain container, one level deep. */
+.nested {
+  border-style: solid;
+  border-width: 2px;
+  border-color: #2c2c2c;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+/* Everything a selected group contains: the direct paragraph AND the
+   nested one (a descendant chain matches at any depth). */
+.selected p {
+  color: #b8ddb8;
+}
+
+/* Only the selected group's *direct* paragraphs: the nested one stays
+   dim (a child chain stops at one level). */
+.selected > p {
+  color: #7fdbff;
+  font-weight: bold;
+}
+
+/* The nested block lights up through its own descendant rule. */
+.selected .nested {
+  border-color: #7fdbff;
+}
+
+p.note {
+  color: #9a9a9a;
+  font-size: 0.8em;
+}

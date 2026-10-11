@@ -172,6 +172,50 @@ fn forms_contexts() -> Vec<Value> {
     ]
 }
 
+/// `examples/grid-names/main.rs`: the board's picks (nothing checked,
+/// everything checked) and the supply list.
+fn grid_names_contexts() -> Vec<Value> {
+    vec![
+        json!({
+            "player": "Ada", "hp": 7, "max_hp": 10, "coins": 12,
+            "picks": [false, false, false, false, false, false, false],
+            "items": [
+                { "name": "torch", "count": 3, "checked": false },
+                { "name": "rope", "count": 1, "checked": false },
+                { "name": "key", "count": 0, "checked": false },
+            ],
+        }),
+        json!({
+            "player": "Ada", "hp": 7, "max_hp": 10, "coins": 12,
+            "picks": [true, true, true, true, true, true, true],
+            "items": [
+                { "name": "torch", "count": 3, "checked": true },
+                { "name": "rope", "count": 1, "checked": true },
+                { "name": "key", "count": 0, "checked": true },
+            ],
+        }),
+    ]
+}
+
+/// `examples/combinators/main.rs`: each group selected in turn.
+fn combinators_contexts() -> Vec<Value> {
+    [0, 1, 2]
+        .iter()
+        .map(|selected| {
+            json!({
+                "groups": GROUPS.iter().enumerate().map(|(index, label)| json!({
+                    "label": label,
+                    "selected": index == *selected,
+                })).collect::<Vec<_>>(),
+                "selected_label": GROUPS[*selected],
+            })
+        })
+        .collect()
+}
+
+/// The combinators example's group names (also in `main.rs`).
+const GROUPS: [&str; 3] = ["north", "middle", "south"];
+
 /// `examples/markdown/main.rs`: both reader pages.
 fn markdown_contexts() -> Vec<Value> {
     vec![
@@ -380,6 +424,20 @@ const PAGES: &[Page] = &[
         contexts: forms_contexts,
         stylesheets: &["forms/style.css"],
         locales: "forms/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "grid-names/board.html",
+        contexts: grid_names_contexts,
+        stylesheets: &["grid-names/style.css"],
+        locales: "grid-names/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "combinators/panel.html",
+        contexts: combinators_contexts,
+        stylesheets: &["combinators/style.css"],
+        locales: "combinators/locales",
         unlocalized: None,
     },
     Page {

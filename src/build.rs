@@ -2317,19 +2317,6 @@ fn collect_node(
     // (named lines and areas); its own template then backs its children's.
     boxed.layout.resolve_names(grid);
     let grid_of_own = boxed.layout.grid_names();
-    eprintln!(
-        "DBG-RESOLVE {}{:?} after: col={:?} row={:?}",
-        element.tag, element.classes, boxed.layout.grid_column, boxed.layout.grid_row,
-    );
-    eprintln!(
-        "DBG-RESOLVE {}{:?} in-grid={:?} own-rows-cols={:?} col={:?} row={:?}",
-        element.tag,
-        element.classes,
-        grid.is_some(),
-        grid_of_own.is_some(),
-        boxed.layout.grid_column,
-        boxed.layout.grid_row,
-    );
     boxed.drawn_outline = boxed.outline(style.color);
     boxed.fade(style.opacity);
     #[cfg(feature = "text-input")]

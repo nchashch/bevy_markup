@@ -1,0 +1,14 @@
+<h1 data-l10n-id="sel-title">Selectors at work</h1>
+<p class="hint" data-l10n-id="sel-hint">Click a <em>group</em> to select it. Selecting highlights the paragraphs <em>inside</em> it with a descendant selector (<code>.selected p</code>) and its direct children with a child selector (<code>.selected > p</code>) — watch the nested one: a descendant rule reaches it, a child rule doesn't. <kbd>Space</kbd> / Y switches the language.</p>
+
+{% for group in groups %}
+<div class="group{% if group.selected %} selected{% endif %}" tabindex="0" data-on-click="select-{{ loop.index0 }}">
+  <h2 data-l10n-id="sel-group" data-l10n-args='{"label": "{{ group.label }}"}'>Group {{ group.label }}</h2>
+  <p class="direct" data-l10n-id="sel-direct">A direct paragraph.</p>
+  <div class="nested">
+    <p class="deep" data-l10n-id="sel-nested">A nested paragraph, one level down.</p>
+  </div>
+</div>
+{% endfor %}
+
+<p class="note" data-l10n-id="sel-note" data-l10n-args='{"selected": "{{ selected_label }}"}'>Selected: {{ selected_label }}</p>

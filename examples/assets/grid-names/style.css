@@ -1,0 +1,121 @@
+/* The camp board: everything about its layout is *named*. The board is a
+   grid; the stylesheet names the areas and the supply list names its own
+   column lines; the panels and rows place by those names. */
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  padding: 20px 28px;
+}
+
+h1 {
+  color: #f0b429;
+  font-size: 40px;
+  font-weight: bold;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}
+
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+em {
+  color: #b8ddb8;
+  font-style: italic;
+}
+
+/* The board's areas: each name is a region; `portrait` spans two rows.
+   The declaration implies the explicit tracks (two columns, three rows,
+   auto-sized); the template columns override the columns' sizing. */
+.board {
+  display: grid;
+  grid-template-areas:
+    "portrait stats"
+    "portrait gear"
+    "log log";
+  grid-template-columns: 200px 1fr;
+  gap: 10px;
+}
+
+/* Panels place by their area's name: the whole region, all four edges. */
+.cell {
+  grid-area: auto;
+  background-color: #1f1f1f;
+  border-style: solid;
+  border-width: 2px;
+  border-color: #3a3a3a;
+  border-radius: 10px;
+  padding: 10px 14px;
+  gap: 8px;
+}
+
+/* The areas: `portrait` spans the two top rows; `log` spans the bottom
+   (a name used on several rows must form a rectangle). */
+#portrait { grid-area: portrait }
+#stats { grid-area: stats }
+#gear { grid-area: gear }
+#log { grid-area: log }
+
+.cell h2 {
+  color: #7fdbff;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.cell:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
+img.cat {
+  width: 100%;
+  border-radius: 8px;
+}
+
+/* The supplies: the columns have *named lines*; each row places between
+   the named lines, and the counts hang off the last one. */
+.supplies {
+  display: grid;
+  grid-template-columns: [left] 1fr [middle] 60px [right];
+  gap: 4px 8px;
+}
+
+.supply-row {
+  /* Across the whole board, from the named left line to the named right
+     line, with the name and its count pushed to the edges. */
+  grid-column: left / right;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  background-color: #262626;
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+
+.supply-row .name {
+  color: #e6e6e6;
+}
+
+.supply-row .count {
+  color: #f0b429;
+  font-family: monospace;
+}
+
+/* A part checked off dims. */
+.picked {
+  opacity: 0.55;
+}
+
+/* The row the pointer or the focus is on lights up. */
+.supply-row:hover,
+.supply-row:focus-visible {
+  background-color: #333333;
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
