@@ -1,0 +1,38 @@
+/* Layout vector: CSS grid with named areas and named lines. Default font
+   only (FiraMono, 0.6em advance), line height 1.2, font sizes with whole
+   line heights (see AGENTS.md). */
+html { font-size: 20px }
+.grid { display: grid; gap: 4px 6px; width: 400px }
+
+/* Named areas: the template implies the tracks (auto) and the rows/cols
+   each region spans; items place by area name, in whole and in part. */
+.areas {
+  grid-template-areas:
+    "head head"
+    "side main"
+    "foot foot";
+}
+.head { grid-area: head }
+.side { grid-area: side }
+.main { grid-area: main }
+.foot { grid-area: foot; grid-row: 3 / 4; grid-column: 1 / 3 }
+
+/* Named lines in the track list: items place by line name, with an
+   occurrence index and a span. */
+.lines {
+  grid-template-columns: [first] 1fr [second] 2fr [third] 1fr;
+  grid-template-rows: 40px 40px;
+}
+.a { grid-column: first / second }
+.b { grid-column: second / span 1; grid-row: 1 / 2 }
+.c { grid-column: second / third; grid-row: 2 }
+.d { grid-column: third / third; grid-row: 2 }
+
+/* Areas and named lines mixed: a named area next to a named-line
+   placement. */
+.mixed {
+  grid-template-columns: [left] 100px [mid] 200px [right];
+  grid-template-areas: "whole part";
+}
+.whole { grid-area: whole }
+.part { grid-column: mid / right }

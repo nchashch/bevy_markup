@@ -35,6 +35,7 @@ use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleAttribute, St
 use lightningcss::traits::IntoOwned;
 use lightningcss::traits::ToCss;
 use lightningcss::values::color::{CssColor, RGBA};
+use lightningcss::values::ident::CustomIdent;
 use lightningcss::values::image::Image;
 use lightningcss::values::length::{LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use lightningcss::values::percentage::NumberOrPercentage;
@@ -85,13 +86,93 @@ pub(crate) struct BorderImageDecl {
 }
 
 /// One side (start or end) of a declared `grid-row`/`grid-column`
-/// placement; named lines and areas are unsupported.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// placement. Named lines and areas resolve to line numbers against the
+/// parent grid's template ([`GridNames`]) at collection time.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum GridLineDecl {
     Auto,
     /// A line number (negative counts from the end).
     Line(i16),
     Span(u16),
+    /// A named line or area, optionally with an occurrence index (as in
+    /// CSS's `2 main-start`; 1-based, negative from the end). Areas
+    /// resolve to their region's start/end lines per side.
+    Named {
+        name: String,
+        index: Option<i16>,
+    },
+}
+
+/// A grid template's named lines and areas, for resolving a child's
+/// named placement to line numbers. Built from a container's
+/// `grid-template-columns`/`-rows` (their `[name]` line names) and
+/// `grid-template-areas`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct GridNames {
+    /// Line indices by name, per axis, in document order: a line `i`
+    /// (1-based from the start, `L` lines total) registers as `i` and
+    /// `i - L - 1` (negative, from the end).
+    rows: HashMap<String, Vec<i16>>,
+    columns: HashMap<String, Vec<i16>>,
+    /// Named areas: `[row start, row end, column start, column end]`
+    /// (1-based lines).
+    areas: HashMap<String, [i16; 4]>,
+    /// The explicit rows/columns `grid-template-areas` implies (sized
+    /// `auto`; declared templates win over them).
+    implied_rows: u16,
+    implied_columns: u16,
+}
+
+impl GridNames {
+    /// Resolves one placement side's named line or area: an area name
+    /// resolves to its region's line for that side; a line name to its
+    /// occurrence (`index`: 1-based, negative from the end, as in CSS's
+    /// `2 main-start`).
+    fn line(&self, axis: Axis, side: Side, name: &str, index: Option<i16>) -> Option<GridLineDecl> {
+        if let Some(area) = self.areas.get(name) {
+            if index.is_some_and(|index| index != 1) {
+                return None;
+            }
+            let [start, end] = match axis {
+                Axis::Row => [area[0], area[1]],
+                Axis::Column => [area[2], area[3]],
+            };
+            return Some(GridLineDecl::Line(match side {
+                Side::Start => start,
+                Side::End => end,
+            }));
+        }
+        let lines = match axis {
+            Axis::Row => &self.rows,
+            Axis::Column => &self.columns,
+        };
+        // The registrations per name are pairs (the 1-based line and its
+        // negative spelling): partition by sign, then pick the occurrence.
+        let occurrences = lines.get(name)?;
+        let (positive, negative): (Vec<i16>, Vec<i16>) =
+            occurrences.iter().partition(|line| **line > 0);
+        let index = index.unwrap_or(1) as i32;
+        let line = if index > 0 {
+            positive.get(index as usize - 1)
+        } else {
+            negative.get((negative.len() as i32 + index as i32 - 1).max(0) as usize)
+        };
+        Some(GridLineDecl::Line(*line?))
+    }
+}
+
+/// Which axis a line name is looked up on.
+#[derive(Clone, Copy, Debug)]
+enum Axis {
+    Row,
+    Column,
+}
+
+/// Which side (`[start, end]`) of a placement is being resolved.
+#[derive(Clone, Copy, Debug)]
+enum Side {
+    Start,
+    End,
 }
 
 /// Declared flex, grid, size and margin properties of a container or block,
@@ -127,6 +208,9 @@ pub(crate) struct LayoutDecl {
     pub grid_auto_rows: Option<Vec<GridTrack>>,
     pub grid_auto_columns: Option<Vec<GridTrack>>,
     pub grid_auto_flow: Option<GridAutoFlow>,
+    /// The template's named lines (from `[name]`s in the track lists) and
+    /// `grid-template-areas` (`Some` whenever either is declared).
+    pub grid_names: Option<GridNames>,
     /// `[start, end]` of `grid-row`.
     pub grid_row: [Option<GridLineDecl>; 2],
     /// `[start, end]` of `grid-column`.
@@ -157,6 +241,40 @@ pub(crate) enum CssPosition {
 
 impl LayoutDecl {
     /// Overrides `node`'s fields with the declared ones.
+    /// Resolves the placement's named lines and areas against the parent
+    /// grid's template; a name the template doesn't have (or one inside an
+    /// `auto-fill`/`auto-fit` repeat, whose count is only known at layout)
+    /// becomes `auto`, logged. Runs once per element, at collection.
+    pub fn resolve_names(&mut self, grid: Option<&GridNames>) {
+        for (axis, sides) in [
+            (Axis::Row, &mut self.grid_row),
+            (Axis::Column, &mut self.grid_column),
+        ] {
+            for (side, side_decl) in sides.iter_mut().enumerate() {
+                let Some(GridLineDecl::Named { name, index }) = side_decl.clone() else {
+                    continue;
+                };
+                let side = if side == 0 { Side::Start } else { Side::End };
+                let resolved = grid.and_then(|grid| grid.line(axis, side, &name, index));
+                *side_decl = Some(resolved.unwrap_or_else(|| {
+                    debug!(
+                        "html css: grid line name `{name}` doesn't resolve against the \
+                             parent grid; treated as auto"
+                    );
+                    GridLineDecl::Auto
+                }));
+            }
+        }
+    }
+
+    /// The grid this element's own template defines for its children's
+    /// placement: named lines and areas. `None` without grid templates or
+    /// areas (the element isn't a grid container, or it declares none of
+    /// the names).
+    pub fn grid_names(&self) -> Option<GridNames> {
+        self.grid_names.clone()
+    }
+
     pub fn apply_to(&self, node: &mut Node) {
         fn set<T: Clone>(target: &mut T, value: &Option<T>) {
             if let Some(value) = value {
@@ -187,13 +305,27 @@ impl LayoutDecl {
         set(&mut node.margin.left, &self.margin[3]);
         set(&mut node.column_gap, &self.column_gap.map(Val::Px));
         set(&mut node.box_sizing, &self.box_sizing);
+        // `grid-template-areas` implies the explicit rows and columns it
+        // names (sized `auto`); declared templates win over them.
+        if let Some(names) = &self.grid_names {
+            let auto: RepeatedGridTrack = GridTrack::auto();
+            if self.grid_template_rows.is_none() && names.implied_rows > 0 {
+                node.grid_template_rows = vec![auto.clone(); names.implied_rows as usize];
+            }
+            if self.grid_template_columns.is_none() && names.implied_columns > 0 {
+                node.grid_template_columns = vec![auto.clone(); names.implied_columns as usize];
+            }
+        }
         set(&mut node.grid_template_rows, &self.grid_template_rows);
         set(&mut node.grid_template_columns, &self.grid_template_columns);
         set(&mut node.grid_auto_rows, &self.grid_auto_rows);
         set(&mut node.grid_auto_columns, &self.grid_auto_columns);
         set(&mut node.grid_auto_flow, &self.grid_auto_flow);
-        set(&mut node.grid_row, &grid_placement(self.grid_row));
-        set(&mut node.grid_column, &grid_placement(self.grid_column));
+        set(&mut node.grid_row, &grid_placement(self.grid_row.clone()));
+        set(
+            &mut node.grid_column,
+            &grid_placement(self.grid_column.clone()),
+        );
         let corners = &mut node.border_radius;
         set(
             &mut corners.top_left,
@@ -312,12 +444,12 @@ impl LayoutDecl {
         put(
             &mut node.grid_row,
             &base.grid_row,
-            &grid_placement(self.grid_row),
+            &grid_placement(self.grid_row.clone()),
         );
         put(
             &mut node.grid_column,
             &base.grid_column,
-            &grid_placement(self.grid_column),
+            &grid_placement(self.grid_column.clone()),
         );
         let (corners, base_corners) = (&mut node.border_radius, &base.border_radius);
         put(
@@ -361,10 +493,22 @@ impl LayoutDecl {
 /// spans from (or back to) the line. `None` when neither side is declared.
 fn grid_placement(sides: [Option<GridLineDecl>; 2]) -> Option<GridPlacement> {
     use GridLineDecl::{Auto, Line, Span};
-    if sides == [None, None] {
+    // `resolve_names` runs at collection, before this; a surviving `Named`
+    // means the parent grid didn't have the name.
+    let sides = sides.map(|side| {
+        side.map(|side| match side {
+            GridLineDecl::Named { .. } => {
+                debug!("html css: unresolved grid line name; treated as auto");
+                Auto
+            }
+            side => side,
+        })
+        .unwrap_or(Auto)
+    });
+    if sides == [Auto, Auto] {
         return None;
     }
-    let [start, end] = sides.map(|side| side.unwrap_or(Auto));
+    let [start, end] = sides;
     Some(match (start, end) {
         (Auto, Auto) => GridPlacement::auto(),
         (Line(start), Auto) => GridPlacement::start(start),
@@ -373,6 +517,9 @@ fn grid_placement(sides: [Option<GridLineDecl>; 2]) -> Option<GridPlacement> {
         (Span(span), Auto | Span(_)) | (Auto, Span(span)) => GridPlacement::span(span),
         (Line(start), Span(span)) => GridPlacement::start_span(start, span),
         (Span(span), Line(end)) => GridPlacement::end_span(end, span),
+        // `resolve_names` handled named lines at collection (or turned
+        // them into `Auto` above); this is unreachable.
+        (GridLineDecl::Named { .. }, _) | (_, GridLineDecl::Named { .. }) => GridPlacement::auto(),
     })
 }
 
@@ -1016,14 +1163,48 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         Property::JustifyItems(value) => style.layout.justify_items = justify_items(value),
         Property::JustifySelf(value) => style.layout.justify_self = justify_self(value),
-        Property::GridTemplateRows(rows) => style.layout.grid_template_rows = track_sizing(rows),
+        Property::GridTemplateRows(rows) => {
+            let (tracks, names) = track_sizing(rows, Axis::Row);
+            style.layout.grid_template_rows = tracks;
+            if let Some(names) = names {
+                let table = style
+                    .layout
+                    .grid_names
+                    .get_or_insert_with(GridNames::default);
+                table.rows = names.rows;
+            }
+        }
         Property::GridTemplateColumns(columns) => {
-            style.layout.grid_template_columns = track_sizing(columns);
+            let (tracks, names) = track_sizing(columns, Axis::Column);
+            style.layout.grid_template_columns = tracks;
+            if let Some(names) = names {
+                let table = style
+                    .layout
+                    .grid_names
+                    .get_or_insert_with(GridNames::default);
+                table.columns = names.columns;
+            }
         }
         Property::GridTemplate(template) => {
-            areas_unsupported(&template.areas);
-            style.layout.grid_template_rows = track_sizing(&template.rows);
-            style.layout.grid_template_columns = track_sizing(&template.columns);
+            let (rows, row_lines) = track_sizing(&template.rows, Axis::Row);
+            let (columns, column_lines) = track_sizing(&template.columns, Axis::Column);
+            style.layout.grid_template_rows = rows;
+            style.layout.grid_template_columns = columns;
+            let names = style
+                .layout
+                .grid_names
+                .get_or_insert_with(GridNames::default);
+            if let Some(lines) = row_lines {
+                names.rows = lines.rows;
+            }
+            if let Some(lines) = column_lines {
+                names.columns = lines.columns;
+            }
+            if let Some(areas) = parse_areas(&template.areas) {
+                names.areas = areas.areas;
+                names.implied_rows = areas.implied_rows;
+                names.implied_columns = areas.implied_columns;
+            }
         }
         Property::GridAutoRows(tracks) => style.layout.grid_auto_rows = track_size_list(tracks),
         Property::GridAutoColumns(tracks) => {
@@ -1031,14 +1212,48 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         Property::GridAutoFlow(flow) => style.layout.grid_auto_flow = Some(grid_auto_flow(*flow)),
         Property::Grid(grid) => {
-            areas_unsupported(&grid.areas);
-            style.layout.grid_template_rows = track_sizing(&grid.rows);
-            style.layout.grid_template_columns = track_sizing(&grid.columns);
+            let (rows, row_names) = track_sizing(&grid.rows, Axis::Row);
+            let (columns, column_names) = track_sizing(&grid.columns, Axis::Column);
+            style.layout.grid_template_rows = rows;
+            style.layout.grid_template_columns = columns;
             style.layout.grid_auto_rows = track_size_list(&grid.auto_rows);
             style.layout.grid_auto_columns = track_size_list(&grid.auto_columns);
             style.layout.grid_auto_flow = Some(grid_auto_flow(grid.auto_flow));
+            if let Some(areas) = parse_areas(&grid.areas) {
+                let names = style
+                    .layout
+                    .grid_names
+                    .get_or_insert_with(GridNames::default);
+                names.areas = areas.areas;
+                names.implied_rows = areas.implied_rows;
+                names.implied_columns = areas.implied_columns;
+            }
+            if let Some(names) = row_names {
+                let table = style
+                    .layout
+                    .grid_names
+                    .get_or_insert_with(GridNames::default);
+                table.rows = names.rows;
+            }
+            if let Some(names) = column_names {
+                let table = style
+                    .layout
+                    .grid_names
+                    .get_or_insert_with(GridNames::default);
+                table.columns = names.columns;
+            }
         }
-        Property::GridTemplateAreas(areas) => areas_unsupported(areas),
+        Property::GridTemplateAreas(areas) => {
+            if let Some(areas) = parse_areas(areas) {
+                let names = style
+                    .layout
+                    .grid_names
+                    .get_or_insert_with(GridNames::default);
+                names.areas = areas.areas;
+                names.implied_rows = areas.implied_rows;
+                names.implied_columns = areas.implied_columns;
+            }
+        }
         Property::GridRowStart(line) => style.layout.grid_row[0] = grid_line(line),
         Property::GridRowEnd(line) => style.layout.grid_row[1] = grid_line(line),
         Property::GridColumnStart(line) => style.layout.grid_column[0] = grid_line(line),
@@ -1366,22 +1581,79 @@ fn justify_self(value: &css_align::JustifySelf) -> Option<JustifySelf> {
 /// `grid-template-rows`/`-columns`: `none` (no explicit tracks) or a track
 /// list; line names are ignored (placements can't refer to them). One
 /// unsupported track drops the whole declaration, as an invalid value would.
-fn track_sizing(sizing: &TrackSizing) -> Option<Vec<RepeatedGridTrack>> {
+fn track_sizing(
+    sizing: &TrackSizing,
+    axis: Axis,
+) -> (Option<Vec<RepeatedGridTrack>>, Option<GridNames>) {
     let list = match sizing {
-        TrackSizing::None => return Some(Vec::new()),
+        TrackSizing::None => return (Some(Vec::new()), None),
         TrackSizing::TrackList(list) => list,
     };
-    if list.line_names.iter().any(|names| !names.is_empty()) {
-        debug!("html css: grid line names are ignored");
+    let has_names = list.line_names.iter().any(|names| !names.is_empty())
+        || list.items.iter().any(|item| {
+            matches!(item, TrackListItem::TrackRepeat(repeat) if repeat.line_names.iter().any(|names| !names.is_empty()))
+        });
+    let auto_count = list.items.iter().any(|item| {
+        matches!(item, TrackListItem::TrackRepeat(repeat) if matches!(repeat.count, RepeatCount::AutoFill | RepeatCount::AutoFit))
+    });
+    let mut table = GridNames::default();
+    let map = match axis {
+        Axis::Row => &mut table.rows,
+        Axis::Column => &mut table.columns,
+    };
+    // Registers a 0-based line index under its names: as the 1-based line
+    // and its negative (from the end).
+    let register = |line: usize, names: &[CustomIdent<'_>], map: &mut HashMap<String, Vec<i16>>| {
+        for name in names {
+            let lower = (line + 1) as i16;
+            let entries = map.entry(name.0.to_string()).or_default();
+            entries.push(lower);
+            // CSS: line `i` of `L` lines is also `i - L - 1` (line 1 of 4
+            // is -4); `total_lines` counts tracks, so `L` is tracks + 1.
+            entries.push(lower - total_lines(list) as i16 - 2);
+        }
+    };
+    if has_names && !auto_count {
+        let mut line = 0usize;
+        for (index, item) in list.items.iter().enumerate() {
+            for name in &list.line_names[index] {
+                register(line, std::slice::from_ref(name), map);
+            }
+            match item {
+                TrackListItem::TrackSize(_) => line += 1,
+                TrackListItem::TrackRepeat(repeat) => {
+                    let tracks = repeat.track_sizes.len();
+                    let count = match &repeat.count {
+                        RepeatCount::Number(n) => *n as usize,
+                        _ => 1,
+                    };
+                    // The repeat's internal boundaries, once per repetition.
+                    for repetition in 0..count {
+                        for (j, boundary) in repeat.line_names.iter().enumerate() {
+                            if j < tracks {
+                                register(line + repetition * tracks + j, boundary, map);
+                            }
+                        }
+                    }
+                    line += tracks * count;
+                }
+            }
+        }
+        for name in &list.line_names[list.items.len()] {
+            register(line, std::slice::from_ref(name), map);
+        }
+    } else if has_names {
+        debug!(
+            "html css: grid line names in auto-fill/auto-fit repeats don't resolve \
+             (the repeat count is layout-dependent)"
+        );
     }
-    list.items
+    let tracks: Option<Vec<RepeatedGridTrack>> = list
+        .items
         .iter()
         .map(|item| match item {
             TrackListItem::TrackSize(size) => grid_track(size).map(RepeatedGridTrack::from),
             TrackListItem::TrackRepeat(repeat) => {
-                if repeat.line_names.iter().any(|names| !names.is_empty()) {
-                    debug!("html css: grid line names are ignored");
-                }
                 let count = match repeat.count {
                     RepeatCount::Number(n) => GridTrackRepetition::Count(u16::try_from(n).ok()?),
                     RepeatCount::AutoFill => GridTrackRepetition::AutoFill,
@@ -1392,7 +1664,29 @@ fn track_sizing(sizing: &TrackSizing) -> Option<Vec<RepeatedGridTrack>> {
                 Some(RepeatedGridTrack::repeat_many(count, tracks?))
             }
         })
-        .collect()
+        .collect();
+    let Some(tracks) = tracks else {
+        return (None, None);
+    };
+    (Some(tracks), has_names.then_some(table))
+}
+
+/// The total track count of a track list (repeats expanded); `auto-fill`/
+/// `auto-fit` repeats count as one track (their count is layout-dependent).
+fn total_lines(list: &css_grid::TrackList) -> usize {
+    list.items
+        .iter()
+        .map(|item| match item {
+            TrackListItem::TrackSize(_) => 1,
+            TrackListItem::TrackRepeat(repeat) => {
+                repeat.track_sizes.len()
+                    * match &repeat.count {
+                        RepeatCount::Number(n) => *n as usize,
+                        _ => 1,
+                    }
+            }
+        })
+        .sum()
 }
 
 /// `grid-auto-rows`/`-columns`.
@@ -1477,20 +1771,72 @@ fn grid_auto_flow(flow: css_grid::GridAutoFlow) -> GridAutoFlow {
 fn grid_line(line: &css_grid::GridLine) -> Option<GridLineDecl> {
     match line {
         css_grid::GridLine::Auto => Some(GridLineDecl::Auto),
+        // A named grid area (lightningcss postfixed it `-start`/`-end`?
+        // No — the plain name): resolved against the parent grid.
+        css_grid::GridLine::Area { name } => Some(GridLineDecl::Named {
+            name: name.0.to_string(),
+            index: None,
+        }),
         css_grid::GridLine::Line { index, name: None } => {
             i16::try_from(*index).ok().map(GridLineDecl::Line)
         }
+        // A named line filtered to an occurrence (`2 main-start`).
+        css_grid::GridLine::Line {
+            index,
+            name: Some(name),
+        } => Some(GridLineDecl::Named {
+            name: name.0.to_string(),
+            index: i16::try_from(*index).ok(),
+        }),
         css_grid::GridLine::Span { index, name: None } => {
             u16::try_from(*index).ok().map(GridLineDecl::Span)
         }
-        _ => unsupported("named grid line or area"),
+        css_grid::GridLine::Span { .. } => {
+            unsupported::<GridLineDecl>("a span anchored at a named line")
+        }
     }
 }
 
-fn areas_unsupported(areas: &css_grid::GridTemplateAreas) {
-    if !matches!(areas, css_grid::GridTemplateAreas::None) {
-        debug!("html css: grid-template-areas unsupported");
+/// `grid-template-areas`: the areas' line bounds and the implied track
+/// counts. Invalid areas (a non-rectangular region can't reach here —
+/// lightningcss rejects them at parse; an empty declaration is `None`).
+fn parse_areas(areas: &css_grid::GridTemplateAreas) -> Option<GridNames> {
+    let css_grid::GridTemplateAreas::Areas { columns, areas } = areas else {
+        return None;
+    };
+    let columns = *columns as usize;
+    let rows = areas.len() / columns.max(1);
+    // Each name's region: the min/max row and column it spans.
+    let mut bounds: HashMap<String, (u16, u16, u16, u16)> = HashMap::new();
+    for (index, name) in areas.iter().enumerate() {
+        let Some(name) = name else { continue };
+        let (row, column) = (index / columns, index % columns);
+        let entry = bounds.entry(name.clone()).or_insert((
+            row as u16,
+            row as u16,
+            column as u16,
+            column as u16,
+        ));
+        entry.0 = entry.0.min(row as u16);
+        entry.1 = entry.1.max(row as u16);
+        entry.2 = entry.2.min(column as u16);
+        entry.3 = entry.3.max(column as u16);
     }
+    let areas = bounds
+        .into_iter()
+        .map(|(name, (r1, r2, c1, c2))| {
+            (
+                name,
+                [r1 as i16 + 1, r2 as i16 + 2, c1 as i16 + 1, c2 as i16 + 2],
+            )
+        })
+        .collect();
+    Some(GridNames {
+        areas,
+        implied_rows: rows as u16,
+        implied_columns: columns as u16,
+        ..GridNames::default()
+    })
 }
 
 /// `width`/`height`/`min-*`: `auto`, lengths, `%`.
@@ -2064,6 +2410,106 @@ mod tests {
             Selector::parse(".a > p b").is_some(),
             "chains of any length"
         );
+    }
+
+    /// `grid-template-areas` parses the areas' bounds and the implied
+    /// track counts; a declaration without areas is `None`.
+    #[test]
+    fn grid_areas_bounds_and_implied_tracks() {
+        let style = declared(
+            "display: grid; grid-template-areas: \"logo nav\" \"main side\" \"main foot\";",
+        );
+        let names = style.layout.grid_names.clone().expect("areas");
+        eprintln!("AREAS: {:?}", names.areas);
+        assert_eq!(names.implied_rows, 3);
+        assert_eq!(names.implied_columns, 2);
+        assert_eq!(names.areas["logo"], [1, 2, 1, 2]);
+        assert_eq!(names.areas["main"], [2, 4, 1, 2]);
+        assert_eq!(names.areas["side"], [2, 3, 2, 3]);
+        assert_eq!(names.areas["foot"], [3, 4, 2, 3]);
+        // The implied tracks materialize on the node.
+        let mut node = Node::default();
+        style.layout.apply_to(&mut node);
+        assert_eq!(node.grid_template_rows.len(), 3);
+        assert_eq!(node.grid_template_columns.len(), 2);
+    }
+
+    /// `[name]` line names in the track lists register at their lines
+    /// (positive and negative).
+    #[test]
+    fn grid_line_names_register() {
+        let style = declared("display: grid; grid-template-columns: [start] 1fr [mid] 2fr [end];");
+        let names = style.layout.grid_names.expect("line names");
+        // Two tracks, three lines: line `i` of 3 is also `i - 4`.
+        assert_eq!(names.columns["start"], &[1, -3]);
+        assert_eq!(names.columns["mid"], &[2, -2]);
+        assert_eq!(names.columns["end"], &[3, -1]);
+    }
+
+    /// A child's named placement resolves against the parent's template:
+    /// area names to their region's lines per side, line names to their
+    /// line; unknown names become `auto`.
+    #[test]
+    fn named_placement_resolves_against_the_parent() {
+        let mut child = declared("grid-column: main / span 2; grid-row: side;");
+        child.layout.resolve_names(None); // no parent grid: names become auto
+        assert_eq!(child.layout.grid_column[0], Some(GridLineDecl::Auto));
+
+        let parent = declared(
+            "display: grid; grid-template-columns: [main-start] 1fr [main-end] 1fr; \
+             grid-template-areas: \"head head\" \"side main\";",
+        );
+        let grid = parent.layout.grid_names.as_ref();
+        let mut child = declared("grid-column: main / span 2; grid-row: side;");
+        child.layout.resolve_names(grid);
+        // The area `main`: column 2/3, row 2/3.
+        assert_eq!(
+            child.layout.grid_column,
+            [Some(GridLineDecl::Line(2)), Some(GridLineDecl::Span(2)),]
+        );
+        assert_eq!(
+            child.layout.grid_row,
+            [Some(GridLineDecl::Line(2)), Some(GridLineDecl::Line(3)),]
+        );
+        // A named LINE: `main-start` is column line 1.
+        let mut child = declared("grid-column: main-start / main-end;");
+        child.layout.resolve_names(grid);
+        assert_eq!(
+            child.layout.grid_column,
+            [Some(GridLineDecl::Line(1)), Some(GridLineDecl::Line(2)),]
+        );
+        // Unknown names become auto.
+        let mut child = declared("grid-column: nope / nope;");
+        child.layout.resolve_names(grid);
+        assert_eq!(
+            child.layout.grid_column,
+            [Some(GridLineDecl::Auto), Some(GridLineDecl::Auto)]
+        );
+        // An occurrence index: the second line named `main-start` (none
+        // here — only one) stays unresolvable.
+        let mut child = declared("grid-column: 2 main-start;");
+        child.layout.resolve_names(grid);
+        assert_eq!(child.layout.grid_column[0], Some(GridLineDecl::Auto));
+    }
+
+    /// `grid-area: name` places on the area's whole region (all four
+    /// sides, side-aware).
+    #[test]
+    fn grid_area_places_the_region() {
+        let parent = declared("display: grid; grid-template-areas: \"head head\" \"side main\";");
+        let grid = parent.layout.grid_names.as_ref();
+        let mut child = declared("grid-area: main;");
+        child.layout.resolve_names(grid);
+        assert_eq!(
+            child.layout.grid_row,
+            [Some(GridLineDecl::Line(2)), Some(GridLineDecl::Line(3)),]
+        );
+        assert_eq!(
+            child.layout.grid_column,
+            [Some(GridLineDecl::Line(2)), Some(GridLineDecl::Line(3)),]
+        );
+        let placement = grid_placement(child.layout.grid_row);
+        assert_eq!(placement, Some(GridPlacement::start_end(2, 3)));
     }
 
     fn declared(declarations: &str) -> ElementStyle {

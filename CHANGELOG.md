@@ -39,6 +39,14 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `text-decoration` apply to link spans too.
 
 ### Added
+- **Named grid lines and areas.** `[name]` line names in
+  `grid-template-columns`/`-rows` and `grid-template-areas` (which also
+  implies the explicit tracks it spans, sized `auto`) resolve at
+  collection: children place by name — `grid-column: main / main-end`,
+  `grid-area: sidebar`, with occurrence indexes (`2 main-start`). Names
+  the template doesn't have — or ones in `auto-fill`/`auto-fit` repeats —
+  place `auto`, logged. (Browsers extend the implicit grid with the
+  repeated pattern instead; taffy auto-places, so bevy_markup does too.)
 - **CSS combinators.** Selectors join compound selectors with descendant
   and child combinators: `.panel p`, `.panel > p`, `.a .b > .c` — matched
   against the ancestor chain, with specificity summed over the compounds

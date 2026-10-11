@@ -13,8 +13,8 @@ use bevy::text::{InlineBox, InlineBoxKind};
 use bevy::ui_widgets::TextInput;
 
 use crate::cascade::{
-    self, Ancestor, CssPosition, DecorationDecl, HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl,
-    Pseudo, SliceValue,
+    self, Ancestor, CssPosition, DecorationDecl, GridNames, HtmlStyles, InlineStyle, LayoutDecl,
+    OutlineDecl, Pseudo, SliceValue,
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
@@ -844,6 +844,7 @@ pub(crate) fn build_html_ui(
         let mut root_box =
             styler.box_of(&root_element, Pseudo::default(), root_inline.as_ref(), &[]);
         root_box.fade(root.opacity);
+        let root_grid = root_box.layout.grid_names();
         // Nested containers space their children like the root does.
         let default_gap = match root_box.row_gap {
             Some(gap) => Val::Px(gap),
@@ -958,6 +959,7 @@ pub(crate) fn build_html_ui(
                     &fragments,
                     &styler,
                     root,
+                    root_grid.as_ref(),
                 ),
                 RenderedHtml::Failed(message) => vec![Item::Block(Block {
                     kind: BlockKind::Paragraph,
@@ -2214,6 +2216,7 @@ fn collect_items(
     fragments: &HashMap<tl::NodeHandle, HashMap<tl::NodeHandle, Pseudo>>,
     styler: &Styler,
     root: Style,
+    grid: Option<&GridNames>,
 ) -> Vec<Item> {
     let ctx = Ctx {
         parser: dom.parser(),
@@ -2225,7 +2228,7 @@ fn collect_items(
     };
     let mut items = Vec::new();
     for handle in dom.children() {
-        collect_node(&ctx, *handle, &root, &mut items, &[]);
+        collect_node(&ctx, *handle, &root, &mut items, &[], grid);
     }
     items
 }
@@ -2236,6 +2239,7 @@ fn collect_node(
     inherited: &Style,
     items: &mut Vec<Item>,
     chain: &[Ancestor],
+    grid: Option<&GridNames>,
 ) {
     let Some(node) = handle.get(ctx.parser) else {
         return;
@@ -2284,7 +2288,7 @@ fn collect_node(
     let Some(element) = ctx.element(tag) else {
         // Unmatched `data-l10n-name` in a translation: content only.
         for child in tag.children().top().iter() {
-            collect_node(ctx, *child, inherited, items, chain);
+            collect_node(ctx, *child, inherited, items, chain, None);
         }
         return;
     };
@@ -2309,6 +2313,23 @@ fn collect_node(
             .style_of(&element, inherited, state, inline.as_ref(), chain)
     };
     let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), chain);
+    // This element's own placement resolves against its parent's grid
+    // (named lines and areas); its own template then backs its children's.
+    boxed.layout.resolve_names(grid);
+    let grid_of_own = boxed.layout.grid_names();
+    eprintln!(
+        "DBG-RESOLVE {}{:?} after: col={:?} row={:?}",
+        element.tag, element.classes, boxed.layout.grid_column, boxed.layout.grid_row,
+    );
+    eprintln!(
+        "DBG-RESOLVE {}{:?} in-grid={:?} own-rows-cols={:?} col={:?} row={:?}",
+        element.tag,
+        element.classes,
+        grid.is_some(),
+        grid_of_own.is_some(),
+        boxed.layout.grid_column,
+        boxed.layout.grid_row,
+    );
     boxed.drawn_outline = boxed.outline(style.color);
     boxed.fade(style.opacity);
     #[cfg(feature = "text-input")]
@@ -2426,12 +2447,26 @@ fn collect_node(
             };
             let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
                 for node in nodes {
-                    collect_node(fragment, *node, &style, target, &child_chain);
+                    collect_node(
+                        fragment,
+                        *node,
+                        &style,
+                        target,
+                        &child_chain,
+                        grid_of_own.as_ref(),
+                    );
                 }
             });
             if !translated {
                 for child in tag.children().top().iter() {
-                    collect_node(ctx, *child, &style, target, &child_chain);
+                    collect_node(
+                        ctx,
+                        *child,
+                        &style,
+                        target,
+                        &child_chain,
+                        grid_of_own.as_ref(),
+                    );
                 }
             }
             if container {

@@ -146,7 +146,8 @@ bevy_markup implements a useful subset of the web, not all of it:
   (ancestors' pseudo-classes work too); colors and fonts
   (inherited); flex and grid layout (`display`, `flex-direction`,
   `justify-content`, `align-items`, `gap`, `grid-template-columns`,
-  `grid-column`, …); sizes, margins, padding, `box-sizing`; font-relative
+  `grid-column`, named lines and areas (`grid-template-areas`,
+  `grid-column: main / main-end`), …); sizes, margins, padding, `box-sizing`; font-relative
   `em`/`rem` lengths (resolved per element like CSS); `position` with
   `top`/`left`/…, `z-index`; borders with colors and rounded corners
   (including elliptical `h / v` radii), background colors; 9-slice frames
@@ -193,8 +194,9 @@ the exact CSS subset.
 ### Not built yet
 
 - CSS sibling combinators (`+`, `~`), `calc()` (the same-unit subset is
-  realistic next; mixed-unit needs newer Bevy), named grid lines and
-  areas;
+  realistic next; mixed-unit needs newer Bevy), named grid lines beyond
+  the template (browsers extend the implicit grid; bevy_markup places
+  those `auto`);
 - form controls beyond text fields and buttons (no selects, checkboxes, …);
   Enter-in-a-field doesn't submit a form;
 - scrollbars as a built-in widget (the demo builds its own from HTML and

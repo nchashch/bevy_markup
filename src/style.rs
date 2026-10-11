@@ -94,10 +94,13 @@
 //!   `%`, viewport units, `fr`, `auto`, `min-content`, `max-content`,
 //!   `minmax()`, `fit-content()`, `repeat()` with a count, `auto-fill` or
 //!   `auto-fit`), `grid-template`, `grid-auto-rows`/`-columns`,
-//!   `grid-auto-flow`, `grid`; placement by line number and `span`:
-//!   `grid-row`/`-column` (+ `-start`/`-end`), `grid-area`. Named lines
-//!   (names in track lists are ignored, placements by name skipped) and
-//!   `grid-template-areas` are unsupported. Bare `grid-auto-flow: dense`
+//!   `grid-auto-flow`, `grid`; placement by line number, by line name or
+//!   area name (resolved against the parent grid's template at collection;
+//!   names in `auto-fill`/`auto-fit` repeats and occurrences past the
+//!   template don't resolve — they place `auto`), and `span`:
+//!   `grid-row`/`-column` (+ `-start`/`-end`), `grid-area`;
+//!   `grid-template-areas` defines the named areas and implies the
+//!   explicit tracks it spans (sized `auto`). Bare `grid-auto-flow: dense`
 //!   doesn't parse (lightningcss); write `row dense`.
 //! - cascade: `!important` beats normal declarations, then higher specificity
 //!   (ids, classes, type) wins, then the later rule

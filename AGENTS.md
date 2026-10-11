@@ -1165,8 +1165,8 @@ check its entries and drop workarounds upstream has made unnecessary.
 Known limits (each skipped/ignored value is logged at `debug`):
 
 - **Layout:** flex and grid layout, sizes, margins and `box-sizing` work on
-  blocks, containers and the root (see the CSS subset); `position: sticky`, `order`, named grid
-  lines or `grid-template-areas`, `place-*` shorthands, `gap` in `%`,
+  blocks, containers and the root (see the CSS subset); `position: sticky`, `order`,
+  `place-*` shorthands, `gap` in `%`,
   font-relative `padding`/`border-width`/`gap`, or `ex`/`ch`.
   `em`/`rem` work for sizes, margins, insets, radius and grid tracks
   (Bevy's `Val::Em`/`Val::Rem`: `em` against each node's `EmSize` — the
@@ -1192,6 +1192,12 @@ Known limits (each skipped/ignored value is logged at `debug`):
   now because changing it alters every existing layout (examples, p19's
   templates) and those vectors; revisit as a deliberate change, re-deriving
   the vectors against plain browser defaults.
+- **Grid placement by name:** named lines and areas resolve at collection
+  (`cascade.rs`'s `GridNames`: `[name]`s in the track lists + the
+  `grid-template-areas` matrix; areas also imply the explicit tracks they
+  span, sized `auto`). A name the template doesn't have — or one in an
+  `auto-fill`/`auto-fit` repeat — places `auto` (browsers extend the
+  implicit grid with the repeated pattern instead; taffy auto-places).
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
   hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
 - **Selectors:** compound selectors (type/`*` + `.class` + `#id`) joined by
