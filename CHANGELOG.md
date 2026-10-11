@@ -8,6 +8,15 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+- `calc()` in layout properties (sizes, `flex-basis`, margins, insets:
+  `width: calc(50% - 40px)`, `top: min(2em, 10%)`, …). Expressions that
+  resolve to a single unit are computed at style time; mixed-unit ones are
+  resolved per frame — `%` against the containing block's content box per
+  axis, `em`/`rem` against the font sizes, viewport units against the UI
+  root's size. Supported math functions: `calc()`, `min()`, `max()`,
+  `clamp()`; `round()`/`mod()`/`abs()` and the rest are skipped.
+
 ### Changed
 - **Breaking:** `<img>` sizes come from the CSS `width`/`height`
   properties instead of the `width`/`height` attributes (the attributes

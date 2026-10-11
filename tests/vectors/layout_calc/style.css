@@ -1,0 +1,16 @@
+/* Layout vector: `calc()` in layout properties. Collapsed single-unit
+   expressions (all px, `2 * 20px`) and mixed-unit ones (`%` + px, `em` +
+   px) resolved per axis. Default font only, font size keeps 1.2 x size
+   whole. */
+html { font-size: 20px }
+.stage { position: relative; width: 400px; height: 300px }
+/* Mixed: 50% of 400 = 200 - 40 = 160px. */
+.width { width: calc(50% - 40px) }
+/* em in calc: 2 x 20px + 1px = 41px. */
+.margin { margin-left: calc(2em + 1px) }
+/* Collapsed at parse: 2 x 20px = 40px (no pass needed). */
+.abs { position: absolute; top: calc(2 * 20px); left: 30px; width: 90px; height: 80px }
+/* Mixed vertical: 10px + 10% of 80 = 18px. */
+.inset { position: relative; top: calc(10px + 10%) }
+/* % in min-height resolves against the parent's content box. */
+.minmax { min-height: calc(50% + 10px) }

@@ -13,8 +13,8 @@ use bevy::text::{InlineBox, InlineBoxKind};
 use bevy::ui_widgets::TextInput;
 
 use crate::cascade::{
-    self, Ancestor, CssPosition, DecorationDecl, GridNames, HtmlStyles, InlineStyle, LayoutDecl,
-    OutlineDecl, Pseudo, SliceValue,
+    self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, GridNames,
+    HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue, node_field_mut,
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
@@ -283,6 +283,9 @@ pub(crate) struct BoxStyle {
     pub(crate) drawn_outline: Option<Outline>,
     /// Not part of `is_empty`: a `Text` node takes these itself.
     pub(crate) layout: LayoutDecl,
+    /// The `calc()`-valued properties (the layout pass resolves them
+    /// per frame; the fields keep their placeholders until then).
+    pub(crate) calc: Vec<(CalcProp, CalcExpr)>,
     /// The `border-image` frame's tint alpha (`opacity`); `None` = opaque.
     pub(crate) image_alpha: Option<f32>,
 }
@@ -368,6 +371,17 @@ fn rect_over(base: UiRect, sides: [Option<f32>; 4]) -> UiRect {
 /// values it replaced, so a later stylesheet or document that stops
 /// declaring something gives it back. Fields and components the rule never
 /// declared stay the app's (an app may move its UI every frame).
+/// A node with `calc()`-valued layout properties: [`resolve_calc`]
+/// evaluates them per frame against the measured basis (the containing
+/// block's content box, the font sizes, the viewport) and writes the
+/// concrete pixels.
+#[derive(Component, Debug, PartialEq)]
+pub(crate) struct CalcSized {
+    /// The element's own font size (`em`'s basis), captured at collection.
+    em: f32,
+    exprs: Vec<(CalcProp, CalcExpr)>,
+}
+
 #[derive(Component)]
 pub(crate) struct CssRoot {
     /// The `Node` before CSS: the declared fields hold the app's values.
@@ -376,6 +390,7 @@ pub(crate) struct CssRoot {
     border: [Option<f32>; 4],
     padding: [Option<f32>; 4],
     row_gap: Option<f32>,
+    calc: Vec<(CalcProp, CalcExpr)>,
     owned: RootOwned,
 }
 
@@ -613,6 +628,7 @@ impl Styler<'_> {
             outline: declared.outline,
             drawn_outline: None,
             layout: declared.layout.clone(),
+            calc: declared.calc.clone(),
             image_alpha: None,
         }
     }
@@ -1060,6 +1076,9 @@ struct NodeSpec {
     /// `Text` nodes hold spans, never child nodes.
     text: Option<TextSpec>,
     children: Vec<NodeSpec>,
+    /// The `calc()`-valued layout properties: the layout pass resolves
+    /// them per frame against the measured basis.
+    calc: Vec<(CalcProp, CalcExpr)>,
 }
 
 struct TextSpec {
@@ -1113,6 +1132,7 @@ impl NodeSpec {
             #[cfg(feature = "text-input")]
             text_input: None,
             images: Vec::new(),
+            calc: Vec::new(),
             text: None,
             children: Vec::new(),
         }
@@ -1321,6 +1341,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
                     #[cfg(feature = "text-input")]
                     text_input: Some(value),
                     children: Vec::new(),
+                    calc: boxed.calc.clone(),
                     ..NodeSpec::new(node)
                 };
             }
@@ -1381,6 +1402,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
         font_size,
         images,
         children,
+        calc: boxed.calc.clone(),
         ..NodeSpec::new(node)
     }
 }
@@ -1483,6 +1505,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             font_size: block.style.size,
             images,
             text: Some(text),
+            calc: boxed.calc.clone(),
             ..NodeSpec::new(node)
         };
     }
@@ -1522,6 +1545,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             text: Some(text),
             ..NodeSpec::new(text_node)
         }],
+        calc: boxed.calc.clone(),
         ..NodeSpec::new(node)
     }
 }
@@ -1574,6 +1598,12 @@ fn spawn_spec(
     let _ = is_text_input;
     if spec.submit {
         entity.insert(signals::FormSubmitButton);
+    }
+    if !spec.calc.is_empty() {
+        entity.insert(CalcSized {
+            em: spec.font_size,
+            exprs: spec.calc.clone(),
+        });
     }
     if let Some(custom) = spec.custom {
         connected.push(ElementConnected {
@@ -1780,6 +1810,7 @@ fn update_spec(
         background,
         image,
         font_size,
+        calc,
         ..
     } = spec;
     let is_text = spec.text.is_some();
@@ -1796,6 +1827,13 @@ fn update_spec(
         if !is_text {
             put(&mut entity, Some(EmSize(font_size)));
         }
+        put(
+            &mut entity,
+            (!calc.is_empty()).then_some(CalcSized {
+                em: font_size,
+                exprs: calc.clone(),
+            }),
+        );
         if element.is_some() {
             put(&mut entity, element);
         }
@@ -1958,6 +1996,56 @@ fn update_spec(
 /// Sets `value` on `entity` if it differs from what's there (inserting it if
 /// absent), or removes the component for `None`: an unchanged component
 /// keeps its change tick.
+/// Resolves `calc()`-valued layout properties per frame: `em`/`rem`
+/// against the font sizes, `%` against the containing block's content box
+/// per axis, viewport units against the UI root's size. Writes the
+/// concrete pixels into the node's fields (the values keep their
+/// placeholders until the first resolution; later builds overwrite the
+/// fresh spec's placeholder each frame until the values are unchanged).
+pub(crate) fn resolve_calc(
+    mut sized: Query<(Entity, &ChildOf, &mut Node, &CalcSized)>,
+    boxes: Query<&ComputedNode>,
+    parents: Query<&ChildOf>,
+    rem: Res<RemSize>,
+) {
+    for (_entity, child_of, mut node, calc) in &mut sized {
+        let (Ok(parent_box), Ok(parent)) = (
+            boxes.get(child_of.parent()),
+            parents.get(child_of.parent()).map(|p| p.0),
+        ) else {
+            continue;
+        };
+        let inset = parent_box.border + parent_box.padding;
+        let content = Vec2::new(
+            (parent_box.size.x - inset.min_inset.x - inset.max_inset.x).max(0.0),
+            (parent_box.size.y - inset.min_inset.y - inset.max_inset.y).max(0.0),
+        );
+        // The viewport: the topmost node's box (a UI root measures the
+        // window; deeper roots measure their own layout, which is not the
+        // viewport — walk past them).
+        let mut top = parent;
+        while let Ok(ancestor) = parents.get(top).map(|p| p.0) {
+            top = ancestor;
+        }
+        let viewport = boxes.get(top).map(|box_| box_.size).unwrap_or_default();
+        let basis = CalcBasis {
+            em: calc.em,
+            rem: rem.0,
+            viewport,
+            content,
+        };
+        for (prop, expr) in &calc.exprs {
+            let Some(value) = expr.resolve(&basis, prop.horizontal()) else {
+                continue;
+            };
+            let field = node_field_mut(&mut node, *prop);
+            if *field != Val::Px(value) {
+                *field = Val::Px(value);
+            }
+        }
+    }
+}
+
 fn put<C: Component<Mutability = bevy::ecs::component::Mutable> + PartialEq>(
     entity: &mut EntityWorldMut,
     value: Option<C>,
@@ -2009,6 +2097,29 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
         restore_sides(&mut base.padding, state.base.padding, state.padding);
         if state.row_gap.is_some() {
             base.row_gap = state.base.row_gap;
+        }
+        // A calc()'d property's field holds the last resolution, not a
+        // declaration: when the new style drops the calc, restore the
+        // app's own value.
+        for (prop, _) in &state.calc {
+            let value = match prop {
+                CalcProp::Width => state.base.width.clone(),
+                CalcProp::Height => state.base.height.clone(),
+                CalcProp::MinWidth => state.base.min_width.clone(),
+                CalcProp::MinHeight => state.base.min_height.clone(),
+                CalcProp::MaxWidth => state.base.max_width.clone(),
+                CalcProp::MaxHeight => state.base.max_height.clone(),
+                CalcProp::FlexBasis => state.base.flex_basis.clone(),
+                CalcProp::MarginTop => state.base.margin.top.clone(),
+                CalcProp::MarginRight => state.base.margin.right.clone(),
+                CalcProp::MarginBottom => state.base.margin.bottom.clone(),
+                CalcProp::MarginLeft => state.base.margin.left.clone(),
+                CalcProp::Left => state.base.left.clone(),
+                CalcProp::Top => state.base.top.clone(),
+                CalcProp::Right => state.base.right.clone(),
+                CalcProp::Bottom => state.base.bottom.clone(),
+            };
+            *node_field_mut(&mut base, *prop) = value;
         }
     }
     let mut node = base.clone();
@@ -2065,6 +2176,7 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
         .chain(&boxed.padding)
         .any(Option::is_some)
         || boxed.row_gap.is_some()
+        || !boxed.calc.is_empty()
         || boxed.layout != LayoutDecl::default();
     let owns_component = owned.background.is_some()
         || owned.border_color.is_some()
@@ -2079,7 +2191,15 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
             border: boxed.border,
             padding: boxed.padding,
             row_gap: boxed.row_gap,
+            calc: boxed.calc.clone(),
             owned,
+        });
+    }
+    // The root's own calc()'d properties: the pass resolves them per frame.
+    if !boxed.calc.is_empty() {
+        entity.insert(CalcSized {
+            em: root_size,
+            exprs: boxed.calc.clone(),
         });
     }
 }

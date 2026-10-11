@@ -141,8 +141,8 @@ pub fn cascade(css: &str) -> Result<String, String> {
     // One hit per element, then a repeat: exercises the cascade's match cache.
     for round in 0..2 {
         for element in &elements {
-            let style = styler.style_of(element, &root, Pseudo::default(), None);
-            let boxed: BoxStyle = styler.box_of(element, Pseudo::default(), None);
+            let style = styler.style_of(element, &root, Pseudo::default(), None, &[]);
+            let boxed: BoxStyle = styler.box_of(element, Pseudo::default(), None, &[]);
             std::fmt::write(
                 &mut out,
                 format_args!(

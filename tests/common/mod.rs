@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bevy::asset::uuid::Uuid;
 use bevy::asset::{AssetMetaCheck, UntypedHandle};
 use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
+use bevy::ecs::schedule::ScheduleBuildSettings;
 use bevy::image::{CompressedImageFormats, ImageLoader};
 use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
-use bevy::ecs::schedule::ScheduleBuildSettings;
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource, InlineBox};
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent, WindowRef};
@@ -192,9 +192,9 @@ impl TestUi {
         }
         // bevy_render normally registers the image loader.
         app.register_asset_loader(ImageLoader::new(CompressedImageFormats::empty()))
-        .init_resource::<Builds>()
-        .add_observer(|_: On<HtmlUiBuilt>, mut builds: ResMut<Builds>| builds.0 += 1)
-        .add_observer(|_: On<HtmlUiRestyled>, mut builds: ResMut<Builds>| builds.0 += 1);
+            .init_resource::<Builds>()
+            .add_observer(|_: On<HtmlUiBuilt>, mut builds: ResMut<Builds>| builds.0 += 1)
+            .add_observer(|_: On<HtmlUiRestyled>, mut builds: ResMut<Builds>| builds.0 += 1);
         // Shuffle each schedule's ambiguous systems (Bevy's `debug` feature,
         // a dev-dependency): an ordering that only holds by luck fails here
         // instead of in the wild. The seed is printed for reproduction.
@@ -884,10 +884,7 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
                 }
                 // A link span: the `open` click binding's href.
                 if let Some(signals) = child.get::<ElementSignals>()
-                    && let Some(binding) = signals
-                        .0
-                        .iter()
-                        .find(|binding| binding.name == "open")
+                    && let Some(binding) = signals.0.iter().find(|binding| binding.name == "open")
                     && let Some(href) = binding.payload.get("href").and_then(|v| v.as_str())
                 {
                     write!(label, " open={href}").unwrap();

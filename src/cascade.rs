@@ -34,6 +34,7 @@ use lightningcss::rules::CssRule;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleAttribute, StyleSheet};
 use lightningcss::traits::IntoOwned;
 use lightningcss::traits::ToCss;
+use lightningcss::values::calc::{Calc, MathFunction};
 use lightningcss::values::color::{CssColor, RGBA};
 use lightningcss::values::ident::CustomIdent;
 use lightningcss::values::image::Image;
@@ -173,6 +174,186 @@ enum Axis {
 enum Side {
     Start,
     End,
+}
+
+/// A calc() expression, flattened from lightningcss's `Calc` AST: sums,
+/// products by a number, min()/max()/clamp(), and leaves in the units
+/// `Val` carries. Anything else (round()/mod()/abs()/…, bare constants in
+/// sums) is skipped at parse with a debug log.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CalcExpr {
+    Val(Val),
+    Number(f32),
+    Sum(Box<CalcExpr>, Box<CalcExpr>),
+    /// A product: the expression times a number (`/ n` is `× 1/n`).
+    Product(f32, Box<CalcExpr>),
+    Min(Vec<CalcExpr>),
+    Max(Vec<CalcExpr>),
+}
+
+/// Which layout property a calc() expression feeds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CalcProp {
+    Width,
+    Height,
+    MinWidth,
+    MinHeight,
+    MaxWidth,
+    MaxHeight,
+    FlexBasis,
+    MarginTop,
+    MarginRight,
+    MarginBottom,
+    MarginLeft,
+    Left,
+    Top,
+    Right,
+    Bottom,
+}
+
+impl CalcProp {
+    /// The axis its percentages resolve against: the containing block's
+    /// inline (width) axis for sizes and the inline-relative properties,
+    /// the block (height) axis for the vertical insets — per CSS.
+    pub(crate) fn horizontal(self) -> bool {
+        !matches!(
+            self,
+            CalcProp::Height
+                | CalcProp::MinHeight
+                | CalcProp::MaxHeight
+                | CalcProp::Top
+                | CalcProp::Bottom
+        )
+    }
+}
+
+/// The context a calc() resolves against at layout time.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CalcBasis {
+    /// The element's own font size (`em`).
+    pub em: f32,
+    /// The root rule's font size (`rem`).
+    pub rem: f32,
+    /// The viewport: the UI root's size.
+    pub viewport: Vec2,
+    /// The containing block's used content box.
+    pub content: Vec2,
+}
+
+impl CalcExpr {
+    /// Collapses to a single `Val` when every leaf shares one unit;
+    /// `None` for mixed units (those wait for the layout pass).
+    pub fn collapse(&self) -> Option<Val> {
+        match self {
+            CalcExpr::Val(val) => Some(val.clone()),
+            CalcExpr::Number(_) => None,
+            CalcExpr::Sum(a, b) => match (a.collapse()?, b.collapse()?) {
+                (Val::Px(a), Val::Px(b)) => Some(Val::Px(a + b)),
+                (Val::Em(a), Val::Em(b)) => Some(Val::Em(a + b)),
+                (Val::Rem(a), Val::Rem(b)) => Some(Val::Rem(a + b)),
+                (Val::Percent(a), Val::Percent(b)) => Some(Val::Percent(a + b)),
+                (Val::Vw(a), Val::Vw(b)) => Some(Val::Vw(a + b)),
+                (Val::Vh(a), Val::Vh(b)) => Some(Val::Vh(a + b)),
+                (Val::VMin(a), Val::VMin(b)) => Some(Val::VMin(a + b)),
+                (Val::VMax(a), Val::VMax(b)) => Some(Val::VMax(a + b)),
+                _ => None,
+            },
+            CalcExpr::Product(k, expr) => match expr.collapse()? {
+                Val::Px(v) => Some(Val::Px(v * k)),
+                Val::Em(v) => Some(Val::Em(v * k)),
+                Val::Rem(v) => Some(Val::Rem(v * k)),
+                Val::Percent(v) => Some(Val::Percent(v * k)),
+                Val::Vw(v) => Some(Val::Vw(v * k)),
+                Val::Vh(v) => Some(Val::Vh(v * k)),
+                Val::VMin(v) => Some(Val::VMin(v * k)),
+                Val::VMax(v) => Some(Val::VMax(v * k)),
+                _ => None,
+            },
+            CalcExpr::Min(args) => collapse_min_max(args, f32::min),
+            CalcExpr::Max(args) => collapse_min_max(args, f32::max),
+        }
+    }
+
+    /// The value, resolved against the basis: percentages against
+    /// `basis.content`'s axis (per the property), `em`/`rem` against the
+    /// font sizes, viewport units against the viewport.
+    pub fn resolve(&self, basis: &CalcBasis, horizontal: bool) -> Option<f32> {
+        match self {
+            CalcExpr::Val(Val::Px(px)) => Some(*px),
+            CalcExpr::Val(Val::Em(f)) => Some(f * basis.em),
+            CalcExpr::Val(Val::Rem(f)) => Some(f * basis.rem),
+            CalcExpr::Val(Val::Percent(f)) => Some(
+                f / 100.0
+                    * if horizontal {
+                        basis.content.x
+                    } else {
+                        basis.content.y
+                    },
+            ),
+            CalcExpr::Val(Val::Vw(f)) => Some(f / 100.0 * basis.viewport.x),
+            CalcExpr::Val(Val::Vh(f)) => Some(f / 100.0 * basis.viewport.y),
+            CalcExpr::Val(Val::VMin(f)) => Some(f / 100.0 * basis.viewport.x.min(basis.viewport.y)),
+            CalcExpr::Val(Val::VMax(f)) => Some(f / 100.0 * basis.viewport.x.max(basis.viewport.y)),
+            CalcExpr::Val(_) => None,
+            CalcExpr::Number(n) => Some(*n),
+            CalcExpr::Sum(a, b) => {
+                Some(a.resolve(basis, horizontal)? + b.resolve(basis, horizontal)?)
+            }
+            CalcExpr::Product(k, expr) => Some(k * expr.resolve(basis, horizontal)?),
+            CalcExpr::Min(args) => args
+                .iter()
+                .map(|arg| arg.resolve(basis, horizontal))
+                .try_fold(f32::INFINITY, |acc, value| Some(acc.min(value?)))
+                .filter(|value| value.is_finite()),
+            CalcExpr::Max(args) => args
+                .iter()
+                .map(|arg| arg.resolve(basis, horizontal))
+                .try_fold(f32::NEG_INFINITY, |acc, value| Some(acc.max(value?)))
+                .filter(|value| value.is_finite()),
+        }
+    }
+}
+
+/// Collapses min()/max() when every argument shares one unit; comparing
+/// values of different units depends on the resolution basis, so mixed
+/// units go to the layout pass (`None`).
+fn collapse_min_max(args: &[CalcExpr], pick: fn(f32, f32) -> f32) -> Option<Val> {
+    let mut values = Vec::new();
+    for arg in args {
+        values.push(arg.collapse()?);
+    }
+    let mut best = None;
+    for value in values {
+        let (unit, amount) = match value {
+            Val::Px(v) => (0, v),
+            Val::Em(v) => (1, v),
+            Val::Rem(v) => (2, v),
+            Val::Percent(v) => (3, v),
+            Val::Vw(v) => (4, v),
+            Val::Vh(v) => (5, v),
+            Val::VMin(v) => (6, v),
+            Val::VMax(v) => (7, v),
+            _ => return None,
+        };
+        best = Some(match best {
+            Some((best_unit, best_amount)) if best_unit == unit => {
+                (best_unit, pick(best_amount, amount))
+            }
+            Some(_) => return None,
+            None => (unit, amount),
+        });
+    }
+    match best {
+        Some((0, v)) => Some(Val::Px(v)),
+        Some((1, v)) => Some(Val::Em(v)),
+        Some((2, v)) => Some(Val::Rem(v)),
+        Some((3, v)) => Some(Val::Percent(v)),
+        Some((4, v)) => Some(Val::Vw(v)),
+        Some((5, v)) => Some(Val::Vh(v)),
+        Some((6, v)) => Some(Val::VMin(v)),
+        Some((7, v)) => Some(Val::VMax(v)),
+        _ => None,
+    }
 }
 
 /// Declared flex, grid, size and margin properties of a container or block,
@@ -558,6 +739,9 @@ pub(crate) struct ElementStyle {
     pub text_decoration: Option<DecorationDecl>,
     /// Flex, size and margin properties (containers and blocks).
     pub layout: LayoutDecl,
+    /// The `calc()`-valued properties: resolved at layout time (the
+    /// property's field keeps its placeholder until then).
+    pub calc: Vec<(CalcProp, CalcExpr)>,
 }
 
 /// Declared `text-decoration` of an inline element.
@@ -1017,6 +1201,99 @@ fn overflow_axis(keyword: &OverflowKeyword) -> OverflowAxis {
     }
 }
 
+impl ElementStyle {
+    /// Sets `prop` to a plain value (dropping any calc for it), or — when
+    /// the declaration was a calc() — records the expression instead (the
+    /// property's field keeps its placeholder until the layout pass).
+    fn set_calc(&mut self, prop: CalcProp, value: Option<Val>, exprs: Vec<CalcExpr>) {
+        self.calc.retain(|(p, _)| p != &prop);
+        match exprs.into_iter().next() {
+            Some(expr) => match expr.collapse() {
+                Some(value) => self.layout.set_field(prop, Some(value)),
+                None => {
+                    // Mixed units: the layout pass resolves per frame; the
+                    // field stays cleared until (and unless) it does.
+                    self.layout.set_field(prop, None);
+                    self.calc.push((prop, expr));
+                }
+            },
+            None => {
+                if let Some(value) = value {
+                    layout_field(&mut self.layout, prop, value);
+                }
+            }
+        }
+    }
+}
+
+impl LayoutDecl {
+    /// Sets or clears the property's field. A `calc()`-valued declaration
+    /// clears it: the concrete value arrives from the layout pass, and a
+    /// stale earlier declaration must not show through.
+    fn set_field(&mut self, prop: CalcProp, value: Option<Val>) {
+        match prop {
+            CalcProp::Width => self.width = value,
+            CalcProp::Height => self.height = value,
+            CalcProp::MinWidth => self.min_width = value,
+            CalcProp::MinHeight => self.min_height = value,
+            CalcProp::MaxWidth => self.max_width = value,
+            CalcProp::MaxHeight => self.max_height = value,
+            CalcProp::FlexBasis => self.flex_basis = value,
+            CalcProp::MarginTop => self.margin[0] = value,
+            CalcProp::MarginRight => self.margin[1] = value,
+            CalcProp::MarginBottom => self.margin[2] = value,
+            CalcProp::MarginLeft => self.margin[3] = value,
+            CalcProp::Left => self.inset[3] = value,
+            CalcProp::Top => self.inset[0] = value,
+            CalcProp::Right => self.inset[1] = value,
+            CalcProp::Bottom => self.inset[2] = value,
+        }
+    }
+}
+
+/// The `Val`-carrying `Node` field for a calc-able property (the layout
+/// pass writes it; the root's restore reads it back).
+pub(crate) fn node_field_mut(node: &mut Node, prop: CalcProp) -> &mut Val {
+    match prop {
+        CalcProp::Width => &mut node.width,
+        CalcProp::Height => &mut node.height,
+        CalcProp::MinWidth => &mut node.min_width,
+        CalcProp::MinHeight => &mut node.min_height,
+        CalcProp::MaxWidth => &mut node.max_width,
+        CalcProp::MaxHeight => &mut node.max_height,
+        CalcProp::FlexBasis => &mut node.flex_basis,
+        CalcProp::MarginTop => &mut node.margin.top,
+        CalcProp::MarginRight => &mut node.margin.right,
+        CalcProp::MarginBottom => &mut node.margin.bottom,
+        CalcProp::MarginLeft => &mut node.margin.left,
+        CalcProp::Left => &mut node.left,
+        CalcProp::Top => &mut node.top,
+        CalcProp::Right => &mut node.right,
+        CalcProp::Bottom => &mut node.bottom,
+    }
+}
+
+/// The `Val`-carrying layout field for a calc-able property.
+pub(crate) fn layout_field(layout: &mut LayoutDecl, prop: CalcProp, value: Val) {
+    match prop {
+        CalcProp::Width => layout.width = Some(value),
+        CalcProp::Height => layout.height = Some(value),
+        CalcProp::MinWidth => layout.min_width = Some(value),
+        CalcProp::MinHeight => layout.min_height = Some(value),
+        CalcProp::MaxWidth => layout.max_width = Some(value),
+        CalcProp::MaxHeight => layout.max_height = Some(value),
+        CalcProp::FlexBasis => layout.flex_basis = Some(value),
+        CalcProp::MarginTop => layout.margin[0] = Some(value),
+        CalcProp::MarginRight => layout.margin[1] = Some(value),
+        CalcProp::MarginBottom => layout.margin[2] = Some(value),
+        CalcProp::MarginLeft => layout.margin[3] = Some(value),
+        CalcProp::Left => layout.inset[3] = Some(value),
+        CalcProp::Top => layout.inset[0] = Some(value),
+        CalcProp::Right => layout.inset[1] = Some(value),
+        CalcProp::Bottom => layout.inset[2] = Some(value),
+    }
+}
+
 fn apply(style: &mut ElementStyle, declaration: &Property) {
     match declaration {
         Property::Opacity(alpha) => {
@@ -1129,11 +1406,17 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         Property::FlexGrow(grow, _) => style.layout.flex_grow = Some(*grow),
         Property::FlexShrink(shrink, _) => style.layout.flex_shrink = Some(*shrink),
-        Property::FlexBasis(basis, _) => style.layout.flex_basis = auto_val(basis),
+        Property::FlexBasis(basis, _) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(basis, &mut exprs);
+            style.set_calc(CalcProp::FlexBasis, value, exprs);
+        }
         Property::Flex(flex, _) => {
             style.layout.flex_grow = Some(flex.grow);
             style.layout.flex_shrink = Some(flex.shrink);
-            style.layout.flex_basis = auto_val(&flex.basis);
+            let mut exprs = Vec::new();
+            let value = auto_val(&flex.basis, &mut exprs);
+            style.set_calc(CalcProp::FlexBasis, value, exprs);
         }
         Property::JustifyContent(value, _) => {
             style.layout.justify_content = justify_content(value);
@@ -1141,20 +1424,68 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::AlignItems(value, _) => style.layout.align_items = align_items(value),
         Property::AlignContent(value, _) => style.layout.align_content = align_content(value),
         Property::AlignSelf(value, _) => style.layout.align_self = align_self(value),
-        Property::Width(size) => style.layout.width = size_val(size),
-        Property::Height(size) => style.layout.height = size_val(size),
-        Property::MinWidth(size) => style.layout.min_width = size_val(size),
-        Property::MinHeight(size) => style.layout.min_height = size_val(size),
-        Property::MaxWidth(size) => style.layout.max_width = max_size_val(size),
-        Property::MaxHeight(size) => style.layout.max_height = max_size_val(size),
-        Property::Margin(margin) => {
-            style.layout.margin =
-                [&margin.top, &margin.right, &margin.bottom, &margin.left].map(auto_val);
+        Property::Width(size) => {
+            let mut exprs = Vec::new();
+            let value = size_val(size, &mut exprs);
+            style.set_calc(CalcProp::Width, value, exprs);
         }
-        Property::MarginTop(value) => style.layout.margin[0] = auto_val(value),
-        Property::MarginRight(value) => style.layout.margin[1] = auto_val(value),
-        Property::MarginBottom(value) => style.layout.margin[2] = auto_val(value),
-        Property::MarginLeft(value) => style.layout.margin[3] = auto_val(value),
+        Property::Height(size) => {
+            let mut exprs = Vec::new();
+            let value = size_val(size, &mut exprs);
+            style.set_calc(CalcProp::Height, value, exprs);
+        }
+        Property::MinWidth(size) => {
+            let mut exprs = Vec::new();
+            let value = size_val(size, &mut exprs);
+            style.set_calc(CalcProp::MinWidth, value, exprs);
+        }
+        Property::MinHeight(size) => {
+            let mut exprs = Vec::new();
+            let value = size_val(size, &mut exprs);
+            style.set_calc(CalcProp::MinHeight, value, exprs);
+        }
+        Property::MaxWidth(size) => {
+            let mut exprs = Vec::new();
+            let value = max_size_val(size, &mut exprs);
+            style.set_calc(CalcProp::MaxWidth, value, exprs);
+        }
+        Property::MaxHeight(size) => {
+            let mut exprs = Vec::new();
+            let value = max_size_val(size, &mut exprs);
+            style.set_calc(CalcProp::MaxHeight, value, exprs);
+        }
+        Property::Margin(margin) => {
+            for (side, value) in [
+                (CalcProp::MarginTop, &margin.top),
+                (CalcProp::MarginRight, &margin.right),
+                (CalcProp::MarginBottom, &margin.bottom),
+                (CalcProp::MarginLeft, &margin.left),
+            ] {
+                let mut exprs = Vec::new();
+                let value = auto_val(value, &mut exprs);
+                style.set_calc(side, value, exprs);
+            }
+        }
+        Property::MarginTop(value) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(value, &mut exprs);
+            style.set_calc(CalcProp::MarginTop, value, exprs);
+        }
+        Property::MarginRight(value) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(value, &mut exprs);
+            style.set_calc(CalcProp::MarginRight, value, exprs);
+        }
+        Property::MarginBottom(value) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(value, &mut exprs);
+            style.set_calc(CalcProp::MarginBottom, value, exprs);
+        }
+        Property::MarginLeft(value) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(value, &mut exprs);
+            style.set_calc(CalcProp::MarginLeft, value, exprs);
+        }
         Property::BoxSizing(sizing, _) => {
             style.layout.box_sizing = Some(match sizing {
                 css_size::BoxSizing::ContentBox => BoxSizing::ContentBox,
@@ -1277,13 +1608,37 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 css_position::Position::Sticky(_) => unsupported("position sticky"),
             };
         }
-        Property::Top(value) => style.layout.inset[0] = auto_val(value),
-        Property::Right(value) => style.layout.inset[1] = auto_val(value),
-        Property::Bottom(value) => style.layout.inset[2] = auto_val(value),
-        Property::Left(value) => style.layout.inset[3] = auto_val(value),
+        Property::Top(value) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(value, &mut exprs);
+            style.set_calc(CalcProp::Top, value, exprs);
+        }
+        Property::Right(value) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(value, &mut exprs);
+            style.set_calc(CalcProp::Right, value, exprs);
+        }
+        Property::Bottom(value) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(value, &mut exprs);
+            style.set_calc(CalcProp::Bottom, value, exprs);
+        }
+        Property::Left(value) => {
+            let mut exprs = Vec::new();
+            let value = auto_val(value, &mut exprs);
+            style.set_calc(CalcProp::Left, value, exprs);
+        }
         Property::Inset(inset) => {
-            style.layout.inset =
-                [&inset.top, &inset.right, &inset.bottom, &inset.left].map(auto_val);
+            for (side, value) in [
+                (CalcProp::Top, &inset.top),
+                (CalcProp::Right, &inset.right),
+                (CalcProp::Bottom, &inset.bottom),
+                (CalcProp::Left, &inset.left),
+            ] {
+                let mut exprs = Vec::new();
+                let value = auto_val(value, &mut exprs);
+                style.set_calc(side, value, exprs);
+            }
         }
         Property::ZIndex(z) => {
             style.z_index = Some(match z {
@@ -1707,7 +2062,7 @@ fn grid_track(size: &TrackSize) -> Option<GridTrack> {
         TrackSize::MinMax { min, max } => {
             Some(GridTrack::minmax(min_breadth(min)?, max_breadth(max)?))
         }
-        TrackSize::FitContent(limit) => match length_percentage_val(limit)? {
+        TrackSize::FitContent(limit) => match length_percentage_val(limit, &mut Vec::new())? {
             Val::Px(px) => Some(GridTrack::fit_content_px(px)),
             Val::Percent(percent) => Some(GridTrack::fit_content_percent(percent)),
             _ => unsupported("fit-content() limit"),
@@ -1718,7 +2073,7 @@ fn grid_track(size: &TrackSize) -> Option<GridTrack> {
 /// A track's minimum: never `fr` (invalid CSS there).
 fn min_breadth(breadth: &TrackBreadth) -> Option<MinTrackSizingFunction> {
     Some(match breadth {
-        TrackBreadth::Length(length) => match length_percentage_val(length)? {
+        TrackBreadth::Length(length) => match length_percentage_val(length, &mut Vec::new())? {
             Val::Px(v) => MinTrackSizingFunction::Px(v),
             Val::Percent(v) => MinTrackSizingFunction::Percent(v),
             Val::Vw(v) => MinTrackSizingFunction::Vw(v),
@@ -1738,7 +2093,7 @@ fn min_breadth(breadth: &TrackBreadth) -> Option<MinTrackSizingFunction> {
 
 fn max_breadth(breadth: &TrackBreadth) -> Option<MaxTrackSizingFunction> {
     Some(match breadth {
-        TrackBreadth::Length(length) => match length_percentage_val(length)? {
+        TrackBreadth::Length(length) => match length_percentage_val(length, &mut Vec::new())? {
             Val::Px(v) => MaxTrackSizingFunction::Px(v),
             Val::Percent(v) => MaxTrackSizingFunction::Percent(v),
             Val::Vw(v) => MaxTrackSizingFunction::Vw(v),
@@ -1840,34 +2195,69 @@ fn parse_areas(areas: &css_grid::GridTemplateAreas) -> Option<GridNames> {
 }
 
 /// `width`/`height`/`min-*`: `auto`, lengths, `%`.
-fn size_val(size: &Size) -> Option<Val> {
+fn size_val(size: &Size, sink: &mut Vec<CalcExpr>) -> Option<Val> {
     match size {
         Size::Auto => Some(Val::Auto),
-        Size::LengthPercentage(value) => length_percentage_val(value),
+        Size::LengthPercentage(value) => length_percentage_val(value, sink),
         _ => unsupported("intrinsic size keyword"),
     }
 }
 
 /// `max-*`: `none` (no limit), lengths, `%`.
-fn max_size_val(size: &MaxSize) -> Option<Val> {
+fn max_size_val(size: &MaxSize, sink: &mut Vec<CalcExpr>) -> Option<Val> {
     match size {
         MaxSize::None => Some(Val::Auto),
-        MaxSize::LengthPercentage(value) => length_percentage_val(value),
+        MaxSize::LengthPercentage(value) => length_percentage_val(value, sink),
         _ => unsupported("intrinsic size keyword"),
     }
 }
 
 /// `margin`/`flex-basis`: `auto`, lengths, `%`.
-fn auto_val(value: &LengthPercentageOrAuto) -> Option<Val> {
+fn auto_val(value: &LengthPercentageOrAuto, sink: &mut Vec<CalcExpr>) -> Option<Val> {
     match value {
         LengthPercentageOrAuto::Auto => Some(Val::Auto),
-        LengthPercentageOrAuto::LengthPercentage(value) => length_percentage_val(value),
+        LengthPercentageOrAuto::LengthPercentage(value) => length_percentage_val(value, sink),
     }
 }
 
 /// Absolute lengths, viewport units and `%` (of the parent, as in CSS);
 /// font-relative units and `calc()` are unsupported.
-fn length_percentage_val(value: &LengthPercentage) -> Option<Val> {
+/// Converts lightningcss's `Calc` AST into the crate's expression tree,
+/// through `leaf` for the value leaves. `None` for anything unsupported
+/// (round()/mod()/abs()/… — logged).
+fn calc_expr<V>(calc: &Calc<V>, leaf: &impl Fn(&V) -> Option<CalcExpr>) -> Option<CalcExpr> {
+    match calc {
+        Calc::Value(value) => leaf(value),
+        Calc::Number(n) => Some(CalcExpr::Number(*n as f32)),
+        Calc::Sum(a, b) => Some(CalcExpr::Sum(
+            Box::new(calc_expr(a, leaf)?),
+            Box::new(calc_expr(b, leaf)?),
+        )),
+        Calc::Product(n, v) => Some(CalcExpr::Product(*n as f32, Box::new(calc_expr(v, leaf)?))),
+        Calc::Function(function) => match &**function {
+            MathFunction::Calc(inner) => calc_expr(inner, leaf),
+            MathFunction::Min(args) => Some(CalcExpr::Min(calc_args(args, leaf)?)),
+            MathFunction::Max(args) => Some(CalcExpr::Max(calc_args(args, leaf)?)),
+            MathFunction::Clamp(min, value, max) => Some(CalcExpr::Max(vec![
+                calc_expr(min, leaf)?,
+                CalcExpr::Min(vec![calc_expr(value, leaf)?, calc_expr(max, leaf)?]),
+            ])),
+            _ => {
+                unsupported::<GridPlacement>("math function in calc()");
+                None
+            }
+        },
+    }
+}
+
+fn calc_args<'i, V>(
+    args: &[Calc<V>],
+    leaf: &impl Fn(&V) -> Option<CalcExpr>,
+) -> Option<Vec<CalcExpr>> {
+    args.iter().map(|arg| calc_expr(arg, leaf)).collect()
+}
+
+fn length_percentage_val(value: &LengthPercentage, sink: &mut Vec<CalcExpr>) -> Option<Val> {
     match value {
         LengthPercentage::Dimension(length) => match length {
             LengthValue::Vw(vw) => Some(Val::Vw(*vw)),
@@ -1886,8 +2276,36 @@ fn length_percentage_val(value: &LengthPercentage) -> Option<Val> {
                 .or_else(|| unsupported("relative length")),
         },
         LengthPercentage::Percentage(percentage) => Some(Val::Percent(percentage.0 * 100.0)),
-        LengthPercentage::Calc(_) => unsupported("calc()"),
+        LengthPercentage::Calc(calc) => {
+            let expr = calc_expr(calc, &length_percentage_leaf)?;
+            sink.push(expr);
+            None
+        }
     }
+}
+
+/// A `LengthPercentage`'s leaf as a calc term.
+fn length_percentage_leaf(value: &LengthPercentage) -> Option<CalcExpr> {
+    match value {
+        LengthPercentage::Dimension(length) => length_val(length),
+        LengthPercentage::Percentage(percentage) => {
+            Some(CalcExpr::Val(Val::Percent(percentage.0 * 100.0)))
+        }
+        LengthPercentage::Calc(calc) => calc_expr(calc, &length_percentage_leaf),
+    }
+}
+
+/// A `LengthValue` leaf as a calc term.
+fn length_val(length: &LengthValue) -> Option<CalcExpr> {
+    Some(CalcExpr::Val(match length {
+        LengthValue::Vw(vw) => Val::Vw(*vw),
+        LengthValue::Vh(vh) => Val::Vh(*vh),
+        LengthValue::Vmin(v) => Val::VMin(*v),
+        LengthValue::Vmax(v) => Val::VMax(*v),
+        LengthValue::Em(em) => Val::Em(*em),
+        LengthValue::Rem(rem) => Val::Rem(*rem),
+        length => length.to_px().map(Val::Px)?,
+    }))
 }
 
 fn unsupported<T>(what: &str) -> Option<T> {
@@ -1910,8 +2328,8 @@ fn outline_visible(style: &lightningcss::properties::outline::OutlineStyle) -> b
 /// `%` resolves per-axis against the node's dimensions, as CSS does.
 fn corner_radius(radius: &Size2D<LengthPercentage>) -> Option<(Val, Val)> {
     Some((
-        length_percentage_val(&radius.0)?,
-        length_percentage_val(&radius.1)?,
+        length_percentage_val(&radius.0, &mut Vec::new())?,
+        length_percentage_val(&radius.1, &mut Vec::new())?,
     ))
 }
 
@@ -2001,6 +2419,77 @@ fn font_size(size: &FontSize) -> Option<FontSizeSpec> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn calc_collapses_to_a_single_value() {
+        // Single-unit expressions become the field directly.
+        let style = declared("width: calc(10px + 5px); height: calc(2em); margin-left: calc(3rem)");
+        assert_eq!(style.layout.width, Some(Val::Px(15.0)));
+        assert_eq!(style.layout.height, Some(Val::Em(2.0)));
+        assert_eq!(style.layout.margin[3], Some(Val::Rem(3.0)));
+        assert!(style.calc.is_empty());
+    }
+
+    #[test]
+    fn calc_mixed_units_go_to_the_layout_pass() {
+        let style = declared("width: calc(50% + 10px); top: calc(1em + 2vh)");
+        assert_eq!(style.layout.width, None); // placeholder: the pass resolves
+        assert_eq!(style.layout.inset[0], None);
+        assert_eq!(style.calc.len(), 2);
+        assert_eq!(style.calc[0].0, CalcProp::Width);
+        assert_eq!(style.calc[1].0, CalcProp::Top);
+    }
+
+    #[test]
+    fn calc_later_declaration_replaces_the_calc() {
+        // The cascade order: a later plain declaration wins over the calc.
+        let style = declared("width: calc(50% + 10px); width: 80px");
+        assert_eq!(style.layout.width, Some(Val::Px(80.0)));
+        assert!(style.calc.is_empty());
+        // And vice versa.
+        let style = declared("width: 80px; width: calc(50% + 10px)");
+        assert_eq!(style.layout.width, None);
+        assert_eq!(style.calc.len(), 1);
+    }
+
+    #[test]
+    fn calc_min_max_clamp_and_products() {
+        let style = declared(
+            "margin-top: calc(min(10px, 20px)); margin-right: calc(max(10px, 20px)); \
+             margin-bottom: calc(clamp(5px, 50%, 30px)); top: calc(2 * (10px + 5px))",
+        );
+        assert_eq!(style.layout.margin[0], Some(Val::Px(10.0)));
+        assert_eq!(style.layout.margin[1], Some(Val::Px(20.0)));
+        // clamp(5px, 50%, 30px): mixed (px bounds, % value) → the pass.
+        assert_eq!(style.layout.margin[2], None);
+        assert_eq!(style.calc[0].0, CalcProp::MarginBottom);
+        // A product over a parenthesized sum collapses (all px).
+        assert_eq!(style.layout.inset[0], Some(Val::Px(30.0)));
+    }
+
+    #[test]
+    fn calc_percent_resolves_by_axis() {
+        // Percentages in sizes resolve against the containing block's
+        // content box per axis; the pass is checked in the layout vector.
+        let style = declared("height: calc(50% + 1px)");
+        assert_eq!(style.layout.height, None);
+        assert_eq!(style.calc[0].0, CalcProp::Height);
+        assert!(
+            style.calc[0]
+                .1
+                .resolve(
+                    &CalcBasis {
+                        em: 16.0,
+                        rem: 16.0,
+                        viewport: Vec2::new(800.0, 600.0),
+                        content: Vec2::new(400.0, 300.0),
+                    },
+                    false
+                )
+                .map(|v| (v - 151.0).abs() < f32::EPSILON)
+                .unwrap_or(false)
+        );
+    }
+
     use lightningcss::stylesheet::ParserOptions;
 
     use super::*;

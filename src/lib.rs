@@ -328,6 +328,9 @@ impl Plugin for BevyMarkupPlugin {
                     build::size_images
                         .after(HtmlUiSystems::Build)
                         .before(UiSystems::Prepare),
+                    build::resolve_calc
+                        .after(HtmlUiSystems::Build)
+                        .before(UiSystems::Prepare),
                 ),
             );
         focus::plugin(app);

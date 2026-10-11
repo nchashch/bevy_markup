@@ -84,12 +84,21 @@
 //!   against the element's own computed font-size (each node's `EmSize`),
 //!   `rem` against the root rule's font-size (the `RemSize` resource,
 //!   kept in sync; a change restyles). Grid tracks take them too
-//!   (taffy's font-relative track sizing). `ex`/`ch`, font-relative
-//!   `padding`/`border-width`/`gap` and `calc()` are skipped.
+//!   (taffy's font-relative track sizing). `ex`/`ch` and font-relative
+//!   `padding`/`border-width`/`gap` are skipped.
+//!
+//!   `calc()` works in these size/margin/inset properties: expressions
+//!   that resolve to a single unit (all px, all `%`, …) are computed at
+//!   style time; mixed-unit ones (`50% + 10px`, `min(2em, 10%)`,
+//!   `clamp()`) are resolved per frame — `%` against the containing
+//!   block's content box per axis (width for sizes, margins and the
+//!   horizontal insets; height for the vertical insets), `em`/`rem`
+//!   against the font sizes, viewport units against the UI root's size.
+//!   Other math functions (`round()`, `mod()`, …) are skipped.
 //!   Containers are flex columns unless `flex-direction` (or `display:
 //!   block`) says otherwise — `display: flex` alone keeps the column — and
 //!   neither containers nor blocks shrink by default (`flex-shrink: 0`).
-//!   Font-relative lengths (`em`, `rem`) and `calc()` are skipped here.
+//!   Font-relative lengths (`em`, `rem`) are skipped here.
 //! - grid: `grid-template-rows`/`-columns` (`none` or track lists: lengths,
 //!   `%`, viewport units, `fr`, `auto`, `min-content`, `max-content`,
 //!   `minmax()`, `fit-content()`, `repeat()` with a count, `auto-fill` or

@@ -1212,7 +1212,10 @@ Known limits (each skipped/ignored value is logged at `debug`):
   `text-decoration`, border styles (every
   border is solid); `overflow: auto` scrolls always (Bevy has no
   scroll-if-needed). Lengths: px/em/rem/% for `font-size`, absolute only
-  for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins.
+  for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins,
+  plus `calc()` in sizes/margins/insets (single-unit expressions at style
+  time, mixed-unit resolved per frame by `resolve_calc` against the
+  containing block's content box, the font sizes and the viewport).
 - **border-image:** center always drawn, `-width`/`-outset` ignored, one
   repeat mode for all sides (Bevy `TextureSlicer` limits).
 - **Inline:** no inline boxes with content — `background-color` paints the
