@@ -46,13 +46,6 @@ impl HtmlTemplate {
         context: &tera::Context,
     ) -> Result<HtmlDocument, Box<dyn std::error::Error + Send + Sync>> {
         let source = self.render_source(context)?;
-        // Markdown renders to the HTML the pipeline parses; HTML templates
-        // pass through untouched.
-        let source = if md::is_markdown(&self.name) {
-            md::to_html(&source)
-        } else {
-            source
-        };
         Ok(HtmlDocument::parse(source)?)
     }
 
@@ -311,6 +304,14 @@ async fn load_template(
             continue;
         }
         let (source, references) = resolve_references(&path, &source)?;
+        // ADR 0020: a `.md` template's Markdown converts once, at load —
+        // Tera syntax survives verbatim (`to_html_template`), so the
+        // per-frame path is Tera-only.
+        let source = if md::is_markdown(&name) {
+            md::to_html_template(&source)
+        } else {
+            source
+        };
         for reference in references {
             if !seen.contains(&reference.to_string()) {
                 let bytes = load_context.read_asset_bytes(reference.clone()).await?;

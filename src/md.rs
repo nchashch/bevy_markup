@@ -15,7 +15,7 @@
 
 use std::collections::VecDeque;
 
-use pulldown_cmark::{CowStr, Event, Options, Parser, Tag};
+use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd};
 
 /// The class injected into every element Markdown compilation constructs
 /// (paragraphs, headings, images, links, emphasis, tables, …), so a
@@ -34,6 +34,22 @@ const MARKER: &str = "\u{1}bevy-markup\u{1}";
 /// transparently (a `<p>` inside a translated block's fragment becomes
 /// plain runs).
 pub(crate) fn to_html(source: &str) -> String {
+    convert(source, false)
+}
+
+/// [`to_html`](Self), for a `.md` *template* (ADR 0020): Tera syntax
+/// survives verbatim — a paragraph of only Tera tags passes through
+/// unwrapped, inline Tera runs inside text pass raw (unescaped) — so the
+/// conversion runs once at load and the per-frame path is Tera-only.
+/// Text inside code blocks and code spans is Tera-literal: it stays
+/// escaped text, like any Markdown code content.
+pub(crate) fn to_html_template(source: &str) -> String {
+    convert(source, true)
+}
+
+/// The shared conversion: `tera` selects whether Tera syntax passes
+/// through verbatim (ADR 0020) or converts as Markdown text.
+fn convert(source: &str, tera: bool) -> String {
     let mut html = String::with_capacity(source.len() * 2);
     let parser = Parser::new_ext(
         source,
@@ -42,11 +58,13 @@ pub(crate) fn to_html(source: &str) -> String {
             | Options::ENABLE_TASKLISTS
             | Options::ENABLE_FOOTNOTES,
     );
-    let mut marked = Marked {
+    let marked = Marked {
         parser,
         pending: VecDeque::new(),
     };
-    pulldown_cmark::html::push_html(&mut html, &mut marked);
+    let events: Vec<Event<'_>> = marked.collect();
+    let events = if tera { rewrite(events) } else { events };
+    pulldown_cmark::html::push_html(&mut html, &mut events.into_iter());
     inject_class(&html)
 }
 
@@ -81,6 +99,157 @@ impl<'a> Iterator for Marked<'a> {
             event => Some(event),
         }
     }
+}
+
+/// The Tera syntax runs of `text`: `(tera, text)` pairs in order — every
+/// `{{ … }}`, `{% … %}` and `{# … #}` (quoted strings inside a tag skip
+/// their own closing pair). `tera` also swallows a trailing unclosed tag
+/// (the source is mid-template-expansion).
+fn tera_runs(text: &str) -> Vec<(bool, &str)> {
+    let bytes = text.as_bytes();
+    let mut runs: Vec<(bool, &str)> = Vec::new();
+    let mut start = 0;
+    let mut scan = 0;
+    while scan < bytes.len() {
+        if bytes[scan] == b'{' && scan + 1 < bytes.len() {
+            let opener = bytes[scan + 1];
+            if opener == b'{' || opener == b'%' || opener == b'#' {
+                let closer = match opener {
+                    b'{' => b'}',
+                    b'%' => b'%',
+                    _ => b'#',
+                };
+                // Scan to the closer, skipping quoted strings.
+                let mut cursor = scan + 2;
+                let mut end = None;
+                while cursor < bytes.len() {
+                    if bytes[cursor] == b'"' || bytes[cursor] == b'\'' {
+                        let quote = bytes[cursor];
+                        cursor += 1;
+                        while cursor < bytes.len() && bytes[cursor] != quote {
+                            cursor += if bytes[cursor] == b'\\' { 2 } else { 1 };
+                        }
+                        cursor += 1;
+                        continue;
+                    }
+                    if bytes[cursor] == closer
+                        && cursor + 1 < bytes.len()
+                        && bytes[cursor + 1] == b'}'
+                    {
+                        end = Some(cursor + 2);
+                        break;
+                    }
+                    cursor += 1;
+                }
+                let end = end.unwrap_or(bytes.len());
+                if scan > start {
+                    runs.push((false, &text[start..scan]));
+                }
+                runs.push((true, &text[scan..end]));
+                scan = end;
+                start = end;
+                continue;
+            }
+        }
+        scan += 1;
+    }
+    if start < text.len() {
+        runs.push((false, &text[start..]));
+    }
+    if runs.is_empty() {
+        runs.push((false, text));
+    }
+    runs
+}
+
+/// The Tera-aware rewrite (ADR 0020): text splits into plain and Tera
+/// runs — Tera as raw `Html`, which `push_html` writes unescaped — and a
+/// paragraph whose text is only Tera passes through without its `<p>`
+/// wrapper and marker (no element is constructed). Code blocks and code
+/// spans are Tera-literal: their text stays escaped, like any Markdown
+/// code content.
+fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
+
+    let mut out = Vec::with_capacity(events.len());
+    let mut code_block = false;
+    let mut index = 0;
+    while index < events.len() {
+        match &events[index] {
+            // The marker precedes a constructed start tag. A paragraph
+            // start begins a pure-Tera inspection: the paragraph's text up
+            // to its end, its marker and its wrapper dropped when every
+            // text run in it is Tera.
+            Event::Html(text) if text.as_ref() == MARKER => {
+                let starts_paragraph =
+                    matches!(events.get(index + 1), Some(Event::Start(Tag::Paragraph)));
+                if starts_paragraph {
+                    let mut cursor = index + 2;
+                    let mut pure = true;
+                    while cursor < events.len()
+                        && !matches!(events[cursor], Event::End(TagEnd::Paragraph))
+                    {
+                        match &events[cursor] {
+                            Event::Text(text) => {
+                                pure &= tera_runs(text).iter().all(|(tera, _)| *tera);
+                            }
+                            Event::SoftBreak => {}
+                            _ => pure = false,
+                        }
+                        cursor += 1;
+                    }
+                    let ends = cursor < events.len();
+                    if pure && ends {
+                        for event in &events[index + 2..cursor] {
+                            if let Event::Text(text) = event {
+                                for (tera, part) in tera_runs(text) {
+                                    debug_assert!(tera, "a pure paragraph has only Tera runs");
+                                    out.push(Event::Html(CowStr::Boxed(part.to_owned().into_boxed_str())));
+                                }
+                            }
+                        }
+                        index = cursor + 1;
+                        continue;
+                    }
+                }
+                out.push(Event::Html(CowStr::from(MARKER)));
+                index += 1;
+            }
+            Event::Start(Tag::CodeBlock(_)) => {
+                code_block = true;
+                out.push(events[index].clone());
+                index += 1;
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                code_block = false;
+                out.push(events[index].clone());
+                index += 1;
+            }
+            // Inline code: literal, escaped by `push_html`.
+            Event::Code(code) => {
+                out.push(Event::Code(code.clone()));
+                index += 1;
+            }
+            Event::Text(text) if code_block => {
+                out.push(Event::Text(text.clone()));
+                index += 1;
+            }
+            Event::Text(text) => {
+                for (tera, part) in tera_runs(text) {
+                    if tera {
+                        out.push(Event::Html(CowStr::Boxed(part.to_owned().into_boxed_str())));
+                    } else {
+                        out.push(Event::Text(CowStr::Boxed(part.to_owned().into_boxed_str())));
+                    }
+                }
+                index += 1;
+            }
+            event => {
+                out.push(event.clone());
+                index += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Rewrites each `MARKER + <tag …>` into `<tag … class="markdown">`
@@ -252,5 +421,58 @@ mod tests {
             html.contains("class=\"footnote-definition markdown\""),
             "{html}"
         );
+    }
+
+    /// ADR 0020: a template's Tera syntax survives verbatim — a
+    /// pure-Tera paragraph passes unwrapped (no `<p>`, no class), inline
+    /// Tera inside text passes raw while the surrounding Markdown still
+    /// constructs and classes, and code is Tera-literal.
+    #[test]
+    fn template_mode_passes_tera_through() {
+        // A pure-Tera paragraph (Tera lines and the whitespace between
+        // them): no wrapper, no class, raw syntax. Plain text inside makes
+        // it a paragraph again (with the Tera still raw inside).
+        let html = to_html_template("{% if score > 3 %}\n{% endif %}\n");
+        assert!(!html.contains("<p"), "PURE = {html:?}");
+        assert!(html.contains("{% if score > 3 %}"), "{html}");
+        assert!(html.contains("{% endif %}"), "{html}");
+        let html = to_html_template("{% if score > 3 %}\nshow it\n{% endif %}\n");
+        assert!(
+            html.contains(
+                "<p class=\"markdown\">{% if score > 3 %}\nshow it\n{% endif %}",
+            ),
+            "MIXED = {html:?}"
+        );
+
+        // A block-level loop: the wrapper-free Tera lines bracket the
+        // constructed Markdown.
+        let html = to_html_template(
+            "{% for i in range(end=2) %}\n## Section {{ i }}\n{% endfor %}\n",
+        );
+        assert!(html.contains("{% for i in range(end=2) %}"), "{html}");
+        assert!(html.contains("{% endfor %}"), "{html}");
+        assert!(
+            html.contains("<h2 class=\"markdown\">Section {{ i }}</h2>"),
+            "{html}"
+        );
+
+        // Inline Tera inside text: raw alongside constructed emphasis.
+        let html = to_html_template("hello {{ name }}, *slanted*\n");
+        assert!(
+            html.contains("hello {{ name }}, <em class=\"markdown\">slanted</em>"),
+            "INLINE = {html:?}"
+        );
+
+        // Code stays Tera-literal: a code span's `{{ x }}` is escaped
+        // text, not passed through.
+        let html = to_html_template("a `{{ x }}` span\n");
+        assert!(html.contains("<code>"), "{html}");
+        assert!(!html.contains("<p class=\"markdown\">{{ x }}</p>"), "{html}");
+
+        // The `to_html` path (values, not templates) converts Tera
+        // looking text as text, as before.
+        let html = to_html("hello {{ name }}\n");
+        assert!(html.contains("hello {{ name }}"), "{html}");
+        assert!(html.contains("<p class=\"markdown\">"), "{html}");
     }
 }

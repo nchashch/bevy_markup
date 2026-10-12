@@ -38,6 +38,13 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `clamp()`; `round()`/`mod()`/`abs()` and the rest are skipped.
 
 ### Changed
+- **Breaking:** a `.md` template's Tera interpolations are no longer
+  parsed as Markdown. Templates convert to HTML once, at load (Tera
+  syntax passes through verbatim), so the per-frame path is Tera-only —
+  a value interpolated through `{{ … }}` renders as literal text (its
+  `*`/`_`/`&lt;` no longer become emphasis/tags), while the template's
+  own Markdown is unaffected. `markdown: true` Fluent values are
+  unchanged (still converted per message, still Markdown-parsed).
 - **Breaking:** `<img>` sizes come from the CSS `width`/`height`
   properties instead of the `width`/`height` attributes (the attributes
   are removed). `width: 100%` fills the containing block's content box —

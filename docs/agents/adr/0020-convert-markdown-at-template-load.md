@@ -7,7 +7,7 @@
 | Date | 2026-10-12 08:23 +0400 |
 | Author | GLM (opencode-zen/glm-5.3-flash), via omp — drafted for the project owner |
 | Commit | `975266e` Remove debug print out line tanking performance for Markdown |
-| Status | Proposed |
+| Status | Accepted — Decisions 1–2 implemented (Tera-aware filter in `md.rs` `to_html_template`, the loader converts at load, `HtmlTemplate::render` is Tera-only); Decision 3 (Fluent values) deferred and now measured as the dominant remaining cost |
 | Related | 0014 (the semantics this changes), 0018/0019 (the measurements), `md.rs` |
 
 ## Context
@@ -118,3 +118,29 @@ syntax intact, so the per-frame path is Tera-only.
   like the existing Markdown vectors.
 - **Per-frame allocations** drop accordingly (divan's counts make the
   delta direct).
+
+## Implementation note (2026-10-12, same day)
+
+Decisions 1–2 are implemented and verified: the `rewrite` pass is a
+pure function over the collected event list (the streaming variant was
+attempted first and abandoned — paragraph stashing, marker lookahead and
+catch-all flushes interleaved into unfixable orderings; the collect-then-
+rewrite pass is 60 lines and exhaustively testable), with unit tests for
+the pure-Tera, mixed, loop and code-context cases. The full suite passes,
+including the markdown vector and the content lint over the `markdown`
+example.
+
+The benchmark after: `frame/markdown/600` ≈ 13.5 ms (from 13.1 ms) —
+**no visible win in the value-heavy workload**, because Decision 3's
+deferral was the wrong call: the 600 per-value `md::to_html` calls
+(~11 µs each, ~9 ms) dominate, and the template-side conversion was
+~1–2 ms. The template-side win is real (visible at 120: 2.84 → 2.71 ms;
+the divan allocation counts drop accordingly) but masked.
+
+**Decision 3 is therefore the next change**, with a design that works:
+convert each message's Markdown pattern once at bundle load with unique
+placeholder text in place of the placeables, cache the converted HTML per
+(message id, selected variant), and substitute the formatted arguments
+into the cached HTML per frame — the conversion is identical for any
+argument values, so the cache hits every frame. The substitution inherits
+Decision 4's semantics (arguments are literal text, not Markdown).
