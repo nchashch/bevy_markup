@@ -58,14 +58,27 @@ benchmarking framework.
    0009's method (120 and 600 block elements; a small and a large
    template).
 3. **Benchmarks**:
-   - per-stage groups via the `fuzzing` harness for render/parse/
-     cascade (pure functions over prepared inputs), each
-     `BenchmarkId`-parameterized by document size;
-   - frame groups: one `app.update()` per iteration over the three
-     workloads (idle / one value changing per frame / full rebuild),
-     measured end to end; `resolve_calc`, `advance_transitions` and the
-     `vars_changed` hash as separate small benches (run over a world
-     with `run_system_once`, the transitions unit tests' pattern).
+   - per-stage groups: `render` (Tera one-off — `HtmlTemplate` has no
+     public constructor, and the crate's `.html` render is a pass-through
+     over it) and `parse` (`HtmlDocument::parse`, the clone excluded with
+     `iter_batched`), each `BenchmarkId`-parameterized by document size;
+   - frame groups: one `app.update()` per iteration over the workloads
+     idle / changing (one templated value *and one templated color with a
+     transition attached*, so the advance system's active path runs) /
+     rebuilding, plus — at 600 — `localized` (every paragraph a
+     `data-l10n-id` message with a changing arg: the Fluent stage) and
+     `markdown` (a `.md` template with `markdown: true` Fluent values:
+     the pulldown-cmark stage);
+   - the kitchen-sink markup and stylesheet (registered fake font faces
+     served from the embedded font, a grid, a flex row, `var()` +
+     `calc()`, positioning, a `border-image` over the `frame.png`
+     fixture) exist to run the cascade's mapping arms per re-collect —
+     the benches doubled as a coverage layer (`scripts/coverage.py`'s
+     `benchmarks` layer: 40% of library lines, from 27% with a minimal
+     CSS).
+   - `resolve_calc` and the `vars_changed` hash run inside the `changing`
+     workload's frames rather than as separate small benches (the real
+     path, not a synthetic one).
 4. **Determinism**: schedule shuffling off (the bench app does not add
    Bevy's `debug` shuffle features); `Time` advanced manually
    (`advance_by`) inside iterations so transition/`resolve_calc` benches
