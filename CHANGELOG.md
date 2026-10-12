@@ -49,6 +49,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   re-render.
 
 ### Fixed
+- **Markdown documents printed their entire converted HTML to stderr on
+  every conversion** — a debug print left in `md::to_html` formatted the
+  whole output per frame (a 600-paragraph document paid ~30% of its
+  per-frame cost on it). Removed.
 - **Scrolling panels stopped working: the root grew to its content.** Taffy
   (in Bevy 0.20) applies the automatic minimum size to root nodes, so a
   root with undeclared `min-height` grew to its tallest content instead of
