@@ -41,11 +41,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 - **Changed-content frames reuse unchanged subtrees** (ADR 0021): a
   rebuild pairs the fresh template output against the previous build and
   hands every element whose tag, attributes and text are unchanged to the
-  update pass by reference — no re-styling, no text-run construction, no
-  copying. Measured on 600-element documents: −35…−40% per frame with one
-  changing paragraph, −24% on a mostly-static Markdown page; documents
-  whose every element changes (a fully localized page, a full re-render)
-  are within a percent or two of before. Style-side changes
+  update pass by reference and skips it entirely — no re-styling, no
+  text-run construction, no copying, no diff visit. Measured on
+  600-element documents: −46% per frame with one changing paragraph, −33%
+  on a mostly-static Markdown page; documents whose every element changes
+  (a fully localized page, a full re-render) are within a percent or two
+  of before. Style-side changes
   (`:hover`/`:active`, `var()` values, fonts, image loads) still restyle
   the whole document, as before.
 - **Breaking:** a `.md` template's Tera interpolations are no longer

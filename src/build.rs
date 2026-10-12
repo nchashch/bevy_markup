@@ -235,6 +235,23 @@ const CONTAINERS: &[&str] = &[
     "form",
 ];
 
+/// A spec shared into the diff: built this frame (the entity tree must be
+/// synced to it), or reused from the previous build (the entities already
+/// match it — the diff skips them; see ADR 0021's C-2).
+#[derive(Clone)]
+enum SpecNode {
+    Fresh(Arc<NodeSpec>),
+    Cached(Arc<NodeSpec>),
+}
+
+impl SpecNode {
+    fn spec(&self) -> &Arc<NodeSpec> {
+        match self {
+            SpecNode::Fresh(spec) | SpecNode::Cached(spec) => spec,
+        }
+    }
+}
+
 /// A node to spawn: a text block, or a container of further items.
 #[derive(Clone)]
 enum Item {
@@ -997,64 +1014,6 @@ pub(crate) fn build_html_ui(
                 apply_root(&mut entity, root_box, root_pointer_events, root_size);
             });
 
-        // The elements' interaction state by DOM node, so the collected
-        // items style for `:hover`/`:active`. Nested `HtmlUi`s have their
-        // own documents — their handles index those, not this one — so their
-        // subtrees are skipped (the starting entity is the UI root itself).
-        let mut states = HashMap::new();
-        // A translated element's subtree is fragment-keyed (its spans'
-        // `DomNode` handles index the translation fragment, re-parsed per
-        // build), so those states are collected per fragment. The map holds
-        // the last build's states: a changed translation misses and styles
-        // unhovered until the next build's fresh map.
-        let mut fragments: HashMap<tl::NodeHandle, HashMap<tl::NodeHandle, Pseudo>> =
-            HashMap::new();
-        let pseudo = |state: Option<&PseudoState>| {
-            state.copied().map_or(Pseudo::default(), |state| Pseudo {
-                hover: state.hovered,
-                active: state.active,
-                focus: state.focused,
-                focus_visible: state.focus_visible,
-            })
-        };
-        let mut stack = vec![(entity, None)];
-        while let Some((current, fragment)) = stack.pop() {
-            if let Ok((handle, state)) = dom_nodes.get(current) {
-                match fragment {
-                    Some(block) => {
-                        fragments
-                            .entry(block)
-                            .or_default()
-                            .insert(**handle, pseudo(state));
-                    }
-                    None => {
-                        states.insert(**handle, pseudo(state));
-                    }
-                }
-            }
-            // A translated element starts its own fragment: its subtree's
-            // spans are spawned from the re-parsed translation, so their
-            // `DomNode` handles index the fragment. Only a document element
-            // starts one (fragments aren't localized again).
-            let fragment = match fragment {
-                Some(fragment) => Some(fragment),
-                None => dom_nodes.get(current).ok().and_then(|(handle, _)| {
-                    let handle = **handle;
-                    localized.0.contains_key(&handle).then_some(handle)
-                }),
-            };
-            let nested_root =
-                current != entity && tree.get(current).is_ok_and(|(.., nested_ui)| nested_ui);
-            if !nested_root && let Ok((children, ..)) = tree.get(current) {
-                stack.extend(
-                    children
-                        .iter()
-                        .flat_map(|children| children.iter())
-                        .map(|child| (child, fragment)),
-                );
-            }
-        }
-
         // ADR 0021: pair the fresh document with the previous build's when
         // only the template's rendered content changed; unchanged subtrees
         // reuse their items, so the cascade and run construction skip
@@ -1072,10 +1031,10 @@ pub(crate) fn build_html_ui(
             && !frame.vars_changed
             && !frame.fonts_changed
             && !frame.images_changed;
-        let (previous_useful, previous_since_try, had_skeleton) = skeletons
+        let (previous_useful, previous_since_try, previous_strike, had_skeleton) = skeletons
             .get(entity)
-            .map_or((true, 0, false), |skeleton| {
-                (skeleton.useful, skeleton.since_try, true)
+            .map_or((true, 0, 0, false), |skeleton| {
+                (skeleton.useful, skeleton.since_try, skeleton.strike, true)
             });
         let mut pairing = HashMap::default();
         let mut reverse = HashMap::default();
@@ -1089,7 +1048,8 @@ pub(crate) fn build_html_ui(
             let Some(skeleton) = skeleton_mut.as_mut() else {
                 break 'pass None;
             };
-            if !skeleton.useful && skeleton.since_try < 16 {
+            let retry_every = 16u32 << skeleton.strike.min(4);
+            if !skeleton.useful && skeleton.since_try < retry_every {
                 break 'pass None;
             }
             let Some(old_document) = skeleton.document.as_ref() else {
@@ -1118,6 +1078,70 @@ pub(crate) fn build_html_ui(
                 reused: Cell::new(0),
             });
         };
+
+        // The elements' interaction state by DOM node, so the collected
+        // items style for `:hover`/`:active`. Nested `HtmlUi`s have their
+        // own documents — their handles index those, not this one — so their
+        // subtrees are skipped (the starting entity is the UI root itself).
+        let mut states = HashMap::new();
+        // A translated element's subtree is fragment-keyed (its spans'
+        // `DomNode` handles index the translation fragment, re-parsed per
+        // build), so those states are collected per fragment. The map holds
+        // the last build's states: a changed translation misses and styles
+        // unhovered until the next build's fresh map.
+        let mut fragments: HashMap<tl::NodeHandle, HashMap<tl::NodeHandle, Pseudo>> =
+            HashMap::new();
+        let pseudo = |state: Option<&PseudoState>| {
+            state.copied().map_or(Pseudo::default(), |state| Pseudo {
+                hover: state.hovered,
+                active: state.active,
+                focus: state.focused,
+                focus_visible: state.focus_visible,
+            })
+        };
+        let mut stack = vec![(entity, None)];
+        while let Some((current, fragment)) = stack.pop() {
+            if let Ok((handle, state)) = dom_nodes.get(current) {
+                // The entity's `DomNode` may lag the fresh document (a
+                // reused subtree's handle is written by the frame it last
+                // synced): map it through the pairing, so the keys match
+                // what the collection looks up.
+                let handle = reverse.get(&**handle).copied().unwrap_or(**handle);
+                match fragment {
+                    Some(block) => {
+                        fragments
+                            .entry(block)
+                            .or_default()
+                            .insert(handle, pseudo(state));
+                    }
+                    None => {
+                        states.insert(handle, pseudo(state));
+                    }
+                }
+            }
+            // A translated element starts its own fragment: its subtree's
+            // spans are spawned from the re-parsed translation, so their
+            // `DomNode` handles index the fragment. Only a document element
+            // starts one (fragments aren't localized again).
+            let fragment = match fragment {
+                Some(fragment) => Some(fragment),
+                None => dom_nodes.get(current).ok().and_then(|(handle, _)| {
+                    let handle = reverse.get(&**handle).copied().unwrap_or(**handle);
+                    localized.0.contains_key(&handle).then_some(handle)
+                }),
+            };
+            let nested_root =
+                current != entity && tree.get(current).is_ok_and(|(.., nested_ui)| nested_ui);
+            if !nested_root && let Ok((children, ..)) = tree.get(current) {
+                stack.extend(
+                    children
+                        .iter()
+                        .flat_map(|children| children.iter())
+                        .map(|child| (child, fragment)),
+                );
+            }
+        }
+
 
         let items = if outline.is_some() {
             let text = match &*rendered {
@@ -1180,11 +1204,11 @@ pub(crate) fn build_html_ui(
             }
         };
 
-        let specs: Vec<Arc<NodeSpec>> = items
+        let specs: Vec<SpecNode> = items
             .into_iter()
             .map(|item| match item {
-                Item::Cached(spec) => spec,
-                item => Arc::new(item_spec(&styler, &item, default_gap)),
+                Item::Cached(spec) => SpecNode::Cached(spec),
+                item => SpecNode::Fresh(Arc::new(item_spec(&styler, &item, default_gap))),
             })
             .collect();
         // Content changes and restyles alike update the existing children in
@@ -1192,7 +1216,7 @@ pub(crate) fn build_html_ui(
         // differs.
         let inline_images: Vec<Handle<Image>> = specs
             .iter()
-            .flat_map(|spec| spec.images.iter().cloned())
+            .flat_map(|spec| spec.spec().images.iter().cloned())
             .collect();
         commands.entity(entity).insert(InlineImages(inline_images));
         // CSS `rem` resolves against the root font-size: keep Bevy's
@@ -1207,7 +1231,16 @@ pub(crate) fn build_html_ui(
             });
         }
         let mut connected = Vec::new();
-        let spawned = update_children(&mut commands, entity, &specs, &tree, entity, &mut connected);
+        let spawned = update_children(
+            &mut commands,
+            entity,
+            &specs,
+            &tree,
+            entity,
+            &mut connected,
+            &dom_nodes,
+            Some(&pairing),
+        );
         // ADR 0021: this build's items (and, when the document changed, a
         // re-parse of it) become the next build's skeleton — the reuse
         // cache. Its document and items must always correspond, so a
@@ -1228,13 +1261,18 @@ pub(crate) fn build_html_ui(
             match pass.as_ref() {
                 Some(pass) => {
                     let total = spec_count(&specs);
+                    let useful = pass.reused.get() > 0 && pass.reused.get() * 2 >= total;
+                    // A useless retry backs the next one off; a useful one
+                    // (or the first) restores the short cadence.
+                    let strike = if useful { 0 } else { previous_strike + 1 };
                     let table = spec_table(&specs);
                     commands.entity(entity).insert(Skeleton {
                         document,
                         specs,
                         table,
-                        useful: pass.reused.get() > 0 && pass.reused.get() * 2 >= total,
+                        useful,
                         since_try: 0,
+                        strike,
                     });
                 }
                 None if !had_skeleton => {
@@ -1245,6 +1283,7 @@ pub(crate) fn build_html_ui(
                         table,
                         useful: true,
                         since_try: 0,
+                        strike: 0,
                     });
                 }
                 None if !skeleton_eligible => {
@@ -1270,6 +1309,7 @@ pub(crate) fn build_html_ui(
                                     table,
                                     useful,
                                     since_try,
+                                    strike: previous_strike,
                                 });
                             }
                         }
@@ -1343,7 +1383,7 @@ struct NodeSpec {
     images: Vec<Handle<Image>>,
     /// `Text` nodes hold spans, never child nodes.
     text: Option<TextSpec>,
-    children: Vec<Arc<NodeSpec>>,
+    children: Vec<SpecNode>,
     /// The `calc()`-valued layout properties: the layout pass resolves
     /// them per frame against the measured basis.
     calc: Vec<(CalcProp, CalcExpr)>,
@@ -1918,16 +1958,16 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
         ..default()
     };
     boxed.layout.apply_to(&mut node);
-    let children: Vec<Arc<NodeSpec>> = children
+    let children: Vec<SpecNode> = children
         .iter()
         .map(|child| match child {
-            Item::Cached(spec) => Arc::clone(spec),
-            child => Arc::new(item_spec(styler, child, default_gap)),
+            Item::Cached(spec) => SpecNode::Cached(Arc::clone(spec)),
+            child => SpecNode::Fresh(Arc::new(item_spec(styler, child, default_gap))),
         })
         .collect();
     let images = children
         .iter()
-        .flat_map(|spec| spec.images.iter().cloned())
+        .flat_map(|child| child.spec().images.iter().cloned())
         .collect();
     NodeSpec {
         element: Some(element),
@@ -2097,11 +2137,11 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
         submit: block.submit,
         font_size: block.style.size,
         images,
-        children: vec![Arc::new(NodeSpec {
+        children: vec![SpecNode::Fresh(Arc::new(NodeSpec {
             pickable: block.style.pointer_events,
             text: Some(text),
             ..NodeSpec::new(text_node)
-        })],
+        }))],
         calc: boxed.calc.clone(),
         transitions: boxed.transitions.clone(),
         ..NodeSpec::new(node)
@@ -2222,7 +2262,7 @@ fn spawn_spec(
     } else {
         entity.with_children(|children| {
             for child in &spec.children {
-                spawn_spec(children, child, root, connected);
+                spawn_spec(children, child.spec(), root, connected);
             }
         });
     }
@@ -2259,10 +2299,12 @@ fn same_identity(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
 fn update_children(
     commands: &mut Commands,
     parent: Entity,
-    specs: &[Arc<NodeSpec>],
+    specs: &[SpecNode],
     tree: &Tree,
     root: Entity,
     connected: &mut Vec<ElementConnected>,
+    dom_nodes: &Query<'_, '_, (&DomNode, Option<&PseudoState>)>,
+    pairing: Option<&HashMap<tl::NodeHandle, tl::NodeHandle>>,
 ) -> bool {
     let current: Vec<Entity> = tree
         .get(parent)
@@ -2277,12 +2319,17 @@ fn update_children(
             .ok()
             .and_then(|(_, _, _, element, ..)| element?.id.clone())
     };
-    let spec_id = |spec: &NodeSpec| spec.element.as_ref().and_then(|element| element.id.clone());
+    let spec_id = |spec: &SpecNode| {
+        spec.spec()
+            .element
+            .as_ref()
+            .and_then(|element| element.id.clone())
+    };
     let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
     for id in owned.iter().filter_map(|&child| id_of(child)) {
         counts.entry(id).or_default().0 += 1;
     }
-    for id in specs.iter().map(Arc::as_ref).filter_map(spec_id) {
+    for id in specs.iter().filter_map(spec_id) {
         counts.entry(id).or_default().1 += 1;
     }
     let key = |id: Option<String>| id.filter(|id| counts.get(id) == Some(&(1, 1)));
@@ -2306,15 +2353,59 @@ fn update_children(
             None => unkeyed.next(),
         };
         match candidate {
-            Some(child) if same_identity(spec, child, tree) => {
-                spawned |= update_spec(commands, child, spec, tree, root, connected);
+            Some(child) if same_identity(spec.spec(), child, tree) => {
+                // A reused spec may only skip when it landed on the entity
+                // it was built for: its content is what that entity already
+                // carries. Positional matching can hand it a foreign
+                // entity (an id-less list reordered); there the cached
+                // content — provably what a fresh build produces for this
+                // subtree — is written through `update_spec` like a fresh
+                // spec's.
+                let own_entity = match spec {
+                    SpecNode::Cached(spec) => spec
+                        .handle
+                        .and_then(|handle| pairing.and_then(|pairing| pairing.get(&handle)))
+                        .copied()
+                        == dom_nodes.get(child).ok().map(|(dom, _)| **dom),
+                    SpecNode::Fresh(_) => false,
+                };
+                match (spec, own_entity) {
+                    // ADR 0021 C-2: a reused subtree's entities already
+                    // match its specs (every write since they were built
+                    // compared equal, and the gates drop the reuse on any
+                    // style-side change). Skip the visit; the one thing
+                    // that changed across frames is the `DomNode` handle
+                    // (earlier insertions shift the indices) — and the
+                    // spec's handle was remapped to the fresh document.
+                    (SpecNode::Cached(spec), true) => {
+                        if let Some(handle) = spec.handle {
+                            commands
+                                .entity(child)
+                                .queue(move |mut entity: EntityWorldMut| {
+                                    put(&mut entity, Some(DomNode(handle)));
+                                });
+                        }
+                    }
+                    (spec, _) => {
+                        spawned |= update_spec(
+                            commands,
+                            child,
+                            spec.spec(),
+                            tree,
+                            root,
+                            connected,
+                            dom_nodes,
+                            pairing,
+                        );
+                    }
+                }
                 kept.insert(child);
                 desired.push(child);
             }
             _ => {
                 let mut id = None;
                 commands.entity(parent).with_children(|children| {
-                    id = Some(spawn_spec(children, spec, root, connected));
+                    id = Some(spawn_spec(children, spec.spec(), root, connected));
                 });
                 desired.extend(id);
                 spawned = true;
@@ -2352,6 +2443,8 @@ fn update_spec(
     tree: &Tree,
     root: Entity,
     connected: &mut Vec<ElementConnected>,
+    dom_nodes: &Query<'_, '_, (&DomNode, Option<&PseudoState>)>,
+    pairing: Option<&HashMap<tl::NodeHandle, tl::NodeHandle>>,
 ) -> bool {
     let (children, has_frame) = tree
         .get(entity)
@@ -2440,7 +2533,16 @@ fn update_spec(
         &spec.transitions,
     );
     let Some(text) = &spec.text else {
-        return update_children(commands, entity, &spec.children, tree, root, connected);
+        return update_children(
+            commands,
+            entity,
+            &spec.children,
+            tree,
+            root,
+            connected,
+            dom_nodes,
+            pairing,
+        );
     };
     // `TextLayout` is required by `Text`: replace, never remove.
     let layout = if text.no_wrap {
@@ -2984,9 +3086,9 @@ pub struct Skeleton {
     /// The document the specs were built from.
     document: Option<HtmlDocument>,
     /// The previous build's spec tree. Clean subtrees are handed to the
-    /// diff through `Rc` clones (refcount bumps, no copies); the handles
+    /// diff through `Arc` clones (refcount bumps, no copies); the handles
     /// in it are kept current by the per-build remap below.
-    specs: Vec<Arc<NodeSpec>>,
+    specs: Vec<SpecNode>,
     /// A node that produced a spec → its position in `specs` (a path of
     /// container-child indices).
     table: HashMap<tl::NodeHandle, Vec<usize>>,
@@ -2995,6 +3097,10 @@ pub struct Skeleton {
     useful: bool,
     /// Builds since the last reuse attempt, for the retry cadence.
     since_try: u32,
+    /// Consecutive useless retries: the retry interval backs off (16, 64,
+    /// 256 builds) so a permanently all-dirty workload pays almost nothing
+    /// while one that becomes reusable is still found.
+    strike: u8,
 }
 
 /// The per-build pairing state: where the fresh DOM meets the previous
@@ -3004,7 +3110,7 @@ struct SkeletonPass<'a> {
     pairing: &'a HashMap<tl::NodeHandle, tl::NodeHandle>,
     /// Old handles whose whole subtree content matches.
     clean: &'a HashSet<tl::NodeHandle>,
-    specs: &'a [Arc<NodeSpec>],
+    specs: &'a [SpecNode],
     table: &'a HashMap<tl::NodeHandle, Vec<usize>>,
     /// How many specs the build reused.
     reused: Cell<usize>,
@@ -3040,16 +3146,18 @@ fn pair_node(
     };
     match (old_node, fresh_node) {
         (tl::Node::Tag(old_tag), tl::Node::Tag(fresh_tag)) => {
-            if !tag_equal(old_tag, fresh_tag) {
-                return false;
-            }
             // A translated element's item comes from its per-build
             // fragment, never from this DOM subtree: exclude it (and its
-            // descendants, whose items are fragment-based too).
+            // descendants, whose items are fragment-based too) before any
+            // attribute work — an all-translated document exits the walk
+            // at the top.
             let translated = |tag: &tl::HTMLTag| {
                 tag.attributes().get("data-l10n-id").flatten().is_some()
             };
             if translated(old_tag) || translated(fresh_tag) {
+                return false;
+            }
+            if !tag_equal(old_tag, fresh_tag) {
                 return false;
             }
             let (old_children, fresh_children) = (old_tag.children(), fresh_tag.children());
@@ -3105,10 +3213,10 @@ fn tag_equal(old: &tl::HTMLTag, fresh: &tl::HTMLTag) -> bool {
 /// following index a container's child.
 /// How many specs the tree holds (containers count themselves plus their
 /// children; a reused spec counts once).
-fn spec_count(specs: &[Arc<NodeSpec>]) -> usize {
+fn spec_count(specs: &[SpecNode]) -> usize {
     specs
         .iter()
-        .map(|spec| match &spec.children {
+        .map(|node| match &node.spec().children {
             children if children.is_empty() => 1,
             children => 1 + spec_count(children),
         })
@@ -3116,7 +3224,7 @@ fn spec_count(specs: &[Arc<NodeSpec>]) -> usize {
 }
 
 /// A node that produced a spec → its position in `specs`.
-fn spec_table(specs: &[Arc<NodeSpec>]) -> HashMap<tl::NodeHandle, Vec<usize>> {
+fn spec_table(specs: &[SpecNode]) -> HashMap<tl::NodeHandle, Vec<usize>> {
     let mut table = HashMap::default();
     let mut prefix = Vec::new();
     spec_table_walk(specs, &mut prefix, &mut table);
@@ -3124,11 +3232,12 @@ fn spec_table(specs: &[Arc<NodeSpec>]) -> HashMap<tl::NodeHandle, Vec<usize>> {
 }
 
 fn spec_table_walk(
-    specs: &[Arc<NodeSpec>],
+    specs: &[SpecNode],
     prefix: &mut Vec<usize>,
     table: &mut HashMap<tl::NodeHandle, Vec<usize>>,
 ) {
-    for (index, spec) in specs.iter().enumerate() {
+    for (index, node) in specs.iter().enumerate() {
+        let spec = node.spec();
         prefix.push(index);
         if let Some(handle) = spec.handle {
             table.insert(handle, prefix.clone());
@@ -3154,11 +3263,11 @@ impl SkeletonPass<'_> {
     }
 }
 
-fn spec_rc_at<'a>(specs: &'a [Arc<NodeSpec>], path: &[usize]) -> Option<&'a Arc<NodeSpec>> {
+fn spec_rc_at<'a>(specs: &'a [SpecNode], path: &[usize]) -> Option<&'a Arc<NodeSpec>> {
     let (first, rest) = path.split_first()?;
-    let mut current = specs.get(*first)?;
+    let mut current = specs.get(*first)?.spec();
     for &index in rest {
-        current = current.children.get(index)?;
+        current = current.children.get(index)?.spec();
     }
     Some(current)
 }
@@ -3168,7 +3277,7 @@ fn spec_rc_at<'a>(specs: &'a [Arc<NodeSpec>], path: &[usize]) -> Option<&'a Arc<
 /// succeeds). Runs up front, when the skeleton's `Rc`s are exclusively
 /// held: the reused specs are then handed on with current handles, and the
 /// entities' `DomNode`s never go stale.
-fn remap_spec_handles(specs: &mut [Arc<NodeSpec>], reverse: &HashMap<tl::NodeHandle, tl::NodeHandle>) {
+fn remap_spec_handles(specs: &mut [SpecNode], reverse: &HashMap<tl::NodeHandle, tl::NodeHandle>) {
     let remapped = |handle: &mut Option<tl::NodeHandle>| {
         if let Some(handle) = handle.as_mut()
             && let Some(new) = reverse.get(handle)
@@ -3176,7 +3285,10 @@ fn remap_spec_handles(specs: &mut [Arc<NodeSpec>], reverse: &HashMap<tl::NodeHan
             *handle = *new;
         }
     };
-    for spec in specs {
+    for node in specs {
+        let spec = match node {
+            SpecNode::Fresh(spec) | SpecNode::Cached(spec) => spec,
+        };
         let Some(spec) = Arc::get_mut(spec) else {
             // Shared with a previous frame's items (impossible: they are
             // dropped with the build); leave the handle stale.

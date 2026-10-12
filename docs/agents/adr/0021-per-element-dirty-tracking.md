@@ -7,7 +7,7 @@
 | Date | 2026-10-12 11:24 +0400 |
 | Author | GLM (opencode-zen/glm-5.3-flash), via omp — drafted for the project owner |
 | Commit | `f05290d` Separate Tera statements in Markdown templates at load |
-| Status | Accepted — phases A+B and C-1 implemented (see the implementation notes); C-2 gated |
+| Status | Accepted — fully implemented (A+B, C-1, C-2; see the implementation notes) |
 | Related | 0017 (its fingerprint variant was rejected on measurement — this is the successor design), 0020 (the load-time conversion this builds on), 0009 (identical-render skip, in-place updates), 0018/0019 (measurement); the "Low-Hanging / Dirty-Flag Rebuilds" items in the session record |
 
 ## Context
@@ -288,3 +288,61 @@ change; the `ImageNode` re-insert on visits is covered by the
 `images_changed` gate). Skipping the visit entirely for cached specs is
 therefore equivalent — but it makes the gate list load-bearing
 correctness, which is why it stays a separate, measured step.
+
+## Implementation note 3 (2026-10-12, latest): C-2 implemented — the diff skips clean subtrees
+
+C-2 is in: the spec tree carries its provenance (`SpecNode::Fresh` /
+`Cached`), and `update_children` **skips `update_spec` entirely for a
+cached, identity-matched child** — the entities already match its specs
+(every write since they were built compared equal under `put_ref`, and
+the gates drop the whole reuse on any style-side change, which is what
+makes the skip load-bearing correctness rather than an optimization).
+Two things keep it sound:
+
+- **The one component that legitimately changes across frames is the
+  `DomNode` handle** (an earlier sibling insertion shifts tl's indices
+  without touching any subtree's content). A cached child therefore gets
+  exactly one queued write — `put(DomNode(remapped_handle))` — a compare
+  that usually writes nothing.
+- **The skip only fires when the cached spec lands on the entity it was
+  built for** (`DomNode == pairing[spec.handle]`, threaded through the
+  diff as `update_children`/`update_spec` parameters). The freshness
+  property `content_update_matches_a_fresh_build` caught the first
+  version skipping that check: an id-less list reordered between frames
+  positionally pairs a cached spec with a foreign entity, and skipping
+  the visit left the foreign entity carrying the old subtree's content
+  while the fresh build shows the new order. The fix: a cached spec on a
+  foreign entity goes through `update_spec` like a fresh one — sound
+  because a cached spec's content is provably what a fresh build
+  produces for its subtree (the A+B invariant), so the write is correct
+  either way; the skip is simply lost on that element for that frame.
+- **The `:hover`/`:active` state walk maps entity handles through the
+  pairing's reverse map** before keying the states (the walk runs before
+  the collect and the skip means an entity's handle can lag the fresh
+  document by the frames it was reused). On pure restyles the source is
+  unchanged, the mapping is the identity, and the walk pays nothing.
+- The retry cadence backs off with consecutive useless passes (16 → 64 →
+  256 builds), so an all-dirty workload (`rebuilding`) pays almost
+  nothing while one that becomes reusable is still found; and the
+  pairing walk checks the translation exclusion *before* the attribute
+  comparison, so an all-translated document exits at the top.
+
+Measured same-session, skeleton on/off (600 elements, with the guard):
+
+| Benchmark | Off | On (C-2) | Δ |
+|---|---|---|---|
+| `changing` | 2.09 ms | **1.17 ms** | **−44%** |
+| `markdown` | 8.75 ms | **6.27 ms** | **−28%** |
+| `localized` | 2.68 ms | 2.60 ms | −3% |
+| `rebuilding` | 9.25 ms | 9.44 ms | +2% |
+| `idle` | 192 µs | 193 µs | 0 |
+
+(The pre-guard skip measured changing 1.13 / markdown 5.87 — the guard
+costs ~4–6% on the reuse-heavy workloads and is not optional.) markdown
+is near the measured floor for this pipeline (Bevy's schedule/layout/
+text measure ~4 ms, the localize walk ~0.4 ms, render + parse ~0.1 ms —
+none of it rebuild machinery). The phase plan of this ADR is complete.
+
+Also since the C-1 note: `spec_id`/`same_identity` take the provenance
+wrapper, and the state walk's translation-fragment detection uses the
+mapped handle.
