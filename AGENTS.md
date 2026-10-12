@@ -264,16 +264,21 @@ tests/
   ci.yml           per push to main / PR: -D warnings check/build/doc, cargo test, fuzzing-feature
                    tests, Fluent oracle references current
   nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 15 min
-                   cargo-fuzz per target, other fuzz drivers build (fuzz on pinned BEVY_MARKUP_NIGHTLY)
+                   cargo-fuzz per target, other fuzz drivers build, criterion + divan
+                   benchmarks (reports as artifacts, not a gate; fuzz on pinned
+                   BEVY_MARKUP_NIGHTLY)
   mutants.yml      twice-weekly mutation testing, 4 shards, --in-place, fast settings, informational
-  cache.yml        builds the shared `mutants` and `fuzz` dependency caches once (push to main,
-                   daily); scheduled jobs only restore them (see Testing, CI)
+  cache.yml        builds the shared `mutants`, `fuzz` and `bench` (both harnesses)
+                   dependency caches once (push to main, daily); scheduled jobs only
+                   restore them (see Testing, CI)
 scripts/
   browser_oracle.py  headless Chromium → tests/vectors/*/browser.json (stdlib Python only)
   fluent_oracle.sh   @fluent/dom in jsdom → tests/vectors/*/fluent.html (Node + npm;
                      pinned packages in fluent-oracle/, node_modules gitignored)
   mutants.sh         mutation testing (cargo-mutants), fast settings + cache parking; see Testing TODO 6
-  coverage.py        line coverage of src/ per testing layer and merged (cargo-llvm-cov); see Testing
+  coverage.py        line coverage of src/ per testing layer and merged (cargo-llvm-cov);
+                     the `benchmarks` layers cover what the criterion + divan benches
+                     exercise (see Testing)
   golden.sh          golden-image test on Mesa lavapipe (`--update` rewrites references; fetches
                      Arch's vulkan-swrast into target/golden-lavapipe/ if no lavapipe ICD)
   fuzz-<driver>.sh   run one fuzzer over one target:

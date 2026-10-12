@@ -30,7 +30,10 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "target" / "coverage"
 IGNORE = r"(^|/)(tests|vendor|fuzz|examples|honggfuzz|fuzzcheck|test-fuzz)/|src/fuzz\.rs$|/\.cargo/|/rustc/"
 
-# Layer name → cargo test arguments (`--` separates test-binary arguments).
+# Layer name → a list of cargo test invocations (each a list of arguments;
+# `--` separates test-binary arguments). A layer with several invocations
+# runs them back to back — the profraws accumulate, so the layer's report
+# is their union.
 LAYERS = {
     "unit": ["--lib"],
     "vectors+oracles": ["--test", "html_ui"],
@@ -40,11 +43,22 @@ LAYERS = {
     "stateful": ["--test", "stateful"],
     "content-lint": ["--test", "content_lint"],
     "fuzz-corpora": ["--features", "fuzzing", "--test", "fuzz_corpus", "--", "--ignored"],
-    # The criterion benches (ADR 0018): what the benchmarks exercise (short
+    # The benchmarks (ADR 0018 + 0019): what the benches exercise (short
     # sampling — coverage doesn't care how long each benchmark runs).
     "benchmarks": [
-        "--bench", "pipeline", "--",
-        "--warm-up-time", "0.1", "--measurement-time", "0.3",
+        # Criterion: the statistical harness (benches/pipeline.rs).
+        ["--bench", "pipeline", "--",
+         "--warm-up-time", "0.1", "--measurement-time", "0.2"],
+        # Divan: the allocation-counting harness (benches/pipeline-divan.rs;
+        # each harness has its own CLI flags, hence two invocations).
+        ["--bench", "pipeline-divan", "--", "--max-time", "0.2"],
+    ],
+    "benchmarks-criterion": [
+        ["--bench", "pipeline", "--",
+         "--warm-up-time", "0.1", "--measurement-time", "0.2"],
+    ],
+    "benchmarks-divan": [
+        ["--bench", "pipeline-divan", "--", "--max-time", "0.2"],
     ],
 }
 
@@ -57,9 +71,14 @@ def cargo_llvm_cov(*args):
 
 
 def run_layer(name, args, isolated=True):
+    """Runs the layer's invocation(s) back to back (profraws accumulate —
+    the report is their union), after one clean. A layer's value is either
+    one flat argument list or a list of them."""
     if isolated:
         cargo_llvm_cov("clean", "--profraw-only")
-    cargo_llvm_cov("--no-report", *args)
+    invocations = args if args and isinstance(args[0], list) else [args]
+    for invocation in invocations:
+        cargo_llvm_cov("--no-report", *invocation)
 
 
 def export_lcov(path):
