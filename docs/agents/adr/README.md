@@ -33,7 +33,7 @@ as `[INFERENCE]`.
 | [0014](./0014-markdown-via-pulldown-cmark.md) | Markdown as a source syntax via pulldown-cmark | Accepted |
 | [0015](./0015-font-fallback-lists.md) | Font fallback lists via Bevy 0.20's `FontSource` | Accepted |
 | [0016](./0016-text-input.md) | Text input as `<input type="text">` via Bevy 0.20's `TextInput` | Accepted |
-| [0017](./0017-keyed-sub-document-updates.md) | Keyed sub-document updates: skip unchanged sub-trees when content changes | Proposed |
+| [0017](./0017-keyed-sub-document-updates.md) | Keyed sub-document updates: skip unchanged sub-trees when content changes | Rejected on measurement |
 | [0018](./0018-benchmarks-with-criterion.md) | Benchmarking with Criterion | Accepted |
 | [0019](./0019-benchmarks-with-divan.md) | Benchmarking with Divan (the second harness; allocation counts) | Accepted |
 

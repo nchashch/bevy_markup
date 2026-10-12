@@ -11,10 +11,11 @@
 //! - enter/leave count for a whole element chain (like CSS `:hover`): a
 //!   move emits enters for newly covered bound elements and leaves for the
 //!   uncovered ones, from the snapshot taken at enter;
-//! - pressing marks the hovered node; a release emits a click only if the
-//!   currently hovered node is the pressed one — and the press is consumed
-//!   (bevy_picking clears the pointer's press state per release) — while the
-//!   release hooks of the currently hovered chain always run.
+//! - pressing marks the hovered node; presses accumulate (bevy_picking's
+//!   `pressing` map is never pruned by moves, and a second press elsewhere
+//!   doesn't drop the first); a release emits a click when the currently
+//!   hovered node was ever pressed, then clears the press state — while
+//!   the release hooks of the currently hovered chain always run.
 //!
 //! Pages are plain containers without text, so hit chains are pure node
 //! geometry (rect containment) and the model needs no text layout; the
@@ -191,9 +192,10 @@ struct PointerModel {
     /// Elements whose enter hooks have fired and whose leave hooks will fire
     /// when uncovered.
     entered: Vec<usize>,
-    /// The node a press marked (persists across releases, like
-    /// bevy_picking's `state.pressing`).
-    pressed: Option<Picked>,
+    /// The nodes presses marked (bevy_picking's `state.pressing`:
+    /// accumulated across presses, never pruned by moves, cleared per
+    /// release).
+    pressed: Vec<Picked>,
     position: Option<Vec2>,
 }
 
@@ -305,7 +307,9 @@ impl<'a> Model<'a> {
 
     fn press(&mut self, pointer: &mut PointerModel, rects: &[Rect], root: Rect) -> Vec<Expected> {
         let picked = self.picked(pointer.position, rects, root);
-        pointer.pressed = Some(picked);
+        if picked != Picked::None && !pointer.pressed.contains(&picked) {
+            pointer.pressed.push(picked);
+        }
         let chain = self.chain(picked);
         let emitter = self.emitter(&chain, SignalTrigger::Press);
         sort_expected(
@@ -319,15 +323,16 @@ impl<'a> Model<'a> {
         let picked = self.picked(pointer.position, rects, root);
         let mut out = Vec::new();
         let chain = self.chain(picked);
-        // Click only when the hovered node is the pressed one; the press is
-        // consumed — bevy_picking clears the pointer's press state at the
-        // end of the release action, so a second release clicks nothing.
-        if pointer.pressed == Some(picked)
+        // Click when the hovered node was ever pressed (bevy_picking's
+        // `pressing` map accumulates across presses and moves); the press
+        // state clears at the release, so a second release clicks nothing.
+        let clicked = picked != Picked::None && pointer.pressed.contains(&picked);
+        if clicked
             && let Some(i) = self.emitter(&chain, SignalTrigger::Click)
         {
             out.push((self.spec.ids[i].clone(), TRIGGER_INDEX_CLICK, i));
         }
-        pointer.pressed = None;
+        pointer.pressed.clear();
         // The release hooks always run over the hovered chain.
         if let Some(i) = self.emitter(&chain, SignalTrigger::Release) {
             out.push((self.spec.ids[i].clone(), TRIGGER_INDEX_RELEASE, i));

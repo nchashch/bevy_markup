@@ -813,9 +813,11 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   (move/press/release, 1–12 ops), compared op by op with a reference model
   of the real semantics: deepest non-ignored node owns the hit and the
   deepest chain element bound for a trigger emits it; enter/leave track the
-  chain's covered set; a release clicks only if the hovered node is (still)
-  pressed — bevy_picking keeps presses across releases — and always runs
-  the hovered chain's release hooks. Pages are text-free so hit chains are
+  chain's covered set; presses accumulate per pointer (bevy_picking's
+  `pressing` map is never pruned by moves, and a second press elsewhere
+  doesn't drop the first), a release clicks when the hovered node was ever
+  pressed and then clears the press state, and always runs the hovered
+  chain's release hooks. Pages are text-free so hit chains are
   pure rect containment (the text-span path is pinned by `tests/signals.rs`).
   Both model halves were spot-checked by breaking the library (disabling
   `covered_by_deeper`, cutting the hover ancestor walk): the property fails
@@ -1333,10 +1335,13 @@ Next steps (roughly in order of value):
    `:focus-visible` from `InputFocus` since, see `focus.rs`).
 4. Lists done properly: `list-style-type`, `ol` numbering, CSS-driven indent.
 5. Text properties: `text-align` (`Justify`), `line-height` (`LineHeight`).
-6. Keyed reconciliation for content changes: keep entities for unchanged
+6. ~~Keyed reconciliation for content changes: keep entities for unchanged
    elements (key `NodeSpec`s by DOM path) so app-attached state survives
    template/locale changes too and large documents stay cheap. (Restyle in
-   place for style-only changes is done.)
+   place for style-only changes is done.)~~ Measured and rejected (ADR
+   0017): the cascade it skips is already cached by element identity and
+   the diff already writes only differences — the fingerprint overhead
+   measured +28% on the changed path, so the item was dropped.
 7. More test vectors alongside each of the above.
 
 ## Verification

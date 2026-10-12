@@ -384,6 +384,25 @@ pub(crate) struct ActiveTransition {
     pub easing: EasingFunction,
 }
 
+/// The hash of the context's values for the sheet's `var()` names: the
+/// seed input that invalidates collection fingerprints when a variable
+/// changes, and the `Frame`'s `vars_changed` signal.
+fn context_vars_hash(
+    sheet: Option<&Stylesheet>,
+    context: Option<&TemplateContext>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for name in sheet.map(|sheet| var_names(sheet.sheet())).unwrap_or_default() {
+        name.hash(&mut hasher);
+        context
+            .and_then(|context| context.get(&name))
+            .and_then(css_value)
+            .hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// A `TemplateContext` value as a CSS `var()` replacement: strings as
 /// written, numbers and bools as their CSS spelling, anything else (arrays,
 /// objects, `null`) unresolvable.
@@ -829,7 +848,6 @@ pub(crate) fn build_html_ui(
     for (entity, rendered, localized, own_sheet, outline, _ui, used_images, mut rebuild) in
         &mut views
     {
-        use std::hash::{Hash, Hasher};
         // The context's values for the sheet's `var()` names: a change
         // restyles (the values style, they don't render). Hashed in name
         // order, so a per-frame context update to any other key (the calc
@@ -852,18 +870,8 @@ pub(crate) fn build_html_ui(
             (Some(Phase::Failed) | None, _) => None,
         };
         let context = contexts.get(entity).ok();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for name in names_sheet
-            .map(|sheet| var_names(sheet.sheet()))
-            .unwrap_or_default()
-        {
-            name.hash(&mut hasher);
-            context
-                .and_then(|context| context.get(&name))
-                .and_then(css_value)
-                .hash(&mut hasher);
-        }
-        let vars_hash = hasher.finish();
+        let vars_hash = context_vars_hash(names_sheet, context);
+
         let frame = Frame {
             own: own_phase,
             default: default_phase,

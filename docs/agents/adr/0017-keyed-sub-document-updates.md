@@ -7,7 +7,7 @@
 | Date | 2026-10-12 05:47 +0400 |
 | Author | GLM (opencode-zen/glm-5.3-flash), via omp — drafted for the project owner |
 | Commit | `f541ee3` Add visibility, CSS variables and transitions; hot-reload and component examples + uncommitted ADR 0017 draft and index row |
-| Status | Proposed — designed, not yet implemented |
+| Status | Rejected — implemented once, measured, reverted (see Outcome) |
 | Related | 0009 (superseded's "Open" item: per-frame cost scales with the document), 0005, 0012; AGENTS "Limits and next steps" item 6 |
 
 ## Context
@@ -157,3 +157,47 @@ kept elements keep entities and attached state exactly as 0009 promised.
   Alternatives); text-run granularity (a span's respawn on style change
   is `update_spec`'s today, unaffected); measuring the `calc` example
   before and after with the 0009 benchmark method.
+
+## Outcome (2026-10-12, same day): rejected on measurement
+
+The design was implemented as specified (path threading through
+`collect_node`, `SpecCache` keyed by path with subtree fingerprints, the
+seed folding stylesheet/locale/font/`rem`/`vars` identities and the root
+element) and measured with ADR 0018's criterion suite
+(`frame/{idle,changing,rebuilding}/{120,600}`, warm-up 0.5 s,
+measurement 1 s):
+
+| Benchmark (600 elements) | Before | With fingerprints | Δ |
+|---|---|---|---|
+| `idle` | 188 µs | 198 µs | +5% |
+| `changing` (one paragraph) | 1.93 ms | 2.47 ms | **+28%** |
+| `rebuilding` (all paragraphs) | 9.26 ms | 10.0 ms | +5–7% |
+| `localized` | 2.42 ms | 2.45 ms+ | +27% |
+
+Hashing alone (fingerprints computed, hits disabled) cost +0.46 ms —
+more than the reuse recovered (−0.08 ms).
+
+**Why the savings weren't there:** the ADR's premise understated 0009.
+The cascade it set out to skip was already nearly free — `cascade.rs`
+`HtmlStyles::get` caches per (tag, id, classes, pseudo, ancestor-chain
+hash), so re-collecting an unchanged element costs one hash lookup — and
+the diff was already incremental (`update_children` + `put` write only
+what differs). What the fingerprint path *added* — O(subtree) hashing per
+element plus a deep `Item` clone per cache hit — cost more than the skip
+saved. Reaching the theoretical floor (~idle + render + parse) would
+additionally require skipping spec construction and the diff via
+fingerprints with clone-free reuse (`Rc` ownership threaded through the
+whole build path): a large redesign for a bounded win (~1.5 ms on a
+600-element document changing every frame).
+
+One design detail proved necessary during implementation and is worth
+keeping in the record: the element's own `tl::NodeHandle` index must be
+part of the fingerprint — cached items carry handles, and a DOM insertion
+shifts every later handle index without changing any sibling's path or
+subtree hash, which would have left `:hover`/tooltip lookups pointing at
+the wrong nodes.
+
+The implementation was reverted; the surviving piece is the extraction of
+`build.rs` `context_vars_hash` (the `Frame::vars_changed` hash, now one
+function instead of inline logic). Item-tree `Clone` derives were removed
+with it.
