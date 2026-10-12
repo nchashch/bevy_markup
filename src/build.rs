@@ -1,6 +1,6 @@
 //! Rendered + localized DOM → styled Bevy UI children of the `HtmlUi` entity.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use bevy::asset::{AssetEvent, AssetPath, LoadState};
 use bevy::ecs::system::SystemParam;
@@ -29,7 +29,7 @@ use crate::l10n::LocalizedText;
 use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
 use crate::signals::{self, ElementSignals, PseudoState, SignalBinding, SignalTrigger};
 use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
-use crate::template::{HtmlTemplate, decode_entities};
+use crate::template::{HtmlDocument, HtmlTemplate, decode_entities};
 
 /// Values when no stylesheet rule applies (white suits the dark UIs Bevy
 /// apps usually draw on; 16px is the CSS initial size).
@@ -64,6 +64,7 @@ pub(crate) fn faded(color: Color, opacity: f32) -> Color {
 }
 
 /// A stretch of text in one style, or an inline `<img>` (empty `text`).
+#[derive(Clone)]
 struct Run {
     text: String,
     style: Style,
@@ -182,6 +183,7 @@ impl ImageRun {
 #[derive(Component, Deref, Default)]
 pub(crate) struct InlineImages(pub Vec<Handle<Image>>);
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BlockKind {
     Heading,
     Paragraph,
@@ -192,6 +194,7 @@ enum BlockKind {
     Button,
 }
 
+#[derive(Clone)]
 struct Block {
     kind: BlockKind,
     /// `<button type="submit">`: clicking submits the enclosing form.
@@ -232,6 +235,7 @@ const CONTAINERS: &[&str] = &[
 ];
 
 /// A node to spawn: a text block, or a container of further items.
+#[derive(Clone)]
 enum Item {
     Block(Block),
     Container {
@@ -268,6 +272,7 @@ enum Item {
 /// Resolved box properties of an element: `border-width`, `padding`,
 /// `background-color`, `border-image`, plus layout (flex, sizes, margins).
 #[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct BoxStyle {
     pub(crate) border: [Option<f32>; 4],
     pub(crate) border_color: [Option<Color>; 4],
@@ -781,6 +786,7 @@ pub(crate) fn build_html_ui(
     roots: Query<(&Node, Option<&CssRoot>), With<HtmlUi>>,
     parents: Query<&ChildOf>,
     contexts: Query<&TemplateContext>,
+    skeletons: Query<&Skeleton>,
     tree: Tree,
     dom_nodes: Query<(&DomNode, Option<&PseudoState>)>,
     pseudo_changed: Query<Entity, Changed<PseudoState>>,
@@ -844,7 +850,7 @@ pub(crate) fn build_html_ui(
 
     // First pass: the decision per UI. Nested UIs need the whole set before
     // anything acts (see the suppression below).
-    let mut decisions: Vec<(Entity, Decision)> = Vec::new();
+    let mut decisions: Vec<(Entity, Decision, Frame)> = Vec::new();
     for (entity, rendered, localized, own_sheet, outline, _ui, used_images, mut rebuild) in
         &mut views
     {
@@ -902,15 +908,15 @@ pub(crate) fn build_html_ui(
         if !matches!(decision, Decision::Wait | Decision::Skip) {
             rebuild.vars = vars_hash;
         }
-        decisions.push((entity, decision));
+        decisions.push((entity, decision, frame));
     }
     // Deepest UIs first: a nested `HtmlUi`'s commands are queued before an
     // ancestor's, so an ancestor update that despawns the element holding it
     // comes after them (and one that keeps it keeps the nested UI updated).
     let depth = |entity: Entity| parents.iter_ancestors(entity).count();
-    decisions.sort_by_key(|(entity, _)| std::cmp::Reverse(depth(*entity)));
+    decisions.sort_by_key(|(entity, ..)| std::cmp::Reverse(depth(*entity)));
 
-    for (entity, decision) in decisions {
+    for (entity, decision, frame) in decisions {
         let (source, restyle) = match decision {
             Decision::Wait | Decision::Skip => continue,
             Decision::Build(source) => (source, false),
@@ -1045,6 +1051,58 @@ pub(crate) fn build_html_ui(
             }
         }
 
+        // ADR 0021: pair the fresh document with the previous build's when
+        // only the template's rendered content changed; unchanged subtrees
+        // reuse their items, so the cascade and run construction skip
+        // them. Style-side changes (state, `var()`s, fonts, images) or a
+        // localization change rebuild fully — the reused items' styles and
+        // translations would be stale.
+        // A localization change doesn't block reuse: only translated
+        // elements depend on it, and those are excluded from the pairing
+        // (their items come from per-build fragments).
+        let skeleton_eligible = matches!(decision, Decision::Build(_))
+            && outline.is_none()
+            && rendered.is_changed()
+            && !frame.state_changed
+            && !frame.vars_changed
+            && !frame.fonts_changed
+            && !frame.images_changed;
+        let mut pairing = HashMap::default();
+        let mut reverse = HashMap::default();
+        let mut clean = HashSet::default();
+        let pass = 'pass: {
+            if !skeleton_eligible {
+                break 'pass None;
+            }
+            let Ok(skeleton) = skeletons.get(entity) else {
+                break 'pass None;
+            };
+            if !skeleton.useful && skeleton.since_try < 16 {
+                break 'pass None;
+            }
+            let Some(old_document) = skeleton.document.as_ref() else {
+                break 'pass None;
+            };
+            let RenderedHtml::Ready(document) = &*rendered else {
+                break 'pass None;
+            };
+            pair_trees_into(
+                old_document.dom(),
+                document.dom(),
+                &mut pairing,
+                &mut reverse,
+                &mut clean,
+            );
+            break 'pass Some(SkeletonPass {
+                pairing: &pairing,
+                reverse: &reverse,
+                clean: &clean,
+                items: &skeleton.items,
+                table: &skeleton.table,
+                reused: Cell::new(0),
+            });
+        };
+
         let items = if outline.is_some() {
             let text = match &*rendered {
                 RenderedHtml::Pending => continue,
@@ -1084,6 +1142,7 @@ pub(crate) fn build_html_ui(
                     &styler,
                     root,
                     root_grid.as_ref(),
+                    pass.as_ref(),
                 ),
                 RenderedHtml::Failed(message) => vec![Item::Block(Block {
                     kind: BlockKind::Paragraph,
@@ -1106,7 +1165,7 @@ pub(crate) fn build_html_ui(
         };
 
         let specs: Vec<NodeSpec> = items
-            .into_iter()
+            .iter()
             .map(|item| item_spec(&styler, item, default_gap))
             .collect();
         // Content changes and restyles alike update the existing children in
@@ -1130,6 +1189,87 @@ pub(crate) fn build_html_ui(
         }
         let mut connected = Vec::new();
         let spawned = update_children(&mut commands, entity, specs, &tree, entity, &mut connected);
+        // ADR 0021: this build's items (and, when the document changed, a
+        // re-parse of it) become the next build's skeleton — the reuse
+        // cache. Its document and items must always correspond, so a
+        // restyle that kept the document updates the items in place. When
+        // the reuse walk was skipped as not worth it, only the retry
+        // counter ticks: the stale skeleton stays sound (its document
+        // matches its items) and no per-frame data move happens. Outline
+        // and failed documents leave it frozen.
+        if outline.is_none() {
+            let previous = skeletons.get(entity).ok();
+            let document = match &*rendered {
+                RenderedHtml::Ready(document)
+                    if pass.is_some() || (rendered.is_changed() && !skeleton_eligible) =>
+                {
+                    HtmlDocument::parse(document.source().to_owned()).ok()
+                }
+                _ => None,
+            };
+            match pass.as_ref() {
+                Some(pass) => {
+                    let total = item_count(&items);
+                    let table = item_table(&items);
+                    commands.entity(entity).insert(Skeleton {
+                        document,
+                        items,
+                        table,
+                        useful: pass.reused.get() > 0 && pass.reused.get() * 2 >= total,
+                        since_try: 0,
+                    });
+                }
+                None if previous.is_none() => {
+                    let table = item_table(&items);
+                    commands.entity(entity).insert(Skeleton {
+                        document,
+                        items,
+                        table,
+                        useful: true,
+                        since_try: 0,
+                    });
+                }
+                None if !skeleton_eligible => {
+                    // A full rebuild or restyle ran: the fresh items are the
+                    // next skeleton; the document only changes with the
+                    // render.
+                    let useful = previous.is_none_or(|previous| previous.useful);
+                    let since_try = previous.map_or(0, |previous| previous.since_try);
+                    let keep_document = document.is_none();
+                    let table = item_table(&items);
+                    commands.queue(move |world: &mut World| {
+                        match world.get_mut::<Skeleton>(entity) {
+                            Some(mut skeleton) => {
+                                skeleton.items = items;
+                                skeleton.table = table;
+                                if !keep_document {
+                                    skeleton.document = document;
+                                }
+                            }
+                            None => {
+                                world.entity_mut(entity).insert(Skeleton {
+                                    document,
+                                    items,
+                                    table,
+                                    useful,
+                                    since_try,
+                                });
+                            }
+                        }
+                    });
+                }
+                None => {
+                    // Eligible but skipped (the adaptive gate): tick the
+                    // retry counter; every 16th build tries again.
+                    let since_try = previous.map_or(1, |previous| previous.since_try + 1);
+                    commands.queue(move |world: &mut World| {
+                        if let Some(mut skeleton) = world.get_mut::<Skeleton>(entity) {
+                            skeleton.since_try = since_try;
+                        }
+                    });
+                }
+            }
+        }
         // After the spawns, before `HtmlUiBuilt`: its observers see what the
         // definitions attached.
         for element in connected {
@@ -1663,7 +1803,7 @@ type Tree<'w, 's> = Query<
     ),
 >;
 
-fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
+fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
     let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children) =
         match item {
             Item::Block(block) => return block_spec(styler, block),
@@ -1680,6 +1820,12 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
                 value,
             } => {
                 // Returns directly: the other arms feed the shared tuple tail.
+                let boxed = boxed.clone();
+                let element = element.clone();
+                let signals = signals.clone();
+                let focus = focus.clone();
+                let custom = custom.clone();
+                let value = value.clone();
                 let mut node = Node {
                     flex_direction: FlexDirection::Column,
                     flex_shrink: 0.0,
@@ -1726,15 +1872,15 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
                 font_size,
                 children,
             } => (
-                element,
-                handle,
-                signals,
-                focus,
-                custom,
-                boxed,
-                pointer_events,
-                font_size,
-                children,
+                element.clone(),
+                *handle,
+                signals.clone(),
+                focus.clone(),
+                custom.clone(),
+                boxed.clone(),
+                *pointer_events,
+                *font_size,
+                children.clone(),
             ),
         };
     let mut node = Node {
@@ -1749,7 +1895,7 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
     };
     boxed.layout.apply_to(&mut node);
     let children: Vec<NodeSpec> = children
-        .into_iter()
+        .iter()
         .map(|child| item_spec(styler, child, default_gap))
         .collect();
     let images = children
@@ -1782,8 +1928,8 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
     }
 }
 
-fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
-    let boxed = block.boxed;
+fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
+    let boxed = block.boxed.clone();
     let indent = match block.kind {
         BlockKind::ListItem => UiRect::left(Val::Px(12.0)),
         _ => UiRect::DEFAULT,
@@ -1817,10 +1963,10 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         no_wrap: matches!(block.kind, BlockKind::Preformatted),
         spans: block
             .runs
-            .into_iter()
+            .iter()
             .map(|run| {
                 let color = faded(run.style.color, run.style.opacity);
-                match run.image {
+                match &run.image {
                     Some(image) => SpanSpec {
                         text: String::new(),
                         font: TextFont::default(),
@@ -1830,11 +1976,11 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
                         line_through: false,
                         decoration_color: None,
                         box_size: image.box_size(styler.images),
-                        image: Some(image),
+                        image: Some(image.clone()),
                         link: None,
                     },
                     None => SpanSpec {
-                        text: run.text,
+                        text: run.text.clone(),
                         font: styler.text_font(&run.style),
                         color,
                         background: run.extras.background,
@@ -1843,7 +1989,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
                         decoration_color: run.extras.decoration.color,
                         image: None,
                         box_size: None,
-                        link: run.extras.link,
+                        link: run.extras.link.clone(),
                     },
                 }
             })
@@ -1866,10 +2012,10 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         };
         boxed.layout.apply_to(&mut node);
         return NodeSpec {
-            element: block.element,
-            signals: block.signals,
-            focus: block.focus,
-            custom: block.custom,
+            element: block.element.clone(),
+            signals: block.signals.clone(),
+            focus: block.focus.clone(),
+            custom: block.custom.clone(),
             handle: block.handle,
             border_color: boxed.border_color(),
             outline: boxed.drawn_outline,
@@ -1905,10 +2051,10 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
     };
     boxed.layout.apply_to(&mut node);
     NodeSpec {
-        element: block.element,
-        signals: block.signals,
-        focus: block.focus,
-        custom: block.custom,
+        element: block.element.clone(),
+        signals: block.signals.clone(),
+        focus: block.focus.clone(),
+        custom: block.custom.clone(),
         handle: block.handle,
         background: boxed.background,
         image: boxed.sliced_image(),
@@ -2713,6 +2859,9 @@ struct Ctx<'a, 'p, 'buf> {
     /// Inside a translation: the source element's `data-l10n-name`
     /// descendants, each usable once (fluent-dom's named overlays).
     named: Option<&'a RefCell<Vec<(String, HtmlElement)>>>,
+    /// ADR 0021: the previous build's tree, when this build may reuse its
+    /// clean subtrees. `None` inside a translation (fragments are rebuilt).
+    skeleton: Option<&'a SkeletonPass<'a>>,
 }
 
 impl Ctx<'_, '_, '_> {
@@ -2774,9 +2923,254 @@ fn walk_translation(
         fragments: None,
         styler: ctx.styler,
         named: Some(&named),
+        skeleton: None,
     };
     walk(&fragment_ctx, fragment.children());
     true
+}
+
+/// ADR 0021: the previous build's item tree and the document it was built
+/// from. A content change pairs the fresh DOM with it (pair_trees); every
+/// subtree whose tag, attributes and text are unchanged reuses the cached
+/// items verbatim (handles remapped to the fresh document), skipping the
+/// cascade and the run construction for it. Style-side inputs (stylesheet,
+/// fonts, `:hover`/`:active`, `var()` values) invalidate the whole reuse
+/// for that build, and translated elements are always rebuilt (their
+/// content comes from per-build fragments).
+#[doc(hidden)]
+#[derive(Component, Default)]
+pub struct Skeleton {
+    /// The document `items` was built from.
+    document: Option<HtmlDocument>,
+    items: Vec<Item>,
+    /// A node that produced an item → its position in `items` (a path of
+    /// container-child indices).
+    table: HashMap<tl::NodeHandle, Vec<usize>>,
+    /// The last reuse run saved at least half the items; an all-dirty
+    /// frame (a `rebuilding` workload) turns the walk off until a retry.
+    useful: bool,
+    /// Builds since the last reuse attempt, for the retry cadence.
+    since_try: u32,
+}
+
+/// The per-build pairing state: where the fresh DOM meets the previous
+/// one, and which old subtrees are unchanged.
+struct SkeletonPass<'a> {
+    /// Fresh handle → the paired node of the previous document.
+    pairing: &'a HashMap<tl::NodeHandle, tl::NodeHandle>,
+    /// The reverse, for remapping a reused item's handles.
+    reverse: &'a HashMap<tl::NodeHandle, tl::NodeHandle>,
+    /// Old handles whose whole subtree content matches.
+    clean: &'a HashSet<tl::NodeHandle>,
+    items: &'a [Item],
+    table: &'a HashMap<tl::NodeHandle, Vec<usize>>,
+    /// How many items the build reused.
+    reused: Cell<usize>,
+}
+
+/// Pairs the two documents' trees and records which old subtrees are
+/// unchanged (tag, attributes, own text, recursively — translations are
+/// excluded: their content is re-parsed per build).
+fn pair_trees_into(
+    old: &tl::VDom,
+    fresh: &tl::VDom,
+    pairing: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
+    reverse: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
+    clean: &mut HashSet<tl::NodeHandle>,
+) {
+    for (old_child, fresh_child) in old.children().iter().zip(fresh.children().iter()) {
+        pair_node(old.parser(), *old_child, fresh.parser(), *fresh_child, pairing, reverse, clean);
+    }
+}
+
+/// Pairs the two nodes; returns whether their whole subtrees match.
+fn pair_node(
+    old_parser: &tl::Parser,
+    old: tl::NodeHandle,
+    fresh_parser: &tl::Parser,
+    fresh: tl::NodeHandle,
+    pairing: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
+    reverse: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
+    clean: &mut HashSet<tl::NodeHandle>,
+) -> bool {
+    let (Some(old_node), Some(fresh_node)) = (old.get(old_parser), fresh.get(fresh_parser)) else {
+        return false;
+    };
+    match (old_node, fresh_node) {
+        (tl::Node::Tag(old_tag), tl::Node::Tag(fresh_tag)) => {
+            if !tag_equal(old_tag, fresh_tag) {
+                return false;
+            }
+            // A translated element's item comes from its per-build
+            // fragment, never from this DOM subtree: exclude it (and its
+            // descendants, whose items are fragment-based too).
+            let translated = |tag: &tl::HTMLTag| {
+                tag.attributes().get("data-l10n-id").flatten().is_some()
+            };
+            if translated(old_tag) || translated(fresh_tag) {
+                return false;
+            }
+            let (old_children, fresh_children) = (old_tag.children(), fresh_tag.children());
+            let (old_children, fresh_children) = (old_children.top(), fresh_children.top());
+            if old_children.len() != fresh_children.len() {
+                return false;
+            }
+            let mut all = true;
+            for (old_child, fresh_child) in old_children.iter().zip(fresh_children.iter()) {
+                all &= pair_node(old_parser, *old_child, fresh_parser, *fresh_child, pairing, reverse, clean);
+            }
+            if all {
+                pairing.insert(fresh, old);
+                reverse.insert(old, fresh);
+                clean.insert(old);
+            }
+            all
+        }
+        // Raw text has no item of its own (anonymous blocks are keyed by
+        // their element); its equality counts toward the parent's.
+        (tl::Node::Raw(old_text), tl::Node::Raw(fresh_text)) => {
+            old_text.as_utf8_str() == fresh_text.as_utf8_str()
+        }
+        (tl::Node::Comment(_), tl::Node::Comment(_)) => true,
+        _ => false,
+    }
+}
+
+/// Same tag name (case-insensitive) and the same attributes by name and
+/// raw value (attribute order is not semantic in HTML).
+fn tag_equal(old: &tl::HTMLTag, fresh: &tl::HTMLTag) -> bool {
+    if !old
+        .name()
+        .as_utf8_str()
+        .eq_ignore_ascii_case(&fresh.name().as_utf8_str())
+    {
+        return false;
+    }
+    let (old_attributes, fresh_attributes) = (old.attributes(), fresh.attributes());
+    if old_attributes.iter().count() != fresh_attributes.iter().count() {
+        return false;
+    }
+    old_attributes.iter().all(|(name, value)| match fresh_attributes.get(name.as_ref()) {
+        Some(Some(bytes)) => value.as_ref().is_some_and(|cow| *bytes == **cow),
+        // A value-less attribute on both sides.
+        Some(None) => value.is_none(),
+        // The attribute is missing on the fresh side.
+        None => false,
+    })
+}
+
+/// How many items the tree holds (containers count themselves plus their
+/// children).
+fn item_count(items: &[Item]) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::Block(_) => 1,
+            Item::Container { children, .. } => 1 + item_count(children),
+            #[cfg(feature = "text-input")]
+            Item::TextInput { .. } => 1,
+        })
+        .sum()
+}
+
+/// A node that produced an item → its position in `items`.
+fn item_table(items: &[Item]) -> HashMap<tl::NodeHandle, Vec<usize>> {
+    let mut table = HashMap::default();
+    let mut prefix = Vec::new();
+    item_table_walk(items, &mut prefix, &mut table);
+    table
+}
+
+fn item_table_walk(
+    items: &[Item],
+    prefix: &mut Vec<usize>,
+    table: &mut HashMap<tl::NodeHandle, Vec<usize>>,
+) {
+    for (index, item) in items.iter().enumerate() {
+        prefix.push(index);
+        match item {
+            Item::Block(block) => {
+                if let Some(handle) = block.handle {
+                    table.insert(handle, prefix.clone());
+                }
+            }
+            Item::Container { handle, children, .. } => {
+                if let Some(handle) = *handle {
+                    table.insert(handle, prefix.clone());
+                }
+                item_table_walk(children, prefix, table);
+            }
+            #[cfg(feature = "text-input")]
+            Item::TextInput { handle, .. } => {
+                if let Some(handle) = *handle {
+                    table.insert(handle, prefix.clone());
+                }
+            }
+        }
+        prefix.pop();
+    }
+}
+
+/// The item at `path`: the first index addresses a top-level item, each
+/// following index a container child.
+fn item_at<'a>(items: &'a [Item], path: &[usize]) -> Option<&'a Item> {
+    let (first, rest) = path.split_first()?;
+    let mut current = items.get(*first)?;
+    for &index in rest {
+        match current {
+            Item::Container { children, .. } => current = children.get(index)?,
+            _ => return None,
+        }
+    }
+    Some(current)
+}
+
+impl SkeletonPass<'_> {
+    /// Pushes the cached item of the paired old node, with every handle
+    /// remapped to the fresh document (a clean subtree's nodes are all
+    /// paired, so every lookup succeeds).
+    fn reuse(&self, old: tl::NodeHandle, items: &mut Vec<Item>) {
+        let Some(path) = self.table.get(&old) else {
+            return;
+        };
+        let Some(mut item) = item_at(self.items, path).cloned() else {
+            return;
+        };
+        remap_item(&mut item, self.reverse);
+        self.reused.set(self.reused.get() + 1);
+        items.push(item);
+    }
+}
+
+/// Rewrites every DOM handle in a reused item to its fresh counterpart.
+fn remap_item(item: &mut Item, reverse: &HashMap<tl::NodeHandle, tl::NodeHandle>) {
+    let remapped = |handle: &mut Option<tl::NodeHandle>| {
+        if let Some(handle) = handle.as_mut()
+            && let Some(new) = reverse.get(handle)
+        {
+            *handle = *new;
+        }
+    };
+    match item {
+        Item::Block(block) => {
+            remapped(&mut block.handle);
+            for run in &mut block.runs {
+                if let Some(link) = &mut run.extras.link {
+                    let mut handle = Some(link.handle);
+                    remapped(&mut handle);
+                    link.handle = handle.unwrap_or(link.handle);
+                }
+            }
+        }
+        Item::Container { handle, children, .. } => {
+            remapped(handle);
+            for child in children {
+                remap_item(child, reverse);
+            }
+        }
+        #[cfg(feature = "text-input")]
+        Item::TextInput { handle, .. } => remapped(handle),
+    }
 }
 
 fn collect_items(
@@ -2787,6 +3181,7 @@ fn collect_items(
     styler: &Styler,
     root: Style,
     grid: Option<&GridNames>,
+    skeleton: Option<&SkeletonPass>,
 ) -> Vec<Item> {
     let ctx = Ctx {
         parser: dom.parser(),
@@ -2795,6 +3190,7 @@ fn collect_items(
         fragments: Some(fragments),
         styler,
         named: None,
+        skeleton,
     };
     let mut items = Vec::new();
     for handle in dom.children() {
@@ -2846,6 +3242,19 @@ fn collect_node(
         }
         tl::Node::Comment(_) => return,
     };
+    // ADR 0021: an unchanged subtree reuses the previous build's item
+    // verbatim (handles remapped), skipping the cascade and the run
+    // construction. Only whole clean subtrees reuse; a node whose cache
+    // entry is missing (walk-through tags, raw text, translations) falls
+    // through to the normal collection.
+    if let Some(skeleton) = ctx.skeleton
+        && let Some(&old) = skeleton.pairing.get(&handle)
+        && skeleton.clean.contains(&old)
+        && skeleton.table.contains_key(&old)
+    {
+        skeleton.reuse(old, items);
+        return;
+    }
 
     let signals = signals::signal_bindings(tag);
     let mut focus = focus::focusable(tag, &signals);

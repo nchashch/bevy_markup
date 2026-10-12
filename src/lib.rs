@@ -186,6 +186,8 @@ pub mod fuzz;
 
 pub mod anchor;
 mod build;
+#[doc(hidden)]
+pub use build::Skeleton;
 mod cascade;
 pub mod custom_elements;
 pub mod focus;

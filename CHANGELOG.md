@@ -38,6 +38,15 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `clamp()`; `round()`/`mod()`/`abs()` and the rest are skipped.
 
 ### Changed
+- **Changed-content frames reuse unchanged subtrees** (ADR 0021): a
+  rebuild pairs the fresh template output against the previous build and
+  skips the styling and text-run construction for every element whose
+  tag, attributes and text are unchanged — measured at −8% per frame on a
+  mostly-static 600-section document and −5% on a document with one
+  changing paragraph per frame; documents whose every element changes
+  (a fully localized page, a full re-render) are within noise of before.
+  Style-side changes (`:hover`/`:active`, `var()` values, fonts, image
+  loads) still restyle the whole document, as before.
 - **Breaking:** a `.md` template's Tera interpolations are no longer
   parsed as Markdown. Templates convert to HTML once, at load (Tera
   syntax passes through verbatim), so the per-frame path is Tera-only —

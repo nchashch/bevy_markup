@@ -7,7 +7,7 @@
 | Date | 2026-10-12 11:24 +0400 |
 | Author | GLM (opencode-zen/glm-5.3-flash), via omp — drafted for the project owner |
 | Commit | `f05290d` Separate Tera statements in Markdown templates at load |
-| Status | Proposed |
+| Status | Accepted — phases A+B implemented (see the implementation note); C gated |
 | Related | 0017 (its fingerprint variant was rejected on measurement — this is the successor design), 0020 (the load-time conversion this builds on), 0009 (identical-render skip, in-place updates), 0018/0019 (measurement); the "Low-Hanging / Dirty-Flag Rebuilds" items in the session record |
 
 ## Context
@@ -182,3 +182,59 @@ state exactly as 0009 promised.
   version this design inherits); `data-l10n-args` changes as slots;
   includes/extends' contribution to the map (the loader merges
   references, so extraction runs on the merged set).
+
+## Implementation note (2026-10-12, same day): phases A+B implemented
+
+A+B are in (`build.rs`), with a refinement over the ADR's letter: **no
+dependency map and no Tera AST fork** — the dependency question dissolved.
+Cleanliness is decided by *content equality*: a fresh build pairs its DOM
+against the previous build's (`Skeleton` holds the previous document, the
+item tree and a handle→item-path table); `pair_trees_into` walks both DOMs
+in lockstep (tag + attributes + own text, recursively) and marks whole
+subtrees clean. A clean subtree's cached item is cloned with every DOM
+handle remapped to the fresh document (`remap_item`), skipping the cascade
+and the run construction for it. Content equality is sound by
+construction — what renders the same builds the same item — and needs no
+expression parsing. (The skeleton's document is a re-parse of the source,
+~35 µs at markdown/600; its items are the build's own, moved.)
+
+Gates: the reuse runs only on `Build` frames whose change came from the
+render, never when `:hover`/`:active` state, `var()` values, fonts or
+inline images changed this frame (a reused item's styles would be stale);
+restyles refresh the skeleton's items in place (the document is
+unchanged). Translated elements never reuse (their items come from
+per-build fragments); a localization change does not block reuse — the
+first draft gated on `!localized.is_changed()`, but the localize system
+rewrites `LocalizedText` whenever the render changes, which disabled reuse
+on every localized frame; the gate is redundant with the walk's
+translation exclusion and was removed. An adaptive gate turns the pairing
+walk off after a useless pass (an all-dirty workload, e.g. `rebuilding`)
+and retries every 16th build; when skipped, only the retry counter ticks —
+no per-frame data move.
+
+`item_spec`/`block_spec` take `&Item` now (the skeleton keeps the build's
+items by move and clones only reused subtrees). `Skeleton` is
+`#[doc(hidden)] pub` for the property harness.
+
+Measured (criterion, warm-up 0.5 s, measurement 1 s, against the
+pre-skeleton state on this machine):
+
+| Benchmark (600) | Before | After | Δ |
+|---|---|---|---|
+| `idle` | 194.8 µs | 190.0 µs | −2% (noise) |
+| `changing` | 2.02 ms | 1.92 ms | −5% |
+| `localized` | 2.55 ms | 2.64 ms | **+4%** (100% fan-out — every element translated, nothing to reuse; the adaptive gate's residual) |
+| `markdown` | 8.20 ms | 7.56 ms | **−8%** |
+| `rebuilding` | 9.87 ms | 9.3–9.4 ms | ~noise (all-dirty frames; the gate disables the walk) |
+
+The freshness net is
+`skeleton_reuse_matches_a_fresh_build` (`tests/properties.rs`): two
+long-lived UIs run the same random context-op sequence, the comparator
+drops its skeleton before every change (every build there is fresh), and
+the dumps must match after every op. The full suite passes, including the
+stateful machine's model checks over context/locale/theme/pointer ops.
+
+Phase C stays gated as written: reuse at the item level still runs
+`item_spec` on the cloned items (~half the per-block cost), so the
+theoretical floor needs the spec-level cache with clone-free ownership —
+attempt only if a workload's profile justifies it with numbers.

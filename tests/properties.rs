@@ -13,6 +13,7 @@ use common::TestUi;
 
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
+use bevy_markup::Skeleton;
 use proptest::strategy::Strategy;
 use proptest::{prop_assert, prop_assert_eq};
 use test_strategy::proptest;
@@ -661,4 +662,81 @@ fn nine_slice_manifest_maps_each_side(
     let tiles = |mode: &SliceScaleMode| matches!(mode, SliceScaleMode::Tile { stretch_value } if *stretch_value == 2.0);
     prop_assert_eq!(tiles(&slicer.sides_scale_mode), tile_sides);
     prop_assert_eq!(tiles(&slicer.center_scale_mode), tile_center);
+}
+
+/// ADR 0021: a build that reused its clean skeleton equals a build without
+/// one. Two long-lived UIs get the same context-op sequence; the second
+/// drops its skeleton before every change, so every build there is fresh.
+#[proptest(cases = 16)]
+fn skeleton_reuse_matches_a_fresh_build(
+    #[strategy(proptest::collection::vec(0..2u8, 1..8))] ops: Vec<u8>,
+) {
+    let page = r#"
+<h1>Report {{ a }}</h1>
+<div class="panel">
+  <p class="static">Unchanged prose.</p>
+  <p class="dynamic">Value: {{ b }}</p>
+  <p>See <a href="/p/{{ a }}">the page</a> now.</p>
+</div>
+{% for i in range(end=2) %}
+<p class="row">Row {{ i }}: {{ b }}</p>
+{% endfor %}
+"#;
+    let sheet = r#"
+html { color: #ffffff; font-size: 20px; flex-direction: column }
+.panel { padding: 8px }
+"#;
+    let files = [("page.html", page), ("style.css", sheet)];
+    let mut reused = TestUi::new(
+        "prop-skeleton-reused",
+        &files,
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("a", &1).with("b", &"x"),
+        Node::default(),
+    );
+    let mut fresh = TestUi::new(
+        "prop-skeleton-fresh",
+        &files,
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("a", &1).with("b", &"x"),
+        Node::default(),
+    );
+    reused.settle();
+    fresh.settle();
+    prop_assert_eq!(reused.dump(), fresh.dump());
+
+    // Every op changes its key's value (a no-op render rebuilds nothing —
+    // covered elsewhere).
+    let (mut a, mut b) = (1u32, "x");
+    for op in ops {
+        let (key, value) = match op {
+            0 => {
+                a = if a == 1 { 2 } else { 1 };
+                ("a", a.to_string())
+            }
+            _ => {
+                b = if b == "x" { "y" } else { "x" };
+                ("b", b.to_owned())
+            }
+        };
+        for ui in [&mut reused, &mut fresh] {
+            // The comparator rebuilds without a skeleton: the next build
+            // there collects everything from scratch.
+            let root = ui.root();
+            ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert(key, &value);
+        }
+        reused.settle();
+        fresh.settle();
+        prop_assert_eq!(reused.dump(), fresh.dump());
+    }
 }

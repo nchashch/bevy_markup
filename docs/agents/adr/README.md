@@ -37,6 +37,6 @@ as `[INFERENCE]`.
 | [0018](./0018-benchmarks-with-criterion.md) | Benchmarking with Criterion | Accepted |
 | [0019](./0019-benchmarks-with-divan.md) | Benchmarking with Divan (the second harness; allocation counts) | Accepted |
 | [0020](./0020-convert-markdown-at-template-load.md) | Convert Markdown at template load, not per render | Accepted |
-| [0021](./0021-per-element-dirty-tracking.md) | Per-element dirty tracking: dependency maps at load, slot-local updates per frame | Proposed |
+| [0021](./0021-per-element-dirty-tracking.md) | Per-element dirty tracking: dependency maps at load, slot-local updates per frame | Accepted (A+B; C gated) |
 
 Add new records to this index in the same commit that adds the file.

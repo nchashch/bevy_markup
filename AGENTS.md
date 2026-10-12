@@ -374,8 +374,14 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   frame, so never read change signals only after resolving load states.
 - Updates (`build.rs`): items become a `NodeSpec` tree (plain data: `Node`,
   element, background, frame, text spans), reconciled with the existing
-  children by `update_children` for content updates and restyles alike. Per
-  sibling list, an element whose `id` is unique among the old *and* new
+  children by `update_children` for content updates and restyles alike. A
+  content change first pairs the fresh DOM against the previous build's
+  (`Skeleton`, ADR 0021): subtrees whose tag, attributes and text are
+  unchanged reuse the previous items verbatim (handles remapped), skipping
+  the cascade and run construction for them; `:hover`/`:active`, `var()`
+  values, font or image changes rebuild fully, translated elements never
+  reuse, and an all-dirty workload turns the pairing off (retried every
+  16th build). Per sibling list, an element whose `id` is unique among the old *and* new
   siblings is matched by it, the rest by position among themselves (a
   duplicated `id` keys nothing — keying it looped: the second copy was
   respawned on every restyle its `PseudoState` triggered). A match with the
