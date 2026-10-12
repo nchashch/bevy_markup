@@ -798,6 +798,13 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
     {
         write!(line, " z={}", z.0).unwrap();
     }
+    // The other half of Bevy's sort order ((GlobalZIndex, ZIndex)): an
+    // app-set global (the world example's per-distance nameplates).
+    if let Some(z) = entity_ref.get::<GlobalZIndex>()
+        && z.0 != 0
+    {
+        write!(line, " gz={}", z.0).unwrap();
+    }
     if let Some(outline) = entity_ref.get::<Outline>() {
         write!(
             line,

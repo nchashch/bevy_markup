@@ -34,6 +34,11 @@ dev-tools = ["dep:bevy_mcp_harness"]
 # (`EditableText` + `TextInput`); the widget crate isn't part of the
 # crate's minimal `ui_api` bevy features, so it's opt-in.
 text-input = ["bevy/bevy_ui_widgets", "bevy/keyboard"]
+# Bevy's asset file watcher, for the `hot-reload` example (edit an asset
+# file and the UI restyles without a restart — the library already reacts
+# to `LoadedWithDependencies`/`Modified`). Inert otherwise; the library
+# itself never needs it.
+hot-reload = ["bevy/file_watcher"]
 
 [dependencies]
 # Only what the library's code uses; the app picks rendering, windowing,
@@ -94,6 +99,11 @@ quickcheck = "1.1.0"
 quickcheck_macros = "1.2.0"
 # 0.4 requires proptest ≥1.6; 0.3.1 is the last line on ^1.1.
 test-strategy = "0.3.1"
+
+# The example needs Bevy's file watcher; skipped without the feature.
+[[example]]
+name = "hot-reload"
+required-features = ["hot-reload"]
 
 # fluent-syntax from the fork with fixes for two bugs reachable from any FTL
 # asset (docs/agents/bugs/UPSTREAM.md U1, U2): a panic on an invalid unicode

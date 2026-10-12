@@ -1,0 +1,12 @@
+/* Browser-oracle vector: CSS custom properties (`:root`-declared, so the
+   sheet-level collection here agrees with per-element browser inheritance)
+   resolving color, padding, width and font-size; the fallback; and an
+   unresolvable var() dropping the declaration. No font-family: the layout
+   oracle is Chromium's own; text content is ASCII. */
+:root { --accent: #ff8800; --pad: 7px; --size: 21px }
+html { color: #eeeeee; border-style: solid; border-width: var(--pad) }
+.accent { color: var(--accent) }
+.missing { color: var(--nope) }
+.fallback { color: var(--nope, #00cc88) }
+.pad { padding: var(--pad); width: var(--pad); background-color: #1a1a1a }
+.size { font-size: var(--size) }

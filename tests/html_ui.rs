@@ -538,6 +538,108 @@ html-ui padding=3,3,3,3
     );
 }
 
+/// CSS variables end to end: `var(--name)` resolves the UI's
+/// `TemplateContext` first (a change re-renders and restyles), then the
+/// sheet's own `--` declarations.
+#[test]
+fn template_context_drives_css_variables() {
+    let mut ui = TestUi::new(
+        "css_variables",
+        &[
+            ("page.html", r#"<p>{{ n }}</p>"#),
+            (
+                "style.css",
+                r#"
+html { color: var(--text, #ffffff) }
+p { color: var(--accent); font-size: var(--px) }
+"#,
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new()
+            .with("n", &1)
+            .with("--accent", "#ff8800")
+            .with("--px", &24),
+        Node::default(),
+    );
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "1" default 24px #ff8800
+"#,
+    );
+
+    // A context change with a new value re-resolves the variable.
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--accent", "#00cc88");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "1" default 24px #00cc88
+"#,
+    );
+}
+
+/// Transitions end to end: a `:active` restyle of a `transition:` element
+/// starts an animation — the transitioned color keeps showing while the
+/// same restyle's un-transitioned properties land at once (which proves
+/// the restyle itself ran).
+#[test]
+fn transitions_animate_a_restyle() {
+    let mut ui = TestUi::new(
+        "transitions",
+        &[
+            ("page.html", "<p>hi</p>"),
+            (
+                "style.css",
+                r#"
+html { color: #ffffff }
+p { color: #000000; transition: color 100s linear }
+p:active { color: #ffffff; font-size: 30px }
+"#,
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "hi" default 16px #000000
+"#,
+    );
+
+    // Restyle the p by state (`:active`): the un-transitioned font-size
+    // lands immediately; the transitioned color is held at its start.
+    let element = ui
+        .world_mut()
+        .query::<(Entity, &bevy_markup::html::HtmlElement)>()
+        .iter(ui.world_mut())
+        .find(|(_, element)| element.tag == "p")
+        .expect("the p element")
+        .0;
+    ui.world_mut().entity_mut(element).insert(bevy_markup::signals::PseudoState {
+        active: true,
+        ..default()
+    });
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "hi" default 30px #000000
+"#,
+    );
+}
+
 /// A block with only a background (no border) still gets its box: the
 /// background is drawn. A boxed `li` keeps its list indent on the box.
 #[test]

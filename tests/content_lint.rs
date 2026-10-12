@@ -376,6 +376,14 @@ fn stats_contexts() -> Vec<Value> {
     vec![json!({ "updates": 12, "spawned": 5, "frames": 600 })]
 }
 
+/// `examples/hot-reload/main.rs`: the palette the app last wrote (0–2; the
+/// contexts render every palette name the Fluent select produces).
+fn hot_reload_contexts() -> Vec<Value> {
+    (0..3)
+        .map(|palette| json!({ "player": "Ada", "coins": 2, "palette": palette }))
+        .collect()
+}
+
 /// Every template under `assets/` (`every_template_is_listed` keeps this
 /// complete).
 const PAGES: &[Page] = &[
@@ -412,6 +420,13 @@ const PAGES: &[Page] = &[
         contexts: quickstart_contexts,
         stylesheets: &["quickstart/style.css"],
         locales: "quickstart/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "hot-reload/page.html",
+        contexts: hot_reload_contexts,
+        stylesheets: &["hot-reload/style.css"],
+        locales: "hot-reload/locales",
         unlocalized: None,
     },
     Page {

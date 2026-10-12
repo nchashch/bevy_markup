@@ -456,6 +456,26 @@ div class=\"a\"
         assert_eq!(document.outline(&localized), expected);
     }
 
+    /// `aria-*` (and every other) attribute shows verbatim in the outline:
+    /// the debug view surfaces accessibility attributes without the
+    /// pipeline interpreting them. (Attribute order in `tl` is a map
+    /// iteration, so assert per attribute, not on the whole line.)
+    #[test]
+    fn outline_shows_aria_attributes() {
+        let document = HtmlDocument::parse(
+            "<button aria-label=\"Close\" aria-disabled=\"true\" data-on-click=\"close\">X</button>"
+                .to_owned(),
+        )
+        .unwrap();
+        let outline = document.outline(&LocalizedText::default());
+        let line = outline.lines().next().unwrap();
+        assert!(line.starts_with("button"), "{line}");
+        assert!(line.contains("aria-label=\"Close\""), "{line}");
+        assert!(line.contains("aria-disabled=\"true\""), "{line}");
+        assert!(line.contains("data-on-click=\"close\""), "{line}");
+        assert_eq!(outline.lines().nth(1).unwrap(), "  \"X\"");
+    }
+
     /// Error messages include every `source()` in the chain (Tera puts the
     /// useful detail — the missing variable — in a source).
     #[test]

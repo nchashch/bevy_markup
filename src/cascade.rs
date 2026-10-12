@@ -2,6 +2,7 @@
 //! [`crate::style`]): compound selectors matched against tag, id and classes.
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -17,6 +18,7 @@ use lightningcss::properties::border_image::{
     BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
 };
 use lightningcss::properties::custom::CustomPropertyName;
+use lightningcss::properties::custom::{TokenList, TokenOrValue};
 use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
 use lightningcss::properties::flex as css_flex;
 use lightningcss::properties::font::{
@@ -29,6 +31,9 @@ use lightningcss::properties::grid::{
 use lightningcss::properties::overflow::OverflowKeyword;
 use lightningcss::properties::position as css_position;
 use lightningcss::properties::size::{self as css_size, MaxSize, Size};
+use lightningcss::properties::transition::Transition;
+use lightningcss::properties::PropertyId;
+use lightningcss::values::easing::EasingFunction;
 use lightningcss::properties::text::TextDecorationLine;
 use lightningcss::rules::CssRule;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleAttribute, StyleSheet};
@@ -361,6 +366,7 @@ fn collapse_min_max(args: &[CalcExpr], pick: fn(f32, f32) -> f32) -> Option<Val>
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LayoutDecl {
     pub display: Option<Display>,
+    pub visibility: Option<bool>,
     pub flex_direction: Option<FlexDirection>,
     pub flex_wrap: Option<FlexWrap>,
     pub justify_content: Option<JustifyContent>,
@@ -742,6 +748,9 @@ pub(crate) struct ElementStyle {
     /// The `calc()`-valued properties: resolved at layout time (the
     /// property's field keeps its placeholder until then).
     pub calc: Vec<(CalcProp, CalcExpr)>,
+    /// Declared `transition` (the shorthand), for the properties the crate
+    /// animates; a repeated property keeps the last declaration.
+    pub transitions: Vec<TransitionDecl>,
 }
 
 /// Declared `text-decoration` of an inline element.
@@ -751,6 +760,27 @@ pub(crate) struct DecorationDecl {
     pub line_through: bool,
     /// `text-decoration-color`; `None` = `currentColor` (the text color).
     pub color: Option<Color>,
+}
+
+/// A property the `transition` shorthand names and the crate animates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransitionProp {
+    TextColor,
+    BackgroundColor,
+    BorderColor,
+}
+
+/// One entry of a declared `transition` (shorthand). Longhands are skipped.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TransitionDecl {
+    pub property: TransitionProp,
+    /// Seconds.
+    pub duration: f32,
+    /// Seconds, before the animation starts.
+    pub delay: f32,
+    /// lightningcss's parsed easing curve (`linear`, the named curves, and
+    /// `cubic-bezier(a, b, c, d)`).
+    pub easing: EasingFunction,
 }
 
 /// Declared `outline` parts (each optional so longhands override parts of
@@ -794,6 +824,47 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
         }
     }
     urls
+}
+
+/// Every `var()` name the sheet's supported declarations reference, sorted:
+/// the names whose context values a change restyles
+/// (`Frame::vars_changed`). Only top-level style rules (what the cascade
+/// reads), only `Property::Unparsed` values (the only `var()` the resolver
+/// handles).
+pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    for rule in sheet.rules.0.iter() {
+        let CssRule::Style(rule) = rule else {
+            continue;
+        };
+        for declaration in rule
+            .declarations
+            .declarations
+            .iter()
+            .chain(&rule.declarations.important_declarations)
+        {
+            if let Property::Unparsed(unparsed) = declaration {
+                collect_var_names(&unparsed.value, &mut names);
+            }
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// The `var()` names a token list references, function arguments included.
+fn collect_var_names(tokens: &TokenList, names: &mut BTreeSet<String>) {
+    for token in &tokens.0 {
+        match token {
+            TokenOrValue::Var(variable) => {
+                names.insert(variable.name.ident.as_ref().to_owned());
+                if let Some(fallback) = &variable.fallback {
+                    collect_var_names(fallback, names);
+                }
+            }
+            TokenOrValue::Function(function) => collect_var_names(&function.arguments, names),
+            _ => {}
+        }
+    }
 }
 
 /// Interaction pseudo-classes a compound selector requires: the rule only
@@ -1064,16 +1135,47 @@ struct Rule<'a> {
 #[derive(Default)]
 pub(crate) struct HtmlStyles<'a> {
     rules: Vec<Rule<'a>>,
+    /// The sheet's custom properties (`--x: …`, any top-level rule; last
+    /// declaration wins): what `var(--x)` falls back to after the UI's
+    /// [`TemplateContext`](crate::html::TemplateContext).
+    variables: HashMap<String, TokenList<'static>>,
+    /// The context's values by name, per UI (per build). Looked up before
+    /// `variables`; values interpolate as written (strings raw, numbers
+    /// and bools as their CSS spelling). `None` = no context.
+    context: Option<&'a dyn Fn(&str) -> Option<String>>,
     cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo, u64), ElementStyle>>,
 }
 
 impl<'a> HtmlStyles<'a> {
+    /// Looks `var(--name)` up in `context` (the UI's `TemplateContext`,
+    /// stringified) before the sheet's own custom properties.
+    pub fn with_context(
+        mut self,
+        context: &'a dyn Fn(&str) -> Option<String>,
+    ) -> Self {
+        self.context = Some(context);
+        self
+    }
+
     pub fn from_sheet(sheet: &'a StyleSheet<'static>) -> Self {
         let mut rules = Vec::new();
+        let mut variables: HashMap<String, TokenList<'static>> = HashMap::default();
         for (order, rule) in sheet.rules.0.iter().enumerate() {
             let CssRule::Style(rule) = rule else {
                 continue;
             };
+            // Custom properties (`--x: …`) are sheet-level here, whatever
+            // rule they sit in (last wins): this cascade has no
+            // per-element custom-property inheritance. Collected before
+            // selector filtering, so a rule with an unsupported selector
+            // still registers its variables.
+            for declaration in rule.declarations.declarations.iter().chain(&rule.declarations.important_declarations) {
+                if let Property::Custom(custom) = declaration {
+                    if let CustomPropertyName::Custom(name) = &custom.name {
+                        variables.insert(name.0.as_ref().to_owned(), custom.value.clone());
+                    }
+                }
+            }
             for selector in rule.selectors.0.iter() {
                 let Ok(text) = selector.to_css_string(PrinterOptions::default()) else {
                     continue;
@@ -1102,6 +1204,8 @@ impl<'a> HtmlStyles<'a> {
         rules.sort_by_key(|rule| rule.rank);
         Self {
             rules,
+            variables,
+            context: None,
             cache: RefCell::default(),
         }
     }
@@ -1143,7 +1247,7 @@ impl<'a> HtmlStyles<'a> {
             .filter(|rule| rule.selector.matches(element, pseudo, ancestors))
         {
             for declaration in rule.declarations {
-                apply(&mut style, declaration);
+                apply_resolved(&mut style, declaration, &self.variables, self.context);
             }
         }
         self.cache.borrow_mut().insert(key, style.clone());
@@ -1185,7 +1289,7 @@ impl<'a> HtmlStyles<'a> {
             .chain(rules(important))
             .chain(&block.important_declarations)
         {
-            apply(&mut style, declaration);
+            apply_resolved(&mut style, declaration, &self.variables, self.context);
         }
         style
     }
@@ -1294,6 +1398,114 @@ pub(crate) fn layout_field(layout: &mut LayoutDecl, prop: CalcProp, value: Val) 
     }
 }
 
+/// Applies `declaration`, resolving its `var()` references first: from the
+/// UI's context (`context`, a `TemplateContext` lookup), then the sheet's
+/// own `--` properties (`variables`). An unresolvable reference without a
+/// fallback drops the declaration (CSS: invalid at computed-value time, the
+/// declaration is unset; we skip it entirely — an earlier rule's value may
+/// show through).
+fn apply_resolved(
+    style: &mut ElementStyle,
+    declaration: &Property<'static>,
+    variables: &HashMap<String, TokenList<'static>>,
+    context: Option<&dyn Fn(&str) -> Option<String>>,
+) {
+    let Property::Unparsed(unparsed) = declaration else {
+        apply(style, declaration);
+        return;
+    };
+    // Fast path: most values have no `var()` at all.
+    if !contains_var(&unparsed.value) {
+        apply(style, declaration);
+        return;
+    }
+    let resolved = match substitute(
+        &unparsed.value,
+        variables,
+        &context.unwrap_or(&|_| None),
+        0,
+    ) {
+        Some(text) => match Property::parse_string(
+            unparsed.property_id.clone(),
+            &text,
+            ParserOptions::default(),
+        ) {
+            Ok(property) => property.into_owned(),
+            Err(_) => {
+                debug!("html css: `var()` substitution produced an invalid value: {text:?}");
+                return;
+            }
+        },
+        None => return,
+    };
+    apply(style, &resolved);
+}
+
+/// Whether any `var()` appears in the tokens (function arguments included).
+fn contains_var(tokens: &TokenList) -> bool {
+    tokens.0.iter().any(|token| match token {
+        TokenOrValue::Var(_) => true,
+        TokenOrValue::Function(function) => contains_var(&function.arguments),
+        _ => false,
+    })
+}
+
+/// The tokens' CSS text, with every `var()` replaced: the context's value
+/// (interpolated as written), else a custom property's tokens (its own
+/// `var()`s resolved, `depth` bounding recursion), else the reference's
+/// fallback, else `None` (unresolvable).
+fn substitute(
+    tokens: &TokenList,
+    variables: &HashMap<String, TokenList<'static>>,
+    context: &dyn Fn(&str) -> Option<String>,
+    depth: usize,
+) -> Option<String> {
+    if depth > 32 {
+        return None;
+    }
+    let mut out = String::new();
+    for token in &tokens.0 {
+        let piece = match token {
+            TokenOrValue::Var(variable) => {
+                let name = variable.name.ident.as_ref();
+                match context(name).or_else(|| {
+                    variables
+                        .get(name)
+                        .and_then(|value| substitute(value, variables, context, depth + 1))
+                }) {
+                    Some(value) => value,
+                    None => match &variable.fallback {
+                        Some(fallback) => substitute(fallback, variables, context, depth + 1)?,
+                        None => return None,
+                    },
+                }
+            }
+            TokenOrValue::Function(function) => {
+                let arguments = substitute(&function.arguments, variables, context, depth + 1)?;
+                format!("{}({arguments})", function.name.as_ref())
+            }
+            TokenOrValue::Token(token) => token.to_css_string(PrinterOptions::default()).ok()?,
+            TokenOrValue::Color(color) => color.to_css_string(PrinterOptions::default()).ok()?,
+            TokenOrValue::Url(url) => url.to_css_string(PrinterOptions::default()).ok()?,
+            TokenOrValue::Length(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+            TokenOrValue::Angle(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+            TokenOrValue::Time(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+            TokenOrValue::Resolution(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+            TokenOrValue::DashedIdent(name) => name.to_css_string(PrinterOptions::default()).ok()?,
+            TokenOrValue::AnimationName(name) => name.to_css_string(PrinterOptions::default()).ok()?,
+            // `UnresolvedColor` and `env()` serialize only crate-internally:
+            // a `var()` among their components can't be resolved here, so
+            // the declaration is dropped (as an unresolvable one is).
+            TokenOrValue::UnresolvedColor(_) | TokenOrValue::Env(_) => return None,
+        };
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(piece.trim());
+    }
+    Some(out)
+}
+
 fn apply(style: &mut ElementStyle, declaration: &Property) {
     match declaration {
         Property::Opacity(alpha) => {
@@ -1388,6 +1600,32 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             style.layout.column_gap = gap_px(&gap.column);
         }
         Property::Display(value) => style.layout.display = display(value),
+        Property::Visibility(visibility) => {
+            // `subtree-hide` semantics: `hidden` maps to Bevy's propagating
+            // `Visibility::Hidden`; `collapse` (table-specific) is skipped.
+            style.layout.visibility = match visibility {
+                lightningcss::properties::display::Visibility::Visible => Some(true),
+                lightningcss::properties::display::Visibility::Hidden => Some(false),
+                lightningcss::properties::display::Visibility::Collapse => unsupported("visibility: collapse"),
+            };
+        }
+        Property::Transition(entries, _) => {
+            style.transitions = entries
+                .iter()
+                .filter_map(transition_decl)
+                // A repeated property keeps the last declaration.
+                .fold(Vec::new(), |mut list, decl| {
+                    list.retain(|kept: &TransitionDecl| kept.property != decl.property);
+                    list.push(decl);
+                    list
+                });
+        }
+        Property::TransitionProperty(..)
+        | Property::TransitionDuration(..)
+        | Property::TransitionDelay(..)
+        | Property::TransitionTimingFunction(..) => {
+            let _: Option<()> = unsupported("transition longhands (declare the `transition` shorthand)");
+        }
         Property::FlexDirection(direction, _) => {
             style.layout.flex_direction = Some(flex_direction(direction));
         }
@@ -2313,6 +2551,26 @@ fn unsupported<T>(what: &str) -> Option<T> {
     None
 }
 
+/// One declared `transition` entry over the properties the crate animates;
+/// every other property (and `all`) is skipped, logged.
+fn transition_decl(entry: &Transition) -> Option<TransitionDecl> {
+    let property = match &entry.property {
+        PropertyId::Color => TransitionProp::TextColor,
+        PropertyId::BackgroundColor => TransitionProp::BackgroundColor,
+        PropertyId::BorderColor => TransitionProp::BorderColor,
+        id => {
+            let _: Option<()> = unsupported(&format!("transition on {id:?}"));
+            return None;
+        }
+    };
+    Some(TransitionDecl {
+        property,
+        duration: entry.duration.to_ms() / 1000.0,
+        delay: entry.delay.to_ms() / 1000.0,
+        easing: entry.timing_function.clone(),
+    })
+}
+
 /// Whether an `outline-style` draws anything (`none` doesn't; every other
 /// style draws Bevy's solid outline).
 fn outline_visible(style: &lightningcss::properties::outline::OutlineStyle) -> bool {
@@ -3004,6 +3262,148 @@ mod tests {
     fn declared(declarations: &str) -> ElementStyle {
         let sheet = owned_sheet(&format!("p {{ {declarations} }}"));
         HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), Pseudo::default(), &[])
+    }
+
+    /// `declared` with a `TemplateContext` lookup: `context(name)` answers
+    /// `var(--name)`.
+    fn declared_with_context(declarations: &str, context: &[(&str, &str)]) -> ElementStyle {
+        let sheet = owned_sheet(&format!("p {{ {declarations} }}"));
+        let context = |name: &str| {
+            context
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        HtmlStyles::from_sheet(&sheet)
+            .with_context(&context)
+            .get(&element("p", None, &[]), Pseudo::default(), &[])
+    }
+
+    /// `visibility`: `hidden`/`visible` map to the subtree-hide flag;
+    /// `collapse` (table-specific) is skipped, left undeclared.
+    #[test]
+    fn visibility_maps_to_subtree_hide() {
+        let layout = |css: &str| declared(css).layout;
+        assert_eq!(layout("visibility: hidden").visibility, Some(false));
+        assert_eq!(layout("visibility: visible").visibility, Some(true));
+        assert_eq!(layout("visibility: collapse").visibility, None);
+        assert_eq!(layout("width: 5px").visibility, None);
+    }
+
+    /// The `transition` shorthand parses to the animatable properties'
+    /// entries: durations/delays in seconds, easings kept as curves; other
+    /// properties (and `all`) are skipped; a repeated property keeps the
+    /// last declaration; the longhands are unsupported.
+    #[test]
+    fn transition_shorthand_parses_per_property() {
+        let style = declared(
+            "transition: background-color 0.2s ease-in, color 0.1s linear 0.05s",
+        );
+        assert_eq!(style.transitions.len(), 2);
+        assert_eq!(
+            style.transitions[0].property,
+            TransitionProp::BackgroundColor
+        );
+        assert!((style.transitions[0].duration - 0.2).abs() < 1e-5);
+        assert_eq!(style.transitions[0].delay, 0.0);
+        assert_eq!(
+            style.transitions[0].easing,
+            EasingFunction::EaseIn
+        );
+        assert_eq!(style.transitions[1].property, TransitionProp::TextColor);
+        assert!((style.transitions[1].duration - 0.1).abs() < 1e-5);
+        assert!((style.transitions[1].delay - 0.05).abs() < 1e-5);
+        assert_eq!(style.transitions[1].easing, EasingFunction::Linear);
+
+        // Unanimatable properties and `all` are dropped; border-color (all
+        // four sides at once) is animatable.
+        let style = declared("transition: width 1s, all 1s, border-color 2s");
+        assert_eq!(style.transitions.len(), 1);
+        assert_eq!(style.transitions[0].property, TransitionProp::BorderColor);
+        assert!((style.transitions[0].duration - 2.0).abs() < 1e-5);
+
+        // A repeated property keeps the last declaration.
+        let style = declared("transition: color 1s, color 3s");
+        assert_eq!(style.transitions.len(), 1);
+        assert!((style.transitions[0].duration - 3.0).abs() < 1e-5);
+
+        // Longhands are unsupported (skipped, logged).
+        let style = declared("transition-property: color; transition-duration: 1s");
+        assert_eq!(style.transitions, Vec::new());
+
+        // No transition: nothing declared.
+        let style = declared("color: #ff0000");
+        assert_eq!(style.transitions, Vec::new());
+    }
+
+    /// CSS variables: `var(--x)` resolves from the sheet's `--x`
+    /// declarations, then the context (which wins), then the reference's
+    /// fallback; an unresolvable reference without a fallback drops the
+    /// declaration; recursion is bounded.
+    #[test]
+    fn css_variables_resolve_from_sheet_context_and_fallback() {
+        let style = declared("--accent: #f0b429; color: var(--accent)");
+        assert_eq!(
+            style.color,
+            Some(Color::srgb(240.0 / 255.0, 180.0 / 255.0, 41.0 / 255.0))
+        );
+
+        // Context wins over the sheet, and works for names the sheet
+        // doesn't declare.
+        let style = declared_with_context(
+            "--accent: red; color: var(--accent); width: var(--w)",
+            &[("--accent", "blue"), ("--w", "160")],
+        );
+        assert_eq!(style.color, Some(Color::srgb(0.0, 0.0, 1.0)));
+        assert_eq!(style.layout.width, Some(Val::Px(160.0)));
+
+        // Fallback: used when neither the context nor the sheet has the
+        // name; the fallback's own `var()`s resolve.
+        let style = declared("color: var(--missing, #ffffff)");
+        assert_eq!(style.color, Some(Color::srgb(1.0, 1.0, 1.0)));
+        let style = declared("--c: #00ff00; color: var(--missing, var(--c))");
+        assert_eq!(style.color, Some(Color::srgb(0.0, 1.0, 0.0)));
+
+        // Unresolvable (no fallback): the declaration is dropped, the
+        // element styles as if it weren't declared.
+        let style = declared("color: var(--missing); width: 5px");
+        assert_eq!(style.color, None);
+        assert_eq!(style.layout.width, Some(Val::Px(5.0)));
+
+        // A fallback does not rescue a resolution failure inside itself.
+        let style = declared("color: var(--missing, var(--also-missing))");
+        assert_eq!(style.color, None);
+
+        // Self-referential variables drop the declaration instead of
+        // recursing forever.
+        let style = declared("--a: var(--b); --b: var(--a); color: var(--a)");
+        assert_eq!(style.color, None);
+
+        // A var() in a multi-part (unparsed) property resolves too.
+        let style = declared_with_context("margin: var(--m)", &[("--m", "1px 2px")]);
+        assert_eq!(
+            style.layout.margin,
+            [
+                Some(Val::Px(1.0)),
+                Some(Val::Px(2.0)),
+                Some(Val::Px(1.0)),
+                Some(Val::Px(2.0))
+            ]
+        );
+
+        // calc() around var(): substitution is textual (as in browsers —
+        // a unitless number where a length is required is invalid), so a
+        // same-unit sum collapses at style time.
+        let style = declared_with_context(
+            "width: calc(var(--w) + 40px)",
+            &[("--w", "120px")],
+        );
+        assert_eq!(style.layout.width, Some(Val::Px(160.0)));
+        let style = declared_with_context(
+            "width: calc(var(--w) + 40px)",
+            &[("--w", "120")],
+        );
+        assert_eq!(style.layout.width, None);
     }
 
     /// Every supported layout property and value maps onto the Bevy value

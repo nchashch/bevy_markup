@@ -71,7 +71,11 @@
 //!   `em`/`rem`, `auto`/`none`); `margin` (+ sides; px, `%`, `em`/`rem`,
 //!   `auto`); `box-sizing`;
 //!   `overflow` (+ `-x`/`-y`: `visible`, `hidden`, `clip`, `scroll`; `auto`
-//!   scrolls — Bevy has no scroll-if-needed). As
+//!   scrolls — Bevy has no scroll-if-needed). `visibility` (`hidden`
+//!   subtree-hides via Bevy's propagating `Visibility`: the element and its
+//!   descendants are invisible but keep their layout space; the root rule's
+//!   visibility is left to the app, since `HtmlWorldAnchor` owns it;
+//!   `collapse` is skipped). As
 //!   in CSS, sizes default to the content box. `position` (`static`,
 //!   `relative`, `absolute`, `fixed`; `absolute` is placed in its parent's
 //!   padding box, Bevy's rule, i.e. as if every parent were positioned;
@@ -86,6 +90,29 @@
 //!   kept in sync; a change restyles). Grid tracks take them too
 //!   (taffy's font-relative track sizing). `ex`/`ch` and font-relative
 //!   `padding`/`border-width`/`gap` are skipped.
+//! - `var()` in any property's value: `var(--name)` resolves the UI's
+//!   `TemplateContext` first (a value inserted there under `--name`;
+//!   strings interpolate as written, numbers and bools as their CSS
+//!   spelling), then the stylesheet's own `--name:` declarations (any
+//!   top-level rule; last wins), then the reference's fallback (whose own
+//!   `var()`s resolve). An unresolvable reference without a fallback drops
+//!   the declaration (CSS makes it invalid at computed-value time; here
+//!   earlier rules' values can show through). Deviations from CSS: the
+//!   sheet's custom properties are sheet-level, not per-element inherited
+//!   (declare them on `:root` for browser-compatible sheets), and a
+//!   context value is opaque data (its own `var()`s don't resolve).
+//! - `transition` (the shorthand): animates a property's change on a
+//!   restyle (a `:hover`/`:active`/`:focus` state, a new stylesheet, …).
+//!   Animatable: `color` (the element's text color — the runs that shared
+//!   its old value fade with it; a span that respawns doesn't),
+//!   `background-color` and `border-color` (all four sides together).
+//!   Durations and delays take seconds or milliseconds; the easing is
+//!   `linear`, the named curves (`ease`, `ease-in`, `ease-out`,
+//!   `ease-in-out`), `cubic-bezier(a, b, c, d)` or `steps(n, position)`.
+//!   The longhands (`transition-property` …) are skipped. Deviations from
+//!   CSS: a spawn never animates (no previous style); transitions run on
+//!   `Time`'s virtual clock (the UI pauses with the game); colors
+//!   interpolate per-channel in sRGB, not premultiplied.
 //!
 //!   `calc()` works in these size/margin/inset properties: expressions
 //!   that resolve to a single unit (all px, all `%`, …) are computed at

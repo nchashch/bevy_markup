@@ -125,6 +125,10 @@ examples/
   quickstart/      fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, two `data-on-click`
                    buttons (add a coin, language) in a column, with an inline minimal `navigate` (arrows / D-pad, all four directions,
                    Enter / A; kept self-contained); Space / Y = language
+  hot-reload/      asset file watcher (`--features hot-reload`): pressing H / B rewrites
+                   the stylesheet with the next accent palette (the watcher reloads it and
+                   the UI restyles in place); the palette *name* is a Fluent select over the
+                   context's `palette` number; Language button, L / Y
   grid/            CSS grid: page track template switched via context (Layout button, Space / X);
                    tabs (`data-tab` → `signal.data`, Q / E, LB / RB) pick one of three screens
                    (`active_tab`), each a grid technique — Items: auto-fill slots with a 2×2
@@ -149,7 +153,7 @@ examples/
                    `tabindex="0"` label ▶, clamped at Easy/Hard; both controls carry
                    `data-setting`, which routes ← → to them), HtmlModal confirm dialog,
                    `data-tooltip` + HtmlTooltips (on the slider row: nearest ancestor wins),
-                   buttons as a Tera 2 component (`menu/components.html`: body, `class`,
+                   buttons as a Tera 2 component (`../shared/components.html`: body, `class`,
                    `focusable`; included by menu and dialog), handlers routed with on_html_click
                    (dialog answer via `data-answer` → `signal.data`), a MessageReader beside
                    them (last input), roots styled by `<html class>` (backdrop, z-index,
@@ -303,7 +307,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
                    locales/{en-US,de}
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
   grid/            grid.html, style.css (all of the grid example's layout), locales/{en-US,de}
-  menu/            menu.html, dialog.html, tooltip.html, components.html (ui.button), style.css
+  menu/            menu.html, dialog.html, tooltip.html, style.css
                    (every root's rule), locales/{en-US,de}
   live/            party.html, stats.html, style.css, locales/{en-US,de}
   world/           plate.html, hud.html, style.css, locales/{en-US,de}
@@ -314,7 +318,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   inputs/          profile.html, style.css (input + focus ring), locales/{en-US,de}
   links/           report.html, style.css (a:hover/:focus-visible), locales/{en-US,de}
   forms/           signup.html, style.css, locales/{en-US,de}
-  shared/          images reused across examples: frame.png (256x256
+  shared/          reused across examples: components.html (Tera 2 component
+                   library: `ui.button`; unstyled — the including page's
+                   stylesheet styles its classes), images: frame.png (256x256
                    9-slice frame), frame_transparent.png (clear center; the
                    parchment/terminal panels frame themselves with it),
                    cat.png (the examples' seal/cat icon)
@@ -475,7 +481,13 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   other pseudo-classes skipped at `debug`), matched per element (`HtmlElement`
   tag/id/classes + `PseudoState`, cached per combination) with CSS
   precedence: `!important`, then specificity (ids,
-  classes, type), then source order. Inherited `color`, `font-family` (the
+  classes, type), then source order. `var()` resolves the UI's
+  `TemplateContext` first (a `--name` key), then the sheet's own `--name:`
+  declarations (sheet-level, last wins), then the reference's fallback;
+  `transition` (the shorthand) animates a restyled color's change
+  (`color`/`background-color`/`border-color`), driven by an
+  `advance_transitions` system after `Build`.
+  Inherited `color`, `font-family` (the
   whole list chains into Bevy 0.20's per-glyph fallback list over registered
   families, generics via `set_generic`; nothing registered → Bevy's
   default font, as browsers do), `font-size` (`px`, `em`/`%`, `rem`, keywords

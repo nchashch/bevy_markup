@@ -50,6 +50,9 @@ pub(crate) struct Frame {
     /// An element's `:hover`/`:active` state changed: restyle (the styles
     /// are state-dependent, the structure isn't).
     pub state_changed: bool,
+    /// The UI's context values for the sheet's `var()` names changed:
+    /// restyle (the values style, they don't render).
+    pub vars_changed: bool,
     /// An `<img>` inline image of this UI loaded (or reloaded): restyle so
     /// its inline box takes the image's size.
     pub images_changed: bool,
@@ -89,6 +92,10 @@ enum Update {
 pub(crate) struct RebuildState {
     built: bool,
     pending: Option<Update>,
+    /// The context's `--` values' hash as of the last update: `Frame`'s
+    /// `vars_changed` compares against it. Only restyled builds record it
+    /// (a `Wait` keeps the old hash, so the change outlives the wait).
+    pub(crate) vars: u64,
 }
 
 impl RebuildState {
@@ -105,7 +112,8 @@ impl RebuildState {
             || (!own_ready && frame.default_changed)
             || frame.fonts_changed
             || frame.state_changed
-            || frame.images_changed;
+            || frame.images_changed
+            || frame.vars_changed;
         let change = if frame.content_changed {
             Some(Update::Build)
         } else if style {
@@ -218,6 +226,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A context `--` value change restyles; a `Wait` (a needed sheet
+    /// loading) keeps the signal so the change outlives the wait.
+    #[test]
+    fn context_var_changes_restyle_and_survive_a_wait() {
+        let mut state = built();
+        let decision = state.decide(Frame {
+            document_ready: true,
+            vars_changed: true,
+            ..Frame::default()
+        });
+        assert_eq!(decision, Decision::Restyle(Source::Unstyled));
+
+        // While a needed sheet loads: wait, and the change is still pending.
+        let mut state = built();
+        let decision = state.decide(Frame {
+            own: Some(Phase::Loading),
+            document_ready: true,
+            vars_changed: true,
+            ..Frame::default()
+        });
+        assert_eq!(decision, Decision::Wait);
+        let decision = state.decide(Frame {
+            own: Some(Phase::Ready),
+            document_ready: true,
+            vars_changed: true,
+            ..Frame::default()
+        });
+        // The wait kept the (style-kind) change: it applies as a restyle,
+        // from the sheet that just became ready.
+        assert_eq!(decision, Decision::Restyle(Source::Own));
     }
 
     /// Style signals restyle a built UI; structure signals rebuild it; both
@@ -401,6 +441,10 @@ mod tests {
                         default_changed,
                         fonts_changed,
                         state_changed,
+                        // The vars signal is a restyle like the others;
+                        // modeling it separately would need the hash
+                        // bookkeeping, which build.rs owns.
+                        vars_changed: images_changed,
                         images_changed,
                         content_changed,
                     }

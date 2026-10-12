@@ -4,6 +4,7 @@ use std::cell::RefCell;
 
 use bevy::asset::{AssetEvent, AssetPath, LoadState};
 use bevy::ecs::system::SystemParam;
+use lightningcss::values::easing::{EasingFunction, StepPosition};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 #[cfg(feature = "text-input")]
@@ -14,13 +15,15 @@ use bevy::ui_widgets::TextInput;
 
 use crate::cascade::{
     self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, GridNames,
-    HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue, node_field_mut,
+    HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue, TransitionDecl,
+    TransitionProp, node_field_mut, var_names,
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
 use crate::fonts::FontFamilies;
 use crate::html::{
     HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, HtmlUiRestyled, RenderedHtml,
+    TemplateContext,
 };
 use crate::l10n::LocalizedText;
 use crate::rebuild::{Decision, Frame, Phase, RebuildState, Source};
@@ -286,6 +289,9 @@ pub(crate) struct BoxStyle {
     /// The `calc()`-valued properties (the layout pass resolves them
     /// per frame; the fields keep their placeholders until then).
     pub(crate) calc: Vec<(CalcProp, CalcExpr)>,
+    /// Declared `transition` (the shorthand): what [`update_spec`]'s color
+    /// writes animate.
+    pub(crate) transitions: Vec<TransitionDecl>,
     /// The `border-image` frame's tint alpha (`opacity`); `None` = opaque.
     pub(crate) image_alpha: Option<f32>,
 }
@@ -353,6 +359,48 @@ impl BoxStyle {
             left: side(self.border_color[3]),
         })
     }
+}
+
+/// An in-flight CSS transition: one entry per transitioned property whose
+/// value changed on the last update, animating from the previous visual to
+/// the new value. Created by [`update_spec`]'s color writes; driven by
+/// [`advance_transitions`]. Empty = idle.
+#[derive(Component, Clone, Default, Debug)]
+pub(crate) struct Transitions(pub Vec<ActiveTransition>);
+
+/// One property's animation: `[from, to]` colors per border side (the
+/// single-color entries repeat them).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ActiveTransition {
+    pub property: TransitionProp,
+    pub from: [Color; 4],
+    pub to: [Color; 4],
+    /// `Time`'s virtual seconds when the change was styled.
+    pub start: f32,
+    /// Seconds; zero plays instantly.
+    pub duration: f32,
+    /// Seconds before the animation starts.
+    pub delay: f32,
+    pub easing: EasingFunction,
+}
+
+/// A `TemplateContext` value as a CSS `var()` replacement: strings as
+/// written, numbers and bools as their CSS spelling, anything else (arrays,
+/// objects, `null`) unresolvable.
+fn css_value(value: &tera::Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return Some(text.to_owned());
+    }
+    if let Some(number) = value.as_i64() {
+        return Some(number.to_string());
+    }
+    if let Some(number) = value.as_u64() {
+        return Some(number.to_string());
+    }
+    if let Some(number) = value.as_f64() {
+        return Some(format!("{number}"));
+    }
+    value.as_bool().map(|value| value.to_string())
 }
 
 /// `[top, right, bottom, left]` px values over `base`.
@@ -629,6 +677,7 @@ impl Styler<'_> {
             drawn_outline: None,
             layout: declared.layout.clone(),
             calc: declared.calc.clone(),
+            transitions: declared.transitions.clone(),
             image_alpha: None,
         }
     }
@@ -712,6 +761,7 @@ pub(crate) fn build_html_ui(
     >,
     roots: Query<(&Node, Option<&CssRoot>), With<HtmlUi>>,
     parents: Query<&ChildOf>,
+    contexts: Query<&TemplateContext>,
     tree: Tree,
     dom_nodes: Query<(&DomNode, Option<&PseudoState>)>,
     pseudo_changed: Query<Entity, Changed<PseudoState>>,
@@ -779,9 +829,44 @@ pub(crate) fn build_html_ui(
     for (entity, rendered, localized, own_sheet, outline, _ui, used_images, mut rebuild) in
         &mut views
     {
+        use std::hash::{Hash, Hasher};
+        // The context's values for the sheet's `var()` names: a change
+        // restyles (the values style, they don't render). Hashed in name
+        // order, so a per-frame context update to any other key (the calc
+        // example's steppers, say) signals nothing. The names come from
+        // the sheet the source resolution picks (a loading sheet waits
+        // anyway; its frame recomputes once it resolves).
+        let (own_phase, default_phase) = (
+            own_sheet.as_ref().map(|own| phase(&own.0)),
+            default_sheet.0.as_ref().map(phase),
+        );
+        let names_sheet = match (own_phase, default_phase) {
+            (Some(Phase::Ready), _) => {
+                own_sheet.as_ref().and_then(|own| sheets.get(&own.0))
+            }
+            (Some(Phase::Loading), _) => None,
+            (Some(Phase::Failed) | None, Some(Phase::Ready)) => default_sheet
+                .0
+                .as_ref()
+                .and_then(|default| sheets.get(default)),
+            (Some(Phase::Failed) | None, _) => None,
+        };
+        let context = contexts.get(entity).ok();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for name in names_sheet
+            .map(|sheet| var_names(sheet.sheet()))
+            .unwrap_or_default()
+        {
+            name.hash(&mut hasher);
+            context
+                .and_then(|context| context.get(&name))
+                .and_then(css_value)
+                .hash(&mut hasher);
+        }
+        let vars_hash = hasher.finish();
         let frame = Frame {
-            own: own_sheet.as_ref().map(|own| phase(&own.0)),
-            default: default_sheet.0.as_ref().map(phase),
+            own: own_phase,
+            default: default_phase,
             document_ready: !matches!(*rendered, RenderedHtml::Pending),
             own_changed: removed_sheets.contains(&entity)
                 || own_sheet
@@ -790,6 +875,7 @@ pub(crate) fn build_html_ui(
             default_changed,
             fonts_changed: fonts.is_changed(),
             state_changed: state_restyle.contains(&entity),
+            vars_changed: vars_hash != rebuild.vars,
             images_changed: used_images.is_some_and(|images| {
                 images
                     .0
@@ -801,7 +887,14 @@ pub(crate) fn build_html_ui(
                 || removed_outlines.contains(&entity)
                 || outline.as_ref().is_some_and(|outline| outline.is_changed()),
         };
-        decisions.push((entity, rebuild.decide(frame)));
+        let decision = rebuild.decide(frame);
+        // The restyled builds record the hash; a `Wait` (a sheet still
+        // loading) keeps the old one, so the change outlives the wait —
+        // the same rule that keeps pending changes alive.
+        if !matches!(decision, Decision::Wait | Decision::Skip) {
+            rebuild.vars = vars_hash;
+        }
+        decisions.push((entity, decision));
     }
     // Deepest UIs first: a nested `HtmlUi`'s commands are queued before an
     // ancestor's, so an ancestor update that despawns the element holding it
@@ -826,9 +919,16 @@ pub(crate) fn build_html_ui(
             Source::Unstyled => None,
         };
 
-        let styles = css
-            .map(|css| HtmlStyles::from_sheet(css.sheet()))
-            .unwrap_or_default();
+        // `var(--name)` resolves against the UI's `TemplateContext` first
+        // (values interpolated as written), then the sheet's own `--`
+        // properties. Built per pass: the context is constant for one
+        // styling run, so the per-element cache stays keyed on identity.
+        let context = contexts.get(entity).ok();
+        let lookup = |name: &str| context.and_then(|context| context.get(name)).and_then(css_value);
+        let styles = match css {
+            Some(css) => HtmlStyles::from_sheet(css.sheet()).with_context(&lookup),
+            None => HtmlStyles::default().with_context(&lookup),
+        };
         let (root_element, root_inline) = match (&*rendered, &outline) {
             (RenderedHtml::Ready(document), None) => root_element(document.dom()),
             _ => (element_tag("html"), None),
@@ -1060,6 +1160,9 @@ struct NodeSpec {
     pickable: bool,
     /// `position: fixed` (`FixedNode` component).
     fixed: bool,
+    /// `visibility: hidden` → `Visibility::Hidden` (subtree-hide: Bevy's
+    /// visibility propagates to descendants; layout keeps the space).
+    visibility: Option<Visibility>,
     /// The element's computed font-size (CSS `em` resolves against it via
     /// Bevy's `EmSize`; `rem` against the synced `RemSize`).
     font_size: f32,
@@ -1079,6 +1182,9 @@ struct NodeSpec {
     /// The `calc()`-valued layout properties: the layout pass resolves
     /// them per frame against the measured basis.
     calc: Vec<(CalcProp, CalcExpr)>,
+    /// Declared `transition`: which color writes [`update_spec`]/[`apply_css_owned`]
+    /// animate.
+    transitions: Vec<TransitionDecl>,
 }
 
 struct TextSpec {
@@ -1127,12 +1233,14 @@ impl NodeSpec {
             outline: None,
             pickable: true,
             fixed: false,
+            visibility: None,
             submit: false,
             font_size: DEFAULT_FONT_SIZE,
             #[cfg(feature = "text-input")]
             text_input: None,
             images: Vec::new(),
             calc: Vec::new(),
+            transitions: Vec::new(),
             text: None,
             children: Vec::new(),
         }
@@ -1152,10 +1260,12 @@ pub(crate) struct CssOwned {
     outline: bool,
     pickable: bool,
     fixed: bool,
+    visibility: bool,
 }
 
 /// Sets a node's CSS-owned components; on a restyle, resets the ones CSS set
-/// earlier and no longer declares.
+/// earlier and no longer declares. `transitions` (the element's declared
+/// `transition`) animates the border color's change instead of writing it.
 fn apply_css_owned(
     target: &mut EntityCommands,
     border_color: Option<BorderColor>,
@@ -1163,6 +1273,8 @@ fn apply_css_owned(
     outline: Option<Outline>,
     pickable: bool,
     fixed: bool,
+    visibility: Option<Visibility>,
+    transitions: &[TransitionDecl],
 ) {
     let owned = CssOwned {
         border_color: border_color.is_some(),
@@ -1170,13 +1282,26 @@ fn apply_css_owned(
         outline: outline.is_some(),
         pickable: !pickable,
         fixed,
+        visibility: visibility.is_some(),
     };
+    let transitions = transitions.to_vec();
     target.queue(move |mut entity: EntityWorldMut| {
+        let now = entity.world().resource::<Time>().elapsed_secs();
         let before = entity.get::<CssOwned>().copied().unwrap_or_default();
         // Written only when different (see `put`): unchanged values keep
         // their change ticks.
         match border_color {
-            Some(color) => put(&mut entity, Some(color)),
+            Some(color) => {
+                if !transition_color(
+                    &mut entity,
+                    &transitions,
+                    TransitionProp::BorderColor,
+                    [color.top, color.right, color.bottom, color.left],
+                    now,
+                ) {
+                    put(&mut entity, Some(color));
+                }
+            }
             None if before.border_color => put(&mut entity, Some(BorderColor::DEFAULT)),
             None => {}
         }
@@ -1202,8 +1327,240 @@ fn apply_css_owned(
         } else if before.fixed && entity.contains::<FixedNode>() {
             entity.remove::<FixedNode>();
         }
+        match visibility {
+            Some(visibility) => put(&mut entity, Some(visibility)),
+            // `Visibility` is a `Node` required component: reset to CSS's
+            // initial `visible`, never removed. (The root `HtmlUi` entity
+            // never goes through here: `HtmlWorldAnchor` owns its visibility.)
+            None if before.visibility => put(&mut entity, Some(Visibility::Visible)),
+            None => {}
+        }
         put(&mut entity, (owned != CssOwned::default()).then_some(owned));
     });
+}
+
+/// The element's current color for `property` (the animation's start: the
+/// visual value, mid-animation included). `None` = not set (a spawn, or
+/// another system owns it) — no transition.
+fn read_color(entity: &EntityWorldMut, property: TransitionProp) -> Option<[Color; 4]> {
+    match property {
+        TransitionProp::TextColor => entity.get::<TextColor>().map(|color| [color.0; 4]),
+        TransitionProp::BackgroundColor => {
+            entity.get::<BackgroundColor>().map(|color| [color.0; 4])
+        }
+        TransitionProp::BorderColor => entity.get::<BorderColor>().map(|color| {
+            [color.top, color.right, color.bottom, color.left]
+        }),
+    }
+}
+
+/// Writes the color(s) for `property` (a no-op when unchanged, like `put`).
+fn write_color(entity: &mut EntityWorldMut, property: TransitionProp, colors: [Color; 4]) {
+    match property {
+        TransitionProp::TextColor => put(entity, Some(TextColor(colors[0]))),
+        TransitionProp::BackgroundColor => put(entity, Some(BackgroundColor(colors[0]))),
+        TransitionProp::BorderColor => put(
+            entity,
+            Some(BorderColor {
+                top: colors[0],
+                right: colors[1],
+                bottom: colors[2],
+                left: colors[3],
+            }),
+        ),
+    }
+}
+
+/// Writes `property`'s value, as a transition when the element declares one
+/// and the value changes. `true` when this handled the write (the caller
+/// skips its own). `now` is `Time`'s virtual seconds at the update.
+fn transition_color(
+    entity: &mut EntityWorldMut,
+    transitions: &[TransitionDecl],
+    property: TransitionProp,
+    to: [Color; 4],
+    now: f32,
+) -> bool {
+    let Some(decl) = transitions.iter().rev().find(|decl| decl.property == property) else {
+        return false;
+    };
+    let Some(from) = read_color(entity, property) else {
+        return false;
+    };
+    // One entry per property: a change during an animation replaces it,
+    // starting from the current visual.
+    let mut active = entity.get::<Transitions>().cloned().unwrap_or_default();
+    active.0.retain(|entry| entry.property != property);
+    if from == to {
+        // The target is the current value: the entry ends now.
+        if active.0.is_empty() {
+            entity.remove::<Transitions>();
+        } else {
+            entity.insert(active);
+        }
+        write_color(entity, property, to);
+        return true;
+    }
+    active.0.push(ActiveTransition {
+        property,
+        from,
+        to,
+        start: now,
+        duration: decl.duration,
+        delay: decl.delay,
+        easing: decl.easing.clone(),
+    });
+    entity.insert(active);
+    // The start value shows until the advance system's first write (later
+    // in this frame, before render — the target is never drawn early).
+    write_color(entity, property, from);
+    true
+}
+
+/// Advances every in-flight transition (PostUpdate, after [`Build`], before
+/// `UiSystems::Prepare`): interpolates from the recorded start value to the
+/// target over the entry's duration and easing, and drops finished entries
+/// (whose final write is the target — an idle component holds the value the
+/// style system would have written).
+///
+/// [`Build`]: HtmlUiSystems::Build
+pub(crate) fn advance_transitions(
+    time: Res<Time>,
+    mut animated: Query<(
+        &mut Transitions,
+        Option<&mut TextColor>,
+        Option<&mut BackgroundColor>,
+        Option<&mut BorderColor>,
+    )>,
+) {
+    let now = time.elapsed_secs();
+    for (mut transitions, mut text, mut background, mut border) in &mut animated {
+        let entries = std::mem::take(&mut transitions.0);
+        let mut pending = Vec::new();
+        for entry in entries {
+            let progress = (now - entry.start - entry.delay)
+                / entry.duration.max(f32::EPSILON);
+            let done = progress >= 1.0;
+            let value = if progress <= 0.0 {
+                entry.from
+            } else if done {
+                entry.to
+            } else {
+                let t = eased(progress, &entry.easing);
+                std::array::from_fn(|side| {
+                    mix(entry.from[side], entry.to[side], t)
+                })
+            };
+            match entry.property {
+                TransitionProp::TextColor => {
+                    if let Some(color) = text.as_mut() {
+                        if color.0 != value[0] {
+                            color.0 = value[0];
+                        }
+                    }
+                }
+                TransitionProp::BackgroundColor => {
+                    if let Some(color) = background.as_mut() {
+                        if color.0 != value[0] {
+                            color.0 = value[0];
+                        }
+                    }
+                }
+                TransitionProp::BorderColor => {
+                    if let Some(color) = border.as_mut() {
+                        let current = color.bypass_change_detection();
+                        if current.top != value[0]
+                            || current.right != value[1]
+                            || current.bottom != value[2]
+                            || current.left != value[3]
+                        {
+                            **color = BorderColor {
+                                top: value[0],
+                                right: value[1],
+                                bottom: value[2],
+                                left: value[3],
+                            };
+                        }
+                    }
+                }
+            }
+            if !done {
+                pending.push(entry);
+            }
+        }
+        transitions.0 = pending;
+    }
+}
+
+/// The easing curve at input progress `t` (0..1): linear, the named
+/// cubic-Bézier curves, a custom one, or the step functions.
+fn eased(t: f32, easing: &EasingFunction) -> f32 {
+    match easing {
+        EasingFunction::Linear => t,
+        EasingFunction::Ease => cubic_bezier(0.25, 0.1, 0.25, 1.0, t),
+        EasingFunction::EaseIn => cubic_bezier(0.42, 0.0, 1.0, 1.0, t),
+        EasingFunction::EaseOut => cubic_bezier(0.0, 0.0, 0.58, 1.0, t),
+        EasingFunction::EaseInOut => cubic_bezier(0.42, 0.0, 0.58, 1.0, t),
+        EasingFunction::CubicBezier { x1, y1, x2, y2, .. } => {
+            cubic_bezier(*x1, *y1, *x2, *y2, t)
+        }
+        EasingFunction::Steps { count, position } => {
+            let count = (*count).max(1) as f32;
+            let value = match position {
+                StepPosition::Start => f32::ceil(t * count) / count,
+                StepPosition::End => f32::floor(t * count) / count,
+                StepPosition::JumpBoth => (f32::floor(t * count) + 1.0) / (count + 1.0),
+                StepPosition::JumpNone if count > 1.0 => {
+                    f32::floor(t * count).clamp(0.0, count - 1.0) / (count - 1.0)
+                }
+                StepPosition::JumpNone => f32::floor(t * count) / count,
+            };
+            value.clamp(0.0, 1.0)
+        }
+    }
+}
+
+/// The cubic Bézier easing's y at input progress `t`: solves `x(s) = t` for
+/// the parameter `s` (x is strictly monotone over CSS's allowed control
+/// points) and evaluates `y(s)`. Bisection is plenty for a frame's
+/// granularity; the endpoints are exact.
+fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
+    if t <= 0.0 {
+        return 0.0;
+    }
+    if t >= 1.0 {
+        return 1.0;
+    }
+    let at = |s: f32| {
+        let u = 1.0 - s;
+        3.0 * u * u * s * y1 + 3.0 * u * s * s * y2 + s * s * s
+    };
+    let x_at = |s: f32| {
+        let u = 1.0 - s;
+        3.0 * u * u * s * x1 + 3.0 * u * s * s * x2 + s * s * s
+    };
+    let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+    for _ in 0..24 {
+        let mid = (lo + hi) / 2.0;
+        if x_at(mid) < t {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    at((lo + hi) / 2.0)
+}
+
+/// sRGB per-channel lerp (CSS interpolates sRGB colors in sRGB, not
+/// linear, and this crate has no premultiplied-alpha transitions).
+fn mix(from: Color, to: Color, t: f32) -> Color {
+    let (from, to) = (from.to_srgba(), to.to_srgba());
+    Color::srgba(
+        from.red + (to.red - from.red) * t,
+        from.green + (to.green - from.green) * t,
+        from.blue + (to.blue - from.blue) * t,
+        from.alpha + (to.alpha - from.alpha) * t,
+    )
 }
 
 /// Marks an element whose `ImageNode` is its CSS `border-image` frame, i.e.
@@ -1337,11 +1694,16 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
                     z_index: boxed.z_index.map(ZIndex),
                     pickable: pointer_events,
                     fixed: boxed.layout.position == Some(CssPosition::Fixed),
+                    visibility: boxed
+                        .layout
+                        .visibility
+                        .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
                     font_size,
                     #[cfg(feature = "text-input")]
                     text_input: Some(value),
                     children: Vec::new(),
                     calc: boxed.calc.clone(),
+                    transitions: boxed.transitions.clone(),
                     ..NodeSpec::new(node)
                 };
             }
@@ -1399,10 +1761,15 @@ fn item_spec(styler: &Styler, item: Item, default_gap: Val) -> NodeSpec {
         z_index: boxed.z_index.map(ZIndex),
         pickable: pointer_events,
         fixed: boxed.layout.position == Some(CssPosition::Fixed),
+        visibility: boxed
+            .layout
+            .visibility
+            .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
         font_size,
         images,
         children,
         calc: boxed.calc.clone(),
+        transitions: boxed.transitions.clone(),
         ..NodeSpec::new(node)
     }
 }
@@ -1501,11 +1868,16 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             z_index: boxed.z_index.map(ZIndex),
             pickable: block.style.pointer_events,
             fixed: boxed.layout.position == Some(CssPosition::Fixed),
+            visibility: boxed
+                .layout
+                .visibility
+                .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
             submit: block.submit,
             font_size: block.style.size,
             images,
             text: Some(text),
             calc: boxed.calc.clone(),
+            transitions: boxed.transitions.clone(),
             ..NodeSpec::new(node)
         };
     }
@@ -1537,6 +1909,10 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
         z_index: boxed.z_index.map(ZIndex),
         pickable: block.style.pointer_events,
         fixed: boxed.layout.position == Some(CssPosition::Fixed),
+        visibility: boxed
+            .layout
+            .visibility
+            .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
         submit: block.submit,
         font_size: block.style.size,
         images,
@@ -1546,6 +1922,7 @@ fn block_spec(styler: &Styler, block: Block) -> NodeSpec {
             ..NodeSpec::new(text_node)
         }],
         calc: boxed.calc.clone(),
+        transitions: boxed.transitions.clone(),
         ..NodeSpec::new(node)
     }
 }
@@ -1642,6 +2019,9 @@ fn spawn_spec(
         spec.outline,
         spec.pickable,
         spec.fixed,
+        spec.visibility,
+        // A spawn has no previous style: CSS transitions don't run.
+        &[],
     );
     match spec.text {
         Some(text) => {
@@ -1811,6 +2191,7 @@ fn update_spec(
         image,
         font_size,
         calc,
+        transitions,
         ..
     } = spec;
     let is_text = spec.text.is_some();
@@ -1820,6 +2201,7 @@ fn update_spec(
     if !bindings.is_empty() || submit {
         signals::observe_pointer_signals(&mut target);
     }
+    let background_transitions = transitions.clone();
     target.queue(move |mut entity: EntityWorldMut| {
         put(&mut entity, Some(node));
         // Non-text nodes get their `EmSize` from the cascade (text blocks
@@ -1848,7 +2230,21 @@ fn update_spec(
         } else {
             entity.remove::<signals::FormSubmitButton>();
         }
-        put(&mut entity, background.map(BackgroundColor));
+        let now = entity.world().resource::<Time>().elapsed_secs();
+        match background {
+            Some(color) => {
+                if !transition_color(
+                    &mut entity,
+                    &background_transitions,
+                    TransitionProp::BackgroundColor,
+                    [color; 4],
+                    now,
+                ) {
+                    put(&mut entity, Some(BackgroundColor(color)));
+                }
+            }
+            None => put(&mut entity, None::<BackgroundColor>),
+        }
         match image {
             // `ImageNode` has no `PartialEq`; frames are rare.
             Some(image) => {
@@ -1867,6 +2263,8 @@ fn update_spec(
         spec.outline,
         spec.pickable,
         spec.fixed,
+        spec.visibility,
+        &transitions,
     );
     match spec.text {
         Some(text) => {
@@ -1878,10 +2276,20 @@ fn update_spec(
             };
             let (prefix, color) = (text.prefix, text.color);
             let font = text.font.clone();
+            let text_transitions = transitions.clone();
             target.queue(move |mut entity: EntityWorldMut| {
                 put(&mut entity, Some(Text::new(prefix)));
                 put(&mut entity, Some(font));
-                put(&mut entity, Some(TextColor(color)));
+                let now = entity.world().resource::<Time>().elapsed_secs();
+                if !transition_color(
+                    &mut entity,
+                    &text_transitions,
+                    TransitionProp::TextColor,
+                    [color; 4],
+                    now,
+                ) {
+                    put(&mut entity, Some(TextColor(color)));
+                }
                 // `TextLayout` has no `PartialEq`: compare its fields.
                 let same = entity.get::<TextLayout>().is_some_and(|current| {
                     current.justify == layout.justify && current.linebreak == layout.linebreak
@@ -1921,7 +2329,42 @@ fn update_spec(
                                     span.insert(TextSpan::new(content));
                                 }
                                 put(&mut span, Some(spec.font));
-                                put(&mut span, Some(TextColor(spec.color)));
+                                // A span that shared the block's color (the
+                                // inherited case) follows the block's color
+                                // transition, so runs fade with their block.
+                                let old_color = span.get::<TextColor>().map(|color| color.0);
+                                let followed = span
+                                    .get::<ChildOf>()
+                                    .and_then(|child_of| {
+                                        span.world().get::<Transitions>(child_of.0)
+                                    })
+                                    .and_then(|transitions| transitions.0.iter().find(|entry| entry.property == TransitionProp::TextColor).cloned());
+                                let now = span.world().resource::<Time>().elapsed_secs();
+                                match followed {
+                                    Some(entry)
+                                        if old_color == Some(entry.from[0])
+                                            && entry.from[0] != entry.to[0] =>
+                                    {
+                                        let mut active = span
+                                            .get::<Transitions>()
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        active.0
+                                            .retain(|entry| entry.property != TransitionProp::TextColor);
+                                        active.0.push(ActiveTransition {
+                                            property: TransitionProp::TextColor,
+                                            from: [old_color.unwrap(); 4],
+                                            to: [spec.color; 4],
+                                            start: entry.start,
+                                            duration: entry.duration,
+                                            delay: entry.delay,
+                                            easing: entry.easing.clone(),
+                                        });
+                                        span.insert(active);
+                                        put(&mut span, Some(TextColor(old_color.unwrap())));
+                                    }
+                                    _ => put(&mut span, Some(TextColor(spec.color))),
+                                }
                             } else {
                                 let image = spec.image.unwrap();
                                 put(
@@ -2967,4 +3410,125 @@ fn collapse_runs(runs: Vec<Run>) -> Vec<Run> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use std::time::Duration;
+    use lightningcss::values::easing::EasingFunction as CssEasing;
+
+    /// The easing curves' endpoints are exact and their midpoints sane:
+    /// linear is identity; the named cubic Béziers pass through 0 and 1
+    /// and stay within (0, 1) inside; a step function jumps.
+    #[test]
+    fn easing_curves_have_exact_endpoints_and_sane_middles() {
+        for easing in [
+            EasingFunction::Linear,
+            CssEasing::Ease,
+            CssEasing::EaseIn,
+            CssEasing::EaseOut,
+            CssEasing::EaseInOut,
+            CssEasing::CubicBezier {
+                x1: 0.3,
+                y1: 1.5,
+                x2: 0.7,
+                y2: -0.5,
+            },
+        ] {
+            assert_eq!(eased(0.0, &easing), 0.0, "{easing:?}");
+            assert_eq!(eased(1.0, &easing), 1.0, "{easing:?}");
+            // Monotone in x-input by construction; a sane midpoint (except
+            // the deliberately overshooting custom curve, which swings
+            // past 1 and back).
+            let middle = eased(0.5, &easing);
+            if !matches!(easing, CssEasing::CubicBezier { .. }) {
+                assert!((0.0..=1.0).contains(&middle), "{easing:?}: {middle}");
+            }
+        }
+        // Linear is identity everywhere.
+        for t in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            assert!((eased(t, &EasingFunction::Linear) - t).abs() < 1e-6);
+        }
+        // Steps: end stays on the floor of the interval; start rises at 0.
+        let end = EasingFunction::Steps {
+            count: 2,
+            position: StepPosition::End,
+        };
+        assert_eq!(eased(0.4, &end), 0.0);
+        assert_eq!(eased(0.6, &end), 0.5);
+        assert_eq!(eased(1.0, &end), 1.0);
+        let start = EasingFunction::Steps {
+            count: 2,
+            position: StepPosition::Start,
+        };
+        assert_eq!(eased(0.0, &start), 0.0);
+        assert_eq!(eased(0.1, &start), 0.5);
+    }
+
+    /// A background color transition: the entry animates from the current
+    /// value (written so the target never shows early) to the target, and
+    /// finished entries are dropped with the target in place.
+    #[test]
+    fn advance_transitions_interpolates_and_finishes() {
+        let from = Color::srgb(0.0, 0.0, 0.0);
+        let to = Color::srgb(1.0, 1.0, 1.0);
+        let transition = |start: f32, duration: f32, delay: f32| Transitions(vec![ActiveTransition {
+            property: TransitionProp::BackgroundColor,
+            from: [from; 4],
+            to: [to; 4],
+            start,
+            duration,
+            delay,
+            easing: CssEasing::Linear,
+        }]);
+
+        // Mid-animation: halfway between, at t = 0.5 of a 1s linear one.
+        let mut world = World::new();
+        world.insert_resource::<Time>(Time::default());
+        let entity = world
+            .spawn((transition(0.0, 1.0, 0.0), BackgroundColor(from)))
+            .id();
+        // Simulate 0.5s of elapsed time.
+        let mut time = world.resource_mut::<Time>();
+        let _ = time.advance_by(Duration::from_secs_f32(0.5));
+        drop(time);
+        world.run_system_once(super::advance_transitions).unwrap();
+        let color = world.get::<BackgroundColor>(entity).unwrap().0;
+        let (Srgba { red, green, blue, .. }, _) = (color.to_srgba(), ());
+        assert!((red - 0.5).abs() < 1e-4, "{red}");
+        assert!((green - 0.5).abs() < 1e-4, "{green}");
+        assert!((blue - 0.5).abs() < 1e-4, "{blue}");
+        // Still running: the entry stays.
+        assert_eq!(world.get::<Transitions>(entity).unwrap().0.len(), 1);
+
+        // Past the end: the target is written and the entry is gone.
+        let mut time = world.resource_mut::<Time>();
+        let _ = time.advance_by(Duration::from_secs_f32(1.0));
+        drop(time);
+        world.run_system_once(super::advance_transitions).unwrap();
+        assert_eq!(world.get::<Transitions>(entity).unwrap().0, Vec::new());
+        assert_eq!(world.get::<BackgroundColor>(entity).unwrap().0, to);
+
+        // Delay: at `now` = 2.0 (the clock accumulated above), an entry
+        // that started 0.2s ago with a 1.5s delay hasn't begun animating.
+        let entity = world
+            .spawn((transition(1.8, 1.0, 1.5), BackgroundColor(from)))
+            .id();
+        let mut time = world.resource_mut::<Time>();
+        let _ = time.advance_by(Duration::from_secs_f32(0.5));
+        drop(time);
+        world.run_system_once(super::advance_transitions).unwrap();
+        assert_eq!(world.get::<BackgroundColor>(entity).unwrap().0, from);
+        assert_eq!(world.get::<Transitions>(entity).unwrap().0.len(), 1);
+
+        // Zero duration: finishes immediately.
+        let entity = world
+            .spawn((transition(0.0, 0.0, 0.0), BackgroundColor(from)))
+            .id();
+        world.run_system_once(super::advance_transitions).unwrap();
+        assert_eq!(world.get::<BackgroundColor>(entity).unwrap().0, to);
+        assert_eq!(world.get::<Transitions>(entity).unwrap().0, Vec::new());
+    }
 }

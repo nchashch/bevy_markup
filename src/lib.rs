@@ -331,6 +331,9 @@ impl Plugin for BevyMarkupPlugin {
                     build::resolve_calc
                         .after(HtmlUiSystems::Build)
                         .before(UiSystems::Prepare),
+                    build::advance_transitions
+                        .after(HtmlUiSystems::Build)
+                        .before(UiSystems::Prepare),
                 ),
             );
         focus::plugin(app);

@@ -1,0 +1,61 @@
+/* Written by the example's palette cycling (and safe to edit by hand):
+   the app rewrites this file with a different accent each press of H, and
+   the file watcher restyles every user of the stylesheet without a
+   restart. The committed copy is palette 0. */
+html {
+  color: #e6e6e6;
+  font-family: serif;
+  font-size: 24px;
+  /* 9-slice frame: image relative to this file, 16px insets, center drawn. */
+  border-image: url("../shared/frame.png") 16 fill stretch;
+  border-width: 16px;
+  padding: 20px 32px;
+}
+
+/* The accent the palette cycling rewrites (palette 0: crimson). */
+h1 {
+  color: #f0b429;
+  font-size: 44px;
+  font-weight: bold;
+}
+
+.palette {
+  color: #f0b429;
+  font-style: italic;
+}
+
+kbd {
+  color: #7fdbff;
+  font-family: monospace;
+}
+
+.action {
+  color: #f0b429;
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 4px 16px;
+}
+
+/* Keyboard/gamepad focus shows a ring; a mouse press hides it again. */
+.action:focus-visible {
+  outline: 3px solid #7fdbff;
+  outline-offset: 2px;
+}
+
+.actions {
+  gap: 8px;
+}
+
+p.hint {
+  color: #9a9a9a;
+  font-size: 0.75em;
+  font-style: italic;
+}
+
+.wallet {
+  border-image: url("../shared/frame_transparent.png") 16 fill stretch;
+  border-width: 12px;
+  padding: 12px 16px;
+  background-color: #1a1a1a;
+  gap: 8px;
+}

@@ -41,8 +41,8 @@ Hover a control for its tooltip.
 - **Built-in tooltips** — elements with `data-tooltip="<Fluent key>"`; the
   app only inserts `HtmlTooltips` with a tooltip template.
 - **Template components** — every button is one Tera 2 component,
-  `ui.button` in `components.html`, which the menu and the dialog include
-  (relative paths) and call with their content as the body:
+  `ui.button` in `../shared/components.html`, which the menu and the dialog
+  include (relative paths) and call with their content as the body:
   `{% <ui.button id="reset" signal="reset"> %}…{% </ui.button> %}`.
 - **Signals routed to systems** — `app.on_html_click("reset", open_dialog)`;
   the dialog's two buttons share one handler and tell themselves apart by
@@ -62,7 +62,7 @@ Hover a control for its tooltip.
 |---|---|
 | `main.rs` | Settings, signal handlers, the slider and icon elements |
 | `../assets/menu/menu.html`, `dialog.html`, `tooltip.html` | Templates |
-| `../assets/menu/components.html` | The `ui.button` component library |
+| `../assets/shared/components.html` | The shared `ui.button` component library (the button's styles are `menu/style.css`) |
 | `../assets/menu/style.css` | The stylesheet |
 | `../assets/menu/locales/{en-US,de}/` | Fluent bundles |
 | `../shared/input.rs` | Keyboard / gamepad focus navigation shared by the examples (`data-setting` controls take ← → themselves) |

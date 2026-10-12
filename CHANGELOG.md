@@ -9,6 +9,26 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Added
+- CSS `transition` (the shorthand): animates a restyled property's change
+  — `color` (the element's text color; runs that shared its old value fade
+  with it), `background-color` and `border-color`, over `linear`, the
+  named curves, `cubic-bezier()` or `steps()`, with optional delay. A
+  spawn never animates; the clock is `Time`'s virtual one.
+- CSS `var()`: `var(--name)` resolves the UI's `TemplateContext` first
+  (insert a value under `--name`; strings interpolate as written, numbers
+  and bools as their CSS spelling), then the stylesheet's own `--name:`
+  declarations (any top-level rule, last wins — sheet-level, not
+  per-element inherited), then the reference's fallback. An unresolvable
+  reference without a fallback drops the declaration.
+- The `hot-reload` example (`--features hot-reload`, which enables Bevy's
+  file watcher): editing a template or stylesheet restyles the UI without
+  a restart; the example also rewrites its own stylesheet on `H` / B to
+  demonstrate it without an editor.
+- `visibility: hidden`: the element and its descendants become invisible
+  (Bevy's propagating `Visibility`) but keep their layout space — a
+  subtree-hide approximation of CSS (a `visibility: visible` child cannot
+  re-appear under a hidden ancestor). `collapse` is skipped; the root
+  rule's visibility is left to the app (`HtmlWorldAnchor` owns it).
 - `calc()` in layout properties (sizes, `flex-basis`, margins, insets:
   `width: calc(50% - 40px)`, `top: min(2em, 10%)`, …). Expressions that
   resolve to a single unit are computed at style time; mixed-unit ones are

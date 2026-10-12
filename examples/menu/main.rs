@@ -10,7 +10,8 @@
 //!   the focus ring, which a mouse press hides again.
 //! - "Reset" opens `menu/dialog.html` with `HtmlModal`: focus moves to its
 //!   `autofocus` button and can't leave it until the dialog closes.
-//! - Buttons are one Tera 2 component, `ui.button` in `menu/components.html`,
+//! - Buttons are one Tera 2 component, `ui.button` in
+//!   `../shared/components.html`,
 //!   which `menu.html` and `dialog.html` include (paths relative to the
 //!   including file) and call with their content as the body.
 //! - Hovering a button with `data-tooltip="<Fluent key>"` shows
