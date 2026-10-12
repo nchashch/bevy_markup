@@ -7,7 +7,7 @@
 | Date | 2026-10-12 11:24 +0400 |
 | Author | GLM (opencode-zen/glm-5.3-flash), via omp — drafted for the project owner |
 | Commit | `f05290d` Separate Tera statements in Markdown templates at load |
-| Status | Accepted — phases A+B implemented (see the implementation note); C gated |
+| Status | Accepted — phases A+B and C-1 implemented (see the implementation notes); C-2 gated |
 | Related | 0017 (its fingerprint variant was rejected on measurement — this is the successor design), 0020 (the load-time conversion this builds on), 0009 (identical-render skip, in-place updates), 0018/0019 (measurement); the "Low-Hanging / Dirty-Flag Rebuilds" items in the session record |
 
 ## Context
@@ -238,3 +238,53 @@ Phase C stays gated as written: reuse at the item level still runs
 `item_spec` on the cloned items (~half the per-block cost), so the
 theoretical floor needs the spec-level cache with clone-free ownership —
 attempt only if a workload's profile justifies it with numbers.
+
+## Implementation note 2 (2026-10-12, later): C-1 implemented — shared specs
+
+C-1 is in: the skeleton caches the previous build's **spec tree**
+(`Arc<NodeSpec>`), not its items. A clean subtree is handed to the diff by
+refcount — no item clone, no `item_spec` — and the reused spec keeps its
+place in the next frame's skeleton, so the trees are structurally shared
+across frames. Two pieces made borrowing sound:
+
+- **`put_ref`** — the compare-then-clone write: the queued commands capture
+  the spec by `Arc` and every component write compares against the current
+  value *before* cloning, so a visited-but-unchanged element copies
+  nothing (`update_spec`/`spawn_spec`/`spawn_spans` take references now;
+  fresh specs are wrapped in `Arc` at construction, which the skeleton
+  then adopts by move).
+- **The up-front handle remap** (`remap_spec_handles`): the cached specs'
+  `DomNode` handles point into the previous document; the pairing's
+  reverse map rewrites them while the `Arc`s are exclusively held, so
+  reused subtrees (and the entities they spawn) never carry stale
+  handles, and the `:hover` state walk stays keyed by current handles.
+
+Nested reuse works: a dirty container's clean children reuse their specs
+inside the container's fresh collection (`Item::Cached` flows through
+`item_spec`'s children construction).
+
+Measured same-session, skeleton on/off (the only trustworthy comparison —
+cross-session criterion drift measured ±10–27% on the pure
+`render`/`parse` stages during this work):
+
+| Benchmark (600) | Off (= A+B) | On (C-1) | Δ |
+|---|---|---|---|
+| `changing` | 2.36 ms | 1.42–1.54 ms | **−35…−40%** |
+| `markdown` | 10.28 ms | 7.79–7.95 ms | **−23…−24%** |
+| `localized` | 2.94 ms | 2.95 ms | 0 |
+| `rebuilding` | 9.89 ms | 10.06 ms | +1.7% |
+| `idle` | 219 µs | 218 µs | 0 |
+
+The dirty path pays ~nothing: an all-dirty workload's writes were going to
+change anyway, so `put_ref`'s lazy clone costs what the old eager move
+plus `set_if_neq` cost. The remaining gap to the theoretical floor is the
+diff's *visit* itself (it still walks clean subtrees to confirm they
+match) — that is C-2, gated on the same numbers discipline.
+
+C-2's soundness argument, recorded while it is cheap: a clean subtree's
+cached spec is only ever *read* by the diff, and every write it would do
+compares equal (the gates invalidate the whole reuse on any style-side
+change; the `ImageNode` re-insert on visits is covered by the
+`images_changed` gate). Skipping the visit entirely for cached specs is
+therefore equivalent — but it makes the gate list load-bearing
+correctness, which is why it stays a separate, measured step.

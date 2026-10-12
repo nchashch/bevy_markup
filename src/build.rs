@@ -1,6 +1,7 @@
 //! Rendered + localized DOM → styled Bevy UI children of the `HtmlUi` entity.
 
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
 use bevy::asset::{AssetEvent, AssetPath, LoadState};
 use bevy::ecs::system::SystemParam;
@@ -267,6 +268,9 @@ enum Item {
         font_size: f32,
         value: TextInputSpec,
     },
+    /// ADR 0021: a reused subtree — the previous build's spec, handed to
+    /// the diff by refcount (its handles were remapped up front).
+    Cached(Arc<NodeSpec>),
 }
 
 /// Resolved box properties of an element: `border-width`, `padding`,
@@ -447,7 +451,7 @@ fn rect_over(base: UiRect, sides: [Option<f32>; 4]) -> UiRect {
 /// evaluates them per frame against the measured basis (the containing
 /// block's content box, the font sizes, the viewport) and writes the
 /// concrete pixels.
-#[derive(Component, Debug, PartialEq)]
+#[derive(Component, Debug, PartialEq, Clone)]
 pub(crate) struct CalcSized {
     /// The element's own font size (`em`'s basis), captured at collection.
     em: f32,
@@ -786,7 +790,7 @@ pub(crate) fn build_html_ui(
     roots: Query<(&Node, Option<&CssRoot>), With<HtmlUi>>,
     parents: Query<&ChildOf>,
     contexts: Query<&TemplateContext>,
-    skeletons: Query<&Skeleton>,
+    mut skeletons: Query<&mut Skeleton>,
     tree: Tree,
     dom_nodes: Query<(&DomNode, Option<&PseudoState>)>,
     pseudo_changed: Query<Entity, Changed<PseudoState>>,
@@ -1060,21 +1064,29 @@ pub(crate) fn build_html_ui(
         // A localization change doesn't block reuse: only translated
         // elements depend on it, and those are excluded from the pairing
         // (their items come from per-build fragments).
-        let skeleton_eligible = matches!(decision, Decision::Build(_))
+        const SKELETON: bool = true;
+        let skeleton_eligible = SKELETON && matches!(decision, Decision::Build(_))
             && outline.is_none()
             && rendered.is_changed()
             && !frame.state_changed
             && !frame.vars_changed
             && !frame.fonts_changed
             && !frame.images_changed;
+        let (previous_useful, previous_since_try, had_skeleton) = skeletons
+            .get(entity)
+            .map_or((true, 0, false), |skeleton| {
+                (skeleton.useful, skeleton.since_try, true)
+            });
         let mut pairing = HashMap::default();
         let mut reverse = HashMap::default();
         let mut clean = HashSet::default();
+        let mut skeleton_mut = if skeleton_eligible {
+            skeletons.get_mut(entity).ok()
+        } else {
+            None
+        };
         let pass = 'pass: {
-            if !skeleton_eligible {
-                break 'pass None;
-            }
-            let Ok(skeleton) = skeletons.get(entity) else {
+            let Some(skeleton) = skeleton_mut.as_mut() else {
                 break 'pass None;
             };
             if !skeleton.useful && skeleton.since_try < 16 {
@@ -1093,11 +1105,15 @@ pub(crate) fn build_html_ui(
                 &mut reverse,
                 &mut clean,
             );
+            // The cached specs' handles point into the previous document;
+            // rewrite them to the fresh one while the `Arc`s are
+            // exclusively held, so reused subtrees (and the entities they
+            // spawn) never carry stale `DomNode`s.
+            remap_spec_handles(&mut skeleton.specs, &reverse);
             break 'pass Some(SkeletonPass {
                 pairing: &pairing,
-                reverse: &reverse,
                 clean: &clean,
-                items: &skeleton.items,
+                specs: &skeleton.specs,
                 table: &skeleton.table,
                 reused: Cell::new(0),
             });
@@ -1164,9 +1180,12 @@ pub(crate) fn build_html_ui(
             }
         };
 
-        let specs: Vec<NodeSpec> = items
-            .iter()
-            .map(|item| item_spec(&styler, item, default_gap))
+        let specs: Vec<Arc<NodeSpec>> = items
+            .into_iter()
+            .map(|item| match item {
+                Item::Cached(spec) => spec,
+                item => Arc::new(item_spec(&styler, &item, default_gap)),
+            })
             .collect();
         // Content changes and restyles alike update the existing children in
         // place where they still match, spawning and despawning only what
@@ -1188,7 +1207,7 @@ pub(crate) fn build_html_ui(
             });
         }
         let mut connected = Vec::new();
-        let spawned = update_children(&mut commands, entity, specs, &tree, entity, &mut connected);
+        let spawned = update_children(&mut commands, entity, &specs, &tree, entity, &mut connected);
         // ADR 0021: this build's items (and, when the document changed, a
         // re-parse of it) become the next build's skeleton — the reuse
         // cache. Its document and items must always correspond, so a
@@ -1198,7 +1217,6 @@ pub(crate) fn build_html_ui(
         // matches its items) and no per-frame data move happens. Outline
         // and failed documents leave it frozen.
         if outline.is_none() {
-            let previous = skeletons.get(entity).ok();
             let document = match &*rendered {
                 RenderedHtml::Ready(document)
                     if pass.is_some() || (rendered.is_changed() && !skeleton_eligible) =>
@@ -1209,38 +1227,37 @@ pub(crate) fn build_html_ui(
             };
             match pass.as_ref() {
                 Some(pass) => {
-                    let total = item_count(&items);
-                    let table = item_table(&items);
+                    let total = spec_count(&specs);
+                    let table = spec_table(&specs);
                     commands.entity(entity).insert(Skeleton {
                         document,
-                        items,
+                        specs,
                         table,
                         useful: pass.reused.get() > 0 && pass.reused.get() * 2 >= total,
                         since_try: 0,
                     });
                 }
-                None if previous.is_none() => {
-                    let table = item_table(&items);
+                None if !had_skeleton => {
+                    let table = spec_table(&specs);
                     commands.entity(entity).insert(Skeleton {
                         document,
-                        items,
+                        specs,
                         table,
                         useful: true,
                         since_try: 0,
                     });
                 }
                 None if !skeleton_eligible => {
-                    // A full rebuild or restyle ran: the fresh items are the
+                    // A full rebuild or restyle ran: the fresh specs are the
                     // next skeleton; the document only changes with the
                     // render.
-                    let useful = previous.is_none_or(|previous| previous.useful);
-                    let since_try = previous.map_or(0, |previous| previous.since_try);
+                    let (useful, since_try) = (previous_useful, previous_since_try);
                     let keep_document = document.is_none();
-                    let table = item_table(&items);
+                    let table = spec_table(&specs);
                     commands.queue(move |world: &mut World| {
                         match world.get_mut::<Skeleton>(entity) {
                             Some(mut skeleton) => {
-                                skeleton.items = items;
+                                skeleton.specs = specs;
                                 skeleton.table = table;
                                 if !keep_document {
                                     skeleton.document = document;
@@ -1249,7 +1266,7 @@ pub(crate) fn build_html_ui(
                             None => {
                                 world.entity_mut(entity).insert(Skeleton {
                                     document,
-                                    items,
+                                    specs,
                                     table,
                                     useful,
                                     since_try,
@@ -1261,7 +1278,7 @@ pub(crate) fn build_html_ui(
                 None => {
                     // Eligible but skipped (the adaptive gate): tick the
                     // retry counter; every 16th build tries again.
-                    let since_try = previous.map_or(1, |previous| previous.since_try + 1);
+                    let since_try = previous_since_try + 1;
                     commands.queue(move |world: &mut World| {
                         if let Some(mut skeleton) = world.get_mut::<Skeleton>(entity) {
                             skeleton.since_try = since_try;
@@ -1326,7 +1343,7 @@ struct NodeSpec {
     images: Vec<Handle<Image>>,
     /// `Text` nodes hold spans, never child nodes.
     text: Option<TextSpec>,
-    children: Vec<NodeSpec>,
+    children: Vec<Arc<NodeSpec>>,
     /// The `calc()`-valued layout properties: the layout pass resolves
     /// them per frame against the measured basis.
     calc: Vec<(CalcProp, CalcExpr)>,
@@ -1726,16 +1743,16 @@ pub(crate) struct CssFrame;
 /// `pointer-events: none` (bevy_picking resolves text-section hits against
 /// the span entity, so an ignored block must ignore its spans too — or the
 /// ignored block stays clickable).
-fn spawn_spans(spans: &mut ChildSpawnerCommands<'_>, text: TextSpec, pickable: bool) {
-    for span in text.spans {
-        let mut child = if let Some(image) = span.image {
+fn spawn_spans(spans: &mut ChildSpawnerCommands<'_>, text: &TextSpec, pickable: bool) {
+    for span in &text.spans {
+        let mut child = if let Some(image) = &span.image {
             let mut child = spans.spawn((
                 InlineBox {
                     kind: InlineBoxKind::InFlow,
                     size: span.box_size.unwrap_or_default(),
                 },
                 InlineImage {
-                    image: image.image,
+                    image: image.image.clone(),
                     width: image.width.and_then(ImageSize::px),
                     height: image.height.and_then(ImageSize::px),
                     ..default()
@@ -1751,16 +1768,20 @@ fn spawn_spans(spans: &mut ChildSpawnerCommands<'_>, text: TextSpec, pickable: b
             }
             child
         } else {
-            spans.spawn((TextSpan::new(span.text), span.font, TextColor(span.color)))
+            spans.spawn((
+                TextSpan::new(span.text.clone()),
+                span.font.clone(),
+                TextColor(span.color),
+            ))
         };
         // A link span is a picked entity: bevy's per-section text picking
         // resolves clicks to it, and its bindings emit the signals (the
         // `open` click carries the href). `HtmlElement`/`DomNode` give it
         // hover state (`a:hover`) and element identity.
-        if let Some(link) = span.link {
+        if let Some(link) = &span.link {
             child.insert((
-                ElementSignals(link.bindings),
-                link.element,
+                ElementSignals(link.bindings.clone()),
+                link.element.clone(),
                 DomNode(link.handle),
             ));
             signals::observe_pointer_signals(&mut child);
@@ -1806,6 +1827,9 @@ type Tree<'w, 's> = Query<
 fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
     let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children) =
         match item {
+            // A reused subtree's spec comes out by refcount in the caller;
+            // this path only builds fresh items.
+            Item::Cached(_) => unreachable!("a cached item never reaches item_spec"),
             Item::Block(block) => return block_spec(styler, block),
             #[cfg(feature = "text-input")]
             Item::TextInput {
@@ -1894,9 +1918,12 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
         ..default()
     };
     boxed.layout.apply_to(&mut node);
-    let children: Vec<NodeSpec> = children
+    let children: Vec<Arc<NodeSpec>> = children
         .iter()
-        .map(|child| item_spec(styler, child, default_gap))
+        .map(|child| match child {
+            Item::Cached(spec) => Arc::clone(spec),
+            child => Arc::new(item_spec(styler, child, default_gap)),
+        })
         .collect();
     let images = children
         .iter()
@@ -2070,11 +2097,11 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
         submit: block.submit,
         font_size: block.style.size,
         images,
-        children: vec![NodeSpec {
+        children: vec![Arc::new(NodeSpec {
             pickable: block.style.pointer_events,
             text: Some(text),
             ..NodeSpec::new(text_node)
-        }],
+        })],
         calc: boxed.calc.clone(),
         transitions: boxed.transitions.clone(),
         ..NodeSpec::new(node)
@@ -2090,11 +2117,11 @@ pub(crate) struct DomNode(pub tl::NodeHandle);
 /// document order) for [`custom_elements::connect`].
 fn spawn_spec(
     parent: &mut ChildSpawnerCommands,
-    spec: NodeSpec,
+    spec: &NodeSpec,
     root: Entity,
     connected: &mut Vec<ElementConnected>,
 ) -> Entity {
-    let mut entity = parent.spawn(spec.node);
+    let mut entity = parent.spawn(spec.node.clone());
     // Non-text nodes get their `EmSize` from the cascade (text blocks have
     // a `TextFont`, which Bevy derives it from). CSS `em` lengths on the
     // node resolve against it. (Text inputs: `EditableText` requires a
@@ -2114,7 +2141,7 @@ fn spawn_spec(
         // navigation, `HtmlModal`) drives it. The field's text styles from
         // the cascade via `TextFont`/`TextColor` (required by
         // `EditableText`), and the box from CSS on the node.
-        let input = spec.text_input.unwrap();
+        let input = spec.text_input.clone().unwrap();
         entity.insert((
             EditableText::new(input.initial),
             input.font,
@@ -2136,17 +2163,17 @@ fn spawn_spec(
             exprs: spec.calc.clone(),
         });
     }
-    if let Some(custom) = spec.custom {
+    if let Some(custom) = &spec.custom {
         connected.push(ElementConnected {
             entity: id,
             root,
             name: custom.name.clone(),
             dataset: custom.dataset.clone(),
         });
-        entity.insert(ConnectedAs(custom));
+        entity.insert(ConnectedAs(custom.clone()));
     }
-    if let Some(element) = spec.element {
-        entity.insert(element);
+    if let Some(element) = &spec.element {
+        entity.insert(element.clone());
     }
     if let Some(handle) = spec.handle {
         entity.insert(DomNode(handle));
@@ -2158,13 +2185,13 @@ fn spawn_spec(
     // the enclosing form (`on_pointer` checks the marker).
     if !spec.signals.is_empty() || spec.submit {
         signals::observe_pointer_signals(&mut entity);
-        entity.insert(ElementSignals(spec.signals));
+        entity.insert(ElementSignals(spec.signals.clone()));
     }
     if let Some(background) = spec.background {
         entity.insert(BackgroundColor(background));
     }
-    if let Some(image) = spec.image {
-        entity.insert((image, CssFrame));
+    if let Some(image) = &spec.image {
+        entity.insert((image.clone(), CssFrame));
     }
     apply_css_owned(
         &mut entity,
@@ -2177,30 +2204,27 @@ fn spawn_spec(
         // A spawn has no previous style: CSS transitions don't run.
         &[],
     );
-    match spec.text {
-        Some(text) => {
-            entity.insert((
-                Text::new(text.prefix),
-                text.font.clone(),
-                TextColor(text.color),
-            ));
-            if text.no_wrap {
-                entity.insert(TextLayout::no_wrap());
+    if let Some(text) = &spec.text {
+        entity.insert((
+            Text::new(text.prefix),
+            text.font.clone(),
+            TextColor(text.color),
+        ));
+        if text.no_wrap {
+            entity.insert(TextLayout::no_wrap());
+        }
+        // bevy_picking resolves text-section hits against the span
+        // entity, so the block's `pointer-events: none` must be on the
+        // spans too (or the ignored block stays clickable).
+        entity.with_children(|spans| {
+            spawn_spans(spans, text, spec.pickable);
+        });
+    } else {
+        entity.with_children(|children| {
+            for child in &spec.children {
+                spawn_spec(children, child, root, connected);
             }
-            // bevy_picking resolves text-section hits against the span
-            // entity, so the block's `pointer-events: none` must be on the
-            // spans too (or the ignored block stays clickable).
-            entity.with_children(|spans| {
-                spawn_spans(spans, text, spec.pickable);
-            });
-        }
-        None => {
-            entity.with_children(|children| {
-                for child in spec.children {
-                    spawn_spec(children, child, root, connected);
-                }
-            });
-        }
+        });
     }
     id
 }
@@ -2235,7 +2259,7 @@ fn same_identity(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
 fn update_children(
     commands: &mut Commands,
     parent: Entity,
-    specs: Vec<NodeSpec>,
+    specs: &[Arc<NodeSpec>],
     tree: &Tree,
     root: Entity,
     connected: &mut Vec<ElementConnected>,
@@ -2258,7 +2282,7 @@ fn update_children(
     for id in owned.iter().filter_map(|&child| id_of(child)) {
         counts.entry(id).or_default().0 += 1;
     }
-    for id in specs.iter().filter_map(spec_id) {
+    for id in specs.iter().map(Arc::as_ref).filter_map(spec_id) {
         counts.entry(id).or_default().1 += 1;
     }
     let key = |id: Option<String>| id.filter(|id| counts.get(id) == Some(&(1, 1)));
@@ -2277,12 +2301,12 @@ fn update_children(
     let mut desired = Vec::with_capacity(specs.len() + nested.len());
     let mut spawned = false;
     for spec in specs {
-        let candidate = match key(spec_id(&spec)) {
+        let candidate = match key(spec_id(spec)) {
             Some(id) => keyed.remove(&id),
             None => unkeyed.next(),
         };
         match candidate {
-            Some(child) if same_identity(&spec, child, tree) => {
+            Some(child) if same_identity(spec, child, tree) => {
                 spawned |= update_spec(commands, child, spec, tree, root, connected);
                 kept.insert(child);
                 desired.push(child);
@@ -2315,10 +2339,16 @@ fn update_children(
 /// Updates `entity` (matched by [`same_identity`]) to `spec` in place: the
 /// entity and anything the app attached stay; components the spec no longer
 /// has are removed. Returns whether elements were spawned below it.
+///
+/// The spec is shared (a reused subtree's spec is the previous build's):
+/// the queued commands capture it by refcount, and every write compares
+/// against the current component *before* cloning (`put_ref`), so an
+/// unchanged element — the common case for a reused subtree — is visited
+/// without copying anything.
 fn update_spec(
     commands: &mut Commands,
     entity: Entity,
-    spec: NodeSpec,
+    spec: &Arc<NodeSpec>,
     tree: &Tree,
     root: Entity,
     connected: &mut Vec<ElementConnected>,
@@ -2335,61 +2365,50 @@ fn update_spec(
     let mut target = commands.entity(entity);
     // Only what differs is written: an unchanged component keeps its change
     // tick, so layout, text and style systems skip unchanged elements.
-    let NodeSpec {
-        node,
-        element,
-        handle,
-        focus,
-        signals: bindings,
-        background,
-        image,
-        font_size,
-        calc,
-        transitions,
-        ..
-    } = spec;
     let is_text = spec.text.is_some();
     // A submit button's click submits the enclosing form even though it
     // has no bindings of its own (`on_pointer` checks the marker).
     let submit = spec.submit;
-    if !bindings.is_empty() || submit {
+    if !spec.signals.is_empty() || submit {
         signals::observe_pointer_signals(&mut target);
     }
-    let background_transitions = transitions.clone();
+    let queued = Arc::clone(spec);
     target.queue(move |mut entity: EntityWorldMut| {
-        put(&mut entity, Some(node));
+        put_ref(&mut entity, Some(&queued.node));
         // Non-text nodes get their `EmSize` from the cascade (text blocks
         // have a `TextFont`, which Bevy derives it from).
         if !is_text {
-            put(&mut entity, Some(EmSize(font_size)));
+            put(&mut entity, Some(EmSize(queued.font_size)));
         }
         put(
             &mut entity,
-            (!calc.is_empty()).then_some(CalcSized {
-                em: font_size,
-                exprs: calc.clone(),
+            (!queued.calc.is_empty()).then(|| CalcSized {
+                em: queued.font_size,
+                exprs: queued.calc.clone(),
             }),
         );
-        if element.is_some() {
-            put(&mut entity, element);
+        if queued.element.is_some() {
+            put_ref(&mut entity, queued.element.as_ref());
         }
-        put(&mut entity, handle.map(DomNode));
-        put(&mut entity, focus);
-        put(
+        put(&mut entity, queued.handle.map(DomNode));
+        put(&mut entity, queued.focus);
+        put_ref(
             &mut entity,
-            (!bindings.is_empty() || submit).then_some(ElementSignals(bindings)),
+            (!queued.signals.is_empty() || queued.submit)
+                .then(|| ElementSignals(queued.signals.clone()))
+                .as_ref(),
         );
-        if submit {
+        if queued.submit {
             entity.insert(signals::FormSubmitButton);
         } else {
             entity.remove::<signals::FormSubmitButton>();
         }
         let now = entity.world().resource::<Time>().elapsed_secs();
-        match background {
+        match queued.background {
             Some(color) => {
                 if !transition_color(
                     &mut entity,
-                    &background_transitions,
+                    &queued.transitions,
                     TransitionProp::BackgroundColor,
                     [color; 4],
                     now,
@@ -2399,10 +2418,10 @@ fn update_spec(
             }
             None => put(&mut entity, None::<BackgroundColor>),
         }
-        match image {
+        match &queued.image {
             // `ImageNode` has no `PartialEq`; frames are rare.
             Some(image) => {
-                entity.insert((image, CssFrame));
+                entity.insert((image.clone(), CssFrame));
             }
             None if has_frame => {
                 entity.remove::<(ImageNode, CssFrame)>();
@@ -2418,180 +2437,180 @@ fn update_spec(
         spec.pickable,
         spec.fixed,
         spec.visibility,
-        &transitions,
+        &spec.transitions,
     );
-    match spec.text {
-        Some(text) => {
-            // `TextLayout` is required by `Text`: replace, never remove.
-            let layout = if text.no_wrap {
-                TextLayout::no_wrap()
-            } else {
-                TextLayout::default()
-            };
-            let (prefix, color) = (text.prefix, text.color);
-            let font = text.font.clone();
-            let text_transitions = transitions.clone();
-            target.queue(move |mut entity: EntityWorldMut| {
-                put(&mut entity, Some(Text::new(prefix)));
-                put(&mut entity, Some(font));
-                let now = entity.world().resource::<Time>().elapsed_secs();
-                if !transition_color(
-                    &mut entity,
-                    &text_transitions,
-                    TransitionProp::TextColor,
-                    [color; 4],
-                    now,
-                ) {
-                    put(&mut entity, Some(TextColor(color)));
-                }
-                // `TextLayout` has no `PartialEq`: compare its fields.
-                let same = entity.get::<TextLayout>().is_some_and(|current| {
-                    current.justify == layout.justify && current.linebreak == layout.linebreak
-                });
-                if !same {
-                    entity.insert(layout);
-                }
-            });
-            // Spans carry the block's `pointer-events: none` (see
-            // `spawn_spec`); an update without it takes it back. An image
-            // span (an `InlineBox` child) can't become a `TextSpan` in
-            // place: any kind mismatch respawns every span.
-            let kinds_match = children.len() == text.spans.len()
-                && children.iter().zip(&text.spans).all(|(child, span)| {
-                    tree.get(*child)
-                        .is_ok_and(|(_, _, is_span, ..)| is_span == span.image.is_none())
-                });
-            if kinds_match {
-                let pickable = spec.pickable;
-                for (span, spec) in children.into_iter().zip(text.spans) {
-                    // A span that becomes a link needs the click observers
-                    // (idempotent: the marker check skips existing ones).
-                    #[cfg_attr(not(feature = "text-input"), allow(clippy::used_underscore_binding))]
-                    if spec.link.is_some() {
-                        signals::observe_pointer_signals(&mut commands.entity(span));
-                    }
-                    commands
-                        .entity(span)
-                        .queue(move |mut span: EntityWorldMut| {
-                            if spec.image.is_none() {
-                                let content = spec.text;
-                                // `TextSpan` has no `PartialEq`: compare the text.
-                                if span
-                                    .get::<TextSpan>()
-                                    .is_none_or(|current| **current != content)
-                                {
-                                    span.insert(TextSpan::new(content));
-                                }
-                                put(&mut span, Some(spec.font));
-                                // A span that shared the block's color (the
-                                // inherited case) follows the block's color
-                                // transition, so runs fade with their block.
-                                let old_color = span.get::<TextColor>().map(|color| color.0);
-                                let followed = span
-                                    .get::<ChildOf>()
-                                    .and_then(|child_of| {
-                                        span.world().get::<Transitions>(child_of.0)
-                                    })
-                                    .and_then(|transitions| transitions.0.iter().find(|entry| entry.property == TransitionProp::TextColor).cloned());
-                                match followed {
-                                    Some(entry)
-                                        if old_color == Some(entry.from[0])
-                                            && entry.from[0] != entry.to[0] =>
-                                    {
-                                        let mut active = span
-                                            .get::<Transitions>()
-                                            .cloned()
-                                            .unwrap_or_default();
-                                        active.0
-                                            .retain(|entry| entry.property != TransitionProp::TextColor);
-                                        active.0.push(ActiveTransition {
-                                            property: TransitionProp::TextColor,
-                                            from: [old_color.unwrap(); 4],
-                                            to: [spec.color; 4],
-                                            start: entry.start,
-                                            duration: entry.duration,
-                                            delay: entry.delay,
-                                            easing: entry.easing.clone(),
-                                        });
-                                        span.insert(active);
-                                        put(&mut span, Some(TextColor(old_color.unwrap())));
-                                    }
-                                    _ => put(&mut span, Some(TextColor(spec.color))),
-                                }
-                            } else {
-                                let image = spec.image.unwrap();
-                                put(
-                                    &mut span,
-                                    Some(InlineBox {
-                                        kind: InlineBoxKind::InFlow,
-                                        size: spec.box_size.unwrap_or_default(),
-                                    }),
-                                );
-                                put(
-                                    &mut span,
-                                    Some(InlineImage {
-                                        image: image.image,
-                                        width: image.width.and_then(ImageSize::px),
-                                        height: image.height.and_then(ImageSize::px),
-                                        ..default()
-                                    }),
-                                );
-                                put(
-                                    &mut span,
-                                    (image.width.is_some() || image.height.is_some()).then(|| {
-                                        InlineImageSized {
-                                            width: image.width,
-                                            height: image.height,
-                                        }
-                                    }),
-                                );
-                            }
-                            put(&mut span, spec.background.map(TextBackgroundColor));
-                            put_marker::<Underline>(&mut span, spec.underline);
-                            put(&mut span, spec.decoration_color.map(UnderlineColor));
-                            put_marker::<Strikethrough>(&mut span, spec.line_through);
-                            put(
-                                &mut span,
-                                spec.line_through
-                                    .then_some(spec.decoration_color)
-                                    .flatten()
-                                    .map(StrikethroughColor),
-                            );
-                            // Link maintenance: bindings/identity on link
-                            // spans, a clean removal when a run stops
-                            // being a link.
-                            match &spec.link {
-                                Some(link) => {
-                                    put(&mut span, Some(ElementSignals(link.bindings.clone())));
-                                    put(&mut span, Some(link.element.clone()));
-                                    put(&mut span, Some(DomNode(link.handle)));
-                                }
-                                None => {
-                                    put::<ElementSignals>(&mut span, None);
-                                    put::<HtmlElement>(&mut span, None);
-                                    put::<DomNode>(&mut span, None);
-                                }
-                            }
-                            put(&mut span, (!pickable).then_some(Pickable::IGNORE));
-                        });
-                }
-            } else {
-                for span in children {
-                    commands.entity(span).despawn();
-                }
-                commands.entity(entity).with_children(|spans| {
-                    spawn_spans(spans, text, spec.pickable);
-                });
-            }
-            false
+    let Some(text) = &spec.text else {
+        return update_children(commands, entity, &spec.children, tree, root, connected);
+    };
+    // `TextLayout` is required by `Text`: replace, never remove.
+    let layout = if text.no_wrap {
+        TextLayout::no_wrap()
+    } else {
+        TextLayout::default()
+    };
+    let (prefix, color) = (text.prefix, text.color);
+    let font = text.font.clone();
+    let text_transitions = spec.transitions.clone();
+    target.queue(move |mut entity: EntityWorldMut| {
+        put(&mut entity, Some(Text::new(prefix)));
+        put_ref(&mut entity, Some(&font));
+        let now = entity.world().resource::<Time>().elapsed_secs();
+        if !transition_color(
+            &mut entity,
+            &text_transitions,
+            TransitionProp::TextColor,
+            [color; 4],
+            now,
+        ) {
+            put(&mut entity, Some(TextColor(color)));
         }
-        None => update_children(commands, entity, spec.children, tree, root, connected),
+        // `TextLayout` has no `PartialEq`: compare its fields.
+        let same = entity.get::<TextLayout>().is_some_and(|current| {
+            current.justify == layout.justify && current.linebreak == layout.linebreak
+        });
+        if !same {
+            entity.insert(layout);
+        }
+    });
+    // Spans carry the block's `pointer-events: none` (see
+    // `spawn_spec`); an update without it takes it back. An image
+    // span (an `InlineBox` child) can't become a `TextSpan` in
+    // place: any kind mismatch respawns every span.
+    let kinds_match = children.len() == text.spans.len()
+        && children.iter().zip(&text.spans).all(|(child, span)| {
+            tree.get(*child)
+                .is_ok_and(|(_, _, is_span, ..)| is_span == span.image.is_none())
+        });
+    if kinds_match {
+        let pickable = spec.pickable;
+        for (index, span) in children.iter().enumerate() {
+            // A span that becomes a link needs the click observers
+            // (idempotent: the marker check skips existing ones).
+            if text.spans[index].link.is_some() {
+                signals::observe_pointer_signals(&mut commands.entity(*span));
+            }
+            let shared = Arc::clone(&spec);
+            commands
+                .entity(*span)
+                .queue(move |mut span: EntityWorldMut| {
+                    // The span's spec, read through the shared block spec.
+                    let Some(spec) = shared.text.as_ref() else {
+                        return;
+                    };
+                    let spec = &spec.spans[index];
+                    if spec.image.is_none() {
+                        let content = spec.text.as_str();
+                        // `TextSpan` has no `PartialEq`: compare the text.
+                        if span
+                            .get::<TextSpan>()
+                            .is_none_or(|current| **current != *content)
+                        {
+                            span.insert(TextSpan::new(content));
+                        }
+                        put_ref(&mut span, Some(&spec.font));
+                        // A span that shared the block's color (the
+                        // inherited case) follows the block's color
+                        // transition, so runs fade with their block.
+                        let old_color = span.get::<TextColor>().map(|color| color.0);
+                        let followed = span
+                            .get::<ChildOf>()
+                            .and_then(|child_of| {
+                                span.world().get::<Transitions>(child_of.0)
+                            })
+                            .and_then(|transitions| transitions.0.iter().find(|entry| entry.property == TransitionProp::TextColor).cloned());
+                        match followed {
+                            Some(entry)
+                                if old_color == Some(entry.from[0])
+                                    && entry.from[0] != entry.to[0] =>
+                            {
+                                let mut active = span
+                                    .get::<Transitions>()
+                                    .cloned()
+                                    .unwrap_or_default();
+                                active.0
+                                    .retain(|entry| entry.property != TransitionProp::TextColor);
+                                active.0.push(ActiveTransition {
+                                    property: TransitionProp::TextColor,
+                                    from: [old_color.unwrap(); 4],
+                                    to: [spec.color; 4],
+                                    start: entry.start,
+                                    duration: entry.duration,
+                                    delay: entry.delay,
+                                    easing: entry.easing.clone(),
+                                });
+                                span.insert(active);
+                                put(&mut span, Some(TextColor(old_color.unwrap())));
+                            }
+                            _ => put(&mut span, Some(TextColor(spec.color))),
+                        }
+                    } else {
+                        let image = spec.image.as_ref().unwrap();
+                        put(
+                            &mut span,
+                            Some(InlineBox {
+                                kind: InlineBoxKind::InFlow,
+                                size: spec.box_size.unwrap_or_default(),
+                            }),
+                        );
+                        put(
+                            &mut span,
+                            Some(InlineImage {
+                                image: image.image.clone(),
+                                width: image.width.and_then(ImageSize::px),
+                                height: image.height.and_then(ImageSize::px),
+                                ..default()
+                            }),
+                        );
+                        put(
+                            &mut span,
+                            (image.width.is_some() || image.height.is_some()).then(|| {
+                                InlineImageSized {
+                                    width: image.width,
+                                    height: image.height,
+                                }
+                            }),
+                        );
+                    }
+                    put_ref(&mut span, spec.background.map(TextBackgroundColor).as_ref());
+                    put_marker::<Underline>(&mut span, spec.underline);
+                    put_ref(&mut span, spec.decoration_color.map(UnderlineColor).as_ref());
+                    put_marker::<Strikethrough>(&mut span, spec.line_through);
+                    put(
+                        &mut span,
+                        spec.line_through
+                            .then_some(spec.decoration_color)
+                            .flatten()
+                            .map(StrikethroughColor),
+                    );
+                    // Link maintenance: bindings/identity on link
+                    // spans, a clean removal when a run stops
+                    // being a link.
+                    match &spec.link {
+                        Some(link) => {
+                            put(&mut span, Some(ElementSignals(link.bindings.clone())));
+                            put_ref(&mut span, Some(&link.element));
+                            put(&mut span, Some(DomNode(link.handle)));
+                        }
+                        None => {
+                            put::<ElementSignals>(&mut span, None);
+                            put::<HtmlElement>(&mut span, None);
+                            put::<DomNode>(&mut span, None);
+                        }
+                    }
+                    put(&mut span, (!pickable).then_some(Pickable::IGNORE));
+                });
+        }
+    } else {
+        for span in children {
+            commands.entity(span).despawn();
+        }
+        commands.entity(entity).with_children(|spans| {
+            spawn_spans(spans, text, spec.pickable);
+        });
     }
+    false
 }
 
-/// Sets `value` on `entity` if it differs from what's there (inserting it if
-/// absent), or removes the component for `None`: an unchanged component
-/// keeps its change tick.
 /// Resolves `calc()`-valued layout properties per frame: `em`/`rem`
 /// against the font sizes, `%` against the containing block's content box
 /// per axis, viewport units against the UI root's size. Writes the
@@ -2639,6 +2658,28 @@ pub(crate) fn resolve_calc(
                 *field = Val::Px(value);
             }
         }
+    }
+}
+
+/// The borrow-and-compare form of [`put`]: the value is only cloned when it
+/// differs, so a shared spec's unchanged component costs one comparison.
+fn put_ref<C: Component<Mutability = bevy::ecs::component::Mutable> + PartialEq + Clone>(
+    entity: &mut EntityWorldMut,
+    value: Option<&C>,
+) {
+    match (value, entity.get_mut::<C>()) {
+        (Some(value), Some(mut current)) => {
+            if *current != *value {
+                *current = C::clone(value);
+            }
+        }
+        (Some(value), None) => {
+            entity.insert(C::clone(value));
+        }
+        (None, Some(_)) => {
+            entity.remove::<C>();
+        }
+        (None, None) => {}
     }
 }
 
@@ -2940,13 +2981,16 @@ fn walk_translation(
 #[doc(hidden)]
 #[derive(Component, Default)]
 pub struct Skeleton {
-    /// The document `items` was built from.
+    /// The document the specs were built from.
     document: Option<HtmlDocument>,
-    items: Vec<Item>,
-    /// A node that produced an item → its position in `items` (a path of
+    /// The previous build's spec tree. Clean subtrees are handed to the
+    /// diff through `Rc` clones (refcount bumps, no copies); the handles
+    /// in it are kept current by the per-build remap below.
+    specs: Vec<Arc<NodeSpec>>,
+    /// A node that produced a spec → its position in `specs` (a path of
     /// container-child indices).
     table: HashMap<tl::NodeHandle, Vec<usize>>,
-    /// The last reuse run saved at least half the items; an all-dirty
+    /// The last reuse run saved at least half the specs; an all-dirty
     /// frame (a `rebuilding` workload) turns the walk off until a retry.
     useful: bool,
     /// Builds since the last reuse attempt, for the retry cadence.
@@ -2958,13 +3002,11 @@ pub struct Skeleton {
 struct SkeletonPass<'a> {
     /// Fresh handle → the paired node of the previous document.
     pairing: &'a HashMap<tl::NodeHandle, tl::NodeHandle>,
-    /// The reverse, for remapping a reused item's handles.
-    reverse: &'a HashMap<tl::NodeHandle, tl::NodeHandle>,
     /// Old handles whose whole subtree content matches.
     clean: &'a HashSet<tl::NodeHandle>,
-    items: &'a [Item],
+    specs: &'a [Arc<NodeSpec>],
     table: &'a HashMap<tl::NodeHandle, Vec<usize>>,
-    /// How many items the build reused.
+    /// How many specs the build reused.
     reused: Cell<usize>,
 }
 
@@ -3059,91 +3101,74 @@ fn tag_equal(old: &tl::HTMLTag, fresh: &tl::HTMLTag) -> bool {
     })
 }
 
-/// How many items the tree holds (containers count themselves plus their
-/// children).
-fn item_count(items: &[Item]) -> usize {
-    items
+/// The spec at `path`: the first index addresses a top-level spec, each
+/// following index a container's child.
+/// How many specs the tree holds (containers count themselves plus their
+/// children; a reused spec counts once).
+fn spec_count(specs: &[Arc<NodeSpec>]) -> usize {
+    specs
         .iter()
-        .map(|item| match item {
-            Item::Block(_) => 1,
-            Item::Container { children, .. } => 1 + item_count(children),
-            #[cfg(feature = "text-input")]
-            Item::TextInput { .. } => 1,
+        .map(|spec| match &spec.children {
+            children if children.is_empty() => 1,
+            children => 1 + spec_count(children),
         })
         .sum()
 }
 
-/// A node that produced an item → its position in `items`.
-fn item_table(items: &[Item]) -> HashMap<tl::NodeHandle, Vec<usize>> {
+/// A node that produced a spec → its position in `specs`.
+fn spec_table(specs: &[Arc<NodeSpec>]) -> HashMap<tl::NodeHandle, Vec<usize>> {
     let mut table = HashMap::default();
     let mut prefix = Vec::new();
-    item_table_walk(items, &mut prefix, &mut table);
+    spec_table_walk(specs, &mut prefix, &mut table);
     table
 }
 
-fn item_table_walk(
-    items: &[Item],
+fn spec_table_walk(
+    specs: &[Arc<NodeSpec>],
     prefix: &mut Vec<usize>,
     table: &mut HashMap<tl::NodeHandle, Vec<usize>>,
 ) {
-    for (index, item) in items.iter().enumerate() {
+    for (index, spec) in specs.iter().enumerate() {
         prefix.push(index);
-        match item {
-            Item::Block(block) => {
-                if let Some(handle) = block.handle {
-                    table.insert(handle, prefix.clone());
-                }
-            }
-            Item::Container { handle, children, .. } => {
-                if let Some(handle) = *handle {
-                    table.insert(handle, prefix.clone());
-                }
-                item_table_walk(children, prefix, table);
-            }
-            #[cfg(feature = "text-input")]
-            Item::TextInput { handle, .. } => {
-                if let Some(handle) = *handle {
-                    table.insert(handle, prefix.clone());
-                }
-            }
+        if let Some(handle) = spec.handle {
+            table.insert(handle, prefix.clone());
         }
+        spec_table_walk(&spec.children, prefix, table);
         prefix.pop();
     }
 }
 
-/// The item at `path`: the first index addresses a top-level item, each
-/// following index a container child.
-fn item_at<'a>(items: &'a [Item], path: &[usize]) -> Option<&'a Item> {
-    let (first, rest) = path.split_first()?;
-    let mut current = items.get(*first)?;
-    for &index in rest {
-        match current {
-            Item::Container { children, .. } => current = children.get(index)?,
-            _ => return None,
-        }
-    }
-    Some(current)
-}
-
 impl SkeletonPass<'_> {
-    /// Pushes the cached item of the paired old node, with every handle
-    /// remapped to the fresh document (a clean subtree's nodes are all
-    /// paired, so every lookup succeeds).
+    /// The cached spec of the paired old node. The handles inside it point
+    /// into the previous document; the build remaps them up front (see
+    /// `remap_spec_handles`), so the `Arc` is handed on as is.
     fn reuse(&self, old: tl::NodeHandle, items: &mut Vec<Item>) {
         let Some(path) = self.table.get(&old) else {
             return;
         };
-        let Some(mut item) = item_at(self.items, path).cloned() else {
+        let Some(spec) = spec_rc_at(self.specs, path) else {
             return;
         };
-        remap_item(&mut item, self.reverse);
         self.reused.set(self.reused.get() + 1);
-        items.push(item);
+        items.push(Item::Cached(Arc::clone(spec)));
     }
 }
 
-/// Rewrites every DOM handle in a reused item to its fresh counterpart.
-fn remap_item(item: &mut Item, reverse: &HashMap<tl::NodeHandle, tl::NodeHandle>) {
+fn spec_rc_at<'a>(specs: &'a [Arc<NodeSpec>], path: &[usize]) -> Option<&'a Arc<NodeSpec>> {
+    let (first, rest) = path.split_first()?;
+    let mut current = specs.get(*first)?;
+    for &index in rest {
+        current = current.children.get(index)?;
+    }
+    Some(current)
+}
+
+/// Rewrites every DOM handle in the cached specs to the fresh document's
+/// counterpart (a clean subtree's nodes are all paired, so every lookup
+/// succeeds). Runs up front, when the skeleton's `Rc`s are exclusively
+/// held: the reused specs are then handed on with current handles, and the
+/// entities' `DomNode`s never go stale.
+fn remap_spec_handles(specs: &mut [Arc<NodeSpec>], reverse: &HashMap<tl::NodeHandle, tl::NodeHandle>) {
     let remapped = |handle: &mut Option<tl::NodeHandle>| {
         if let Some(handle) = handle.as_mut()
             && let Some(new) = reverse.get(handle)
@@ -3151,25 +3176,21 @@ fn remap_item(item: &mut Item, reverse: &HashMap<tl::NodeHandle, tl::NodeHandle>
             *handle = *new;
         }
     };
-    match item {
-        Item::Block(block) => {
-            remapped(&mut block.handle);
-            for run in &mut block.runs {
-                if let Some(link) = &mut run.extras.link {
-                    let mut handle = Some(link.handle);
-                    remapped(&mut handle);
-                    link.handle = handle.unwrap_or(link.handle);
-                }
+    for spec in specs {
+        let Some(spec) = Arc::get_mut(spec) else {
+            // Shared with a previous frame's items (impossible: they are
+            // dropped with the build); leave the handle stale.
+            continue;
+        };
+        remapped(&mut spec.handle);
+        for run in spec.text.iter_mut().flat_map(|text| &mut text.spans) {
+            if let Some(link) = &mut run.link {
+                let mut handle = Some(link.handle);
+                remapped(&mut handle);
+                link.handle = handle.unwrap_or(link.handle);
             }
         }
-        Item::Container { handle, children, .. } => {
-            remapped(handle);
-            for child in children {
-                remap_item(child, reverse);
-            }
-        }
-        #[cfg(feature = "text-input")]
-        Item::TextInput { handle, .. } => remapped(handle),
+        remap_spec_handles(&mut spec.children, reverse);
     }
 }
 
@@ -3250,7 +3271,6 @@ fn collect_node(
     if let Some(skeleton) = ctx.skeleton
         && let Some(&old) = skeleton.pairing.get(&handle)
         && skeleton.clean.contains(&old)
-        && skeleton.table.contains_key(&old)
     {
         skeleton.reuse(old, items);
         return;
