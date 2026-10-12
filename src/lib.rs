@@ -3,6 +3,7 @@
 //! Write UI as HTML templates; get Bevy UI nodes.
 //!
 //! ```text
+//! .md template ──pulldown-cmark once at load──▶ .html template (Tera intact)
 //! .html/.md (Tera template) ──render(TemplateContext)──▶ HTML ──tl──▶ DOM
 //!   ──Fluent (data-l10n-id, ActiveLocale)──▶ localized DOM
 //!   ──CSS (DefaultStylesheet / HtmlStylesheet, FontFamilies)──▶ Bevy UI nodes
@@ -55,7 +56,10 @@
 //! updates the UI only if the rendered HTML changed, in place: elements still
 //! in the document (matched by `id`, else by position) keep their entities,
 //! interaction state and app components, so templated per-frame values
-//! (`style="width: {{ hp }}%"`) are fine; swapping
+//! (`style="width: {{ hp }}%"`) are fine. Subtrees whose content is
+//! unchanged reuse the previous build's specs outright (no re-styling, no
+//! diffing), so a frame's cost tracks what changed, not the document size;
+//! swapping
 //! [`ActiveLocale`](l10n::ActiveLocale) re-localizes; swapping
 //! [`DefaultStylesheet`](style::DefaultStylesheet) restyles — all at runtime.
 //! After every content update an [`HtmlUiBuilt`](html::HtmlUiBuilt) event
@@ -97,15 +101,17 @@
 //!   in the whole template (`{{ <ui.button … /> }}`) — include a component
 //!   library to share widgets.
 //! - **Markdown** ([`template`](mod@template)): a `.md`/`.markdown` template is
-//!   the same Tera machinery, and its rendered output converts to HTML
-//!   (CommonMark + tables, strikethrough, task lists, footnotes) before
-//!   parsing — headings, emphasis, lists and `![images](…)` come out as
-//!   ordinary elements carrying `class="markdown"` (so documents style
-//!   their Markdown content apart from raw-HTML `<img>` tags). Raw HTML
-//!   passes through, so a Markdown page can embed real UI (`data-on-click`
-//!   buttons, containers). Fluent
-//!   bundles opt their message values into Markdown with the manifest's
-//!   `markdown: bool` (default off).
+//!   the same Tera machinery; its Markdown converts to HTML once, at asset
+//!   load (CommonMark + tables, strikethrough, task lists, footnotes),
+//!   with Tera syntax passing through untouched — headings, emphasis,
+//!   lists and `![images](…)` come out as ordinary elements carrying
+//!   `class="markdown"` (so documents style their Markdown content apart
+//!   from raw-HTML `<img>` tags), and the per-frame path is Tera-only.
+//!   Raw HTML passes through, so a Markdown page can embed real UI
+//!   (`data-on-click` buttons, containers). Fluent bundles opt their
+//!   message values into Markdown with the manifest's `markdown: bool`
+//!   (default off): each message's pattern converts once at bundle load
+//!   and the formatted arguments substitute into the cached HTML.
 //! - **Interaction signals** ([`signals`]): elements declare hooks with
 //!   `data-on-click`/`-auxclick`/`-press`/`-release`/`-enter`/`-leave`
 //!   naming an app-side signal (`click` is the primary button, `auxclick`

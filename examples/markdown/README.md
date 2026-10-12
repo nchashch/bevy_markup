@@ -34,7 +34,8 @@ switching the language switches the documents.
   like in an HTML template.
 - **Fluent values in Markdown** — the bundle sets `markdown: true`; each
   message value is a Markdown document (heading, emphasis, lists, block
-  quote, strike-through) that converts to HTML before the walk. The FTL
+  quote, strike-through) whose pattern converts to HTML once, at bundle
+  load (the formatted arguments substitute into the cached HTML). The FTL
   authoring rules live in AGENTS.md's Gotchas (indented lists, no
   line-initial `*`, `{"{"}` for literal braces).
 - **Raw HTML inside Markdown** — the tabs and the Language button are HTML

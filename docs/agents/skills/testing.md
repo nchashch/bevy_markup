@@ -378,6 +378,21 @@ it only changes whether a `debug!` line is logged). Copy survivors into
 twice-weekly CI run: `gh run download <run-id>` and read each shard's
 `missed.txt`.
 
+## Benchmarks (`benches/`)
+
+Criterion (`benches/pipeline.rs`) and Divan (`benches/pipeline-divan.rs`)
+over the update pipeline (ADR 0018/0019). The workloads: idle (nothing
+changes), changing (one value per frame), rebuilding (every element
+changes), localized and markdown (a 600-section localized Markdown
+document), plus the pure stages (render, parse) and the interaction
+harnesses (hover, focus navigation). Read the two together: Criterion for
+times, Divan for the allocation counts that explain them.
+
+Cross-session drift is real (±10–27% was measured on the pure
+`render`/`parse` stages during the ADR 0021 work) — performance claims
+need a same-session A/B (the `frame/*` filter + the two-binary
+on/off pattern), not a comparison against an old stored baseline.
+
 ## Coverage (`scripts/coverage.py`)
 
 Source-based line coverage (`cargo-llvm-cov`) of the library code in `src/`,

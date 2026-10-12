@@ -152,15 +152,20 @@ bevy_markup implements a useful subset of the web, not all of it:
   `top`/`left`/…, `z-index`; borders with colors and rounded corners
   (including elliptical `h / v` radii), background colors; 9-slice frames
   through `border-image`; `outline`; `pointer-events: none`; `opacity`;
-  inline `style="…"` attributes (templated values update in place). Images
-  size through the CSS `width`/`height` (`px`, or `%` of the containing
-  block — `width: 100%` fits a panel). A template styles its own root with
-  `<html class="…">` (placement, stacking, pickability); whatever CSS
-  doesn't declare stays as your code set it. Combinators (`.panel p`) and
-  `calc()` aren't supported yet; unsupported CSS is skipped, never guessed.
-  One deliberate difference from browsers: elements don't shrink below
-  their content unless a rule says `flex-shrink: 1` (a scrolling panel
-  needs it on every level down to the panel).
+  `visibility: hidden`; inline `style="…"` attributes (templated values
+  update in place); `calc()` in sizes, margins and insets (mixed-unit
+  expressions re-resolve in place as the context changes); `var()` (the
+  UI's `TemplateContext` first, then the stylesheet's own `--name:`
+  declarations, then a fallback); `text-decoration` (underline,
+  line-through, with a declared color); `transition` for color changes.
+  Images size through the CSS `width`/`height` (`px`, or `%` of the
+  containing block — `width: 100%` fits a panel). A template styles its
+  own root with `<html class="…">` (placement, stacking, pickability);
+  whatever CSS doesn't declare stays as your code set it. Unsupported CSS
+  is skipped, never guessed. One deliberate difference from browsers:
+  elements don't shrink below their content unless a rule says
+  `flex-shrink: 1` (a scrolling panel needs it on every level down to the
+  panel).
 - **Focus:** as above — `data-on-click`/`tabindex` focusable, `autofocus`,
   `:focus`/`:focus-visible`, modal roots, focus kept across updates.
 - **Text input:** the `text-input` feature, as above (fields, cursor and
@@ -193,17 +198,17 @@ the exact CSS subset.
 
 ### Not built yet
 
-- CSS sibling combinators (`+`, `~`), `calc()` (the same-unit subset is
-  realistic next; mixed-unit needs newer Bevy), named grid lines beyond
-  the template (browsers extend the implicit grid; bevy_markup places
-  those `auto`);
+- CSS sibling combinators (`+`, `~`), grid lines/names beyond the
+  template (browsers extend the implicit grid; bevy_markup places those
+  `auto`);
 - form controls beyond text fields and buttons (no selects, checkboxes, …);
   Enter-in-a-field doesn't submit a form;
 - scrollbars as a built-in widget (the demo builds its own from HTML and
   CSS);
-- performance for large documents: any change re-renders and re-styles the
-  whole template (unchanged elements are not rewritten, but the work to
-  find them grows with the document).
+- frame cost still scales with the whole document for *structural*
+  changes (elements appearing or disappearing) and for style-side changes
+  like a `:hover` or a stylesheet swap; value-only changes in a large
+  document are cheap (unchanged subtrees skip styling and diffing).
 
 ## Examples
 
@@ -212,6 +217,9 @@ cargo run --example quickstart   # the code above, plus buttons the keyboard and
 cargo run --example grid         # CSS grid: three screens (auto-fill slots, a paper doll, a quest board)
 cargo run --example grid-names   # named grid lines and areas: a board whose panels place by name
 cargo run --example combinators  # descendant and child combinators: two rules reaching different depths
+cargo run --example calc         # calc() in layout: a sidebar + fluid column, steppers re-resolve in place
+cargo run --example hot-reload --features hot-reload
+                                 # edited templates/stylesheets restyle the running game
 cargo run --example menu         # focus, a slider and a stepper, modal dialog, data-tooltip, a component library
 cargo run --example inputs       # text fields with a live preview and reset buttons (needs --features text-input)
 cargo run --example links        # <a href>: clicking and keyboard cycling, the open signal, a status line
@@ -370,6 +378,10 @@ layers, each catching a different kind of mistake:
   lines no layer reaches. Every real defect found this way is written up
   with its fix and regression test (`docs/agents/bugs/`, 30 reports so
   far).
+- **Benchmarks** — Criterion and Divan suites over the update pipeline
+  (idle, changing, rebuilding, localized and Markdown workloads) guard
+  the per-frame cost and its allocations; regression claims are measured,
+  not asserted.
 
 ```sh
 cargo test                                  # unit tests, vectors, properties, state machine
@@ -380,18 +392,19 @@ scripts/coverage.py --html                  # coverage per testing layer
 
 CI runs the warning-free build, all tests and the docs on every push;
 nightly it renders the golden images, re-checks the oracles against the
-current Chrome, fuzzes each target for 15 minutes and publishes a coverage
-report; twice a week it runs the full mutation-testing campaign. Dependency
-builds are cached between jobs. `docs/agents/skills/testing.md` explains
+current Chrome, fuzzes each target for 15 minutes, runs both benchmark
+suites (reports as artifacts) and publishes a coverage report; twice a
+week it runs the full mutation-testing campaign. Dependency builds are
+cached between jobs. `docs/agents/skills/testing.md` explains
 every layer in detail.
 
 ## Project layout
 
 ```
 src/            the library
-examples/       quickstart, grid, grid-names, combinators, menu, live,
-                world, inline, markdown, inputs, links, forms and demo,
-                one directory and README each
+examples/       quickstart, grid, grid-names, combinators, calc, hot-reload,
+                menu, live, world, inline, markdown, inputs, links, forms
+                and demo, one directory and README each
                 (+ shared/input.rs, shared/harness.rs)
 tests/          headless harness, test vectors, property and state machine tests
 fuzz/           cargo-fuzz targets and committed seeds (other fuzzers in

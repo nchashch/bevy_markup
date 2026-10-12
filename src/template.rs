@@ -28,8 +28,9 @@ use crate::l10n::LocalizedText;
 use crate::md;
 
 /// A compiled Tera template loaded from an `.html`/`.htm` file — or a
-/// Markdown `.md`/`.markdown` file ([ADR 0014]), which renders to HTML
-/// before parsing. Use it via [`HtmlUi`](crate::html::HtmlUi).
+/// Markdown `.md`/`.markdown` file ([ADR 0014]), whose Markdown converts
+/// to HTML once, at asset load (Tera syntax passes through; ADR 0020).
+/// Use it via [`HtmlUi`](crate::html::HtmlUi).
 ///
 /// [ADR 0014]: docs/agents/adr/0014-markdown-via-pulldown-cmark.md
 #[derive(Asset, TypePath)]
@@ -254,8 +255,9 @@ impl AssetLoader for HtmlTemplateLoader {
 }
 
 /// Loads Markdown templates: the same Tera machinery (includes, extends,
-/// one Tera set per template); [`HtmlTemplate::render`] converts the output
-/// to HTML.
+/// one Tera set per template); each file's Markdown converts to HTML at
+/// load ([`md::to_html_template`](crate::md::to_html_template)), so
+/// [`HtmlTemplate::render`] is Tera-only.
 #[derive(Default, TypePath)]
 pub(crate) struct MarkdownTemplateLoader;
 

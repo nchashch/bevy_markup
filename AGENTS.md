@@ -1320,11 +1320,15 @@ Known limits (each skipped/ignored value is logged at `debug`):
   span count (e.g. a run merge) respawns the block's spans, not the block.
   Updates write a kept element's components only where they differ
   (`build.rs` `put`, `set_if_neq`; `ImageNode` frames are re-inserted, it has
-  no `PartialEq`), so unchanged elements keep their change ticks — measured
-  (throwaway release bench, 1200 frames, one templated value changing per
-  frame): 600 elements 9.85 → 4.06 ms/frame, 120 elements 2.09 → 0.97
-  (idle 0.44 / 0.19). What's left is re-rendering, re-parsing and
-  re-styling the whole document on any change (O(document)). Nested `HtmlUi`s go with a replaced slot; re-nest
+  no `PartialEq`), so unchanged elements keep their change ticks. ADR 0021
+  went further: unchanged subtrees reuse the previous build's specs by
+  reference and skip the cascade, the spec construction and the diff visit
+  (the skeleton, `SpecNode::Fresh`/`Cached`, `put_ref`); measured
+  (criterion, 600 elements, skeleton on/off): changing 2.09 → 1.17 ms,
+  markdown 8.75 → 6.27 ms, all-dirty/localized/idle within noise. The
+  remaining per-frame costs are the render, the parse, the localize walk
+  and Bevy's own schedule/layout/text — none of them the rebuild.
+  Nested `HtmlUi`s go with a replaced slot; re-nest
   them on `HtmlUiBuilt`.
 - **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
   CJK (wrapped CJK source lines become spaces); `decode_entities` handles only
@@ -1354,10 +1358,11 @@ Next steps (roughly in order of value):
 6. ~~Keyed reconciliation for content changes: keep entities for unchanged
    elements (key `NodeSpec`s by DOM path) so app-attached state survives
    template/locale changes too and large documents stay cheap. (Restyle in
-   place for style-only changes is done.)~~ Measured and rejected (ADR
-   0017): the cascade it skips is already cached by element identity and
-   the diff already writes only differences — the fingerprint overhead
-   measured +28% on the changed path, so the item was dropped.
+   place for style-only changes is done.)~~ Done a different way (ADR 0021,
+   after 0017's fingerprint variant measured +28%): the skeleton pairs the
+   fresh DOM with the previous build by *content*, and unchanged subtrees
+   skip the cascade, the spec construction and the diff visit; benchmark
+   suites (ADR 0018/0019) guard it.
 7. More test vectors alongside each of the above.
 
 ## Verification
