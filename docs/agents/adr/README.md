@@ -36,7 +36,7 @@ as `[INFERENCE]`.
 | [0017](./0017-keyed-sub-document-updates.md) | Keyed sub-document updates: skip unchanged sub-trees when content changes | Rejected on measurement |
 | [0018](./0018-benchmarks-with-criterion.md) | Benchmarking with Criterion | Accepted |
 | [0019](./0019-benchmarks-with-divan.md) | Benchmarking with Divan (the second harness; allocation counts) | Accepted |
-| [0020](./0020-convert-markdown-at-template-load.md) | Convert Markdown at template load, not per render | Proposed |
+| [0020](./0020-convert-markdown-at-template-load.md) | Convert Markdown at template load, not per render | Accepted |
 | [0021](./0021-per-element-dirty-tracking.md) | Per-element dirty tracking: dependency maps at load, slot-local updates per frame | Proposed |
 
 Add new records to this index in the same commit that adds the file.
