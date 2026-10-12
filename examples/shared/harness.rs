@@ -56,8 +56,12 @@ const HEADLESS_FRAME_RATE: f64 = 1.0 / 60.0;
 /// command line (windowed, `--no-render`, `--offscreen`), then hands it to
 /// `setup` (systems, resources, the example's own wiring) and runs it.
 pub fn run(window: ExampleWindow, setup: impl FnOnce(&mut App)) {
-    let no_render = std::env::args().any(|arg| arg == "--no-render");
-    let headless = no_render || std::env::args().any(|arg| arg == "--offscreen");
+    let flag = |name: &str, env: &str| {
+        std::env::args().any(|arg| arg == name)
+            || std::env::var(env).is_ok_and(|value| !value.is_empty() && value != "0")
+    };
+    let no_render = flag("--no-render", "BEVY_MARKUP_NO_RENDER");
+    let headless = no_render || flag("--offscreen", "BEVY_MARKUP_OFFSCREEN");
     let mut app = App::new();
     if headless && !no_render {
         // Offscreen-rendered headless: full `DefaultPlugins` minus winit —
@@ -128,13 +132,17 @@ pub fn run(window: ExampleWindow, setup: impl FnOnce(&mut App)) {
             PointerInputPlugin,
             bevy::picking::InteractionPlugin,
             ScheduleRunnerPlugin::run_loop(std::time::Duration::from_secs_f64(HEADLESS_FRAME_RATE)),
+            // The widgets' button observers (a plugin group, so added on
+            // its own); part of `DefaultPlugins` in the windowed
+            // composition. Before `BevyMarkupPlugin`: with the `text-input`
+            // feature the crate's own `TextInputPlugin` add is guarded by
+            // `is_plugin_added` (lib.rs) — after the group it would panic
+            // as a duplicate.
+            bevy::ui_widgets::UiWidgetsPlugins,
             bevy_markup::BevyMarkupPlugin,
             super::input::ExampleInputPlugin,
             HarnessPlugin { headless },
         ));
-        // The widgets' button observers (a plugin group, so added on its
-        // own); part of `DefaultPlugins` in the windowed composition.
-        app.add_plugins(bevy::ui_widgets::UiWidgetsPlugins);
     } else {
         app.add_plugins((
             DefaultPlugins
@@ -159,7 +167,67 @@ pub fn run(window: ExampleWindow, setup: impl FnOnce(&mut App)) {
         ));
     }
     setup(&mut app);
-    app.run();
+    run_bounded(&mut app);
+}
+
+/// `--exit-after <frames>`: the example runs for a bounded number of
+/// frames and exits — and a generic keyboard pattern is injected, so the
+/// examples' input systems run their navigation and activation branches.
+/// A bounded QA run needs no window, no editor and no shutdown logic; the
+/// flag works with every composition.
+fn run_bounded(app: &mut App) {
+    // From the command line (`--exit-after N`) or the environment
+    // (`BEVY_MARKUP_EXIT_AFTER=N`); the env form works under runners that
+    // eat the command line (coverage's `cargo test --example` runs the
+    // example through the test harness, which parses argv itself).
+    let frames = std::env::args()
+        .position(|arg| arg == "--exit-after")
+        .and_then(|index| std::env::args().nth(index + 1))
+        .and_then(|frames| frames.parse::<u32>().ok())
+        .or_else(|| {
+            std::env::var("BEVY_MARKUP_EXIT_AFTER")
+                .ok()
+                .and_then(|frames| frames.parse::<u32>().ok())
+        });
+    let Some(frames) = frames else {
+        app.run();
+        return;
+    };
+    app.insert_resource(ExitAfter(frames));
+    app.add_systems(Update, exit_after);
+}
+
+#[derive(Resource)]
+struct ExitAfter(u32);
+
+fn exit_after(
+    frames: Res<bevy::diagnostic::FrameCount>,
+    limit: Res<ExitAfter>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if frames.0 >= limit.0 {
+        exit.write(AppExit::Success);
+        return;
+    }
+    // One key pressed for a frame every 40 frames, cycling navigation,
+    // activation and the language/menu keys — enough for the examples'
+    // systems to run their branches without scripting each example.
+    const KEYS: [KeyCode; 6] = [
+        KeyCode::ArrowDown,
+        KeyCode::ArrowRight,
+        KeyCode::ArrowUp,
+        KeyCode::Enter,
+        KeyCode::ArrowLeft,
+        KeyCode::Space,
+    ];
+    let step = frames.0 % 40;
+    let key = KEYS[(frames.0 / 40) as usize % KEYS.len()];
+    if step == 20 {
+        keys.press(key);
+    } else {
+        keys.release(key);
+    }
 }
 
 /// Adds [`bevy_mcp_harness::BevyMcpHarnessPlugin`] when the `dev-tools`

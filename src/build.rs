@@ -1890,6 +1890,9 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
                 let focus = focus.clone();
                 let custom = custom.clone();
                 let value = value.clone();
+                let font_size = *font_size;
+                let handle = *handle;
+                let pointer_events = *pointer_events;
                 let mut node = Node {
                     flex_direction: FlexDirection::Column,
                     flex_shrink: 0.0,

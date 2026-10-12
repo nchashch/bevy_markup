@@ -1433,7 +1433,9 @@ Next steps (roughly in order of value):
   build` → `run` compile no dependencies. Details and the producer/consumer
   table: `docs/agents/skills/testing.md`, CI. A consumer's `::warning::`
   "no exact … build cache" means the pair's env, toolchain or keys drifted.
-- Warning-free: `cargo check --lib` (minimal Bevy features), `cargo build
+- Warning-free: `cargo check --lib` (minimal Bevy features), `cargo check
+  --lib --features text-input` (that feature's mapping arms compile only
+  under it — a plain `--lib` check never sees them), `cargo build
   --all-targets`, `cargo doc --no-deps`. `cargo test` must pass: cascade unit
   tests, the headless test vectors, and the `no_run` doc examples (see
   Testing). Library changes that alter the mapping need a vector.
