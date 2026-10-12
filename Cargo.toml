@@ -100,6 +100,10 @@ quickcheck = "1.1.0"
 # saved baselines and regression detection. default-features off drops the
 # plotters/gnuplot machinery; html_reports keeps the browsable report.
 criterion = { version = "0.8.2", default-features = false, features = ["html_reports"] }
+# The second harness (ADR 0019, reinstated): allocation counts + bytes per
+# benchmark — the direct signal for update-model work — run in parallel
+# with criterion's statistics so the two corroborate each other.
+divan = "0.1.21"
 quickcheck_macros = "1.2.0"
 # 0.4 requires proptest ≥1.6; 0.3.1 is the last line on ^1.1.
 test-strategy = "0.3.1"
@@ -107,6 +111,11 @@ test-strategy = "0.3.1"
 # Benchmarks (ADR 0018): criterion's own harness, not libtest's.
 [[bench]]
 name = "pipeline"
+harness = false
+
+# The second harness (ADR 0019): divan's, with allocation counting.
+[[bench]]
+name = "pipeline-divan"
 harness = false
 
 # The example needs Bevy's file watcher; skipped without the feature.

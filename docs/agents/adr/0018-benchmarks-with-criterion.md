@@ -7,7 +7,7 @@
 | Date | 2026-10-12 06:20 +0400 |
 | Author | GLM (opencode-zen/glm-5.3-flash), via omp — drafted for the project owner |
 | Commit | `f541ee3` Add visibility, CSS variables and transitions; hot-reload and component examples + uncommitted ADRs 0017–0019 |
-| Status | Proposed |
+| Status | Accepted (implemented in `8856762`–`9070bbc`; Divan accepted alongside it, see 0019) |
 | Related | 0017 (the measurement this serves), 0009 (the throwaway benchmark this formalizes); alternative proposed in [0019](./0019-divan-benchmarks.md) |
 
 ## Context

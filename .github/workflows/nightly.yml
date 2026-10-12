@@ -17,10 +17,10 @@ env:
 
 jobs:
   benches:
-    # ADR 0018: trend evidence, not a gate — runner timings are noisy and
-    # criterion's baselines don't transfer between runners. The reports
-    # artifact is the record; compare across nights by eye.
-    name: Benchmarks (criterion reports)
+    # ADR 0018 + 0019: trend evidence, not a gate — runner timings are
+    # noisy and criterion's baselines don't transfer between runners. The
+    # artifacts are the record; compare across nights by eye.
+    name: Benchmarks (criterion + divan)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -39,14 +39,23 @@ jobs:
       - name: Warn on a build-cache miss
         if: steps.cache.outputs.cache-hit != 'true'
         run: echo "::warning::no exact 'bench' build cache (dependencies changed since cache.yml last ran on main); building from scratch"
-      - name: Run the benchmark suite
+      - name: Run the criterion suite
         run: cargo bench --bench pipeline -- --warm-up-time 0.5 --measurement-time 2
+      - name: Run the divan suite (allocation counts)
+        run: |
+          cargo bench --bench pipeline-divan -- --max-time 2 | tee target/divan.txt
       - name: Upload the reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: criterion-reports
           path: target/criterion/
+      - name: Upload the divan output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: divan-report
+          path: target/divan.txt
 
   golden:
     # Restores the `dev` cache the CI `test` job saves: needs CI's

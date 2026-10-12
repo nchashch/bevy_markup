@@ -52,9 +52,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig-dev
-      - name: Compile the bench targets
+      - name: Compile the bench targets (criterion and divan)
         if: steps.cache.outputs.cache-hit != 'true'
-        run: cargo bench --bench pipeline --no-run
+        run: cargo bench --no-run
 
   mutants:
     name: Mutants build (profile mutants, dynamic Bevy)
