@@ -308,12 +308,12 @@ pub(crate) fn frame_files(size: usize, workload: &str) -> Vec<(String, String)> 
     ]
 }
 
-/// The specialized workloads' file lists (600 elements): the localized
-/// paragraphs or the Markdown document, with their bundle.
-pub(crate) fn specialized_files(workload: &str) -> Vec<(String, String)> {
+/// The specialized workloads' file lists: the localized paragraphs or the
+/// Markdown document at the given size, with their bundle.
+pub(crate) fn specialized_files(size: usize, workload: &str) -> Vec<(String, String)> {
     let (path, page, markdown) = match workload {
-        "markdown" => ("page.md", markdown_template(600), true),
-        _ => ("page.html", localized_template(600), false),
+        "markdown" => ("page.md", markdown_template(size), true),
+        _ => ("page.html", localized_template(size), false),
     };
     let mut files = vec![(path.to_owned(), page), ("style.css".to_owned(), CSS.to_owned())];
     files.extend(locale_files(markdown));

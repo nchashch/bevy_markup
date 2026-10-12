@@ -87,10 +87,10 @@ fn rebuilding(bencher: Bencher, size: usize) {
 }
 
 /// Localized: every paragraph a `data-l10n-id` message whose arg changes
-/// per frame (the Fluent stage, 600 paragraphs).
-#[divan::bench(max_time = 2)]
-fn localized(bencher: Bencher) {
-    let files = specialized_files("localized");
+/// per frame (the Fluent stage).
+#[divan::bench(args = SIZES, max_time = 2)]
+fn localized(bencher: Bencher, size: usize) {
+    let files = specialized_files(size, "localized");
     let (mut app, root) = bench_app(&shared::borrowed(&files));
     let mut n = 0_i64;
     bencher.bench_local(|| {
@@ -102,9 +102,9 @@ fn localized(bencher: Bencher) {
 
 /// Markdown: a `.md` template whose Fluent values are Markdown too (the
 /// pulldown-cmark stage, per frame).
-#[divan::bench(max_time = 2)]
-fn markdown(bencher: Bencher) {
-    let files = specialized_files("markdown");
+#[divan::bench(args = SIZES, max_time = 2)]
+fn markdown(bencher: Bencher, size: usize) {
+    let files = specialized_files(size, "markdown");
     let (mut app, root) = bench_app_loading(&shared::borrowed(&files), template_path("markdown"));
     let mut n = 0_i64;
     bencher.bench_local(|| {
@@ -135,9 +135,9 @@ use bevy_markup::prelude::*;
 /// enter, `update_pseudo_states` holds the `:hover` styles, and the
 /// tooltip `HtmlUi` stays anchored — the per-frame cost every mouse-driven
 /// app pays.
-#[divan::bench(max_time = 2)]
-fn hover_stable(bencher: Bencher) {
-    let files = hover_files(600);
+#[divan::bench(args = SIZES, max_time = 2)]
+fn hover_stable(bencher: Bencher, size: usize) {
+    let files = hover_files(size);
     let (mut app, _root) =
         shared::bench_app_pointer(&shared::borrowed(&files), "page.html");
     insert_tooltips(&mut app);
@@ -154,9 +154,9 @@ fn hover_stable(bencher: Bencher) {
 /// (nothing bound or tooltip-carrying there): enter/leave signals and
 /// `:hover` pseudo-state restyles every frame, tooltip despawn and
 /// respawn — the active paths.
-#[divan::bench(max_time = 2)]
-fn hover_flicker(bencher: Bencher) {
-    let files = hover_files(600);
+#[divan::bench(args = SIZES, max_time = 2)]
+fn hover_flicker(bencher: Bencher, size: usize) {
+    let files = hover_files(size);
     let (mut app, _root) =
         shared::bench_app_pointer(&shared::borrowed(&files), "page.html");
     insert_tooltips(&mut app);
@@ -187,9 +187,9 @@ fn bound_row_center(app: &mut App, index: usize) -> Option<Vec2> {
 /// Directional focus navigation every frame (the keyboard/gamepad path a
 /// game menu drives): `HtmlFocus::navigate` walks the focus chain and
 /// restyles `:focus-visible` per frame.
-#[divan::bench(max_time = 2)]
-fn focus_navigation(bencher: Bencher) {
-    let files = hover_files(600);
+#[divan::bench(args = SIZES, max_time = 2)]
+fn focus_navigation(bencher: Bencher, size: usize) {
+    let files = hover_files(size);
     let (mut app, _root) = bench_app_loading(&shared::borrowed(&files), "page.html");
     app.add_systems(
         Update,
@@ -202,9 +202,9 @@ fn focus_navigation(bencher: Bencher) {
 
 /// Ten overlays anchored to ten rows (the HUD pattern): `place_anchored`
 /// reads the last frame's layout and re-places every overlay per frame.
-#[divan::bench(max_time = 2)]
-fn anchored(bencher: Bencher) {
-    let files = hover_files(600);
+#[divan::bench(args = SIZES, max_time = 2)]
+fn anchored(bencher: Bencher, size: usize) {
+    let files = hover_files(size);
     let (mut app, _root) = bench_app_loading(&shared::borrowed(&files), "page.html");
     let rows = app
         .world_mut()

@@ -115,33 +115,36 @@ fn frames(c: &mut Criterion) {
         });
     }
 
-    // Localized: every paragraph a data-l10n-id message whose arg changes
-    // per frame — the Fluent stage over the whole document.
-    let localized_files = shared::specialized_files("localized");
-    let files = shared::borrowed(&localized_files);
-    let (mut app, root) = bench_app(&files);
-    let mut n = 0_i64;
-    group.bench_function(BenchmarkId::new("localized", 600), |b| {
-        b.iter(|| {
-            n += 1;
-            set_n(&mut app, root, n);
-            black_box(app.update())
-        })
-    });
+    // Localized (the Fluent stage) and markdown (the pulldown-cmark
+    // stage): every paragraph a data-l10n-id message whose arg changes per
+    // frame — at both sizes.
+    for size in SIZES {
+        let localized_files = shared::specialized_files(size, "localized");
+        let files = shared::borrowed(&localized_files);
+        let (mut app, root) = bench_app(&files);
+        let mut n = 0_i64;
+        group.bench_function(BenchmarkId::new("localized", size), |b| {
+            b.iter(|| {
+                n += 1;
+                set_n(&mut app, root, n);
+                black_box(app.update())
+            })
+        });
 
-    // Markdown: a `.md` template (converted at render) whose Fluent
-    // values are Markdown too (converted at localize, `markdown: true`).
-    let markdown_files = shared::specialized_files("markdown");
-    let files = shared::borrowed(&markdown_files);
-    let (mut app, root) = bench_app_loading(&files, shared::template_path("markdown"));
-    let mut n = 0_i64;
-    group.bench_function(BenchmarkId::new("markdown", 600), |b| {
-        b.iter(|| {
-            n += 1;
-            set_n(&mut app, root, n);
-            black_box(app.update())
-        })
-    });
+        // Markdown: a `.md` template (converted at render) whose Fluent
+        // values are Markdown too (converted at localize, `markdown: true`).
+        let markdown_files = shared::specialized_files(size, "markdown");
+        let files = shared::borrowed(&markdown_files);
+        let (mut app, root) = bench_app_loading(&files, shared::template_path("markdown"));
+        let mut n = 0_i64;
+        group.bench_function(BenchmarkId::new("markdown", size), |b| {
+            b.iter(|| {
+                n += 1;
+                set_n(&mut app, root, n);
+                black_box(app.update())
+            })
+        });
+    }
 
     group.finish();
 }
