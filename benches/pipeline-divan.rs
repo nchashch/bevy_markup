@@ -114,3 +114,151 @@ fn markdown(bencher: Bencher) {
     });
 }
 
+
+// --- Interaction benches -------------------------------------------------
+//
+// These are possible with criterion too, but they earn their keep only
+// under divan: allocation counts per frame are deterministic where wall
+// time is noisy, each run is cheap (`max_time`, no warm-up), and what
+// they measure is "what does this interactive system allocate and trigger
+// per frame" — a coverage/metrics question, not a statistics one. They
+// cover the interactive systems the criterion suite doesn't reach
+// (`signals.rs`'s hover path, `tooltips.rs`, `anchor.rs`, `focus.rs`).
+
+use bevy::prelude::*;
+use bevy::ui::ComputedNode;
+use bevy_markup::prelude::*;
+
+
+/// A stable hover over a bound, tooltip-carrying row (the pointer parked
+/// on it via a real `CursorMoved` event): `hover_signals` tracks the
+/// enter, `update_pseudo_states` holds the `:hover` styles, and the
+/// tooltip `HtmlUi` stays anchored — the per-frame cost every mouse-driven
+/// app pays.
+#[divan::bench(max_time = 2)]
+fn hover_stable(bencher: Bencher) {
+    let files = hover_files(600);
+    let (mut app, _root) =
+        shared::bench_app_pointer(&shared::borrowed(&files), "page.html");
+    insert_tooltips(&mut app);
+    let center = bound_row_center(&mut app, 0).expect("a bound row laid out");
+    shared::move_pointer(&mut app, center);
+    let hover_center = move |app: &mut App| shared::move_pointer(app, center);
+    bencher.bench_local(|| {
+        hover_center(&mut app);
+        black_box(app.update());
+    });
+}
+
+/// A pointer flickering between a tooltip row and the window corner
+/// (nothing bound or tooltip-carrying there): enter/leave signals and
+/// `:hover` pseudo-state restyles every frame, tooltip despawn and
+/// respawn — the active paths.
+#[divan::bench(max_time = 2)]
+fn hover_flicker(bencher: Bencher) {
+    let files = hover_files(600);
+    let (mut app, _root) =
+        shared::bench_app_pointer(&shared::borrowed(&files), "page.html");
+    insert_tooltips(&mut app);
+    let center = bound_row_center(&mut app, 0).expect("a bound row laid out");
+    let away = Vec2::new(5.0, 5.0);
+    shared::move_pointer(&mut app, center);
+    let mut flip = false;
+    bencher.bench_local(|| {
+        flip = !flip;
+        shared::move_pointer(&mut app, if flip { center } else { away });
+        black_box(app.update());
+    });
+}
+
+/// The screen center of a bound row (`index` among the elements with
+/// signals): where the pointer must land to hover it.
+fn bound_row_center(app: &mut App, index: usize) -> Option<Vec2> {
+    let entity = app
+        .world_mut()
+        .query_filtered::<Entity, With<ElementSignals>>()
+        .iter(app.world())
+        .nth(index)?;
+    let node = app.world().get::<ComputedNode>(entity)?;
+    let transform = app.world().get::<bevy::ui::UiGlobalTransform>(entity)?;
+    Some(transform.translation + node.size / 2.0)
+}
+
+/// Directional focus navigation every frame (the keyboard/gamepad path a
+/// game menu drives): `HtmlFocus::navigate` walks the focus chain and
+/// restyles `:focus-visible` per frame.
+#[divan::bench(max_time = 2)]
+fn focus_navigation(bencher: Bencher) {
+    let files = hover_files(600);
+    let (mut app, _root) = bench_app_loading(&shared::borrowed(&files), "page.html");
+    app.add_systems(
+        Update,
+        |mut focus: HtmlFocus| {
+            focus.navigate(bevy::math::CompassOctant::South);
+        },
+    );
+    bencher.bench_local(|| black_box(app.update()));
+}
+
+/// Ten overlays anchored to ten rows (the HUD pattern): `place_anchored`
+/// reads the last frame's layout and re-places every overlay per frame.
+#[divan::bench(max_time = 2)]
+fn anchored(bencher: Bencher) {
+    let files = hover_files(600);
+    let (mut app, _root) = bench_app_loading(&shared::borrowed(&files), "page.html");
+    let rows = app
+        .world_mut()
+        .query_filtered::<Entity, With<ElementSignals>>()
+        .iter(app.world())
+        .take(10)
+        .collect::<Vec<_>>();
+    let anchors = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, element)| {
+            (
+                element,
+                if i % 2 == 0 {
+                    AnchorPlacement::Below
+                } else {
+                    AnchorPlacement::Right
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    for (element, placement) in anchors {
+        app.world_mut().spawn((
+            Node::default(),
+            HtmlAnchor {
+                element,
+                placement,
+                gap: 8.0,
+            },
+        ));
+    }
+    bencher.bench_local(|| black_box(app.update()));
+}
+
+/// Inserts [`HtmlTooltips`] and runs a few frames so the tooltip template
+/// loads before the bench (the tooltip `HtmlUi` spawns only when it's
+/// ready).
+fn insert_tooltips(app: &mut App) {
+    let server = app.world().resource::<AssetServer>();
+    let template = server.load("tooltip.html");
+    app.insert_resource(HtmlTooltips::new(template));
+    for _ in 0..20 {
+        app.update();
+    }
+}
+
+/// The interactive workloads' files: the hover template, the stylesheet
+/// and tooltip template, and the bundle.
+fn hover_files(size: usize) -> Vec<(String, String)> {
+    let mut files = vec![
+        ("page.html".to_owned(), shared::hover_template(size)),
+        ("style.css".to_owned(), shared::CSS.to_owned()),
+        ("tooltip.html".to_owned(), shared::TOOLTIP_TEMPLATE.to_owned()),
+    ];
+    files.extend(shared::locale_files(false));
+    files
+}

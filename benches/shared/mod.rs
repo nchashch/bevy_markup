@@ -3,7 +3,13 @@
 //! and headless app composition, so the two harnesses measure the same
 //! thing and their numbers corroborate each other (ADR 0018/0019).
 
+// One shared harness for two bench targets: some helpers serve only one
+// of them (the interaction benches are divan-only), so the module allows
+// dead code instead of per-target cfgs.
+#![allow(dead_code)]
+
 use bevy::asset::AssetMetaCheck;
+use bevy::window::{PrimaryWindow, WindowEvent, WindowRef};
 use bevy::asset::uuid::Uuid;
 use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
 use bevy::image::{CompressedImageFormats, ImageLoader};
@@ -329,4 +335,63 @@ pub(crate) fn workload_page(size: usize, workload: &str) -> String {
         "changing" => shell_template(size, true),
         _ => shell_template(size, false),
     }
+}
+
+/// The interactive workloads' markup: N bound rows (`data-on-click` makes
+/// them focusable and hover-bound); two carry tooltips, and the counter
+/// paragraph too. For the hover and focus benches.
+pub(crate) fn hover_template(elements: usize) -> String {
+    format!(
+        r#"{prelude}
+{{% for i in range(end={elements}) %}}<p class="row" data-on-click="ping" data-tooltip="tip" data-l10n-args='{{"i": {{{{ i }}}}}}'>item {{{{ i }}}} of {{{{ n }}}}</p>
+{{% endfor %}}"#,
+        prelude = SHELL_PRELUDE
+    )
+}
+
+/// The tooltips' template (the menu's shape: the Fluent message the
+/// `data-tooltip` key names).
+pub(crate) const TOOLTIP_TEMPLATE: &str =
+    r#"<html class="tooltip"><p class="tooltip-text" data-l10n-id="{{ key }}">{{ key }}</p></html>"#;
+
+/// [`bench_app_loading`], plus a primary window and the camera targeting
+/// it — the `tests/common` `with_pointer` composition: real picking input
+/// runs (`WindowEvent`s drive the full backend → `HoverMap` chain).
+pub(crate) fn bench_app_pointer(
+    files: &[(&str, &str)],
+    template: &str,
+) -> (App, Entity) {
+    let (mut app, root) = bench_app_loading(files, template);
+    app.world_mut().spawn((
+        Window {
+            resolution: bevy::window::WindowResolution::new(VIEWPORT.x, VIEWPORT.y),
+            ..default()
+        },
+        PrimaryWindow,
+    ));
+    let mut target = app
+        .world_mut()
+        .query_filtered::<&mut RenderTarget, With<bevy::ui::IsDefaultUiCamera>>()
+        .single_mut(app.world_mut())
+        .expect("the bench camera");
+    *target = RenderTarget::Window(WindowRef::Primary);
+    (app, root)
+}
+
+/// Writes a `CursorMoved` window event (what winit would send) and runs
+/// one frame — the pointer path the hover benches drive per iteration.
+pub(crate) fn move_pointer(app: &mut App, position: Vec2) {
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world_mut())
+        .expect("primary window");
+    app.world_mut()
+        .resource_mut::<Messages<WindowEvent>>()
+        .write(WindowEvent::CursorMoved(bevy::window::CursorMoved {
+            window,
+            position,
+            delta: None,
+        }));
+    app.update();
 }
