@@ -296,16 +296,20 @@ Bevy systems in `PostUpdate`:
 
 ```mermaid
 flowchart LR
-  T[HTML / Markdown template] -->|Tera + TemplateContext| H[HTML document]
-  H -->|Fluent: data-l10n-id| L[localized document]
+  MD[.md / .markdown template] -->|pulldown-cmark<br>once at asset load| T[HTML template<br>Tera syntax intact]
+  T -->|Tera render × TemplateContext| H[HTML document]
+  H -->|tl parse| D[DOM]
+  D -->|Fluent: data-l10n-id × ActiveLocale| L[localized document]
   L --> B[build]
   C[CSS stylesheet] -->|cascade| B
-  B --> U[Bevy UI entities]
+  B -->|skeleton reuse: skip unchanged subtrees| U[Bevy UI entities]
 ```
 
 1. **Render.** The template is a [Tera](https://keats.github.io/tera/)
-   template; a `.md` page converts to HTML first (CommonMark + GFM tables,
-   strikethrough, task lists, footnotes, via pulldown-cmark).
+   template. A `.md`/`.markdown` page is converted to HTML once, at asset
+   load (CommonMark + GFM tables, strikethrough, task lists, footnotes,
+   via pulldown-cmark; Tera syntax passes through), so the per-frame path
+   is Tera-only.
 2. **Localize.** `data-l10n-id` elements get the Fluent translation of the
    active locale, `data-l10n-args` as arguments, following the conventions
    of Mozilla's `fluent-dom`. Translations may carry inline markup, styled
@@ -324,8 +328,10 @@ flowchart LR
 Updates are in place: the new document is reconciled with the existing
 entities (matched by `id`, else by position), so elements keep their
 entities, hover and focus state, and whatever your code attached; only what
-appeared or disappeared is spawned or despawned. Styling changes restyle
-the same entities.
+appeared or disappeared is spawned or despawned. Subtrees whose content is
+unchanged are reused as-is (their specs skip the cascade and the diff), so
+a frame's cost scales with what changed, not with the document. Styling
+changes restyle the same entities.
 
 **Dependencies.** The library needs only a minimal slice of Bevy; the
 examples get the full thing through dev-dependencies, so nothing the
