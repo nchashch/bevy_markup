@@ -40,6 +40,12 @@ LAYERS = {
     "stateful": ["--test", "stateful"],
     "content-lint": ["--test", "content_lint"],
     "fuzz-corpora": ["--features", "fuzzing", "--test", "fuzz_corpus", "--", "--ignored"],
+    # The criterion benches (ADR 0018): what the benchmarks exercise (short
+    # sampling — coverage doesn't care how long each benchmark runs).
+    "benchmarks": [
+        "--bench", "pipeline", "--",
+        "--warm-up-time", "0.1", "--measurement-time", "0.3",
+    ],
 }
 
 
