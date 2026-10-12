@@ -7,7 +7,7 @@
 | Date | 2026-10-12 08:23 +0400 |
 | Author | GLM (opencode-zen/glm-5.3-flash), via omp — drafted for the project owner |
 | Commit | `975266e` Remove debug print out line tanking performance for Markdown |
-| Status | Accepted — Decisions 1–2 implemented (Tera-aware filter in `md.rs` `to_html_template`, the loader converts at load, `HtmlTemplate::render` is Tera-only); Decision 3 (Fluent values) deferred and now measured as the dominant remaining cost |
+| Status | Accepted — Decisions 1–3 implemented (Tera-aware filter + statement separation in `md.rs`, the loader converts at load, per-message Fluent-value substitution cache); measured win: markdown/600 14.3 → 8.18 ms |
 | Related | 0014 (the semantics this changes), 0018/0019 (the measurements), `md.rs` |
 
 ## Context
@@ -183,3 +183,29 @@ conversion of the (3.7× larger) HTML template — net per-frame, the
 conversion cost went from ~2 ms to 0; the workload's floor is the
 per-element pipeline, and further wins there are 0017-shaped (rejected)
 or out of scope.
+
+## Implementation note 3 (2026-10-12, latest): the floor was a broken DOM
+
+Note 2's "the absolute number did not move" is wrong: both measured states
+built a **shattered document**. The bench template's Rust `\` line
+continuations strip the newline after `{% for %}`, so the statement and the
+first heading shared a line; pulldown parsed statement + heading + paragraph
+as *one* paragraph, the filter wrapped it in `<p class="markdown">`, and the
+Tera loop repeated that opening `<p>` 600 times — no `<h2>`, unclosed
+paragraphs, ~4800 anonymous items instead of ~1800 blocks. Every
+`frame/markdown` number above (13.5, 13.2, 8.8-era comparisons) ran on that
+shape, which is also why the localized/markdown per-element costs disagreed.
+
+Fix (`md.rs` `separate_statements`, before pulldown): every Tera *statement*
+(`{% … %}`, `{# … #}`, `-` variants included) is placed on its own line, so
+it cannot merge with Markdown content — the shape the old expand-then-
+convert pipeline always produced. Interpolations (`{{ … }}`) stay inline.
+The mixed-Tera unit test now asserts statement-line semantics (plain text
+between statements is its own paragraph, as after a Tera expansion).
+
+Final numbers (criterion, same settings): `frame/markdown/600`
+**13.5 → 8.18 ms (−39%)** vs the pre-ADR state and **−43%** vs the 14.3 ms
+pre-ADR-0020 baseline; `frame/markdown/120` 2.71 → 1.81 ms. The
+conversion now measures as a clear win end to end; Decision 3's
+substitution cache removes the value conversions, and
+`separate_statements` makes the load-time conversion shape-correct.

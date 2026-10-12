@@ -44,7 +44,41 @@ pub(crate) fn to_html(source: &str) -> String {
 /// Text inside code blocks and code spans is Tera-literal: it stays
 /// escaped text, like any Markdown code content.
 pub(crate) fn to_html_template(source: &str) -> String {
-    convert(source, true)
+    convert(&separate_statements(source), true)
+}
+
+/// Puts every Tera *statement* (`{% … %}`, `{# … #}`, including the `-`
+/// whitespace-control variants) on its own line, so it cannot merge with
+/// neighbouring Markdown content into one block. The old pipeline expanded
+/// Tera before converting, so statements never shaped Markdown structure;
+/// converting at load must reproduce that. Interpolations (`{{ … }}`) are
+/// inline content and stay where they are.
+fn separate_statements(source: &str) -> String {
+    if !source.contains("{%") && !source.contains("{#") {
+        return source.to_owned();
+    }
+    let mut out = String::with_capacity(source.len() + 16);
+    let mut rest = source;
+    while let Some(start) = rest.find("{%").or_else(|| rest.find("{#")) {
+        let opener = &rest[start..start + 2];
+        let closer = match opener {
+            "{%" => "%}",
+            _ => "#}",
+        };
+        // A lone `{%`/`{#` without its closer is text; leave it as is.
+        let Some(inner) = rest[start + 2..].find(closer) else {
+            out.push_str(rest);
+            return out;
+        };
+        let end = start + 2 + inner + closer.len();
+        out.push_str(&rest[..start]);
+        out.push('\n');
+        out.push_str(&rest[start..end]);
+        out.push('\n');
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The shared conversion: `tera` selects whether Tera syntax passes
@@ -426,23 +460,22 @@ mod tests {
     /// ADR 0020: a template's Tera syntax survives verbatim — a
     /// pure-Tera paragraph passes unwrapped (no `<p>`, no class), inline
     /// Tera inside text passes raw while the surrounding Markdown still
-    /// constructs and classes, and code is Tera-literal.
+    /// constructs and classes, and code is Tera-literal. Tera statements
+    /// sit on their own lines (like after a Tera expansion), so they never
+    /// shape Markdown structure.
     #[test]
     fn template_mode_passes_tera_through() {
         // A pure-Tera paragraph (Tera lines and the whitespace between
-        // them): no wrapper, no class, raw syntax. Plain text inside makes
-        // it a paragraph again (with the Tera still raw inside).
+        // them): no wrapper, no class, raw syntax. Plain text between
+        // statements becomes its own paragraph, as after a Tera expansion.
         let html = to_html_template("{% if score > 3 %}\n{% endif %}\n");
         assert!(!html.contains("<p"), "PURE = {html:?}");
         assert!(html.contains("{% if score > 3 %}"), "{html}");
         assert!(html.contains("{% endif %}"), "{html}");
         let html = to_html_template("{% if score > 3 %}\nshow it\n{% endif %}\n");
-        assert!(
-            html.contains(
-                "<p class=\"markdown\">{% if score > 3 %}\nshow it\n{% endif %}",
-            ),
-            "MIXED = {html:?}"
-        );
+        assert!(html.contains("{% if score > 3 %}"), "MIXED = {html:?}");
+        assert!(html.contains("<p class=\"markdown\">show it</p>"), "MIXED = {html:?}");
+        assert!(html.contains("{% endif %}"), "MIXED = {html:?}");
 
         // A block-level loop: the wrapper-free Tera lines bracket the
         // constructed Markdown.

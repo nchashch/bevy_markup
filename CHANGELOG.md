@@ -59,6 +59,14 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   re-render.
 
 ### Fixed
+- **A Tera statement sharing a line with Markdown content broke the
+  document's structure.** The load-time conversion parsed `{% for %}##
+  Heading` (e.g. from Rust `\`-continued template strings) as one
+  paragraph, wrapping the loop in it — headings vanished, paragraphs
+  stayed unclosed, every loop iteration repeated the opening tag. Tera
+  statements (`{% … %}`, `{# … #}`) are now placed on their own lines
+  before the Markdown conversion, matching the shape the old
+  expand-then-convert pipeline produced.
 - **Markdown documents printed their entire converted HTML to stderr on
   every conversion** — a debug print left in `md::to_html` formatted the
   whole output per frame (a 600-paragraph document paid ~30% of its

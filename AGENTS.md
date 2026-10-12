@@ -444,13 +444,18 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 - Templates: compiled at load (syntax errors fail the load); name = asset path,
   so `.html` gets Tera HTML autoescaping (the loader forces `.md`/`.markdown`
   into the autoescape list). Plain HTML renders to itself; Markdown
-  (`src/md.rs::to_html`, pulldown-cmark: CommonMark + tables, strikethrough,
+  (`src/md.rs::to_html`/`to_html_template`, pulldown-cmark: CommonMark + tables, strikethrough,
   task lists, footnotes; raw HTML passes through unclassed; every element
   the conversion constructs carries `class="markdown"` — `img.markdown`
   styles a document's Markdown images apart from raw-HTML `<img>` tags)
-  converts in `render_templates` before the identical-render check. Fluent bundles set
-  `markdown: true` in the manifest to convert message values at localize
-  time.
+  converts once at template load (ADR 0020): Tera syntax survives verbatim
+  (`to_html_template`), and `separate_statements` puts every `{% … %}`/`{# … #}`
+  on its own line first so statements can't merge with Markdown content.
+  Fluent bundles set `markdown: true` in the manifest to pre-convert each
+  message's pattern at bundle load; localization substitutes the formatted
+  arguments into the cached HTML (messages with selectors or adjacent
+  placeables, or a pattern that fails to anchor the substitution, convert
+  per value as before).
 - Update triggers: rebuild on template/context change or reload when the
   rendered HTML differs from the previous render (`render_templates` compares
   `HtmlDocument::source`; an identical render leaves `RenderedHtml`
