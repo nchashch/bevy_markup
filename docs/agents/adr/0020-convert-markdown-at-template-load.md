@@ -144,3 +144,42 @@ placeholder text in place of the placeables, cache the converted HTML per
 into the cached HTML per frame — the conversion is identical for any
 argument values, so the cache hits every frame. The substitution inherits
 Decision 4's semantics (arguments are literal text, not Markdown).
+
+## Implementation note 2 (2026-10-12, later): Decision 3 implemented
+
+Decision 3 is in: the loader walks each resource's AST (re-parsed via
+`fluent_syntax::parser::parse` — the bundle's own AST is private) and
+caches, per message without selectors or adjacent placeables, the
+pattern's literal text runs (`MarkdownEntry::parts`) plus the pattern —
+its placeables replaced by marker control characters — converted once
+(`md::to_html`); `resolve_all` splits the formatted value on the anchored
+parts back to front, strips the bidi isolation marks from each gap,
+escapes it, and substitutes it at its marker. The split anchors on the
+pattern's verbatim text (fluent writes text elements as-is; the isolation
+marks wrap values, and are stripped). A message whose parts don't anchor
+the split falls back to per-value conversion, as does any message with a
+selector or adjacent placeables; a unit test covers the substitution, the
+escaping and the fallback.
+
+Verified by probe during development: the bench's 600 values all take the
+substitution path (zero cache misses, zero fallbacks) — the `md::to_html`
+calls are gone from the per-frame path entirely, as are the render
+system's: `html.rs` `render_templates` had a second per-frame conversion
+site, re-converting the whole Tera output as Markdown every frame; it is
+removed with the loader change.
+
+**The absolute number did not move** (`frame/markdown/600` ≈ 13.2 ms,
+before and after): the workload's per-frame cost is now the pipeline's
+normal per-element work (cascade, diff, layout) over ~4200 entities (600
+sections × heading + Markdown paragraph + localized paragraph, plus
+spans) — the markdown workload is simply 3.5× the element count of the
+localized one (2.4 ms over 1200 entities). Per element the two workloads
+agree (~3 µs vs ~2 µs) and the conversions no longer appear at all. The
+"before" baselines on this workload (13.1 with the debug print, 9.2
+after) are now explained: the print dominated the first, and the second
+was the single per-frame conversion of the Markdown source — whose cost
+the ADR-0020 state replaced with one conversion per *load*, plus the
+conversion of the (3.7× larger) HTML template — net per-frame, the
+conversion cost went from ~2 ms to 0; the workload's floor is the
+per-element pipeline, and further wins there are 0017-shaped (rejected)
+or out of scope.

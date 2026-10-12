@@ -75,7 +75,9 @@ src/
                    → one Tera set per template, components shared), HtmlDocument (+ outline),
                    decode_entities
   l10n.rs          LocaleBundle asset + loader (`.ftl.ron`: manifest → Fluent resources, read as
-                   dependencies), ActiveLocale, LocalizedText; localize system (data-l10n-id/-args)
+                   dependencies), ActiveLocale, LocalizedText; localize system (data-l10n-id/-args);
+                   with `markdown: true`, each message's pattern pre-converts at load and every
+                   frame substitutes the formatted args into the cached HTML (ADR 0020 Decision 3)
   style.rs         Stylesheet asset + loader, DefaultStylesheet, HtmlStylesheet; CSS subset docs
   cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
   fonts.rs         FontFamilies, FontFaces, GenericFamily

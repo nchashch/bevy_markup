@@ -72,6 +72,10 @@ lightningcss = { version = "1.0.0-alpha.72", features = ["into_owned"] }
 # Fluent values convert to the HTML the pipeline already parses. `html`
 # renders to HTML; no CLI parser (`getopts`).
 pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
+# The FTL AST (ADR 0020 Decision 3): the per-message Markdown patterns
+# pre-convert at bundle load. fluent doesn't re-export it; same version as
+# fluent's, patched below.
+fluent-syntax = "0.11.1"
 # Only for the `fuzzing` harness: `Image::new_fill` needs wgpu texture types,
 # which bevy_image does not re-export.
 wgpu-types = { version = "30.0.1", optional = true }
@@ -88,9 +92,6 @@ async-trait = "0.1.92"
 # Examples are full apps: Bevy defaults (window, renderer, …) plus system
 # font fallback so the demo's Japanese locale renders.
 bevy = { version = "0.20.0", features = ["system_font_discovery", "debug"] }
-# FTL AST for tests/content_lint.rs (message ids, pseudo-locale); fluent
-# doesn't re-export it. Same version as fluent's, patched below.
-fluent-syntax = "0.11.1"
 # Pinned: proptest-stateful 0.1.3 needs the rand-0.8 TestRng of proptest
 # ≤1.5, so every proptest-based dev crate must share that line.
 proptest = "=1.5.0"

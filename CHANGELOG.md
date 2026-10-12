@@ -43,8 +43,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   syntax passes through verbatim), so the per-frame path is Tera-only —
   a value interpolated through `{{ … }}` renders as literal text (its
   `*`/`_`/`&lt;` no longer become emphasis/tags), while the template's
-  own Markdown is unaffected. `markdown: true` Fluent values are
-  unchanged (still converted per message, still Markdown-parsed).
+  own Markdown is unaffected. `markdown: true` Fluent values' arguments
+  are literal too: the message's Markdown converts once per bundle load
+  (with placeholders) and the formatted arguments substitute into the
+  cached HTML, escaped — messages with select expressions or two
+  adjacent placeables convert per frame, as before.
 - **Breaking:** `<img>` sizes come from the CSS `width`/`height`
   properties instead of the `width`/`height` attributes (the attributes
   are removed). `width: 100%` fills the containing block's content box —

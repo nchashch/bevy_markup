@@ -32,7 +32,6 @@ use bevy::prelude::*;
 use serde::Serialize;
 
 use crate::l10n::LocalizedText;
-use crate::md;
 use crate::template::{HtmlDocument, HtmlTemplate, error_chain};
 
 /// A Bevy UI subtree rendered from an HTML template.
@@ -264,14 +263,9 @@ pub(crate) fn render_templates(
                 continue;
             }
         };
-        // Markdown templates convert to the HTML the pipeline parses (ADR
-        // 0014); the conversion feeds the identical-render check, so an
-        // edited `.md` file rebuilds only when its HTML actually changes.
-        let source = if md::is_markdown(template.name()) {
-            md::to_html(&source)
-        } else {
-            source
-        };
+        // A `.md` template converted at load (ADR 0020): the Tera output is
+        // the HTML the pipeline parses, so the identical-render check still
+        // rebuilds only when the rendered HTML actually changes.
         if matches!(&*rendered, RenderedHtml::Ready(document) if document.source() == source) {
             continue;
         }

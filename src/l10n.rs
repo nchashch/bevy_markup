@@ -93,9 +93,10 @@ use crate::template::decode_entities;
 /// (see the [locale bundles](self#locale-bundles) section). Use it via
 /// [`ActiveLocale`]. The manifest's `markdown: bool` (default off) opts the
 /// bundle's message values into Markdown: the formatted value converts to
-/// HTML (`md::to_html`) before the walk parses it as markup.
+/// HTML (`md::to_html`) before the walk parses it as markup — cached per
+/// message (ADR 0020 Decision 3), so the conversion runs once per load.
 #[derive(Asset, Clone, TypePath)]
-pub struct LocaleBundle(Arc<ConcurrentBundle>, pub(crate) bool);
+pub struct LocaleBundle(Arc<BundleState>);
 
 /// A [`FluentBundle`] over shared resources: an asset must be `Send + Sync`,
 /// so the concurrent memoizer.
@@ -105,8 +106,38 @@ impl Deref for LocaleBundle {
     type Target = ConcurrentBundle;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.0.bundle
     }
+}
+
+/// ADR 0020 Decision 3: `markdown: true` messages' patterns pre-convert at
+/// bundle load — each placeable becomes a `\u{2}index\u{3}` marker, the
+/// pattern converts to HTML once, and every frame substitutes the formatted
+/// arguments into the cached HTML. Messages with selectors, or with two
+/// placeables and no text between them (their formatted values can't be
+/// split apart textually), convert per frame instead.
+struct BundleState {
+    bundle: ConcurrentBundle,
+    markdown: Option<MarkdownCache>,
+}
+
+#[derive(Default)]
+struct MarkdownCache {
+    messages: HashMap<String, MarkdownEntry>,
+}
+
+struct MarkdownEntry {
+    /// The converted HTML, with `\u{2}index\u{3}` markers at the
+    /// placeables.
+    html: String,
+    /// The pattern's literal text runs: `parts[0]` before the first
+    /// placeable, `parts[k]` between placeables, `parts[n]` after the last.
+    parts: Vec<String>,
+}
+
+/// The marker that stands for placeable `index` in a cached pattern.
+fn marker(index: usize) -> String {
+    format!("\u{2}{index}\u{3}")
 }
 
 #[derive(Deserialize)]
@@ -138,6 +169,7 @@ impl AssetLoader for LocaleBundleLoader {
         let manifest: LocaleBundleDescriptor = ron::de::from_bytes(&bytes)?;
 
         let mut bundle = ConcurrentBundle::new_concurrent(vec![manifest.locale]);
+        let mut sources = Vec::new();
         for name in manifest.resources {
             let path = load_context.path().resolve_embed_str(&name)?;
             // Reading through the load context makes each `.ftl` a
@@ -147,7 +179,7 @@ impl AssetLoader for LocaleBundleLoader {
             let source = String::from_utf8(bytes)?;
             // A resource with syntax errors still loads: Fluent keeps its
             // valid messages and the errors name the broken ones.
-            let resource = match FluentResource::try_new(source) {
+            let resource = match FluentResource::try_new(source.clone()) {
                 Ok(resource) => resource,
                 Err((resource, errors)) => {
                     for error in errors {
@@ -156,6 +188,7 @@ impl AssetLoader for LocaleBundleLoader {
                     resource
                 }
             };
+            sources.push(source);
             // Duplicate message ids across resources: the earlier one wins.
             if let Err(errors) = bundle.add_resource(Arc::new(resource)) {
                 for error in errors {
@@ -163,7 +196,12 @@ impl AssetLoader for LocaleBundleLoader {
                 }
             }
         }
-        Ok(LocaleBundle(Arc::new(bundle), manifest.markdown))
+        Ok(LocaleBundle(Arc::new(BundleState {
+            bundle,
+            markdown: manifest
+                .markdown
+                .then(|| markdown_cache(&sources)),
+        })))
     }
 
     fn extensions(&self) -> &[&str] {
@@ -231,21 +269,23 @@ pub(crate) fn localize(
         let RenderedHtml::Ready(document) = &*rendered else {
             continue;
         };
-        localized.0 = resolve_all(document.dom(), &**bundle, bundle.1);
+        localized.0 = resolve_all(
+            document.dom(),
+            &bundle.0.bundle,
+            bundle.0.markdown.as_ref(),
+        );
     }
 }
 
 /// Resolves every `data-l10n-id` element in `dom` against `bundle`. With
-/// `markdown`, each formatted value converts to HTML first (`md::to_html`).
-fn resolve_all<R, M>(
+/// the Markdown cache (ADR 0020 Decision 3), each value substitutes its
+/// formatted arguments into the message's pre-converted HTML; without it,
+/// each formatted value converts to HTML (`md::to_html`).
+fn resolve_all(
     dom: &tl::VDom,
-    bundle: &FluentBundle<R, M>,
-    markdown: bool,
-) -> HashMap<tl::NodeHandle, Result<String, String>>
-where
-    R: Borrow<FluentResource>,
-    M: MemoizerKind,
-{
+    bundle: &ConcurrentBundle,
+    markdown: Option<&MarkdownCache>,
+) -> HashMap<tl::NodeHandle, Result<String, String>> {
     let parser = dom.parser();
     let mut out = HashMap::default();
     let mut stack: Vec<tl::NodeHandle> = dom.children().to_vec();
@@ -262,10 +302,16 @@ where
                 let text = translate(bundle, &id, args.as_deref());
                 out.insert(
                     handle,
-                    if markdown {
-                        text.map(|text| md::to_html(&text))
-                    } else {
-                        text
+                    match markdown.and_then(|cache| cache.messages.get(&id)) {
+                        Some(entry) => text.and_then(|text| {
+                            substitute(entry, &text).ok_or_else(|| {
+                                format!("`{id}`: substituting the arguments")
+                            })
+                        }),
+                        None if markdown.is_some() => {
+                            text.map(|text| md::to_html(&text))
+                        }
+                        None => text,
                     },
                 );
             }
@@ -310,6 +356,124 @@ where
         .collect())
 }
 
+/// Substitutes the formatted arguments into a cached pattern's HTML: the
+/// pattern's literal parts anchor the split of `text` (each gap is one
+/// placeable's formatted value, its bidi isolation marks stripped), and
+/// each gap replaces its `\u{2}index\u{3}` marker — escaped, per ADR
+/// 0020's Decision 4 (arguments are literal text, not Markdown).
+/// `None`: the text doesn't split (a part moved or vanished) — the caller
+/// converts the formatted text directly instead.
+fn substitute(entry: &MarkdownEntry, text: &str) -> Option<String> {
+    const ISOLATES: [char; 2] = ['\u{2068}', '\u{2069}'];
+    // The pattern's parts (all but the trailing one) anchor the split: each
+    // anchor's end to the next anchor's start is one placeable's formatted
+    // value. An empty part is a boundary without text (adjacent placeables
+    // are uncached at load, so an empty anchor only borders the document's
+    // edges).
+    let n = entry.parts.len().saturating_sub(1);
+    let mut bounds = Vec::with_capacity(n);
+    let mut cursor = 0;
+    for part in &entry.parts[..n] {
+        if part.is_empty() {
+            bounds.push((cursor, cursor));
+            continue;
+        }
+        let start = cursor + text[cursor..].find(part.as_str())?;
+        bounds.push((start, start + part.len()));
+        cursor = start + part.len();
+    }
+    let mut out = entry.html.clone();
+    // The pattern's trailing text bounds the last value: it is verbatim at
+    // the text's end (fluent writes text elements as-is). The values are
+    // extracted back to front, each between an anchor's end and the
+    // previous value's start.
+    // The trailing part is verbatim at the text's end: it bounds the last
+    // value.
+    let mut end = text.len() - entry.parts.last().map(|part| part.len()).unwrap_or(0);
+    for index in (0..n).rev() {
+        let (anchor_start, anchor_end) = bounds[index];
+        let start = anchor_end;
+        let value: String = text[start..end]
+            .chars()
+            .filter(|c| !ISOLATES.contains(c))
+            .collect();
+        out = out.replace(&marker(index), &escape_html(&value));
+        end = anchor_start;
+    }
+    Some(out)
+}
+
+/// Builds the Markdown cache from a resource's source (ADR 0020
+/// Decision 3): per message without selectors or adjacent placeables, the
+/// pattern's text runs anchor `substitute`, and the pattern — its
+/// placeables replaced by markers — converts to HTML once.
+fn markdown_cache(sources: &[String]) -> MarkdownCache {
+    use fluent_syntax::ast::PatternElement;
+    let mut cache = MarkdownCache::default();
+    for source in sources {
+        // Re-parsed here: Fluent's own `FluentResource` keeps its AST
+        // private. A message fluent rejected isn't in this resource either.
+        let Ok(resource) = fluent_syntax::parser::parse(source.as_str()) else {
+            continue;
+        };
+        for entry in resource.body {
+            let fluent_syntax::ast::Entry::Message(message) = entry else {
+                continue;
+            };
+            let Some(id) = message.id.name.split('.').next().map(str::to_owned) else {
+                continue;
+            };
+            let Some(pattern) = &message.value else {
+                continue;
+            };
+            let mut parts = Vec::new();
+            let mut html = String::new();
+            let mut index = 0;
+            let mut placeable_before = false;
+            let mut cached = true;
+            for element in &pattern.elements {
+                match element {
+                    PatternElement::TextElement { value } => {
+                        placeable_before = false;
+                        parts.push(value.to_string());
+                        html.push_str(value);
+                    }
+                    PatternElement::Placeable { expression } => {
+                        if placeable_before {
+                            // Two placeables, no text between: their
+                            // formatted values can't be split apart
+                            // textually.
+                            cached = false;
+                            break;
+                        }
+                        if matches!(
+                            expression,
+                            fluent_syntax::ast::Expression::Select { .. }
+                        ) {
+                            cached = false;
+                            break;
+                        }
+                        placeable_before = true;
+                        html.push_str(&marker(index));
+                        index += 1;
+                    }
+                }
+            }
+            if cached && index > 0 {
+                cache.messages.insert(
+                    id,
+                    MarkdownEntry {
+                        html: md::to_html(&html),
+                        parts,
+                    },
+                );
+            }
+        }
+    }
+    cache
+}
+
+#[allow(clippy::needless_continue)]
 fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
     let serde_json::Value::Object(map) =
         serde_json::from_str(json).map_err(|err| err.to_string())?
@@ -357,6 +521,40 @@ mod tests {
     use super::*;
     use fluent::FluentBundle;
     use proptest::prelude::*;
+
+    /// ADR 0020 Decision 3: the cached pattern's HTML substitutes the
+    /// formatted arguments at the markers — escaped, the bidi isolation
+    /// marks stripped — and falls back (`None`) when the pattern's text
+    /// parts no longer anchor the split.
+    #[test]
+    fn markdown_substitution() {
+        // Build the cache the way the loader does: the pattern's text runs
+        // anchor, the placeables become markers.
+        let source = "row = Item { $i } of **{ $n }** things.\ngreet = Hello { $name }.\n";
+        let cache = markdown_cache(&[source.to_owned()]);
+        let entry = cache.messages.get("row").expect("row cached");
+
+        // The formatted text (isolation marks included, as fluent's).
+        let text = "Item \u{2068}3\u{2069} of **\u{2068}7\u{2069}** things.";
+        let html = substitute(entry, text).expect("substituted");
+        // The isolation marks are stripped from the values (the plain path
+        // strips them from the whole text).
+        assert!(
+            html.contains("Item 3 of <strong class=\"markdown\">7</strong> things."),
+            "{html}"
+        );
+        // The substituted values are escaped (literal, not Markdown).
+        let entry = cache.messages.get("greet").expect("greet cached");
+        let html = substitute(entry, "Hello \u{2068}<em>*</em>\u{2069}.").expect("substituted");
+        assert!(
+            html.contains("&lt;em&gt;*&lt;/em&gt;"),
+            "the value is escaped: {html}"
+        );
+
+        // A text part moved or vanished: the split fails, the caller falls
+        // back to converting the formatted value.
+        assert_eq!(substitute(entry, "Completely different"), None);
+    }
 
     /// An en-US bundle with Fluent's default bidi isolation on (as
     /// [`LocaleBundle`]s have it).
