@@ -26,6 +26,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  bench:
+    # The benchmarks' dependency tree (criterion; ADR 0018): the nightly
+    # `benches` job restores this instead of building criterion cold.
+    name: Bench build (release bench targets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env: # = nightly.yml's workflow env (rust-cache keys on these)
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      BEVY_MARKUP_NIGHTLY: nightly-2026-09-09
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space (full-Bevy builds are large)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: dtolnay/rust-toolchain@stable
+      - id: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bench
+      - name: Install Bevy's Linux build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig-dev
+      - name: Compile the bench targets
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cargo bench --bench pipeline --no-run
+
   mutants:
     name: Mutants build (profile mutants, dynamic Bevy)
     runs-on: ubuntu-latest

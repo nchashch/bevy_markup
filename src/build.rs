@@ -2339,7 +2339,6 @@ fn update_spec(
                                         span.world().get::<Transitions>(child_of.0)
                                     })
                                     .and_then(|transitions| transitions.0.iter().find(|entry| entry.property == TransitionProp::TextColor).cloned());
-                                let now = span.world().resource::<Time>().elapsed_secs();
                                 match followed {
                                     Some(entry)
                                         if old_color == Some(entry.from[0])
