@@ -47,7 +47,6 @@ pub(crate) fn to_html(source: &str) -> String {
         pending: VecDeque::new(),
     };
     pulldown_cmark::html::push_html(&mut html, &mut marked);
-    eprintln!("RAW: {html:?}");
     inject_class(&html)
 }
 
