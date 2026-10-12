@@ -270,6 +270,7 @@ remain your app's choice. Optional features:
 
 | bevy_markup | Bevy |
 |---|---|
+| 0.6 | 0.20 |
 | 0.5 | 0.20 |
 | 0.4 | 0.19 |
 | 0.3 | 0.19 |

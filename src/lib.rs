@@ -80,13 +80,17 @@
 //!   becomes a `Text` node with a `TextSpan` per styled run; blocks and
 //!   containers carry an [`HtmlElement`](html::HtmlElement) (tag, id, classes).
 //! - **CSS** ([`style`]): type, `.class`, `#id` and compound selectors with
-//!   specificity, plus the interaction pseudo-classes `:hover`/`:active`
-//!   (state comes from picking; a change restyles in place); `color`,
-//!   `font-family`, `font-size`,
-//!   `font-weight`, `font-style`, `pointer-events` (inherited); `border-image` (9-slice),
+//!   specificity, descendant and child combinators, plus the interaction
+//!   pseudo-classes `:hover`/`:active`/`:focus`/`:focus-visible` (state
+//!   comes from picking and input focus; a change restyles in place);
+//!   `color`, `font-family` (per-glyph fallback chains over registered
+//!   faces), `font-size` (including `em`/`rem`), `font-weight`,
+//!   `font-style`, `pointer-events` (inherited); `border-image` (9-slice),
 //!   `border-width`, `padding`, `background-color`, `gap`, flex and grid
-//!   layout, sizes, margins, `box-sizing`, `position` with insets,
-//!   `z-index`, `border-radius`, `border-color` and `opacity` (fades the
+//!   layout (including named lines and areas), sizes, margins, `box-sizing`,
+//!   `calc()` (mixed-unit, re-resolved per frame), `var()`, `transition`
+//!   (color changes), `position` with insets, `z-index`, `border-radius`,
+//!   `border-color`, `outline`, `text-decoration` and `opacity` (fades the
 //!   subtree) on blocks, containers and
 //!   the `HtmlUi` node itself (the `html` rule, or the template's own
 //!   `<html class="…">`; what it stops declaring goes back to the app's
