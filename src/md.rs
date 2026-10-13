@@ -118,15 +118,18 @@ fn separate_statements(source: &str) -> String {
         let end = start + 2 + inner + closer.len();
         // Inline code spans protect their content: a statement between
         // backticks stays code. (A pragmatic backtick run: the span's
-        // closer is the next run of the same length.)
-        if opener == "{#" || rest[..start].ends_with('`') {
+        // closer is the next run of the same length.) Only a backtick
+        // run right before the opener opens a span — a bare `{# … #}`
+        // comment is a statement, and must make progress.
+        if rest[..start].ends_with('`') {
             let ticks = rest[..start].len() - rest[..start].trim_end_matches('`').len();
-            let span_end = rest[start..].find(&"`".repeat(ticks.max(1))).map_or(
-                start,
-                |at| start + at + ticks.max(1),
-            );
-            out.push_str(&rest[..span_end.min(end)]);
-            rest = &rest[span_end.min(end)..];
+            // No closer: the span runs to the statement's end, so the
+            // loop always advances (the rest is processed normally).
+            let span_end = rest[start..]
+                .find(&"`".repeat(ticks))
+                .map_or(end, |at| (start + at + ticks).min(end));
+            out.push_str(&rest[..span_end]);
+            rest = &rest[span_end..];
             at_line_start = false;
             continue;
         }
@@ -415,6 +418,35 @@ pub(crate) fn is_markdown(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `{# … #}` comment with no backtick after it used to spin
+    /// forever: the code-span branch consumed nothing. Every shape
+    /// terminates, and the comment/text survive verbatim.
+    #[test]
+    fn a_comment_without_a_backtick_terminates() {
+        let out = separate_statements("{# note #}\nHello\n");
+        assert!(out.contains("{# note #}\n"), "{out}");
+        assert!(out.contains("Hello"), "{out}");
+
+        let out = separate_statements("Hi {# c #} there");
+        assert!(out.contains("Hi {# c #} there"), "{out}");
+
+        let out = separate_statements("{##}");
+        assert!(out.contains("{##}"), "{out}");
+    }
+
+    /// A statement inside a code span still stays verbatim, whether or
+    /// not the span closes after it (an unterminated span runs to the
+    /// statement's end so the rest is processed normally).
+    #[test]
+    fn a_statement_between_backticks_stays_verbatim() {
+        let out = separate_statements("use `{# c #}` here");
+        assert!(out.contains("use `{# c #}` here"), "{out}");
+
+        let out = separate_statements("use `{# c #} tail");
+        assert!(out.contains("use `{# c #}"), "{out}");
+        assert!(out.contains("tail"), "{out}");
+    }
 
     /// CommonMark basics: headings, emphasis, lists; code blocks; images.
     /// Every constructed element carries [`MARKDOWN_CLASS`].
