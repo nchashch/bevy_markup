@@ -334,13 +334,14 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
                 out.push(events[index].clone());
                 index += 1;
             }
-            // Inline code: literal, escaped by `push_html`.
+            // Inline code: literal, escaped by `push_html` — and
+            // Tera-literal: Tera never sees an original opener in it.
             Event::Code(code) => {
-                out.push(Event::Code(code.clone()));
+                out.push(Event::Code(tera_literal(code)));
                 index += 1;
             }
             Event::Text(text) if code_block => {
-                out.push(Event::Text(text.clone()));
+                out.push(Event::Text(tera_literal(text)));
                 index += 1;
             }
             Event::Text(text) => {
@@ -360,6 +361,21 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
         }
     }
     out
+}
+
+/// Code text that Tera cannot execute: every `{` becomes an expression
+/// printing a literal brace, so no original `{{`/`{%`/`{#` opener
+/// survives (Tera sees only balanced expressions it runs). Code spans
+/// and blocks keep their content verbatim — ADR 0020 — whether the
+/// content is a variable reference, a raw block or an unbalanced string.
+fn tera_literal(code: &CowStr<'_>) -> CowStr<'static> {
+    let code: &str = code;
+    // Owned: `out` must not borrow the event vector.
+    CowStr::from(if code.contains('{') {
+        code.replace('{', "{{ \"{\" }}")
+    } else {
+        code.to_owned()
+    })
 }
 
 /// Rewrites each `MARKER + <tag …>` into `<tag … class="markdown">`
@@ -648,15 +664,56 @@ mod tests {
             "| a | b |\n|---|---|\n| {% if a %}1{% endif %} | 2 |\n",
         );
         assert!(html.contains("{% if a %}1{% endif %}"), "{html}");
-        // A code span and a fenced block are Tera-literal.
+        // A code span and a fenced block are Tera-literal: the converted
+        // template contains no executable Tera from the code (`code_is_
+        // teraliteral_when_rendered` pins the rendered result).
         let html = to_html_template("a `{{ x }}` span\n");
-        assert!(html.contains("<code>{{ x }}</code>"), "{html}");
+        assert!(html.contains("<code>"), "{html}");
+        assert!(
+            !html.contains("<code>{{ x }}</code>"),
+            "the code's opener must not survive the conversion: {html}"
+        );
         let html = to_html_template("```\nlet s = \"{%\"; // %}\n```\n");
         assert!(
-            html.contains("let s = \"{%\"; // %}"),
-            "the fenced code is verbatim: {html}"
+            !html.contains("let s = \"{%\";"),
+            "the fenced code's opener must not survive the conversion: {html}"
         );
         // A literal `{% raw %}` in text: Tera-literal via the code span...
         let html = to_html_template("text `{% raw %}` tail\n");
+        assert!(
+            !html.contains("<code>{% raw %}</code>"),
+            "the raw opener must not survive the conversion: {html}"
+        );
+    }
+
+    /// Code content renders verbatim (ADR 0020; R34): Tera never sees an
+    /// opener inside a code span or block, so `{{ x }}` stays `{{ x }}`
+    /// (not the variable), a fenced `{%`/`endraw`/unbalanced string is
+    /// literal, and prose Tera still executes.
+    #[test]
+    fn code_is_teraliteral_when_rendered() {
+        let render = |source: &str, json: &str| -> String {
+            let html = to_html_template(source);
+            let value: serde_json::Value = serde_json::from_str(json).unwrap();
+            let mut tera = tera::Tera::default();
+            tera.add_raw_template("md", &html).unwrap();
+            let context = tera::Context::from_serialize(&value).unwrap();
+            tera.render("md", &context).unwrap()
+        };
+
+        let html = render("a `{{ x }}` span\n", r#"{"x":"VALUE"}"#);
+        assert!(html.contains("<code>{{ x }}</code>"), "{html}");
+        assert!(!html.contains("VALUE"), "{html}");
+
+        let html = render("```\nlet s = \"{%\"; // %}\n{% endraw %}\n```\n", "{}");
+        assert!(html.contains("let s = \"{%\"; // %}"), "{html}");
+        assert!(html.contains("{% endraw %}"), "{html}");
+
+        let html = render("text `{% raw %}` tail\n", "{}");
         assert!(html.contains("<code>{% raw %}</code>"), "{html}");
+
+        // Prose Tera still executes; only code is literal.
+        let html = render("hello {{ name }}, code `{{ name }}`\n", r#"{"name":"Ada"}"#);
+        assert!(html.contains("hello Ada"), "{html}");
+        assert!(html.contains("<code>{{ name }}</code>"), "{html}");
     }
