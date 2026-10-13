@@ -1756,6 +1756,31 @@ impl<'a> Substitution<'a> {
 /// cascade keeps no parent computed style to inherit from (a documented
 /// deviation; the earlier rule's value no longer shows through either
 /// way). Unknown properties are ignored.
+/// The calc-able properties a property name owns: a CSS-wide keyword
+/// drops the entries (the field and its calc reset together).
+fn calc_props(name: &str) -> &'static [CalcProp] {
+    use CalcProp::*;
+    match name {
+        "width" => &[Width],
+        "height" => &[Height],
+        "min-width" => &[MinWidth],
+        "min-height" => &[MinHeight],
+        "max-width" => &[MaxWidth],
+        "max-height" => &[MaxHeight],
+        "flex-basis" | "flex" => &[FlexBasis],
+        "margin" | "inset" => &[MarginTop, MarginRight, MarginBottom, MarginLeft, Left, Top, Right, Bottom],
+        "margin-top" => &[MarginTop],
+        "margin-right" => &[MarginRight],
+        "margin-bottom" => &[MarginBottom],
+        "margin-left" => &[MarginLeft],
+        "top" => &[Top],
+        "right" => &[Right],
+        "bottom" => &[Bottom],
+        "left" => &[Left],
+        _ => &[],
+    }
+}
+
 fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
     // Matched by name: `PropertyId`'s variants carry vendor prefixes for
     // some properties and not others; the names are stable.
@@ -1792,10 +1817,13 @@ fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
         "border-right-color" => style.border_color[1] = None,
         "border-bottom-color" => style.border_color[2] = None,
         "border-left-color" => style.border_color[3] = None,
-        "border-radius" | "border-top-left-radius" | "border-top-right-radius"
-        | "border-bottom-right-radius" | "border-bottom-left-radius" => {
-            style.layout.border_radius = [None; 4];
-        }
+        "border-radius" => style.layout.border_radius = [None; 4],
+        // A per-corner keyword resets its corner only (the shorthand
+        // resets all four).
+        "border-top-left-radius" => style.layout.border_radius[0] = None,
+        "border-top-right-radius" => style.layout.border_radius[1] = None,
+        "border-bottom-right-radius" => style.layout.border_radius[2] = None,
+        "border-bottom-left-radius" => style.layout.border_radius[3] = None,
         "padding" => style.padding = [None; 4],
         "padding-top" => style.padding[0] = None,
         "padding-right" => style.padding[1] = None,
@@ -1902,6 +1930,12 @@ fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
         }
         "transition" => style.transitions.clear(),
         _ => {}
+    }
+    // A keyword also drops the property's `calc()` entries: the field
+    // and its calc expression reset together (`width: initial` after
+    // `width: calc(50% + 10px)` used to keep resolving the calc).
+    for prop in calc_props(id.name()) {
+        style.calc.retain(|(p, _)| p != prop);
     }
 }
 
@@ -4071,6 +4105,28 @@ mod tests {
             get("p { color: #ff0000 } p { color: #0000ff }").color,
             Some(Color::srgb(0.0, 0.0, 1.0))
         );
+        // A keyword drops the property's calc() too (the field and its
+        // calc reset together; the calc used to survive the keyword and
+        // resolve again at layout).
+        let style = get("p { width: calc(50% + 10px) } p { width: initial }");
+        assert!(style.layout.width.is_none());
+        assert!(style.calc.iter().all(|(p, _)| p != &CalcProp::Width));
+        let style = get("p { margin: calc(1em + 2px) } p { margin: unset }");
+        assert!(style.calc.iter().all(|(p, _)| !matches!(
+            p,
+            CalcProp::MarginTop
+                | CalcProp::MarginRight
+                | CalcProp::MarginBottom
+                | CalcProp::MarginLeft
+        )));
+
+        // A per-corner keyword resets its corner only.
+        let style = get(concat!(
+            "p { border-radius: 8px } p { border-top-left-radius: initial }"
+        ));
+        assert_eq!(style.layout.border_radius[0], None);
+        assert_eq!(style.layout.border_radius[1], Some((Val::Px(8.0), Val::Px(8.0))));
+        assert_eq!(style.layout.border_radius[3], Some((Val::Px(8.0), Val::Px(8.0))));
     }
 
     /// `*:hover` (lightningcss prints it back without the `*`) and a bare

@@ -146,7 +146,14 @@
 //!   explicit tracks it spans (sized `auto`). Bare `grid-auto-flow: dense`
 //!   doesn't parse (lightningcss); write `row dense`.
 //! - cascade: `!important` beats normal declarations, then higher specificity
-//!   (ids, classes, type) wins, then the later rule
+//!   (ids, classes, type) wins, then the later rule. `initial`/`inherit`/
+//!   `unset`/`revert` clear the field back to the initial value — one
+//!   documented deviation: on an *inherited* property (`color`, `font-*`)
+//!   all four behave like `inherit` (the cascade keeps no "explicitly
+//!   initial" marker, and the build's field default fills from the
+//!   parent's computed value); on everything else they reset to the
+//!   initial value. A keyword also drops the property's `calc()` entry
+//!   and resets only its own `border-radius` corner.
 //! - the `style` attribute (any element, the `<html>` root included): its
 //!   declarations beat every normal rule and lose to `!important` rules
 //!   unless `!important` themselves, as in CSS. Rendered by Tera like any

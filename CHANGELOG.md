@@ -96,8 +96,13 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   match now.
 - `inherit`, `initial`, `unset` (and `revert`) were silently ignored, so a
   lower-priority rule's value showed through (`width: initial` kept the
-  earlier 200px). They reset the field to its initial value; `inherit`
-  resolves to it too (the cascade keeps no parent computed style).
+  earlier 200px). They clear the field back to its initial value — on an
+  inherited property (`color`, `font-*`) all four behave like `inherit`
+  (a documented deviation: the cascade keeps no parent computed style,
+  and `initial` is not distinguishable from an undeclared field) — and
+  drop the property's `calc()` entry with it. A keyword resets only its
+  own `border-radius` corner (the shorthand resets all four; a corner
+  keyword used to reset every corner).
 - **Changing a context variable that reached the styles only transitively
   (`--a: var(--brand)`) never restyled:** the tracked `var()` names were
   only the directly referenced ones. Names are followed through the
