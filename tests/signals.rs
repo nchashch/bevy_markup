@@ -1320,6 +1320,25 @@ fn activation_on_submit_button_submits() {
         submits[0].source,
         SignalSource::Activation(ActivationInput::Synthetic)
     ));
+
+    // A pointer click on the submit button also submits, reporting the
+    // pointer as the source.
+    let (go, at) = {
+        let root = ui.root();
+        let world = ui.world_mut();
+        center(world, root, "go")
+    };
+    ui.click_at(at);
+    let submits = ui
+        .update_collecting_signals(2)
+        .into_iter()
+        .filter(|signal| signal.trigger == SignalTrigger::Submit)
+        .collect::<Vec<_>>();
+    assert_eq!(submits.len(), 1, "one submit: {submits:?}");
+    assert!(matches!(
+        submits[0].source,
+        SignalSource::Pointer { button: PointerButton::Primary, .. }
+    ), "the pointer source is real: {:?}", submits[0].source);
 }
 
 /// A touch pointer's entered elements emit their `data-on-leave` when the

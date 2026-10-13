@@ -168,3 +168,61 @@ fn next_language(languages: &Languages, active: &mut ActiveLocale) {
         .unwrap_or(0);
     active.set(languages.0[(current + 1) % languages.0.len()].clone());
 }
+
+/// The picking state machine: a click flips the part's flag on the
+/// resource (R64: writing only the context made every click restart from
+/// the initial flags — cells couldn't be unchecked, checking one
+/// unchecked the others).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::message::Messages;
+
+    #[test]
+    fn clicks_flip_and_persist_on_the_resource() {
+        let mut app = App::new();
+        app.add_message::<ElementSignal>();
+        app.insert_resource(Picks(vec![false; 4]));
+        let ui = app
+            .world_mut()
+            .spawn(TemplateContext::new().with("picks", &vec![false; 4]))
+            .id();
+        app.add_systems(Update, handle_signals);
+
+        let click = |app: &mut App, name: &'static str| {
+            app.world_mut()
+                .resource_mut::<Messages<ElementSignal>>()
+                .write(ElementSignal {
+                    trigger: SignalTrigger::Click,
+                    name: name.into(),
+                    element: HtmlElement::default(),
+                    target: ui,
+                    payload: Default::default(),
+                    source: SignalSource::Activation(ActivationInput::Synthetic),
+                });
+            app.update();
+        };
+
+        click(&mut app, "pick-portrait");
+        let picks = app.world().resource::<Picks>().clone();
+        assert_eq!(picks.0, [true, false, false, false], "checked");
+        let context = app.world().get::<TemplateContext>(ui).unwrap();
+        assert_eq!(
+            context.get("picks").unwrap(),
+            &tera::Value::from(vec![true, false, false, false])
+        );
+
+        click(&mut app, "pick-portrait");
+        let picks = app.world().resource::<Picks>().clone();
+        assert_eq!(picks.0, [false, false, false, false], "unchecked");
+        let context = app.world().get::<TemplateContext>(ui).unwrap();
+        assert_eq!(
+            context.get("picks").unwrap(),
+            &tera::Value::from(vec![false, false, false, false])
+        );
+
+        click(&mut app, "pick-stats");
+        let picks = app.world().resource::<Picks>().clone();
+        assert_eq!(picks.0, [false, true, false, false], "checking another keeps the first");
+    }
+}

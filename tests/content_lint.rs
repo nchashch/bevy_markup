@@ -1777,3 +1777,18 @@ fn pseudo_locale_shows_every_string_translated() {
     }
     assert_no_problems("untranslated text runs under the pseudo-locale", &problems);
 }
+
+/// The forms example's "Clear fields" looks its fields up by `id`
+/// (`HtmlElements::by_id` reads the `id` attribute), so the inputs must
+/// carry `id="name"`/`id="role"` (R62: with only `name=` the lookups
+/// found nothing and the fields were never cleared).
+#[test]
+fn forms_clear_targets_are_id_attributes() {
+    let page = std::fs::read_to_string("examples/assets/forms/signup.html").unwrap();
+    for id in ["name", "role"] {
+        assert!(
+            page.contains(&format!("id=\"{id}\"")),
+            "signup.html's `{id}` input needs `id=\"{id}\"`: clear-form looks it up by id"
+        );
+    }
+}

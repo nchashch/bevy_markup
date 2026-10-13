@@ -540,6 +540,141 @@ html-ui padding=3,3,3,3
     );
 }
 
+/// A render change that lands while the build is waiting for a
+/// stylesheet is not lost (R05's Wait variant): a context change queued
+/// during the `Wait` is still the content after the sheet resolves, not
+/// the stale one the wait started with.
+#[test]
+fn render_change_during_a_wait_carries_the_new_content() {
+    let page = r#"<p>{{ n }}</p>"#;
+    let spawn = |name: &str| {
+        TestUi::new(
+            name,
+            &[("page.html", page), ("late.css", "html { color: #00ff00 }")],
+        )
+        .spawn("page.html", TemplateContext::new().with("n", &"a"), Node::default())
+    };
+    let mut ui = spawn("wait-content");
+    let mut fresh = spawn("wait-content-fresh");
+    ui.settle();
+    fresh.settle();
+    // Swap to a stylesheet that has not loaded yet: the next build waits.
+    let late = ui.load::<Stylesheet>("late.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(late);
+    // The context changes land during the wait (one per frame).
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &"b");
+    ui.update(1);
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &"c");
+    // The fresh reference changes the same way, with no wait in between.
+    let froot = fresh.root();
+    fresh
+        .world_mut()
+        .get_mut::<TemplateContext>(froot)
+        .unwrap()
+        .insert("n", &"b");
+    fresh.update(1);
+    fresh
+        .world_mut()
+        .get_mut::<TemplateContext>(froot)
+        .unwrap()
+        .insert("n", &"c");
+    let late = fresh.load::<Stylesheet>("late.css");
+    fresh.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(late);
+    ui.settle();
+    fresh.settle();
+    assert_eq!(ui.dump(), fresh.dump(), "the waited-out build carries `c`");
+    assert!(ui.dump().contains("\"c\""));
+}
+
+/// An all-dirty workload (every subtree translated, so nothing reuses)
+/// with a stale skeleton still produces a fresh build's content (R04):
+/// the retry gate must not serve the skeleton's content when the pairing
+/// is skipped. On the revert, the last change showed its old value.
+#[test]
+fn gate_skipped_builds_with_a_stale_skeleton_stay_fresh() {
+    let page = r#"{% for i in rows %}<p data-l10n-id="count" data-l10n-args='{"n": {{ n }}}'>{{ i }}</p>{% endfor %}"#;
+    let files = [
+        ("page.html", page),
+        ("style.css", "html { color: #ffffff }"),
+        ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
+        ("locales/en-US/ui.ftl", "count = { $n } items"),
+    ];
+    let spawn = |name: &str| {
+        TestUi::new(name, &files)
+            .locale("locales/en-US/main.ftl.ron")
+            .spawn(
+                "page.html",
+                TemplateContext::new()
+                    .with("n", &1)
+                    .with("rows", &[0, 1, 2, 3, 4, 5, 6, 7, 8]),
+                Node::default(),
+            )
+    };
+    let mut reused = spawn("stale-skeleton-reused");
+    let mut fresh = spawn("stale-skeleton-fresh");
+    reused.settle();
+    fresh.settle();
+    // Several context changes: each rebuilds every translated row (all
+    // dirty), driving the skeleton's strikes up so the retry gate skips
+    // the pairing walk.
+    for value in [2, 3, 4, 5, 6] {
+        for ui in [&mut reused, &mut fresh] {
+            let root = ui.root();
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("n", &value);
+        }
+        reused.settle();
+        fresh.settle();
+    }
+    assert_eq!(reused.dump(), fresh.dump());
+    assert!(reused.dump().contains("6 items"), "the last change wins");
+}
+
+/// Reuse keeps an unchanged subtree whose root tag produces no node of
+/// its own: `<span>` runs directly in a container, while a sibling
+/// changes. On the R04 revert the reused span's content vanished when
+/// its parent changed.
+#[test]
+fn reuse_keeps_a_bare_span_when_a_sibling_changes() {
+    let page = r#"<div><span>{{ a }}</span><p>{{ b }}</p></div>"#;
+    let spawn = |name: &str| {
+        TestUi::new(
+            name,
+            &[("page.html", page), ("style.css", "html { color: #ffffff }")],
+        )
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("a", &"1").with("b", &"x"),
+            Node::default(),
+        )
+    };
+    let mut reused = spawn("bare-span-reused");
+    let mut fresh = spawn("bare-span-fresh");
+    reused.settle();
+    fresh.settle();
+    for (a, b) in [("1", "y"), ("2", "z"), ("2", "w")] {
+        for ui in [&mut reused, &mut fresh] {
+            let root = ui.root();
+            let mut context = ui.world_mut().get_mut::<TemplateContext>(root).unwrap();
+            context.insert("a", &a);
+            context.insert("b", &b);
+        }
+        reused.settle();
+        fresh.settle();
+        assert_eq!(reused.dump(), fresh.dump(), "a={a} b={b}");
+    }
+    assert!(reused.dump().contains("\"2\""), "the span's content stayed");
+}
+
 /// CSS variables end to end: `var(--name)` resolves the UI's
 /// `TemplateContext` first (a change re-renders and restyles), then the
 /// sheet's own `--` declarations.
