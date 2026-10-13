@@ -1296,6 +1296,13 @@ pub(crate) struct HtmlStyles<'a> {
     /// `variables`; values interpolate as written (strings raw, numbers
     /// and bools as their CSS spelling). `None` = no context.
     context: Option<&'a dyn Fn(&str) -> Option<String>>,
+    /// The `--` names the sheet's non-custom declarations (transitively)
+    /// reference (the wrapper's `var_names`): a custom declaration whose
+    /// name isn't here is never observable (its substituted value is
+    /// re-parsed and discarded — custom values live in `variables` raw),
+    /// so its substitution is skipped: a chain with no consumer cost
+    /// 4.8 ms per element.
+    consumed: &'a [String],
     cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo, u64), ElementStyle>>,
 }
 
@@ -1310,7 +1317,7 @@ impl<'a> HtmlStyles<'a> {
         self
     }
 
-    pub fn from_sheet(sheet: &'a StyleSheet<'static>) -> Self {
+    pub fn from_sheet(sheet: &'a StyleSheet<'static>, consumed: &'a [String]) -> Self {
         let mut rules = Vec::new();
         let mut variables: HashMap<String, TokenList<'static>> = HashMap::default();
         for (order, rule) in sheet.rules.0.iter().enumerate() {
@@ -1356,6 +1363,7 @@ impl<'a> HtmlStyles<'a> {
         // Apply in ascending rank: later application wins.
         rules.sort_by_key(|rule| rule.rank);
         Self {
+            consumed,
             rules,
             variables,
             context: None,
@@ -1400,7 +1408,7 @@ impl<'a> HtmlStyles<'a> {
             .filter(|rule| rule.selector.matches(element, pseudo, ancestors))
         {
             for declaration in rule.declarations {
-                apply_resolved(&mut style, declaration, &self.variables, self.context);
+                apply_resolved(&mut style, declaration, &self.variables, self.context, self.consumed);
             }
         }
         self.cache.borrow_mut().insert(key, style.clone());
@@ -1442,7 +1450,7 @@ impl<'a> HtmlStyles<'a> {
             .chain(rules(important))
             .chain(&block.important_declarations)
         {
-            apply_resolved(&mut style, declaration, &self.variables, self.context);
+            apply_resolved(&mut style, declaration, &self.variables, self.context, self.consumed);
         }
         style
     }
@@ -1568,6 +1576,7 @@ fn apply_resolved(
     declaration: &Property<'static>,
     variables: &HashMap<String, TokenList<'static>>,
     context: Option<&dyn Fn(&str) -> Option<String>>,
+    consumed: &[String],
 ) {
     // `initial`/`inherit`/`unset`/`revert` arrive as unparsed bare
     // keywords: the field returns to its initial value (the cascade has
@@ -1598,6 +1607,17 @@ fn apply_resolved(
             if !contains_var(&custom.value) {
                 apply(style, declaration);
                 return;
+            }
+            // A custom declaration's substituted value is re-parsed and
+            // discarded (the consumers resolve against the raw sheet
+            // values), so one nothing reads is not substituted at all.
+            match &custom.name {
+                CustomPropertyName::Custom(dashed)
+                    if !consumed.iter().any(|name| name == dashed.0.as_ref()) =>
+                {
+                    return;
+                }
+                _ => {}
             }
             (Some(PropertyId::Custom(custom.name.clone())), &custom.value)
         }
@@ -3420,7 +3440,7 @@ mod tests {
 
     fn color_with(css: &'static str, element: &HtmlElement, pseudo: Pseudo) -> Option<Color> {
         let sheet = sheet(css);
-        HtmlStyles::from_sheet(&sheet)
+        HtmlStyles::from_sheet(&sheet, &[])
             .get(element, pseudo, &[])
             .color
     }
@@ -4014,7 +4034,7 @@ mod tests {
 
     fn declared(declarations: &str) -> ElementStyle {
         let sheet = owned_sheet(&format!("p {{ {declarations} }}"));
-        HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), Pseudo::default(), &[])
+        HtmlStyles::from_sheet(&sheet, &[]).get(&element("p", None, &[]), Pseudo::default(), &[])
     }
 
     /// `declared` with a `TemplateContext` lookup: `context(name)` answers
@@ -4027,7 +4047,7 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.to_string())
         };
-        HtmlStyles::from_sheet(&sheet)
+        HtmlStyles::from_sheet(&sheet, &[])
             .with_context(&context)
             .get(&element("p", None, &[]), Pseudo::default(), &[])
     }
@@ -4106,6 +4126,30 @@ mod tests {
         );
         let names = style.layout.grid_names.expect("line names");
         assert_eq!(names.columns["a"], &[1, -4, 2, -3, 3, -2]);
+    }
+
+    /// A custom declaration nothing reads isn't substituted: its value is
+    /// re-parsed and discarded anyway (the consumers resolve against the
+    /// raw sheet values), so a chain with no consumer cost the same per
+    /// element as a consumed one. The get must stay fast.
+    #[test]
+    fn unconsumed_custom_declarations_arent_substituted() {
+        let mut sheet = String::from("p { ");
+        for i in 0..2000 {
+            sheet.push_str(&format!("--v{i}: var(--v{}); ", i + 1));
+        }
+        sheet.push_str("color: #00ff00 }");
+        let parsed = owned_sheet(&sheet);
+        let consumed = var_names(&parsed);
+        let styles = HtmlStyles::from_sheet(&parsed, &consumed);
+        let start = std::time::Instant::now();
+        let style = styles.get(&element("p", None, &[]), Pseudo::default(), &[]);
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(10),
+            "the get took {:?}",
+            start.elapsed()
+        );
+        assert_eq!(style.color, Some(Color::srgb(0.0, 1.0, 0.0)));
     }
 
     /// A cycle is invalid at computed-value time, *including* the
@@ -4207,7 +4251,7 @@ mod tests {
     #[test]
     fn unsupported_values_dont_erase_earlier_values() {
         let get = |rules: &str, classes: &[&str]| {
-            HtmlStyles::from_sheet(&owned_sheet(rules)).get(
+            HtmlStyles::from_sheet(&owned_sheet(rules), &[]).get(
                 &element("p", None, classes),
                 Pseudo::default(),
                 &[],
@@ -4258,7 +4302,7 @@ mod tests {
     #[test]
     fn inherit_initial_unset_clear_the_field() {
         let get = |rules: &str| {
-            HtmlStyles::from_sheet(&owned_sheet(rules))
+            HtmlStyles::from_sheet(&owned_sheet(rules), &[])
                 .get(&element("p", None, &[]), Pseudo::default(), &[])
         };
         assert_eq!(get("p { color: #ff0000 } p { color: initial }").color, None);
@@ -4305,7 +4349,7 @@ mod tests {
     fn pseudo_only_compounds_match_any_element() {
         let style = |pseudo| {
             let sheet = owned_sheet(":focus-visible { color: #ff0000 } *:hover { color: #00ff00 }");
-            HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), pseudo, &[])
+            HtmlStyles::from_sheet(&sheet, &[]).get(&element("p", None, &[]), pseudo, &[])
         };
         assert_eq!(
             style(Pseudo {
@@ -4972,7 +5016,7 @@ mod tests {
     #[test]
     fn strong_type_selector_matches() {
         let sheet = owned_sheet("strong { font-weight: bold }");
-        let style = HtmlStyles::from_sheet(&sheet).get(
+        let style = HtmlStyles::from_sheet(&sheet, &[]).get(
             &element("strong", None, &[]),
             Pseudo::default(),
             &[],

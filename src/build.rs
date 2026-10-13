@@ -980,7 +980,9 @@ pub(crate) fn build_html_ui(
         let context = contexts.get(entity).ok();
         let lookup = |name: &str| context.and_then(|context| context.get(name)).and_then(css_value);
         let styles = match css {
-            Some(css) => HtmlStyles::from_sheet(css.sheet()).with_context(&lookup),
+            Some(css) => {
+                HtmlStyles::from_sheet(css.sheet(), &css.var_names).with_context(&lookup)
+            }
             None => HtmlStyles::default().with_context(&lookup),
         };
         let (root_element, root_inline) = match (&*rendered, &outline) {
