@@ -297,30 +297,26 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
                 let starts_paragraph =
                     matches!(events.get(index + 1), Some(Event::Start(Tag::Paragraph)));
                 if starts_paragraph {
-                    let mut cursor = index + 2;
+                    // The paragraph's text as one string: a Tera span can
+                    // span a softbreak (a multi-line `{# comment #}` —
+                    // per-piece scanning read each line separately and
+                    // left the comment visible as a paragraph).
+                    let mut whole = String::new();
                     let mut pure = true;
+                    let mut cursor = index + 2;
                     while cursor < events.len()
                         && !matches!(events[cursor], Event::End(TagEnd::Paragraph))
                     {
                         match &events[cursor] {
-                            Event::Text(text) => {
-                                pure &= tera_runs(text).iter().all(|(tera, _)| *tera);
-                            }
-                            Event::SoftBreak => {}
+                            Event::Text(text) => whole.push_str(text),
+                            Event::SoftBreak => whole.push('\n'),
                             _ => pure = false,
                         }
                         cursor += 1;
                     }
                     let ends = cursor < events.len();
-                    if pure && ends {
-                        for event in &events[index + 2..cursor] {
-                            if let Event::Text(text) = event {
-                                for (tera, part) in tera_runs(text) {
-                                    debug_assert!(tera, "a pure paragraph has only Tera runs");
-                                    out.push(Event::Html(CowStr::Boxed(part.to_owned().into_boxed_str())));
-                                }
-                            }
-                        }
+                    if pure && ends && tera_runs(&whole).iter().all(|(tera, _)| *tera) {
+                        out.push(Event::Html(CowStr::Boxed(whole.into_boxed_str())));
                         index = cursor + 1;
                         continue;
                     }
@@ -437,6 +433,29 @@ pub(crate) fn is_markdown(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A multi-line `{# comment #}` used to render as a visible
+    /// paragraph (the pure-Tera check scanned each line separately; the
+    /// comment's span crosses the softbreak). It vanishes now, and the
+    /// text after it is untouched.
+    #[test]
+    fn a_multiline_comment_renders_nothing() {
+        // Converted: the comment is a Tera span (raw passthrough).
+        let html = to_html_template("{# multi\nline #}\n\nHello\n");
+        assert!(
+            !html.contains("<p class=\"markdown\">{#"),
+            "the comment rendered as a visible paragraph: {html}"
+        );
+        assert!(!html.contains("<p class=\"markdown\"></p>"), "{html}");
+        // Rendered: Tera drops the comment; nothing of it survives.
+        let value: serde_json::Value = serde_json::from_str("{}").unwrap();
+        let mut tera = tera::Tera::default();
+        tera.add_raw_template("md", &html).unwrap();
+        let context = tera::Context::from_serialize(&value).unwrap();
+        let rendered = tera.render("md", &context).unwrap();
+        assert!(!rendered.contains("{#"), "{rendered}");
+        assert!(rendered.contains("Hello"), "{rendered}");
+    }
+
     use super::*;
 
     /// A fenced block with an info string closes again: the closing
