@@ -2969,15 +2969,27 @@ pub(crate) fn resolve_calc(
     parents: Query<&ChildOf>,
     rem: Res<RemSize>,
     cameras: Query<(&Camera, Option<&IsDefaultUiCamera>)>,
+    target_cameras: Query<&UiTargetCamera>,
 ) {
-    // The viewport for a top-level root (no parent): the UI camera's
-    // target, preferring the default UI camera. A root's own box is *not*
-    // the viewport — an auto-sized root shrinks to its content.
-    let viewport_of_camera = || {
-        cameras
-            .iter()
-            .min_by_key(|(_, default)| default.is_some())
-            .and_then(|(camera, _)| camera.logical_viewport_size())
+    // The viewport for a top-level root (no parent): the camera the root
+    // itself targets (`UiTargetCamera`), else the default UI camera. A
+    // root's own box is *not* the viewport — an auto-sized root shrinks
+    // to its content.
+    let viewport_of_camera = |root: Entity| {
+        target_cameras
+            .get(root)
+            .ok()
+            .and_then(|target| cameras.get(target.0).ok())
+            .map(|(camera, _)| camera)
+            .or_else(|| {
+                // A camera with the default marker sorts last: with
+                // several cameras the UI camera is the viewport.
+                cameras
+                    .iter()
+                    .max_by_key(|(_, default)| default.is_some())
+                    .map(|(camera, _)| camera)
+            })
+            .and_then(|camera| camera.logical_viewport_size())
     };
     for (entity, child_of, mut node, calc) in &mut sized {
         let (content, viewport) = match child_of {
@@ -3007,7 +3019,7 @@ pub(crate) fn resolve_calc(
             // block is the viewport. Without any camera (a headless edge),
             // the root's own box is the only reference available.
             None => {
-                let size = viewport_of_camera()
+                let size = viewport_of_camera(entity)
                     .or_else(|| boxes.get(entity).ok().map(|box_| box_.size))
                     .unwrap_or_default();
                 (size, size)

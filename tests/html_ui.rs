@@ -2716,6 +2716,78 @@ fn root_calc_applies_and_stops() {
     );
 }
 
+/// A second camera without the `IsDefaultUiCamera` marker must not
+/// become the root's calc viewport: the default UI camera is preferred,
+/// and a root's own `UiTargetCamera` wins over both.
+#[test]
+fn root_calc_resolves_against_the_ui_camera() {
+    let mut ui = TestUi::with_layout(
+        "root-calc-camera",
+        &[
+            ("page.html", "<p>x</p>"),
+            ("a.css", "html { width: calc(50% - 20px) }"),
+        ],
+        UVec2::new(640, 480),
+    )
+    .stylesheet("a.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    // A small non-UI camera sorts before the default one under the old
+    // `min_by_key(is_some)` (it has no marker), stealing the viewport:
+    // 50% - 20px of 100px was 30px instead of 300px.
+    let world = ui.world_mut();
+    world.spawn((
+        bevy::camera::Camera2d,
+        bevy::camera::Camera {
+            computed: bevy::camera::ComputedCameraValues {
+                target_info: Some(bevy::camera::RenderTargetInfo {
+                    physical_size: UVec2::new(100, 100),
+                    scale_factor: 1.0,
+                }),
+                ..default()
+            },
+            ..default()
+        },
+        bevy::camera::RenderTarget::None {
+            size: UVec2::new(100, 100),
+        },
+    ));
+    ui.settle();
+    let root = ui.root();
+    let width = ui.world_mut().get::<Node>(root).unwrap().width;
+    assert_eq!(width, Val::Px(300.0), "the wrong camera became the viewport");
+
+    // An explicit `UiTargetCamera` on the root wins over the default.
+    let second = {
+        let world = ui.world_mut();
+        world
+            .spawn((
+                bevy::camera::Camera2d,
+                bevy::camera::Camera {
+                    computed: bevy::camera::ComputedCameraValues {
+                        target_info: Some(bevy::camera::RenderTargetInfo {
+                            physical_size: UVec2::new(200, 200),
+                            scale_factor: 1.0,
+                        }),
+                        ..default()
+                    },
+                    ..default()
+                },
+                bevy::camera::RenderTarget::None {
+                    size: UVec2::new(200, 200),
+                },
+                bevy::ui::IsDefaultUiCamera,
+            ))
+            .id()
+    };
+    ui.world_mut()
+        .entity_mut(root)
+        .insert(bevy::ui::UiTargetCamera(second));
+    // The calc pass resolves per frame; it is not a build.
+    ui.settle_quiet();
+    let width = ui.world_mut().get::<Node>(root).unwrap().width;
+    assert_eq!(width, Val::Px(80.0), "the targeted camera's viewport won");
+}
+
 /// A restyle that respawns spans (runs merging under a new sheet) must
 /// fire `HtmlUiBuilt`, not `HtmlUiRestyled`: the promise behind the
 /// restyled event is that every element was kept, and link spans are new
