@@ -2489,6 +2489,32 @@ html-ui
     );
 }
 
+/// `type` values are ASCII case-insensitive (HTML enumerated attributes):
+/// `type="Text"` builds a field.
+#[cfg(feature = "text-input")]
+#[test]
+fn input_type_is_case_insensitive() {
+    let mut ui = TestUi::new(
+        "input-type-case",
+        &[
+            (
+                "page.html",
+                r#"<input type="Text" class="field">"#,
+            ),
+            ("style.css", "html { color: #ffffff } .field { width: 100px }"),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.update(30);
+    let world = ui.world_mut();
+    let fields = world
+        .query_filtered::<Entity, With<bevy::ui_widgets::TextInput>>()
+        .iter(world)
+        .count();
+    assert_eq!(fields, 1, "type=Text didn't build a field");
+}
+
 /// (`--a: var(--brand)`) restyles when it changes: the vars hash used to
 /// track only directly referenced names.
 #[test]

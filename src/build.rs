@@ -3974,7 +3974,7 @@ fn collect_node(
                 .attributes()
                 .get("type")
                 .flatten()
-                .map(|kind| kind.as_utf8_str() == "text")
+                .map(|kind| kind.as_utf8_str().eq_ignore_ascii_case("text"))
                 .unwrap_or(true)
         {
             // An editable text field (ADR 0016): a block with the widget's
@@ -4142,7 +4142,7 @@ fn collect_node(
                 .get("type")
                 .flatten()
                 .map(|kind| kind.as_utf8_str())
-                .is_none_or(|kind| kind == "submit")
+                .is_none_or(|kind| kind.eq_ignore_ascii_case("submit"))
             && chain
                 .iter()
                 .any(|ancestor| {
