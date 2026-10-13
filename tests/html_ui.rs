@@ -2532,7 +2532,6 @@ fn non_text_input_types_are_not_fields() {
     ui.update(20);
     let world = ui.world_mut();
     let mut query = world.query::<(
-        Entity,
         &bevy_markup::html::HtmlElement,
         Option<&bevy::text::EditableText>,
         Option<&bevy::ui_widgets::TextInput>,
@@ -2540,7 +2539,7 @@ fn non_text_input_types_are_not_fields() {
     )>();
     let inputs: Vec<_> = query
         .iter(world)
-        .map(|(entity, element, text, widget, focus)| {
+        .map(|(element, text, widget, focus)| {
             (
                 element.tag.clone(),
                 text.is_some(),

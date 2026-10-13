@@ -711,6 +711,8 @@ mod tests {
                 (true, true) => format!("{{ $n }} {body}\n\n  and {n} again"),
                 (false, false) => body,
             };
+            // A trailing placeable ends the (last line of the) pattern.
+            let pattern = if trail { format!("{pattern} then {{ $n }}") } else { pattern };
             let id = "m";
             let source = format!("{id} = {pattern}\n");
             let cache = markdown_cache(&[source.clone()]);
