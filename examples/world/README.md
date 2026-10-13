@@ -8,6 +8,9 @@ Nameplates over 3D units: HTML + CSS UI anchored to points in the world.
 cargo run --example world
 ```
 
+(The 3D scene needs render resources: run it `--offscreen` for a
+headless capture — `--no-render` panics in the mesh/material setup.)
+
 ## What you see
 
 Six units walk in circles under an orbiting camera, each with a nameplate

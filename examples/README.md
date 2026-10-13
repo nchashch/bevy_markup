@@ -57,7 +57,9 @@ compositions exist:
 
 - `--no-render` — render-less: no window, no winit, no wgpu. UI layout,
   picking, `game/ui` and the input mocks all work; `game/screenshot`
-  returns a clean error (nothing renders).
+  returns a clean error (nothing renders). The exception is `world`:
+  its 3D setup (meshes, `StandardMaterial`) needs render resources
+  registered by bevy_render — run it `--offscreen` instead.
 - `--offscreen` — windowed rendering minus winit: every camera renders
   into the harness's offscreen texture, so `game/screenshot` captures
   real frames (needs a GPU or lavapipe).
