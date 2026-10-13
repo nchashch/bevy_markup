@@ -174,6 +174,11 @@ impl AssetLoader for LocaleBundleLoader {
         let mut sources = Vec::new();
         for name in manifest.resources {
             let path = load_context.path().resolve_embed_str(&name)?;
+            // `read_asset_bytes` skips Bevy's own unapproved-path check:
+            // enforce it, matching `AssetServer::load`'s default.
+            if path.is_unapproved() {
+                return Err(format!("resource escapes the asset root: {name}").into());
+            }
             // Reading through the load context makes each `.ftl` a
             // dependency of the bundle: with Bevy's file watcher, editing one
             // reloads every bundle that uses it.
@@ -254,14 +259,30 @@ pub(crate) fn localize(
         }
         return;
     };
-    let bundle_ready = events.read().any(|event| match event {
-        AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => {
-            *id == handle.id()
-        }
-        _ => false,
+    // `.fold`, not `.any`: the iterator consumes events one at a time —
+    // `.any` stops at the first match, leaving a second matching event
+    // (Modified then LoadedWithDependencies on a hot reload) to re-serve
+    // next frame with an extra re-resolve and rebuild.
+    let bundle_ready = events.read().fold(false, |ready, event| {
+        ready
+            || match event {
+                AssetEvent::LoadedWithDependencies { id } | AssetEvent::Modified { id } => {
+                    *id == handle.id()
+                }
+                _ => false,
+            }
     });
-    // Not loaded yet: its load event triggers localization.
+    // Not loaded (yet, or ever — a failed asset emits no event): its load
+    // event triggers localization. A render that changed meanwhile must
+    // not inherit the previous document's translations (they key on the
+    // old DOM's handles and would land on the wrong elements): drop them,
+    // the elements show their fallback content until the bundle arrives.
     let Some(bundle) = bundles.get(handle) else {
+        for (rendered, mut localized) in &mut views {
+            if rendered.is_changed() {
+                localized.0.clear();
+            }
+        }
         return;
     };
     for (rendered, mut localized) in &mut views {
@@ -305,11 +326,16 @@ fn resolve_all(
                 out.insert(
                     handle,
                     match markdown.and_then(|cache| cache.messages.get(&id)) {
-                        Some(entry) => text.and_then(|text| {
-                            substitute(entry, &text).ok_or_else(|| {
-                                format!("`{id}`: substituting the arguments")
+                        Some(entry) => {
+                            // The cache is an accelerator: a text that
+                            // doesn't split (an argument swallowing a
+                            // literal part) falls back to converting the
+                            // formatted text directly.
+                            text.map(|text| {
+                                substitute(entry, &text)
+                                    .unwrap_or_else(|| md::to_html(&text))
                             })
-                        }),
+                        }
                         None if markdown.is_some() => {
                             text.map(|text| md::to_html(&text))
                         }
@@ -358,58 +384,90 @@ where
         .collect())
 }
 
-/// Substitutes the formatted arguments into a cached pattern's HTML: the
-/// pattern's literal parts anchor the split of `text` (each gap is one
-/// placeable's formatted value, its bidi isolation marks stripped), and
-/// each gap replaces its `\u{2}index\u{3}` marker — escaped, per ADR
-/// 0020's Decision 4 (arguments are literal text, not Markdown).
-/// `None`: the text doesn't split (a part moved or vanished) — the caller
+/// Fuzzing entry (ADR 0020's `markdown: true` path, exercised by
+/// `fuzz::translate`): the cache is built from the same source, and the
+/// formatted value substitutes into it — never panics, errors are values.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn markdown_fuzz(ftl: &str, id: &str, args_json: &str) -> Option<String> {
+    let cache = markdown_cache(&[ftl.to_owned()]);
+    let entry = cache.messages.get(id)?;
+    let text = translate_markdown_value(ftl, id, args_json)?;
+    substitute(entry, &text)
+}
+
+/// The `markdown: true` per-frame path, split out for the fuzz harness:
+/// format the message against a plain (non-markdown) bundle, then
+/// substitute into the cache — the same text the real bundle produces.
+#[cfg(feature = "fuzzing")]
+fn translate_markdown_value(ftl: &str, id: &str, args_json: &str) -> Option<String> {
+    let resource = fluent::FluentResource::try_new(ftl.to_owned()).ok()?;
+    let locale: unic_langid::LanguageIdentifier = "en".parse().ok()?;
+    let mut bundle = fluent::concurrent::FluentBundle::new_concurrent(vec![locale]);
+    bundle.add_resource(resource).ok()?;
+    translate(&bundle, id, Some(args_json)).ok()
+}
+
+/// Substitutes the formatted arguments into a cached pattern's HTML. The
+/// cached `parts` are the pattern's `n + 1` literal runs (empty at the
+/// edges when the pattern starts or ends with a placeable; multi-line
+/// runs joined): `text` must be `parts[0]`, then each placeable's
+/// formatted value (bidi isolation marks stripped), then the next part,
+/// and so on — the first part anchors the text's start, the last its
+/// end. Each gap replaces its `\u{2}index\u{3}` marker verbatim (the
+/// values were escaped by `parse_args`; ADR 0020's Decision 4). `None`:
+/// the text doesn't split (a part moved or vanished) — the caller
 /// converts the formatted text directly instead.
 fn substitute(entry: &MarkdownEntry, text: &str) -> Option<String> {
     const ISOLATES: [char; 2] = ['\u{2068}', '\u{2069}'];
-    // The pattern's parts (all but the trailing one) anchor the split: each
-    // anchor's end to the next anchor's start is one placeable's formatted
-    // value. An empty part is a boundary without text (adjacent placeables
-    // are uncached at load, so an empty anchor only borders the document's
-    // edges).
-    let n = entry.parts.len().saturating_sub(1);
-    let mut bounds = Vec::with_capacity(n);
-    let mut cursor = 0;
-    for part in &entry.parts[..n] {
-        if part.is_empty() {
-            bounds.push((cursor, cursor));
-            continue;
+    let last = entry.parts.len() - 1;
+    let first = entry.parts.first()?;
+    if !text.starts_with(first.as_str()) || !text.ends_with(entry.parts[last].as_str()) {
+        return None;
+    }
+    if last == 0 {
+        // No placeables: the text must be the pattern verbatim.
+        return Some(entry.html.clone());
+    }
+    // One value per marker: value k runs from the end of `parts[k]` to
+    // the start of `parts[k + 1]`.
+    let mut bounds = Vec::with_capacity(last);
+    let mut cursor = first.len();
+    let limit = text.len() - entry.parts[last].len();
+    for part in &entry.parts[1..last] {
+        if cursor > limit {
+            return None;
         }
-        let start = cursor + text[cursor..].find(part.as_str())?;
-        bounds.push((start, start + part.len()));
+        let start = cursor + text[cursor..limit].find(part.as_str())?;
+        bounds.push((cursor, start));
         cursor = start + part.len();
     }
+    if cursor > limit {
+        return None;
+    }
+    bounds.push((cursor, limit));
     let mut out = entry.html.clone();
-    // The pattern's trailing text bounds the last value: it is verbatim at
-    // the text's end (fluent writes text elements as-is). The values are
-    // extracted back to front, each between an anchor's end and the
-    // previous value's start.
-    // The trailing part is verbatim at the text's end: it bounds the last
-    // value.
-    let mut end = text.len() - entry.parts.last().map(|part| part.len()).unwrap_or(0);
-    for index in (0..n).rev() {
-        let (anchor_start, anchor_end) = bounds[index];
-        let start = anchor_end;
+    for (index, (start, end)) in bounds.into_iter().enumerate().rev() {
         let value: String = text[start..end]
             .chars()
             .filter(|c| !ISOLATES.contains(c))
             .collect();
-        out = out.replace(&marker(index), &escape_html(&value));
-        end = anchor_start;
+        out = out.replace(&marker(index), &value);
     }
     Some(out)
 }
 
 /// Builds the Markdown cache from a resource's source (ADR 0020
-/// Decision 3): per message without selectors or adjacent placeables, the
-/// pattern's text runs anchor `substitute`, and the pattern — its
-/// placeables replaced by markers — converts to HTML once.
+/// Decision 3): per message without selectors, adjacent placeables, or
+/// term/message references, the pattern's `n + 1` literal runs anchor
+/// `substitute` (empty at the edges when the pattern starts or ends with
+/// a placeable), and the pattern — its placeables replaced by markers —
+/// converts to HTML once. Duplicate message ids keep the first (the
+/// bundle's own choice). Messages whose conversion leaves a marker in a
+/// Markdown link destination don't cache: CommonMark rejects control
+/// characters there, so the link is lost.
 fn markdown_cache(sources: &[String]) -> MarkdownCache {
+    use fluent_syntax::ast::Expression;
+    use fluent_syntax::ast::InlineExpression;
     use fluent_syntax::ast::PatternElement;
     let mut cache = MarkdownCache::default();
     for source in sources {
@@ -428,7 +486,7 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
             let Some(pattern) = &message.value else {
                 continue;
             };
-            let mut parts = Vec::new();
+            let mut parts: Vec<String> = vec![String::new()];
             let mut html = String::new();
             let mut index = 0;
             let mut placeable_before = false;
@@ -437,7 +495,7 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
                 match element {
                     PatternElement::TextElement { value } => {
                         placeable_before = false;
-                        parts.push(value.to_string());
+                        parts.last_mut().unwrap().push_str(value);
                         html.push_str(value);
                     }
                     PatternElement::Placeable { expression } => {
@@ -448,27 +506,40 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
                             cached = false;
                             break;
                         }
-                        if matches!(
-                            expression,
-                            fluent_syntax::ast::Expression::Select { .. }
-                        ) {
+                        let uncachable = match expression {
+                            Expression::Select { .. } => true,
+                            Expression::Inline(inline) => matches!(
+                                inline,
+                                InlineExpression::MessageReference { .. }
+                                    | InlineExpression::TermReference { .. }
+                            ),
+                        };
+                        if uncachable {
+                            // A select picks per arguments; a term or
+                            // message reference expands to markup (its
+                            // Markdown must convert), not literal text.
                             cached = false;
                             break;
                         }
                         placeable_before = true;
                         html.push_str(&marker(index));
+                        parts.push(String::new());
                         index += 1;
                     }
                 }
             }
-            if cached && index > 0 {
-                cache.messages.insert(
-                    id,
-                    MarkdownEntry {
-                        html: md::to_html(&html),
-                        parts,
-                    },
-                );
+            if cached {
+                let html = md::to_html(&html);
+                if html.contains("](\u{2}") {
+                    // A marker in a Markdown link destination: CommonMark
+                    // rejects control characters there and the link is
+                    // lost — convert per value instead.
+                    continue;
+                }
+                cache
+                    .messages
+                    .entry(id)
+                    .or_insert(MarkdownEntry { html, parts });
             }
         }
     }
@@ -545,12 +616,14 @@ mod tests {
             html.contains("Item 3 of <strong class=\"markdown\">7</strong> things."),
             "{html}"
         );
-        // The substituted values are escaped (literal, not Markdown).
+        // The substituted values land verbatim: they were escaped by
+        // `parse_args` before fluent formatted them (escaping again here
+        // double-escaped `O'Brien & Co`).
         let entry = cache.messages.get("greet").expect("greet cached");
-        let html = substitute(entry, "Hello \u{2068}<em>*</em>\u{2069}.").expect("substituted");
+        let html = substitute(entry, "Hello \u{2068}&lt;em&gt;*&lt;/em&gt;\u{2069}.").expect("substituted");
         assert!(
             html.contains("&lt;em&gt;*&lt;/em&gt;"),
-            "the value is escaped: {html}"
+            "the pre-escaped value lands as-is: {html}"
         );
 
         // A text part moved or vanished: the split fails, the caller falls
@@ -611,6 +684,134 @@ mod tests {
             let text = translate(&bundle("m = [{ $s }]"), "m", Some(&json)).unwrap();
             prop_assert!(!text.contains('<'), "{text:?}");
             prop_assert_eq!(decode_entities(&text), format!("[{s}]"));
+        }
+
+        /// Every cached entry substitutes exactly what the per-value
+        /// conversion of the same formatted text produces — over patterns
+        /// of arbitrary shape: leading/trailing placeables (the old
+        /// parts/marker alignment lost those), several placeables, and
+        /// multi-line patterns (the old cache split parts per line). The
+        /// cached entry exists exactly when the message is cacheable
+        /// (no select, no adjacent placeables, no term/message
+        /// references).
+        #[test]
+        fn cached_markdown_matches_per_value_conversion(
+            lead in prop::bool::ANY,
+            trail in prop::bool::ANY,
+            second in prop::bool::ANY,
+            multiline in prop::bool::ANY,
+            n in 0u32..100,
+        ) {
+            let mid = if second { " and { $n }/2" } else { "" };
+            let body = format!("say {n}{mid}");
+            let pattern = match (lead, multiline) {
+                (true, false) => format!("{{ $n }} {body}"),
+                (false, true) => format!("{body}\n\n  and {n} again"),
+                (true, true) => format!("{{ $n }} {body}\n\n  and {n} again"),
+                (false, false) => body,
+            };
+            let id = "m";
+            let source = format!("{id} = {pattern}\n");
+            let cache = markdown_cache(&[source.clone()]);
+            if second {
+                // Two placeables separated by text are cacheable; the
+                // empty-part alignment must still hold.
+                prop_assert!(cache.messages.contains_key(id));
+            }
+            let bundle = bundle(&source);
+            let json = serde_json::json!({ "n": n }).to_string();
+            let text = translate(&bundle, id, Some(&json)).unwrap();
+            let expected = md::to_html(&text);
+            match cache.messages.get(id) {
+                Some(entry) => {
+                    let substituted = substitute(entry, &text);
+                    prop_assert_eq!(
+                        substituted.as_ref(),
+                        Some(&expected),
+                        "pattern {:?} text {:?}",
+                        pattern,
+                        text
+                    );
+                }
+                None => prop_assert_eq!(md::to_html(&text), expected),
+            }
+        }
+    }
+
+    /// Uncacheable patterns: a select, adjacent placeables, a term or
+    /// message reference (markup expands per value), and a pattern whose
+    /// placeable lands in a Markdown link destination (CommonMark rejects
+    /// control characters there and the link is lost). Duplicate ids keep
+    /// the first entry (the bundle's choice).
+    #[test]
+    fn markdown_cache_skips_uncacheable_patterns() {
+        let cases = [
+            "sel = { $n ->\n   *[other] { $n } items\n}",
+            "adjacent = { $a }{ $b }",
+            "term = Use { -brand } now",
+            "reference = See { other } now",
+            "link = See [the docs]({ $url }) now",
+        ];
+        for source in cases {
+            assert!(
+                markdown_cache(&[source.to_owned()]).messages.is_empty(),
+                "{source:?} should not cache"
+            );
+        }
+        // A duplicate id keeps the first message's pattern.
+        let cache = markdown_cache(&[
+            "dup = First { $x } one\n".to_owned(),
+            "dup = Second { $x } two\n".to_owned(),
+        ]);
+        let entry = cache.messages.get("dup").expect("dup cached");
+        assert!(entry.html.contains("First"), "{:?}", entry.html);
+    }
+
+    /// Cached substitution never shows double-escaped text: the values
+    /// were escaped once by `parse_args`; a second escape in `substitute`
+    /// showed `O&#39;Brien &amp; Co`.
+    #[test]
+    fn string_args_escape_once_through_the_cache() {
+        let source = "apos = Hello { $name }!\n";
+        let cache = markdown_cache(&[source.to_owned()]);
+        let json = serde_json::json!({ "name": "O'Brien & Co" }).to_string();
+        let text = translate(&bundle(source), "apos", Some(&json)).unwrap();
+        let html = substitute(cache.messages.get("apos").unwrap(), &text).unwrap();
+        assert!(
+            html.contains("Hello O&#39;Brien &amp; Co!"),
+            "double-escaped? {html}"
+        );
+        assert!(!html.contains("&amp;#39;"), "double-escaped: {html}");
+    }
+
+    /// A message without placeables is cached too: the conversion runs
+    /// once at load, not on every localize.
+    #[test]
+    fn placeable_free_messages_are_cached() {
+        let cache = markdown_cache(&["plain = Just **text**.\n".to_owned()]);
+        let entry = cache.messages.get("plain").expect("plain cached");
+        assert!(entry.html.contains("<strong"));
+        assert_eq!(
+            substitute(entry, "Just **text**.").as_deref(),
+            Some(entry.html.as_str()),
+            "the whole text matches the pattern: the cached HTML comes back"
+        );
+    }
+
+    /// An argument whose text swallows a later literal part: the split
+    /// fails (or the parts no longer match) and the caller falls back to
+    /// converting the formatted text — the output is still right.
+    #[test]
+    fn args_containing_literal_parts_fall_back() {
+        let source = "pair = A { $x } B { $y } C\n";
+        let cache = markdown_cache(&[source.to_owned()]);
+        let json = serde_json::json!({ "x": "1 B 2", "y": "3" }).to_string();
+        let text = translate(&bundle(source), "pair", Some(&json)).unwrap();
+        let expected = md::to_html(&text);
+        let entry = cache.messages.get("pair").unwrap();
+        match substitute(entry, &text) {
+            Some(html) => assert_eq!(html, expected, "the mis-split substituted"),
+            None => assert_eq!(md::to_html(&text), expected),
         }
     }
 

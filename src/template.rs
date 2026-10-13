@@ -196,10 +196,92 @@ pub(crate) fn resolve_references(
     path: &AssetPath<'static>,
     source: &str,
 ) -> Result<(String, Vec<AssetPath<'static>>), BevyError> {
+    let is_markdown = md::is_markdown(&path.to_string());
     let mut out = String::with_capacity(source.len());
     let mut references = Vec::new();
     let mut rest = source;
-    while let Some(start) = rest.find("{%") {
+    // Markdown code fences and inline code spans protect their content: a
+    // code sample showing `{% include %}` syntax isn't a reference.
+    let mut fence: Option<String> = None;
+    let mut at_line_start = true;
+    while !rest.is_empty() {
+        if is_markdown && at_line_start {
+            let trimmed = rest.trim_start_matches(' ');
+            let indent = rest.len() - trimmed.len();
+            if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
+                let marker = &trimmed[..3];
+                let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+                let info = &rest[indent + 3..line_end.min(rest.len())];
+                if fence.is_none() && !info.trim().is_empty() {
+                    fence = Some(marker.to_owned());
+                } else if fence.as_deref() == Some(marker) && info.trim().is_empty() {
+                    fence = None;
+                }
+                out.push_str(&rest[..line_end]);
+                rest = &rest[line_end..];
+                at_line_start = true;
+                continue;
+            }
+        }
+        if fence.is_some() {
+            let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+            out.push_str(&rest[..line_end]);
+            rest = &rest[line_end..];
+            at_line_start = rest.is_empty() || rest.starts_with('\n');
+            continue;
+        }
+        // The earliest of: a reference tag, a comment (its `{% include %}`
+        // examples are commented out, not references), a raw block
+        // (verbatim), or — in Markdown — an inline code span.
+        let tag_start = rest.find("{%");
+        let comment_start = rest.find("{#");
+        let raw_start = rest.find("{% raw");
+        let code_start = if is_markdown { rest.find('`') } else { None };
+        let start = [tag_start, comment_start, raw_start, code_start]
+            .into_iter()
+            .flatten()
+            .min();
+        let Some(start) = start else {
+            out.push_str(rest);
+            return Ok((out, references));
+        };
+        if Some(start) == code_start && Some(start) != tag_start && Some(start) != raw_start {
+            // An inline code span: copy through its closing backtick run.
+            let ticks = rest[start..].len() - rest[start..].trim_start_matches('`').len();
+            let closer = "`".repeat(ticks);
+            let end = rest[start + ticks..]
+                .find(&closer)
+                .map_or(rest.len(), |at| start + ticks + at + ticks);
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            at_line_start = false;
+            continue;
+        }
+        if Some(start) == comment_start && Some(start) != tag_start {
+            // A `{# … #}` comment: copied verbatim, its contents skipped.
+            let Some(end) = rest[start..].find("#}") else {
+                out.push_str(rest);
+                return Ok((out, references));
+            };
+            let end = start + end + 2;
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            at_line_start = false;
+            continue;
+        }
+        if Some(start) == raw_start {
+            // `{% raw %} … {% endraw %}`: verbatim to the end tag.
+            let Some(end) = rest[start..].find("{% endraw") else {
+                out.push_str(rest);
+                return Ok((out, references));
+            };
+            let end = rest[end..].find("%}").map_or(rest.len(), |at| end + at + 2);
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            at_line_start = false;
+            continue;
+        }
+        // A reference tag (or a `{%` that isn't one): the original logic.
         let (before, tag) = rest.split_at(start);
         out.push_str(before);
         let body = tag[2..].trim_start_matches('-').trim_start();
@@ -216,9 +298,19 @@ pub(crate) fn resolve_references(
         let Some((after, literal, quote)) = literal else {
             out.push_str("{%");
             rest = &tag[2..];
+            at_line_start = false;
             continue;
         };
         let resolved = path.resolve_embed_str(literal)?;
+        // `read_asset_bytes` skips Bevy's own unapproved-path check
+        // (`../..` out of the asset root would load): enforce it here,
+        // matching `AssetServer::load`'s default.
+        if resolved.is_unapproved() {
+            return Err(format!(
+                "template include escapes the asset root: {literal}"
+            )
+            .into());
+        }
         // Everything up to the literal, the resolved path, then on.
         let literal_offset = tag.len() - after.len();
         out.push_str(&tag[..literal_offset]);
@@ -226,6 +318,7 @@ pub(crate) fn resolve_references(
         out.push_str(&resolved.to_string());
         out.push(quote);
         rest = &after[literal.len() + 2..];
+        at_line_start = false;
         references.push(resolved);
     }
     out.push_str(rest);
@@ -308,8 +401,10 @@ async fn load_template(
         let (source, references) = resolve_references(&path, &source)?;
         // ADR 0020: a `.md` template's Markdown converts once, at load —
         // Tera syntax survives verbatim (`to_html_template`), so the
-        // per-frame path is Tera-only.
-        let source = if md::is_markdown(&name) {
+        // per-frame path is Tera-only. Per file: an `.html` partial
+        // included from a `.md` page stays HTML, and a `.md` partial
+        // included from an `.html` page converts.
+        let source = if md::is_markdown(&path.to_string()) {
             md::to_html_template(&source)
         } else {
             source
