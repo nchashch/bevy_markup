@@ -176,6 +176,7 @@ fn handle_signals(
     languages: Res<Languages>,
     mut active: ResMut<ActiveLocale>,
     palettes: Query<&PaletteFile>,
+    exit: Option<Res<crate::harness::ExitAfter>>,
 ) {
     for signal in signals.read() {
         if signal.trigger != SignalTrigger::Click {
@@ -193,7 +194,7 @@ fn handle_signals(
             "switch-language" => next_language(&languages, &mut active),
             "cycle" => {
                 if let Ok(palette) = palettes.single() {
-                    cycle(&mut contexts, &palette.0);
+                    cycle(&mut contexts, &palette.0, exit.is_some());
                 }
             }
             _ => {}
@@ -209,23 +210,33 @@ fn cycle_palette(
     hotkeys: Hotkeys,
     mut contexts: Query<&mut TemplateContext>,
     palettes: Query<&PaletteFile>,
+    // A bounded (`--exit-after`) run leaves the tracked file alone: the
+    // harness injects keys, so the cycle would rewrite the committed
+    // stylesheet and dirty the working tree.
+    exit: Option<Res<crate::harness::ExitAfter>>,
 ) {
     if !hotkeys.just_pressed(KeyCode::KeyH, GamepadButton::East) {
         return;
     }
     if let Ok(palette) = palettes.single() {
-        cycle(&mut contexts, &palette.0);
+        cycle(&mut contexts, &palette.0, exit.is_some());
     }
 }
 
-fn cycle(contexts: &mut Query<&mut TemplateContext>, stylesheet: &PathBuf) {
+fn cycle(
+    contexts: &mut Query<&mut TemplateContext>,
+    stylesheet: &PathBuf,
+    bounded: bool,
+) {
     let current = contexts
         .iter()
         .find_map(|context| context.get("palette").and_then(|v| v.as_i64()))
         .unwrap_or(0);
     let next = (current as usize + 1) % PALETTES;
-    if let Err(err) = std::fs::write(stylesheet, palette_css(next)) {
-        error!("writing {}: {err}", stylesheet.display());
+    if !bounded {
+        if let Err(err) = std::fs::write(stylesheet, palette_css(next)) {
+            error!("writing {}: {err}", stylesheet.display());
+        }
     }
     for mut context in contexts.iter_mut() {
         context.insert("palette", &(next as i64));

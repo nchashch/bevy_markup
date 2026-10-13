@@ -205,7 +205,7 @@ fn run_bounded(app: &mut App) {
 }
 
 #[derive(Resource)]
-struct ExitAfter(u32);
+pub struct ExitAfter(pub u32);
 
 fn exit_after(
     frames: Res<bevy::diagnostic::FrameCount>,
