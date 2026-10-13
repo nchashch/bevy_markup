@@ -65,23 +65,27 @@ fn separate_statements(source: &str) -> String {
     let mut fence: Option<String> = None;
     let mut at_line_start = true;
     while !rest.is_empty() {
-        // Verbatim inside fenced code blocks.
-        if fence.is_none() && at_line_start {
+        // Fenced code blocks, at a line start: an opener carries an info
+        // string (or is a bare ``` fence), a closer matches the open
+        // marker and has nothing but whitespace after it. The check runs
+        // while a fence is open too — the closer must be found or the
+        // rest of the document stays verbatim.
+        if at_line_start {
             let trimmed = rest.trim_start_matches(' ');
             let indent = rest.len() - trimmed.len();
             if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
                 let marker = &trimmed[..3];
                 let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
                 let info = &rest[indent + 3..line_end.min(rest.len())];
-                // A closing fence has nothing but whitespace after the
-                // marker; an opening one carries the info string.
-                if fence.is_none() && !info.trim().is_empty() {
-                    fence = Some(marker.to_owned());
-                } else if fence.as_deref() == Some(marker) && info.trim().is_empty() {
+                let empty = info.trim().is_empty();
+                if fence.as_deref() == Some(marker) && empty {
                     fence = None;
+                } else if fence.is_none() {
+                    fence = Some(marker.to_owned());
                 }
                 out.push_str(&rest[..line_end]);
                 rest = &rest[line_end..];
+                // A whole line was copied; the next one is at a line start.
                 at_line_start = true;
                 continue;
             }
@@ -90,7 +94,7 @@ fn separate_statements(source: &str) -> String {
             let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
             out.push_str(&rest[..line_end]);
             rest = &rest[line_end..];
-            at_line_start = rest.is_empty() || rest.starts_with('\n');
+            at_line_start = true;
             continue;
         }
         // The earliest statement opener (a `{#` before a `{%` is a
@@ -434,6 +438,50 @@ pub(crate) fn is_markdown(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fenced block with an info string closes again: the closing
+    /// check sat behind `fence.is_none()`, so everything after a
+    /// ```` ```rust ```` fence stayed verbatim and own-line statements
+    /// merged into one paragraph (the a=false render left an empty
+    /// paragraph behind). A bare fence opens too, so its statements stay
+    /// *inside* the code instead of executing.
+    #[test]
+    fn fences_close_and_statements_after_them_separate() {
+        let render = |source: &str, json: &str| -> String {
+            let html = to_html_template(source);
+            let value: serde_json::Value = serde_json::from_str(json).unwrap();
+            let mut tera = tera::Tera::default();
+            tera.add_raw_template("md", &html).unwrap();
+            let context = tera::Context::from_serialize(&value).unwrap();
+            tera.render("md", &context).unwrap()
+        };
+
+        // After the closed fence, the statement is separated: `Shown`
+        // keeps its own paragraph (no merged `<p>{% if %}…{% endif %}</p>`,
+        // which renders an empty paragraph when `a` is false).
+        let source = "```rust\nx\n```\n\n{% if a %}\nShown\n{% endif %}\n";
+        let html = render(source, r#"{"a":true}"#);
+        assert!(html.contains("<p class=\"markdown\">Shown</p>"), "{html}");
+        let html = render(source, r#"{"a":false}"#);
+        assert!(
+            !html.contains("<p class=\"markdown\"></p>"),
+            "the merged paragraph renders empty: {html}"
+        );
+
+        // A bare fence opens too (Markdown semantics): its statements are
+        // code, not executed — and no blank lines were inserted around
+        // them (the old behavior split them, adding empty lines to the
+        // code).
+        let source = "```\ncode\n{% if a %}\nShown\n{% endif %}\n```\n";
+        let html = render(source, r#"{"a":true}"#);
+        assert!(!html.contains("<p class=\"markdown\">Shown</p>"), "{html}");
+        let code_at = html.find("<code").expect("the code block: {html}");
+        assert!(html[code_at..].contains("Shown"), "{html}");
+        assert!(
+            !html[code_at..].contains("code\n\n"),
+            "blank lines were inserted into the code: {html}"
+        );
+    }
 
     /// A `{# … #}` comment with no backtick after it used to spin
     /// forever: the code-span branch consumed nothing. Every shape
