@@ -157,8 +157,10 @@ jobs:
       - name: Compare with the committed references (ignoring the generator line)
         run: |
           # Untracked files (a new vector committed without its generated
-          # output) don't show in git diff — catch them too.
-          if [ -n "$(git status --porcelain tests/vectors)" ] \
+          # output) don't show in git diff — catch them too (tracked
+          # modifications are `git diff`'s job; the generator line nightly
+          # ignores must not defeat it).
+          if [ -n "$(git ls-files --others --exclude-standard tests/vectors)" ] \
             || ! git diff --exit-code -I '"generator"' -- tests/vectors; then
             echo "::error::Chrome computes differently from the committed browser.json: review; if the browser is right, regenerate and commit, then fix bevy_markup"
             exit 1
