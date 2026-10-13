@@ -1268,7 +1268,13 @@ pub(crate) fn build_html_ui(
             Some(&pairing),
         );
         // ADR 0021: this build's items become the next build's skeleton —
-        // the reuse cache. Three things must always correspond: the
+        // the reuse cache. The accepted costs: every build without a
+        // pairing walk compares the document by source (a clone + a
+        // string compare), and a gate-skipped build re-parses at retry
+        // time — both load-bearing for R04/R05's "the skeleton never
+        // pairs against the wrong document" (comparing without the
+        // clone would need the queued closure to hold a borrow, which
+        // commands don't allow). Three things must always correspond: the
         // skeleton's document, its specs, and the entities (which a build
         // that updated them from fresh specs has moved — a full rebuild or
         // restyle, or a gate-skipped one). So every build without a
@@ -2528,19 +2534,30 @@ fn update_children(
                         // (earlier insertions shift the indices) — and the
                         // spec's handle was remapped to the fresh document.
                         (SpecNode::Cached(spec), true) => {
-                            if let Some(handle) = spec.handle {
+                            // The skip leaves the descendants' `DomNode`s at
+                            // the handles they were spawned with; the state
+                            // walk keys `:hover`/`:active` by the current
+                            // document's handles, so refresh every level (the
+                            // spec's handles were remapped up front) — but
+                            // only when the root's handle actually moved
+                            // (an unchanged document remaps every handle to
+                            // itself; the per-element queue used to fire
+                            // anyway).
+                            let moved = spec.handle
+                                != dom_nodes
+                                    .get(child)
+                                    .ok()
+                                    .map(|(dom, _)| dom.0);
+                            if let Some(handle) = spec.handle.filter(|_| moved) {
                                 commands
                                     .entity(child)
                                     .queue(move |mut entity: EntityWorldMut| {
                                         put(&mut entity, Some(DomNode(handle)));
                                     });
                             }
-                            // The skip leaves the descendants' `DomNode`s at
-                            // the handles they were spawned with; the state
-                            // walk keys `:hover`/`:active` by the current
-                            // document's handles, so refresh every level (the
-                            // spec's handles were remapped up front).
-                            refresh_cached_handles(commands, child, spec, tree);
+                            if moved {
+                                refresh_cached_handles(commands, child, spec, tree);
+                            }
                         }
                         (spec, _) => {
                             let (spawned_spans, children) =
