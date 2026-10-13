@@ -129,6 +129,8 @@ pub(crate) fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
     message
 }
 
+/// The DOM outline (depth-first, document order), iterative: the
+/// document's depth costs heap, not stack.
 fn write_node(
     out: &mut String,
     parser: &tl::Parser,
@@ -136,48 +138,54 @@ fn write_node(
     handle: tl::NodeHandle,
     depth: usize,
 ) {
-    let Some(node) = handle.get(parser) else {
-        return;
-    };
-    let indent = "  ".repeat(depth);
-    match node {
-        tl::Node::Tag(tag) => {
-            let _ = write!(out, "{indent}{}", tag.name().as_utf8_str());
-            for (key, value) in tag.attributes().iter() {
-                match value {
-                    Some(value) => {
-                        let _ = write!(out, " {key}=\"{value}\"");
+    let mut stack = vec![(handle, depth)];
+    while let Some((handle, depth)) = stack.pop() {
+        let Some(node) = handle.get(parser) else {
+            continue;
+        };
+        let indent = "  ".repeat(depth);
+        match node {
+            tl::Node::Tag(tag) => {
+                let _ = write!(out, "{indent}{}", tag.name().as_utf8_str());
+                for (key, value) in tag.attributes().iter() {
+                    match value {
+                        Some(value) => {
+                            let _ = write!(out, " {key}=\"{value}\"");
+                        }
+                        None => {
+                            let _ = write!(out, " {key}");
+                        }
+                    }
+                }
+                out.push('\n');
+                let child_indent = "  ".repeat(depth + 1);
+                match localized.get(&handle) {
+                    Some(Ok(text)) => {
+                        let _ = writeln!(out, "{child_indent}l10n {text:?}");
+                    }
+                    Some(Err(err)) => {
+                        let _ = writeln!(out, "{child_indent}l10n error: {err}");
                     }
                     None => {
-                        let _ = write!(out, " {key}");
+                        // Reversed: the leftmost child pops first.
+                        let children: Vec<tl::NodeHandle> =
+                            tag.children().top().iter().copied().collect();
+                        for child in children.into_iter().rev() {
+                            stack.push((child, depth + 1));
+                        }
                     }
                 }
             }
-            out.push('\n');
-            let child_indent = "  ".repeat(depth + 1);
-            match localized.get(&handle) {
-                Some(Ok(text)) => {
-                    let _ = writeln!(out, "{child_indent}l10n {text:?}");
-                }
-                Some(Err(err)) => {
-                    let _ = writeln!(out, "{child_indent}l10n error: {err}");
-                }
-                None => {
-                    for child in tag.children().top().iter() {
-                        write_node(out, parser, localized, *child, depth + 1);
-                    }
+            tl::Node::Raw(text) => {
+                let text = text.as_utf8_str();
+                let text = text.trim();
+                if !text.is_empty() {
+                    let _ = writeln!(out, "{indent}{text:?}");
                 }
             }
-        }
-        tl::Node::Raw(text) => {
-            let text = text.as_utf8_str();
-            let text = text.trim();
-            if !text.is_empty() {
-                let _ = writeln!(out, "{indent}{text:?}");
+            tl::Node::Comment(text) => {
+                let _ = writeln!(out, "{indent}{}", text.as_utf8_str());
             }
-        }
-        tl::Node::Comment(text) => {
-            let _ = writeln!(out, "{indent}{}", text.as_utf8_str());
         }
     }
 }

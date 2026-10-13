@@ -10,3 +10,4 @@ cc 2f1064b8586144ff6f17f3aa3f149b364083e1f0d1a43221dbbacf74a98c123d # shrinks to
 cc 6731bad6cde585359e0115dda68dbee8c50e2cd5d825f52b201523b6d661a3de # shrinks to input = _ContentUpdateMatchesAFreshBuildArgs { a: [9, 9], b: [] }
 cc 2d0be45caa84cb9c976a73f37d198cb76ea37d6c398049384b47fe77de1e7fce # shrinks to input = _ContentUpdateMatchesAFreshBuildArgs { a: [10, 3, 5], b: [5, 3] }
 cc c204ae6dca010b1f15ca938f327a16f30bd449c75226399526df61fc74cab01b # shrinks to input = _SkeletonReuseMatchesAFreshBuildArgs { ops: [3, 4, 3, 0] }
+cc 254da4eb0e003fb76928da4376c5cccea89cddce3787180489a1dbb22e3c4ed2 # shrinks to input = _ContentUpdateMatchesAFreshBuildArgs { a: [8], b: [8, 0] }

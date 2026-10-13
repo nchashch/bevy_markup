@@ -1868,13 +1868,64 @@ type Tree<'w, 's> = Query<
     ),
 >;
 
+/// The spec of an item and everything below it. Iterative (a frame per
+/// open container: its partial spec, its remaining child items, the
+/// child specs built so far), so the item tree's depth costs heap, not
+/// stack.
 fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
+    struct Frame<'a> {
+        spec: NodeSpec,
+        items: std::slice::Iter<'a, Item>,
+        children: Vec<SpecNode>,
+    }
+    impl<'a> Frame<'a> {
+        fn new(spec: NodeSpec, items: &'a [Item]) -> Self {
+            Self {
+                spec,
+                items: items.iter(),
+                children: Vec::with_capacity(items.len()),
+            }
+        }
+    }
+    let (spec, items) = item_shell(styler, item, default_gap);
+    let Some(items) = items else {
+        return spec;
+    };
+    let mut stack = vec![Frame::new(spec, items)];
+    loop {
+        let top = stack.last_mut().expect("the root frame is popped last");
+        match top.items.next() {
+            Some(Item::Cached(spec)) => top.children.push(SpecNode::Cached(Arc::clone(spec))),
+            Some(child) => match item_shell(styler, child, default_gap) {
+                (spec, None) => top.children.push(SpecNode::Fresh(Arc::new(spec))),
+                (spec, Some(items)) => stack.push(Frame::new(spec, items)),
+            },
+            None => {
+                let Frame { mut spec, children, .. } = stack.pop().expect("non-empty");
+                spec.images = children
+                    .iter()
+                    .flat_map(|child| child.spec().images.iter().cloned())
+                    .collect();
+                spec.children = children;
+                match stack.last_mut() {
+                    Some(parent) => parent.children.push(SpecNode::Fresh(Arc::new(spec))),
+                    None => return spec,
+                }
+            }
+        }
+    }
+}
+
+/// One item's own spec, without its children: a container's comes back
+/// with its child items for [`item_spec`] to build (and its `children`
+/// and `images` still empty).
+fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpec, Option<&'a [Item]>) {
     let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children) =
         match item {
             // A reused subtree's spec comes out by refcount in the caller;
             // this path only builds fresh items.
             Item::Cached(_) => unreachable!("a cached item never reaches item_spec"),
-            Item::Block(block) => return block_spec(styler, block),
+            Item::Block(block) => return (block_spec(styler, block), None),
             #[cfg(feature = "text-input")]
             Item::TextInput {
                 element,
@@ -1906,7 +1957,7 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
                     ..default()
                 };
                 boxed.layout.apply_to(&mut node);
-                return NodeSpec {
+                return (NodeSpec {
                     element: Some(element),
                     signals,
                     focus,
@@ -1930,7 +1981,7 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
                     calc: boxed.calc.clone(),
                     transitions: boxed.transitions.clone(),
                     ..NodeSpec::new(node)
-                };
+                }, None);
             }
             Item::Container {
                 element,
@@ -1967,18 +2018,7 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
         ..default()
     };
     boxed.layout.apply_to(&mut node);
-    let children: Vec<SpecNode> = children
-        .iter()
-        .map(|child| match child {
-            Item::Cached(spec) => SpecNode::Cached(Arc::clone(spec)),
-            child => SpecNode::Fresh(Arc::new(item_spec(styler, child, default_gap))),
-        })
-        .collect();
-    let images = children
-        .iter()
-        .flat_map(|child| child.spec().images.iter().cloned())
-        .collect();
-    NodeSpec {
+    let spec = NodeSpec {
         element: Some(element),
         signals,
         focus,
@@ -1996,12 +2036,11 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
             .visibility
             .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
         font_size,
-        images,
-        children,
         calc: boxed.calc.clone(),
         transitions: boxed.transitions.clone(),
         ..NodeSpec::new(node)
-    }
+    };
+    (spec, Some(children.as_slice()))
 }
 
 fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
@@ -2163,14 +2202,84 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
 pub(crate) struct DomNode(pub tl::NodeHandle);
 
 /// Spawns `spec` under `parent`, collecting its custom elements (in
-/// document order) for [`custom_elements::connect`].
+/// document order) for [`custom_elements::connect`]. Iterative: a BFS
+/// spawn pass (children attach left-to-right, so `Children` order is
+/// document order) plus a DFS pass for the custom elements, so the spec
+/// tree's depth costs heap, not stack.
 fn spawn_spec(
-    parent: &mut ChildSpawnerCommands,
+    commands: &mut Commands,
+    parent: Entity,
     spec: &NodeSpec,
     root: Entity,
     connected: &mut Vec<ElementConnected>,
 ) -> Entity {
-    let mut entity = parent.spawn(spec.node.clone());
+    /// A spawned node: its entity, its spec, and where its children sit
+    /// in `spawned` (they spawn consecutively right after their parent
+    /// is processed).
+    struct Spawned<'a> {
+        entity: Entity,
+        spec: &'a NodeSpec,
+        children: Vec<usize>,
+    }
+    // The BFS spawn pass: a node is configured and attached where it is
+    // spawned; its children spawn consecutively (left to right, so
+    // `Children` order is document order) and go to the back of the
+    // queue.
+    let mut spawned: Vec<Spawned> = Vec::new();
+    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    let id = spawn_attached(commands, parent, spec);
+    spawned.push(Spawned {
+        entity: id,
+        spec,
+        children: Vec::new(),
+    });
+    queue.push_back(0);
+    while let Some(index) = queue.pop_front() {
+        let (entity, children) = (spawned[index].entity, spawned[index].spec.children.as_slice());
+        spawned[index].children = children
+            .iter()
+            .map(|child| {
+                let entity = spawn_attached(commands, entity, child.spec());
+                spawned.push(Spawned {
+                    entity,
+                    spec: child.spec(),
+                    children: Vec::new(),
+                });
+                spawned.len() - 1
+            })
+            .collect();
+        queue.extend(spawned[index].children.iter().copied());
+    }
+    // The DFS pass: custom elements in document order (pre-order), which
+    // is the order `custom_elements::connect` runs them in.
+    let mut stack = vec![0usize];
+    while let Some(index) = stack.pop() {
+        let Spawned {
+            entity, spec, ..
+        } = &spawned[index];
+        if let Some(custom) = &spec.custom {
+            connected.push(ElementConnected {
+                entity: *entity,
+                root,
+                name: custom.name.clone(),
+                dataset: custom.dataset.clone(),
+            });
+        }
+        for child in spawned[index].children.iter().rev() {
+            stack.push(*child);
+        }
+    }
+    id
+}
+
+/// Spawns one spec's node under `parent` (no children): the node, the
+/// element components and, for a text block, its spans.
+fn spawn_attached(
+    commands: &mut Commands,
+    parent: Entity,
+    spec: &NodeSpec,
+) -> Entity {
+    let mut entity = commands.spawn((spec.node.clone(), ChildOf(parent)));
     // Non-text nodes get their `EmSize` from the cascade (text blocks have
     // a `TextFont`, which Bevy derives it from). CSS `em` lengths on the
     // node resolve against it. (Text inputs: `EditableText` requires a
@@ -2214,12 +2323,6 @@ fn spawn_spec(
         });
     }
     if let Some(custom) = &spec.custom {
-        connected.push(ElementConnected {
-            entity: id,
-            root,
-            name: custom.name.clone(),
-            dataset: custom.dataset.clone(),
-        });
         entity.insert(ConnectedAs(custom.clone()));
     }
     if let Some(element) = &spec.element {
@@ -2269,12 +2372,6 @@ fn spawn_spec(
         entity.with_children(|spans| {
             spawn_spans(spans, text, spec.pickable);
         });
-    } else {
-        entity.with_children(|children| {
-            for child in &spec.children {
-                spawn_spec(children, child.spec(), root, connected);
-            }
-        });
     }
     id
 }
@@ -2306,6 +2403,11 @@ fn same_identity(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
 /// the rest are despawned and spawned, then everything is put in document
 /// order. Children the app nested (`HtmlUi` roots) are kept, after the
 /// pipeline's own. Returns whether anything below `parent` was spawned.
+///
+/// Iterative: a level's matching is a flat loop (`update_spec` returns the
+/// children to process instead of recursing); a level's finalization
+/// (despawn the stale, put the kept ones in order) runs after all the
+/// deeper levels matched, deepest first.
 fn update_children(
     commands: &mut Commands,
     parent: Entity,
@@ -2316,132 +2418,164 @@ fn update_children(
     dom_nodes: &Query<'_, '_, (&DomNode, Option<&PseudoState>)>,
     pairing: Option<&HashMap<tl::NodeHandle, tl::NodeHandle>>,
 ) -> bool {
-    let current: Vec<Entity> = tree
-        .get(parent)
-        .ok()
-        .and_then(|(children, ..)| children)
-        .map_or_else(Vec::new, |children| children.to_vec());
-    let (owned, nested): (Vec<Entity>, Vec<Entity>) = current
-        .iter()
-        .partition(|child| !tree.get(**child).is_ok_and(|(.., nested_ui)| nested_ui));
-    let id_of = |entity: Entity| {
-        tree.get(entity)
-            .ok()
-            .and_then(|(_, _, _, element, ..)| element?.id.clone())
-    };
-    let spec_id = |spec: &SpecNode| {
-        spec.spec()
-            .element
-            .as_ref()
-            .and_then(|element| element.id.clone())
-    };
-    let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
-    for id in owned.iter().filter_map(|&child| id_of(child)) {
-        counts.entry(id).or_default().0 += 1;
+    /// A level waiting for its finalization (after all deeper levels
+    /// matched).
+    struct Pending {
+        parent: Entity,
+        owned: Vec<Entity>,
+        nested: Vec<Entity>,
+        current: Vec<Entity>,
+        kept: HashSet<Entity>,
+        desired: Vec<Entity>,
     }
-    for id in specs.iter().filter_map(spec_id) {
-        counts.entry(id).or_default().1 += 1;
-    }
-    let key = |id: Option<String>| id.filter(|id| counts.get(id) == Some(&(1, 1)));
-    let mut keyed: HashMap<String, Entity> = HashMap::new();
-    let mut unkeyed = Vec::new();
-    for &child in &owned {
-        match key(id_of(child)) {
-            Some(id) => {
-                keyed.insert(id, child);
-            }
-            None => unkeyed.push(child),
-        }
-    }
-    let mut unkeyed = unkeyed.into_iter();
-    let mut kept = HashSet::new();
-    let mut desired = Vec::with_capacity(specs.len() + nested.len());
     let mut spawned = false;
-    for spec in specs {
-        let candidate = match key(spec_id(spec)) {
-            Some(id) => keyed.remove(&id),
-            None => unkeyed.next(),
+    let mut levels: Vec<Pending> = Vec::new();
+    let mut work: Vec<(Entity, &[SpecNode])> = vec![(parent, specs)];
+    while let Some((parent, specs)) = work.pop() {
+        let current: Vec<Entity> = tree
+            .get(parent)
+            .ok()
+            .and_then(|(children, ..)| children)
+            .map_or_else(Vec::new, |children| children.to_vec());
+        let (owned, nested): (Vec<Entity>, Vec<Entity>) = current
+            .iter()
+            .partition(|child| !tree.get(**child).is_ok_and(|(.., nested_ui)| nested_ui));
+        let id_of = |entity: Entity| {
+            tree.get(entity)
+                .ok()
+                .and_then(|(_, _, _, element, ..)| element?.id.clone())
         };
-        match candidate {
-            Some(child) if same_identity(spec.spec(), child, tree) => {
-                // A reused spec may only skip when it landed on the entity
-                // it was built for: its content is what that entity already
-                // carries. Positional matching can hand it a foreign
-                // entity (an id-less list reordered); there the cached
-                // content — provably what a fresh build produces for this
-                // subtree — is written through `update_spec` like a fresh
-                // spec's.
-                let own_entity = match spec {
-                    SpecNode::Cached(spec) => spec
-                        .handle
-                        .and_then(|handle| pairing.and_then(|pairing| pairing.get(&handle)))
-                        .copied()
-                        == dom_nodes.get(child).ok().map(|(dom, _)| **dom),
-                    SpecNode::Fresh(_) => false,
-                };
-                match (spec, own_entity) {
-                    // ADR 0021 C-2: a reused subtree's entities already
-                    // match its specs (every write since they were built
-                    // compared equal, and the gates drop the reuse on any
-                    // style-side change). Skip the visit; the one thing
-                    // that changed across frames is the `DomNode` handle
-                    // (earlier insertions shift the indices) — and the
-                    // spec's handle was remapped to the fresh document.
-                    (SpecNode::Cached(spec), true) => {
-                        if let Some(handle) = spec.handle {
-                            commands
-                                .entity(child)
-                                .queue(move |mut entity: EntityWorldMut| {
-                                    put(&mut entity, Some(DomNode(handle)));
-                                });
-                        }
-                        // The skip leaves the descendants' `DomNode`s at
-                        // the handles they were spawned with; the state
-                        // walk keys `:hover`/`:active` by the current
-                        // document's handles, so refresh every level (the
-                        // spec's handles were remapped up front).
-                        refresh_cached_handles(commands, child, spec, tree);
-                    }
-                    (spec, _) => {
-                        spawned |= update_spec(
-                            commands,
-                            child,
-                            spec.spec(),
-                            tree,
-                            root,
-                            connected,
-                            dom_nodes,
-                            pairing,
-                        );
-                    }
+        let spec_id = |spec: &SpecNode| {
+            spec.spec()
+                .element
+                .as_ref()
+                .and_then(|element| element.id.clone())
+        };
+        let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
+        for id in owned.iter().filter_map(|&child| id_of(child)) {
+            counts.entry(id).or_default().0 += 1;
+        }
+        for id in specs.iter().filter_map(spec_id) {
+            counts.entry(id).or_default().1 += 1;
+        }
+        let key = |id: Option<String>| id.filter(|id| counts.get(id) == Some(&(1, 1)));
+        let mut keyed: HashMap<String, Entity> = HashMap::new();
+        let mut unkeyed = Vec::new();
+        for &child in &owned {
+            match key(id_of(child)) {
+                Some(id) => {
+                    keyed.insert(id, child);
                 }
-                kept.insert(child);
-                desired.push(child);
-            }
-            _ => {
-                let mut id = None;
-                commands.entity(parent).with_children(|children| {
-                    id = Some(spawn_spec(children, spec.spec(), root, connected));
-                });
-                desired.extend(id);
-                spawned = true;
+                None => unkeyed.push(child),
             }
         }
+        let mut unkeyed = unkeyed.into_iter();
+        let mut kept = HashSet::new();
+        let mut desired = Vec::with_capacity(specs.len() + nested.len());
+        for spec in specs {
+            let candidate = match key(spec_id(spec)) {
+                Some(id) => keyed.remove(&id),
+                None => unkeyed.next(),
+            };
+            match candidate {
+                Some(child) if same_identity(spec.spec(), child, tree) => {
+                    // A reused spec may only skip when it landed on the entity
+                    // it was built for: its content is what that entity already
+                    // carries. Positional matching can hand it a foreign
+                    // entity (an id-less list reordered); there the cached
+                    // content — provably what a fresh build produces for this
+                    // subtree — is written through `update_spec` like a fresh
+                    // spec's.
+                    let own_entity = match spec {
+                        SpecNode::Cached(spec) => spec
+                            .handle
+                            .and_then(|handle| pairing.and_then(|pairing| pairing.get(&handle)))
+                            .copied()
+                            == dom_nodes.get(child).ok().map(|(dom, _)| **dom),
+                        SpecNode::Fresh(_) => false,
+                    };
+                    match (spec, own_entity) {
+                        // ADR 0021 C-2: a reused subtree's entities already
+                        // match its specs (every write since they were built
+                        // compared equal, and the gates drop the reuse on any
+                        // style-side change). Skip the visit; the one thing
+                        // that changed across frames is the `DomNode` handle
+                        // (earlier insertions shift the indices) — and the
+                        // spec's handle was remapped to the fresh document.
+                        (SpecNode::Cached(spec), true) => {
+                            if let Some(handle) = spec.handle {
+                                commands
+                                    .entity(child)
+                                    .queue(move |mut entity: EntityWorldMut| {
+                                        put(&mut entity, Some(DomNode(handle)));
+                                    });
+                            }
+                            // The skip leaves the descendants' `DomNode`s at
+                            // the handles they were spawned with; the state
+                            // walk keys `:hover`/`:active` by the current
+                            // document's handles, so refresh every level (the
+                            // spec's handles were remapped up front).
+                            refresh_cached_handles(commands, child, spec, tree);
+                        }
+                        (spec, _) => {
+                            let (spawned_spans, children) =
+                                update_spec(commands, child, spec.spec(), tree);
+                            spawned |= spawned_spans;
+                            if let Some(children) = children {
+                                work.push((child, children));
+                            }
+                        }
+                    }
+                    kept.insert(child);
+                    desired.push(child);
+                }
+                _ => {
+                    let id = spawn_spec(commands, parent, spec.spec(), root, connected);
+                    desired.push(id);
+                    spawned = true;
+                }
+            }
+        }
+        levels.push(Pending {
+            parent,
+            owned,
+            nested,
+            current,
+            kept,
+            desired,
+        });
     }
-    for &stale in owned.iter().filter(|child| !kept.contains(*child)) {
-        commands.entity(stale).despawn();
-    }
-    // The non-`owned` children are exactly the nested ones: membership in
-    // the (small) nested set instead of a linear scan per current child.
-    let nested_set: HashSet<Entity> = nested.iter().copied().collect();
-    desired.extend(nested);
-    let remaining: Vec<Entity> = current
-        .iter()
-        .copied()
-        .filter(|child| kept.contains(child) || nested_set.contains(child))
-        .collect();
-    if desired != remaining {
-        commands.entity(parent).replace_children(&desired);
+    // The finalizations run deepest first (a level pushed later is a
+    // descendant of an earlier one): every level's children are matched
+    // (and its stale grandchildren despawned) by the time it finalizes.
+    for Pending {
+        parent,
+        owned,
+        nested,
+        current,
+        kept,
+        desired,
+    } in levels.into_iter().rev()
+    {
+        for &stale in owned.iter().filter(|child| !kept.contains(*child)) {
+            commands.entity(stale).despawn();
+        }
+        // The non-`owned` children are exactly the nested ones: membership in
+        // the (small) nested set instead of a linear scan per current child.
+        let nested_set: HashSet<Entity> = nested.iter().copied().collect();
+        let desired = {
+            let mut desired = desired;
+            desired.extend(nested);
+            desired
+        };
+        let remaining: Vec<Entity> = current
+            .iter()
+            .copied()
+            .filter(|child| kept.contains(child) || nested_set.contains(child))
+            .collect();
+        if desired != remaining {
+            commands.entity(parent).replace_children(&desired);
+        }
     }
     spawned
 }
@@ -2460,47 +2594,50 @@ fn refresh_cached_handles(
     spec: &NodeSpec,
     tree: &Tree,
 ) {
-    let Ok((children, .., nested_ui)) = tree.get(entity) else {
-        return;
-    };
-    if nested_ui {
-        return;
-    }
-    let Some(children) = children else {
-        return;
-    };
-    let entities: Vec<Entity> = children.iter().collect();
-    if let Some(text) = &spec.text {
-        // A text block's children are its spans, in order; only link spans
-        // carry a `DomNode`.
-        if entities.len() != text.spans.len() {
-            return;
+    let mut stack = vec![(entity, spec)];
+    while let Some((entity, spec)) = stack.pop() {
+        let Ok((children, .., nested_ui)) = tree.get(entity) else {
+            continue;
+        };
+        if nested_ui {
+            continue;
         }
-        for (&child, span) in entities.iter().zip(&text.spans) {
-            let Some(link) = &span.link else {
+        let Some(children) = children else {
+            continue;
+        };
+        let entities: Vec<Entity> = children.iter().collect();
+        if let Some(text) = &spec.text {
+            // A text block's children are its spans, in order; only link
+            // spans carry a `DomNode`.
+            if entities.len() != text.spans.len() {
                 continue;
-            };
-            let handle = link.handle;
-            commands
-                .entity(child)
-                .queue(move |mut entity: EntityWorldMut| {
-                    put(&mut entity, Some(DomNode(handle)));
-                });
+            }
+            for (&child, span) in entities.iter().zip(&text.spans) {
+                let Some(link) = &span.link else {
+                    continue;
+                };
+                let handle = link.handle;
+                commands
+                    .entity(child)
+                    .queue(move |mut entity: EntityWorldMut| {
+                        put(&mut entity, Some(DomNode(handle)));
+                    });
+            }
+            continue;
         }
-        return;
-    }
-    if entities.len() != spec.children.len() {
-        return;
-    }
-    for (&child, child_spec) in entities.iter().zip(&spec.children) {
-        if let Some(handle) = child_spec.spec().handle {
-            commands
-                .entity(child)
-                .queue(move |mut entity: EntityWorldMut| {
-                    put(&mut entity, Some(DomNode(handle)));
-                });
+        if entities.len() != spec.children.len() {
+            continue;
         }
-        refresh_cached_handles(commands, child, child_spec.spec(), tree);
+        for (&child, child_spec) in entities.iter().zip(&spec.children) {
+            if let Some(handle) = child_spec.spec().handle {
+                commands
+                    .entity(child)
+                    .queue(move |mut entity: EntityWorldMut| {
+                        put(&mut entity, Some(DomNode(handle)));
+                    });
+            }
+            stack.push((child, child_spec.spec().as_ref()));
+        }
     }
 }
 
@@ -2513,16 +2650,12 @@ fn refresh_cached_handles(
 /// against the current component *before* cloning (`put_ref`), so an
 /// unchanged element — the common case for a reused subtree — is visited
 /// without copying anything.
-fn update_spec(
+fn update_spec<'a>(
     commands: &mut Commands,
     entity: Entity,
-    spec: &Arc<NodeSpec>,
+    spec: &'a Arc<NodeSpec>,
     tree: &Tree,
-    root: Entity,
-    connected: &mut Vec<ElementConnected>,
-    dom_nodes: &Query<'_, '_, (&DomNode, Option<&PseudoState>)>,
-    pairing: Option<&HashMap<tl::NodeHandle, tl::NodeHandle>>,
-) -> bool {
+) -> (bool, Option<&'a [SpecNode]>) {
     let (children, has_frame) = tree
         .get(entity)
         .map(|(children, _, _, _, _, has_frame, _)| {
@@ -2647,16 +2780,9 @@ fn update_spec(
         &spec.transitions,
     );
     let Some(text) = &spec.text else {
-        return update_children(
-            commands,
-            entity,
-            &spec.children,
-            tree,
-            root,
-            connected,
-            dom_nodes,
-            pairing,
-        );
+        // The children are the caller's next level (the update walk is
+        // iterative; see `update_children`).
+        return (false, Some(&spec.children));
     };
     // `TextLayout` is required by `Text`: replace, never remove.
     let layout = if text.no_wrap {
@@ -2826,9 +2952,9 @@ fn update_spec(
         // New span entities: the restyle's "everything was kept" promise
         // no longer holds — report a build so `HtmlUiBuilt` fires and
         // observers re-wire the replacements (link spans, in particular).
-        return true;
+        return (true, None);
     }
-    false
+    (false, None)
 }
 
 /// Resolves `calc()`-valued layout properties per frame: `em`/`rem`
@@ -3285,9 +3411,11 @@ fn pair_trees_into(
     }
 }
 
-/// Pairs the two nodes; returns whether their whole subtrees match. Trees
-/// deeper than [`MAX_DOM_DEPTH`] never match (the fresh collect caps
-/// them, so a cached spec could not describe them anyway).
+/// Pairs the two nodes; returns whether their whole subtrees match.
+/// Iterative (an explicit task stack): a tag is clean when every child
+/// pair matched, so its completion runs after its children (post-order).
+/// Trees deeper than [`MAX_DOM_DEPTH`] never match (the fresh collect
+/// caps them, so a cached spec could not describe them anyway).
 fn pair_node(
     old_parser: &tl::Parser,
     old: tl::NodeHandle,
@@ -3298,61 +3426,133 @@ fn pair_node(
     clean: &mut HashSet<tl::NodeHandle>,
     depth: usize,
 ) -> bool {
-    if depth >= MAX_DOM_DEPTH {
-        return false;
+    /// A tag pair whose children are being paired; `all` folds their
+    /// results.
+    struct Parent {
+        old: tl::NodeHandle,
+        fresh: tl::NodeHandle,
+        all: bool,
     }
-    let (Some(old_node), Some(fresh_node)) = (old.get(old_parser), fresh.get(fresh_parser)) else {
-        return false;
-    };
-    match (old_node, fresh_node) {
-        (tl::Node::Tag(old_tag), tl::Node::Tag(fresh_tag)) => {
-            // A translated element's item comes from its per-build
-            // fragment, never from this DOM subtree: exclude it (and its
-            // descendants, whose items are fragment-based too) before any
-            // attribute work — an all-translated document exits the walk
-            // at the top.
-            let translated = |tag: &tl::HTMLTag| {
-                tag.attributes().get("data-l10n-id").flatten().is_some()
-            };
-            if translated(old_tag) || translated(fresh_tag) {
-                return false;
-            }
-            if !tag_equal(old_tag, fresh_tag) {
-                return false;
-            }
-            let (old_children, fresh_children) = (old_tag.children(), fresh_tag.children());
-            let (old_children, fresh_children) = (old_children.top(), fresh_children.top());
-            if old_children.len() != fresh_children.len() {
-                return false;
-            }
-            let mut all = true;
-            for (old_child, fresh_child) in old_children.iter().zip(fresh_children.iter()) {
-                all &= pair_node(
-                    old_parser,
-                    *old_child,
-                    fresh_parser,
-                    *fresh_child,
-                    pairing,
-                    reverse,
-                    clean,
-                    depth + 1,
-                );
-            }
-            if all {
-                pairing.insert(fresh, old);
-                reverse.insert(old, fresh);
-                clean.insert(old);
-            }
-            all
-        }
-        // Raw text has no item of its own (anonymous blocks are keyed by
-        // their element); its equality counts toward the parent's.
-        (tl::Node::Raw(old_text), tl::Node::Raw(fresh_text)) => {
-            old_text.as_utf8_str() == fresh_text.as_utf8_str()
-        }
-        (tl::Node::Comment(_), tl::Node::Comment(_)) => true,
-        _ => false,
+    enum Task {
+        /// Pair two nodes, folding the result into the parent tag's
+        /// accumulator (`None`: the root pair, folded into `all`).
+        Pair {
+            old: tl::NodeHandle,
+            fresh: tl::NodeHandle,
+            depth: usize,
+            parent: Option<usize>,
+        },
+        /// A tag pair's children are all done: complete it.
+        Complete {
+            parent: usize,
+            grandparent: Option<usize>,
+        },
     }
+    let mut all = true;
+    let mut parents: Vec<Parent> = Vec::new();
+    let mut stack = vec![Task::Pair {
+        old,
+        fresh,
+        depth,
+        parent: None,
+    }];
+    while let Some(task) = stack.pop() {
+        match task {
+            Task::Pair {
+                old,
+                fresh,
+                depth,
+                parent,
+            } => {
+                let ok = 'pair: {
+                    let (Some(old_node), Some(fresh_node)) =
+                        (old.get(old_parser), fresh.get(fresh_parser))
+                    else {
+                        break 'pair false;
+                    };
+                    let (old_tag, fresh_tag) = match (old_node, fresh_node) {
+                        (tl::Node::Tag(old_tag), tl::Node::Tag(fresh_tag)) => (old_tag, fresh_tag),
+                        // Raw text has no item of its own (anonymous
+                        // blocks are keyed by their element); its equality
+                        // counts toward the parent's.
+                        (tl::Node::Raw(old_text), tl::Node::Raw(fresh_text)) => {
+                            break 'pair old_text.as_utf8_str() == fresh_text.as_utf8_str()
+                        }
+                        (tl::Node::Comment(_), tl::Node::Comment(_)) => break 'pair true,
+                        _ => break 'pair false,
+                    };
+                    // A translated element's item comes from its per-build
+                    // fragment, never from this DOM subtree: exclude it
+                    // (and its descendants, whose items are fragment-based
+                    // too) before any attribute work — an all-translated
+                    // document exits the walk at the top.
+                    let translated = |tag: &tl::HTMLTag| {
+                        tag.attributes().get("data-l10n-id").flatten().is_some()
+                    };
+                    if translated(old_tag)
+                        || translated(fresh_tag)
+                        || !tag_equal(old_tag, fresh_tag)
+                    {
+                        break 'pair false;
+                    }
+                    let (old_children, fresh_children) =
+                        (old_tag.children(), fresh_tag.children());
+                    let (old_children, fresh_children) =
+                        (old_children.top(), fresh_children.top());
+                    if old_children.len() != fresh_children.len() || depth + 1 >= MAX_DOM_DEPTH {
+                        break 'pair false;
+                    }
+                    let index = parents.len();
+                    parents.push(Parent {
+                        old,
+                        fresh,
+                        all: true,
+                    });
+                    // The tag completes after its children: the completion
+                    // task sits below theirs on the stack.
+                    stack.push(Task::Complete {
+                        parent: index,
+                        grandparent: parent,
+                    });
+                    for (old_child, fresh_child) in
+                        old_children.iter().zip(fresh_children.iter())
+                    {
+                        stack.push(Task::Pair {
+                            old: *old_child,
+                            fresh: *fresh_child,
+                            depth: depth + 1,
+                            parent: Some(index),
+                        });
+                    }
+                    true
+                };
+                match parent {
+                    Some(parent) => parents[parent].all &= ok,
+                    None => all &= ok,
+                }
+            }
+            Task::Complete {
+                parent,
+                grandparent,
+            } => {
+                let Parent {
+                    old,
+                    fresh,
+                    all: children_all,
+                } = parents[parent];
+                if children_all {
+                    pairing.insert(fresh, old);
+                    reverse.insert(old, fresh);
+                    clean.insert(old);
+                }
+                match grandparent {
+                    Some(grandparent) => parents[grandparent].all &= children_all,
+                    None => all &= children_all,
+                }
+            }
+        }
+    }
+    all
 }
 
 /// Same tag name (case-insensitive) and the same attributes by name and
@@ -3378,46 +3578,43 @@ fn tag_equal(old: &tl::HTMLTag, fresh: &tl::HTMLTag) -> bool {
     })
 }
 
-/// The spec at `path`: the first index addresses a top-level spec, each
-/// following index a container's child.
 /// How much collection work the tree represents: a fresh spec counts
 /// itself plus its children; a reused (cached) subtree counts once — its
 /// nodes were neither cascaded nor re-collected.
 fn spec_count(specs: &[SpecNode]) -> usize {
-    specs
-        .iter()
-        .map(|node| match node {
-            SpecNode::Cached(_) => 1,
-            SpecNode::Fresh(spec) => match &spec.children {
-                children if children.is_empty() => 1,
-                children => 1 + spec_count(children),
-            },
-        })
-        .sum()
+    let mut count = 0;
+    let mut stack = vec![specs];
+    while let Some(level) = stack.pop() {
+        for node in level {
+            count += 1;
+            if let SpecNode::Fresh(spec) = node {
+                stack.push(&spec.children);
+            }
+        }
+    }
+    count
 }
 
 /// A node that produced a spec → its position in `specs`.
 fn spec_table(specs: &[SpecNode]) -> HashMap<tl::NodeHandle, Vec<usize>> {
     let mut table = HashMap::default();
-    let mut prefix = Vec::new();
-    spec_table_walk(specs, &mut prefix, &mut table);
-    table
-}
-
-fn spec_table_walk(
-    specs: &[SpecNode],
-    prefix: &mut Vec<usize>,
-    table: &mut HashMap<tl::NodeHandle, Vec<usize>>,
-) {
-    for (index, node) in specs.iter().enumerate() {
-        let spec = node.spec();
-        prefix.push(index);
-        if let Some(handle) = spec.handle {
-            table.insert(handle, prefix.clone());
+    // (the path of the level's parent, the level)
+    let mut stack: Vec<(Vec<usize>, &[SpecNode])> = vec![(Vec::new(), specs)];
+    while let Some((prefix, level)) = stack.pop() {
+        for (index, node) in level.iter().enumerate() {
+            let spec = node.spec();
+            let mut path = Vec::with_capacity(prefix.len() + 1);
+            path.extend_from_slice(&prefix);
+            path.push(index);
+            if !spec.children.is_empty() {
+                stack.push((path.clone(), &spec.children));
+            }
+            if let Some(handle) = spec.handle {
+                table.insert(handle, path);
+            }
         }
-        spec_table_walk(&spec.children, prefix, table);
-        prefix.pop();
     }
+    table
 }
 
 impl SkeletonPass<'_> {
@@ -3439,6 +3636,8 @@ impl SkeletonPass<'_> {
     }
 }
 
+/// The spec at `path`: the first index addresses a top-level spec, each
+/// following index a container's child.
 fn spec_rc_at<'a>(specs: &'a [SpecNode], path: &[usize]) -> Option<&'a Arc<NodeSpec>> {
     let (first, rest) = path.split_first()?;
     let mut current = specs.get(*first)?.spec();
@@ -3461,31 +3660,36 @@ fn remap_spec_handles(specs: &mut [SpecNode], reverse: &HashMap<tl::NodeHandle, 
             *handle = *new;
         }
     };
-    for node in specs {
-        let spec = match node {
-            SpecNode::Fresh(spec) | SpecNode::Cached(spec) => spec,
-        };
-        let Some(spec) = Arc::get_mut(spec) else {
-            // Shared with a previous frame's items (impossible: they are
-            // dropped with the build); leave the handle stale.
-            continue;
-        };
-        remapped(&mut spec.handle);
-        for run in spec.text.iter_mut().flat_map(|text| &mut text.spans) {
-            if let Some(link) = &mut run.link {
-                let mut handle = Some(link.handle);
-                remapped(&mut handle);
-                link.handle = handle.unwrap_or(link.handle);
+    let mut stack = vec![specs];
+    while let Some(level) = stack.pop() {
+        for node in level {
+            let spec = match node {
+                SpecNode::Fresh(spec) | SpecNode::Cached(spec) => spec,
+            };
+            let Some(spec) = Arc::get_mut(spec) else {
+                // Shared with a previous frame's items (impossible: they
+                // are dropped with the build); leave the handle stale.
+                continue;
+            };
+            remapped(&mut spec.handle);
+            for run in spec.text.iter_mut().flat_map(|text| &mut text.spans) {
+                if let Some(link) = &mut run.link {
+                    let mut handle = Some(link.handle);
+                    remapped(&mut handle);
+                    link.handle = handle.unwrap_or(link.handle);
+                }
             }
+            stack.push(&mut spec.children);
         }
-        remap_spec_handles(&mut spec.children, reverse);
     }
 }
 
-/// User content nested deeper than this is dropped with a warning: the
-/// build's walks recurse per level (and clone the ancestor chain), and
-/// ~150 nesting levels already overflow a debug-build task-pool stack.
-/// Browsers parse far deeper; this only bounds pathological documents.
+/// User content nested deeper than this is dropped with a warning. The
+/// build's walks are iterative (an explicit work stack: the document's
+/// depth costs heap, not stack), so this caps what's *downstream* of
+/// them: Bevy's layout recurses per tree level (taffy), and pathological
+/// fan-out (entities, spans, specs) stays bounded. Browsers parse far
+/// deeper; this only bounds pathological documents.
 const MAX_DOM_DEPTH: usize = 100;
 
 /// Warns once per process when content is dropped for its depth.
@@ -3531,27 +3735,242 @@ fn collect_node(
     grid: Option<&GridNames>,
     depth: usize,
 ) {
-    if depth >= MAX_DOM_DEPTH {
-        warn_overdepth();
-        return;
+    /// A node to collect: everything its children need (the computed
+    /// style, the ancestor chain, its grid template), plus, for a
+    /// container, where its children's items start (post-order
+    /// completion — the subtree's items are the tail of `items`).
+    struct Open {
+        element: HtmlElement,
+        handle: tl::NodeHandle,
+        signals: Vec<SignalBinding>,
+        focus: Option<Focusable>,
+        custom: Option<CustomElement>,
+        boxed: BoxStyle,
+        pointer_events: bool,
+        font_size: f32,
+        start: usize,
     }
-    let Some(node) = handle.get(ctx.parser) else {
-        return;
-    };
-    let tag = match node {
-        tl::Node::Tag(tag) => tag,
-        tl::Node::Raw(_) => {
-            // Anonymous block: inherits the container's style.
+    enum Task {
+        Node {
+            handle: tl::NodeHandle,
+            inherited: Style,
+            chain: Vec<Ancestor>,
+            grid: Option<GridNames>,
+            depth: usize,
+        },
+        Complete(Box<Open>),
+    }
+    let mut stack = vec![Task::Node {
+        handle,
+        inherited: inherited.clone(),
+        chain: chain.to_vec(),
+        grid: grid.cloned(),
+        depth,
+    }];
+    while let Some(task) = stack.pop() {
+        let (handle, inherited, chain, grid, depth) = match task {
+            Task::Complete(open) => {
+                let Open {
+                    element,
+                    handle,
+                    signals,
+                    focus,
+                    custom,
+                    boxed,
+                    pointer_events,
+                    font_size,
+                    start,
+                } = *open;
+                let children = items.drain(start..).collect();
+                items.push(Item::Container {
+                    element,
+                    handle: Some(handle),
+                    signals,
+                    focus,
+                    custom,
+                    boxed,
+                    pointer_events,
+                    font_size,
+                    children,
+                });
+                continue;
+            }
+            Task::Node {
+                handle,
+                inherited,
+                chain,
+                grid,
+                depth,
+            } => (handle, inherited, chain, grid, depth),
+        };
+        if depth >= MAX_DOM_DEPTH {
+            warn_overdepth();
+            continue;
+        }
+        let Some(node) = handle.get(ctx.parser) else {
+            continue;
+        };
+        let tag = match node {
+            tl::Node::Tag(tag) => tag,
+            tl::Node::Raw(_) => {
+                // Anonymous block: inherits the container's style.
+                let mut runs = Vec::new();
+                push_runs(
+                    ctx,
+                    handle,
+                    &inherited,
+                    RunExtras::default(),
+                    &mut runs,
+                    &chain,
+                );
+                let runs = collapse_runs(runs);
+                if !runs.is_empty() {
+                    items.push(Item::Block(Block {
+                        kind: BlockKind::Paragraph,
+                        element: None,
+                        handle: None,
+                        signals: Vec::new(),
+                        focus: None,
+                        custom: None,
+                        submit: false,
+                        style: inherited.clone(),
+                        boxed: BoxStyle::default(),
+                        runs,
+                    }));
+                }
+                continue;
+            }
+            tl::Node::Comment(_) => continue,
+        };
+        // ADR 0021: an unchanged subtree reuses the previous build's item
+        // verbatim (handles remapped), skipping the cascade and the run
+        // construction. Only whole clean subtrees whose root produced a spec
+        // reuse; a node whose cache entry is missing (walk-through tags like
+        // `span`/`body` whose content makes anonymous items, raw text,
+        // translations) falls through to the normal collection — returning
+        // here would drop the subtree's content entirely.
+        if let Some(skeleton) = ctx.skeleton
+            && let Some(&old) = skeleton.pairing.get(&handle)
+            && skeleton.clean.contains(&old)
+            && skeleton.reuse(old, items)
+        {
+            continue;
+        }
+
+        let signals = signals::signal_bindings(tag);
+        let mut focus = focus::focusable(tag, &signals);
+        let custom = custom_elements::custom_element(tag);
+        let state = ctx
+            .states
+            .and_then(|states| states.get(&handle))
+            .copied()
+            .unwrap_or_default();
+        let Some(element) = ctx.element(tag) else {
+            // Unmatched `data-l10n-name` in a translation: content only.
+            let children: Vec<tl::NodeHandle> =
+                tag.children().top().iter().copied().collect();
+            for child in children.into_iter().rev() {
+                stack.push(Task::Node {
+                    handle: child,
+                    inherited: inherited.clone(),
+                    chain: chain.clone(),
+                    grid: None,
+                    depth: depth + 1,
+                });
+            }
+            continue;
+        };
+        let inline = cascade::inline_style(tag);
+        // This element becomes the nearest ancestor for everything inside it.
+        let own = Ancestor {
+            element: element.clone(),
+            pseudo: state,
+        };
+        let child_chain = {
+            let mut child_chain = Vec::with_capacity(chain.len() + 1);
+            child_chain.push(own);
+            child_chain.extend(chain.iter().cloned());
+            child_chain
+        };
+        // The `<html>` element is what the root style was computed from:
+        // re-applying it would square its `opacity`.
+        let style = if element.tag == "html" {
+            inherited.clone()
+        } else {
+            ctx.styler
+                .style_of(&element, &inherited, state, inline.as_ref(), &chain)
+        };
+        let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), &chain);
+        // This element's own placement resolves against its parent's grid
+        // (named lines and areas); its own template then backs its children's.
+        boxed.layout.resolve_names(grid.as_ref());
+        let grid_of_own = boxed.layout.grid_names();
+        boxed.drawn_outline = boxed.outline(style.color);
+        boxed.fade(style.opacity);
+        #[cfg(feature = "text-input")]
+        if element.tag == "input"
+            && tag
+                .attributes()
+                .get("type")
+                .flatten()
+                .map(|kind| kind.as_utf8_str() == "text")
+                .unwrap_or(true)
+        {
+            // An editable text field (ADR 0016): a block with the widget's
+            // components; its content is the field's state, not walked markup.
+            // Other `type`s stay unsupported (the field is not built). An
+            // `<input>` is focusable like a block with `data-on-click` (HTML
+            // inputs are focusable), unless `tabindex="-1"`.
+            focus = Some(Focusable {
+                autofocus: tag.attributes().get("autofocus").flatten().is_some(),
+            });
+            let value = tag
+                .attributes()
+                .get("value")
+                .flatten()
+                .map(|value| decode_entities(&value.as_utf8_str()).to_string());
+            let name = tag
+                .attributes()
+                .get("name")
+                .flatten()
+                .map(|name| decode_entities(&name.as_utf8_str()).to_string());
+            // The outer `boxed` already has the placement (`resolve_names`),
+            // the outline and the fade applied.
+            items.push(Item::TextInput {
+                element,
+                handle: Some(handle),
+                signals,
+                focus,
+                custom,
+                boxed,
+                pointer_events: style.pointer_events,
+                font_size: style.size,
+                value: TextInputSpec {
+                    initial: value.unwrap_or_default(),
+                    font: ctx.styler.text_font(&style),
+                    color: faded(style.color, style.opacity),
+                    name,
+                },
+            });
+            continue;
+        }
+        // A button: a block carrying its bindings and element; clicking a
+        // submit button submits the enclosing form (the marker is on the
+        // spawn path, behind the `text-input` feature — without it the
+        // Submit signal's payload is just empty).
+        // An `<img>` directly in a container (raw HTML or Markdown): an
+        // anonymous block carrying its image run — the same treatment a text
+        // piece gets. In a block, `push_runs` handles it inline instead.
+        if element.tag == "img" {
             let mut runs = Vec::new();
             push_runs(
                 ctx,
                 handle,
-                inherited,
+                &inherited,
                 RunExtras::default(),
                 &mut runs,
-                chain,
+                &child_chain,
             );
-            let runs = collapse_runs(runs);
             if !runs.is_empty() {
                 items.push(Item::Block(Block {
                     kind: BlockKind::Paragraph,
@@ -3566,257 +3985,117 @@ fn collect_node(
                     runs,
                 }));
             }
-            return;
+            continue;
         }
-        tl::Node::Comment(_) => return,
-    };
-    // ADR 0021: an unchanged subtree reuses the previous build's item
-    // verbatim (handles remapped), skipping the cascade and the run
-    // construction. Only whole clean subtrees whose root produced a spec
-    // reuse; a node whose cache entry is missing (walk-through tags like
-    // `span`/`body` whose content makes anonymous items, raw text,
-    // translations) falls through to the normal collection — returning
-    // here would drop the subtree's content entirely.
-    if let Some(skeleton) = ctx.skeleton
-        && let Some(&old) = skeleton.pairing.get(&handle)
-        && skeleton.clean.contains(&old)
-        && skeleton.reuse(old, items)
-    {
-        return;
-    }
 
-    let signals = signals::signal_bindings(tag);
-    let mut focus = focus::focusable(tag, &signals);
-    let custom = custom_elements::custom_element(tag);
-    let state = ctx
-        .states
-        .and_then(|states| states.get(&handle))
-        .copied()
-        .unwrap_or_default();
-    let Some(element) = ctx.element(tag) else {
-        // Unmatched `data-l10n-name` in a translation: content only.
-        for child in tag.children().top().iter() {
-            collect_node(ctx, *child, inherited, items, chain, None, depth + 1);
-        }
-        return;
-    };
-    let inline = cascade::inline_style(tag);
-    // This element becomes the nearest ancestor for everything inside it.
-    let own = Ancestor {
-        element: element.clone(),
-        pseudo: state,
-    };
-    let child_chain = {
-        let mut child_chain = Vec::with_capacity(chain.len() + 1);
-        child_chain.push(own);
-        child_chain.extend(chain.iter().cloned());
-        child_chain
-    };
-    // The `<html>` element is what the root style was computed from:
-    // re-applying it would square its `opacity`.
-    let style = if element.tag == "html" {
-        inherited.clone()
-    } else {
-        ctx.styler
-            .style_of(&element, inherited, state, inline.as_ref(), chain)
-    };
-    let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), chain);
-    // This element's own placement resolves against its parent's grid
-    // (named lines and areas); its own template then backs its children's.
-    boxed.layout.resolve_names(grid);
-    let grid_of_own = boxed.layout.grid_names();
-    boxed.drawn_outline = boxed.outline(style.color);
-    boxed.fade(style.opacity);
-    #[cfg(feature = "text-input")]
-    if element.tag == "input"
-        && tag
-            .attributes()
-            .get("type")
-            .flatten()
-            .map(|kind| kind.as_utf8_str() == "text")
-            .unwrap_or(true)
-    {
-        // An editable text field (ADR 0016): a block with the widget's
-        // components; its content is the field's state, not walked markup.
-        // Other `type`s stay unsupported (the field is not built). An
-        // `<input>` is focusable like a block with `data-on-click` (HTML
-        // inputs are focusable), unless `tabindex="-1"`.
-        focus = Some(Focusable {
-            autofocus: tag.attributes().get("autofocus").flatten().is_some(),
-        });
-        let value = tag
-            .attributes()
-            .get("value")
-            .flatten()
-            .map(|value| decode_entities(&value.as_utf8_str()).to_string());
-        let name = tag
-            .attributes()
-            .get("name")
-            .flatten()
-            .map(|name| decode_entities(&name.as_utf8_str()).to_string());
-        // The outer `boxed` already has the placement (`resolve_names`),
-        // the outline and the fade applied.
-        items.push(Item::TextInput {
-            element,
-            handle: Some(handle),
-            signals,
-            focus,
-            custom,
-            boxed,
-            pointer_events: style.pointer_events,
-            font_size: style.size,
-            value: TextInputSpec {
-                initial: value.unwrap_or_default(),
-                font: ctx.styler.text_font(&style),
-                color: faded(style.color, style.opacity),
-                name,
-            },
-        });
-        return;
-    }
-    // A button: a block carrying its bindings and element; clicking a
-    // submit button submits the enclosing form (the marker is on the
-    // spawn path, behind the `text-input` feature — without it the
-    // Submit signal's payload is just empty).
-    // An `<img>` directly in a container (raw HTML or Markdown): an
-    // anonymous block carrying its image run — the same treatment a text
-    // piece gets. In a block, `push_runs` handles it inline instead.
-    if element.tag == "img" {
+        let is_button = element.tag == "button";
+        let kind = match element.tag.as_str() {
+            "button" => {
+                kind_button_focus(&mut focus, tag);
+                BlockKind::Button
+            }
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
+            "p" => BlockKind::Paragraph,
+            "li" => BlockKind::ListItem,
+            "pre" => BlockKind::Preformatted,
+            "head" | "script" | "style" => continue,
+            // Containers hold their children's nodes; other elements outside a
+            // block (`html`, `body`, unknown tags) are walked through, no node.
+            // Either way a translation replaces the children.
+            name => {
+                let container = CONTAINERS.contains(&name);
+                if !container && !signals.is_empty() {
+                    debug!(
+                        "html signals: <{name}> has data-on-* hooks, but only blocks and \
+                         containers become nodes; skipped"
+                    );
+                }
+                if !container && custom.is_some() {
+                    debug!(
+                        "html custom elements: <{name}> has an is attribute, but only blocks \
+                         and containers become nodes; skipped"
+                    );
+                }
+                // The container completes after its children (post-order):
+                // it is pushed first, so its children's tasks (pushed
+                // above it) pop — and append their items — before it.
+                let start = items.len();
+                if container {
+                    stack.push(Task::Complete(Box::new(Open {
+                        element,
+                        handle,
+                        signals,
+                        focus,
+                        custom,
+                        boxed,
+                        pointer_events: style.pointer_events,
+                        font_size: style.size,
+                        start,
+                    })));
+                }
+                let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
+                    for node in nodes {
+                        collect_node(
+                            fragment,
+                            *node,
+                            &style,
+                            items,
+                            &child_chain,
+                            grid_of_own.as_ref(),
+                            depth + 1,
+                        );
+                    }
+                });
+                if !translated {
+                    // Reversed: the leftmost child pops first.
+                    let children: Vec<tl::NodeHandle> =
+                        tag.children().top().iter().copied().collect();
+                    for child in children.into_iter().rev() {
+                        stack.push(Task::Node {
+                            handle: child,
+                            inherited: style.clone(),
+                            chain: child_chain.clone(),
+                            grid: grid_of_own.clone(),
+                            depth: depth + 1,
+                        });
+                    }
+                }
+                continue;
+            }
+        };
+        // A missing translation falls back to the element's own content.
+        let preformatted = matches!(kind, BlockKind::Preformatted);
+        let submit = is_button
+            && tag
+                .attributes()
+                .get("type")
+                .flatten()
+                .map(|kind| kind.as_utf8_str())
+                .is_none_or(|kind| kind == "submit");
         let mut runs = Vec::new();
-        push_runs(
+        push_content_runs(
             ctx,
             handle,
-            inherited,
+            tag,
+            &style,
             RunExtras::default(),
             &mut runs,
             &child_chain,
         );
-        if !runs.is_empty() {
-            items.push(Item::Block(Block {
-                kind: BlockKind::Paragraph,
-                element: None,
-                handle: None,
-                signals: Vec::new(),
-                focus: None,
-                custom: None,
-                submit: false,
-                style: inherited.clone(),
-                boxed: BoxStyle::default(),
-                runs,
-            }));
-        }
-        return;
+        items.push(Item::Block(Block {
+            kind,
+            element: Some(element),
+            handle: Some(handle),
+            signals,
+            focus,
+            custom,
+            style,
+            submit,
+            boxed,
+            runs: finish_runs(runs, preformatted),
+        }));
     }
-
-    let is_button = element.tag == "button";
-    let kind = match element.tag.as_str() {
-        "button" => {
-            kind_button_focus(&mut focus, tag);
-            BlockKind::Button
-        }
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => BlockKind::Heading,
-        "p" => BlockKind::Paragraph,
-        "li" => BlockKind::ListItem,
-        "pre" => BlockKind::Preformatted,
-        "head" | "script" | "style" => return,
-        // Containers hold their children's nodes; other elements outside a
-        // block (`html`, `body`, unknown tags) are walked through, no node.
-        // Either way a translation replaces the children.
-        name => {
-            let container = CONTAINERS.contains(&name);
-            if !container && !signals.is_empty() {
-                debug!(
-                    "html signals: <{name}> has data-on-* hooks, but only blocks and \
-                     containers become nodes; skipped"
-                );
-            }
-            if !container && custom.is_some() {
-                debug!(
-                    "html custom elements: <{name}> has an is attribute, but only blocks \
-                     and containers become nodes; skipped"
-                );
-            }
-            let mut children = Vec::new();
-            let target = if container {
-                &mut children
-            } else {
-                &mut *items
-            };
-            let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
-                for node in nodes {
-                    collect_node(
-                        fragment,
-                        *node,
-                        &style,
-                        target,
-                        &child_chain,
-                        grid_of_own.as_ref(),
-                        depth + 1,
-                    );
-                }
-            });
-            if !translated {
-                for child in tag.children().top().iter() {
-                    collect_node(
-                        ctx,
-                        *child,
-                        &style,
-                        target,
-                        &child_chain,
-                        grid_of_own.as_ref(),
-                        depth + 1,
-                    );
-                }
-            }
-            if container {
-                items.push(Item::Container {
-                    element,
-                    handle: Some(handle),
-                    signals,
-                    focus,
-                    custom,
-                    boxed,
-                    pointer_events: style.pointer_events,
-                    font_size: style.size,
-                    children,
-                });
-            }
-            return;
-        }
-    };
-    // A missing translation falls back to the element's own content.
-    let preformatted = matches!(kind, BlockKind::Preformatted);
-    let submit = is_button
-        && tag
-            .attributes()
-            .get("type")
-            .flatten()
-            .map(|kind| kind.as_utf8_str())
-            .is_none_or(|kind| kind == "submit");
-    let mut runs = Vec::new();
-    push_content_runs(
-        ctx,
-        handle,
-        tag,
-        &style,
-        RunExtras::default(),
-        &mut runs,
-        &child_chain,
-    );
-    items.push(Item::Block(Block {
-        kind,
-        element: Some(element),
-        handle: Some(handle),
-        signals,
-        focus,
-        custom,
-        style,
-        submit,
-        boxed,
-        runs: finish_runs(runs, preformatted),
-    }));
 }
-
 /// Tag name (lowercase), `id` and `class` of an element.
 /// A `<button>` is focusable like a block with `data-on-click` (HTML
 /// buttons are focusable), unless the author opts out with `tabindex="-1"`.
@@ -3874,15 +4153,169 @@ fn push_content_runs(
     chain: &[Ancestor],
 ) {
     let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
-        for node in nodes {
-            push_runs(fragment, *node, style, extras.clone(), runs, chain);
-        }
+        run_walk(fragment, nodes.iter().copied(), style, &extras, runs, chain);
     });
     if !translated {
-        for child in tag.children().top().iter() {
-            push_runs(ctx, *child, style, extras.clone(), runs, chain);
+        run_walk(
+            ctx,
+            tag.children().top().iter().copied(),
+            style,
+            &extras,
+            runs,
+            chain,
+        );
+    }
+}
+
+/// The runs walk over a set of roots, iterative (an explicit stack; a
+/// node's children are pushed in reverse so the visit order — and with it
+/// the run merge order and the named-overlay consumption — is the same
+/// depth-first document order the recursion visited). The tree's depth
+/// costs heap, not stack.
+fn run_walk<'a>(
+    ctx: &Ctx<'a, '_, '_>,
+    roots: impl IntoIterator<Item = tl::NodeHandle>,
+    style: &Style,
+    extras: &RunExtras,
+    runs: &mut Vec<Run>,
+    chain: &[Ancestor],
+) {
+    let mut stack: Vec<(tl::NodeHandle, Style, RunExtras, Vec<Ancestor>)> = roots
+        .into_iter()
+        .map(|handle| (handle, style.clone(), extras.clone(), chain.to_vec()))
+        .collect();
+    // Reversed: the last entry pops first, so the first root (and, in the
+    // tag arm, the leftmost child) is visited first.
+    stack.reverse();
+    while let Some((handle, style, extras, chain)) = stack.pop() {
+        match handle.get(ctx.parser) {
+            Some(tl::Node::Raw(text)) => {
+                let text = decode_entities(&text.as_utf8_str());
+                match runs.last_mut() {
+                    Some(last)
+                        if last.style == style && last.extras == extras && last.image.is_none() =>
+                    {
+                        last.text.push_str(&text);
+                    }
+                    _ => runs.push(Run {
+                        text,
+                        style,
+                        extras,
+                        image: None,
+                    }),
+                }
+            }
+            Some(tl::Node::Tag(tag)) => {
+                // The tag's own interaction state (`:hover` on a link span,
+                // say): entities with `DomNode` carry it (the link spans do).
+                let state = ctx
+                    .states
+                    .and_then(|states| states.get(&handle))
+                    .copied()
+                    .unwrap_or_default();
+                // The element, computed once: `element` consumes a named
+                // overlay's entry (each usable once), so all uses share it.
+                let element = ctx.element(tag);
+                // This element becomes the nearest ancestor for its content.
+                let child_chain = {
+                    let mut child_chain = Vec::with_capacity(chain.len() + 1);
+                    child_chain.push(Ancestor {
+                        element: element.clone().unwrap_or_default(),
+                        pseudo: state,
+                    });
+                    child_chain.extend(chain.iter().cloned());
+                    child_chain
+                };
+                if tag.name().as_utf8_str() == *"img" {
+                    push_image_run(ctx, tag, &element, state, &style, extras, runs, &chain);
+                    continue;
+                }
+                // An unmatched `data-l10n-name` element is plain text.
+                let style = match &element {
+                    Some(element) => {
+                        let inline = cascade::inline_style(tag);
+                        ctx.styler.style_of(element, &style, state, inline.as_ref(), &chain)
+                    }
+                    None => style,
+                };
+                // This element's `background`/`text-decoration` over the
+                // subtree's running values, faded with its opacity.
+                let inherited_link = extras.link.clone();
+                let mut extras = element
+                    .as_ref()
+                    .and_then(|element| {
+                        let inline = cascade::inline_style(tag);
+                        ctx.styler
+                            .run_extras(element, state, inline.as_ref(), &chain)
+                    })
+                    .map(|extras| extras.faded(style.opacity))
+                    .unwrap_or(extras);
+                // A link: its runs become picked span entities that emit the
+                // `open` signal with the href when clicked (plus the element's
+                // own `data-on-*` hooks). No href → plain styled text, as in
+                // browsers. Nested elements inherit the enclosing link (their
+                // own extras would otherwise replace it), so a non-link
+                // element's extras keep the inherited one.
+                if tag.name().as_utf8_str() == *"a"
+                    && let Some(href) = tag.attributes().get("href").flatten()
+                {
+                    let href = decode_entities(&href.as_utf8_str());
+                    if !href.is_empty() {
+                        let mut bindings = signals::signal_bindings(tag);
+                        bindings.push(SignalBinding {
+                            trigger: SignalTrigger::Click,
+                            name: "open".to_owned(),
+                            payload: serde_json::json!({ "href": href }),
+                        });
+                        extras.link = Some(LinkRun {
+                            bindings,
+                            element: element_of(tag),
+                            handle,
+                        });
+                    } else {
+                        extras.link = inherited_link;
+                    }
+                } else {
+                    extras.link = inherited_link;
+                }
+                // A translation's markup replaces the element's content; its
+                // walk is a nested `run_walk` (a fragment context has no
+                // translations of its own, so this never nests further).
+                // Own children are pushed in reverse, so the next pops are
+                // the leftmost subtree: the same depth-first document order
+                // the recursion visited.
+                let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
+                    run_walk(
+                        fragment,
+                        nodes.iter().copied(),
+                        &style,
+                        &extras,
+                        runs,
+                        &child_chain,
+                    );
+                });
+                if !translated {
+                    let children: Vec<tl::NodeHandle> =
+                        tag.children().top().iter().copied().collect();
+                    for child in children.into_iter().rev() {
+                        stack.push((child, style.clone(), extras.clone(), child_chain.clone()));
+                    }
+                }
+            }
+            Some(tl::Node::Comment(_)) | None => {}
         }
     }
+}
+
+fn push_runs(
+    ctx: &Ctx,
+    handle: tl::NodeHandle,
+    style: &Style,
+    extras: RunExtras,
+    runs: &mut Vec<Run>,
+    chain: &[Ancestor],
+) {
+    run_walk(ctx, std::iter::once(handle), style, &extras, runs, chain);
 }
 
 /// Whitespace handling for a block's runs: collapsed as in HTML, or for `pre`
@@ -3906,109 +4339,6 @@ fn finish_runs(mut runs: Vec<Run>, preformatted: bool) -> Vec<Run> {
     }
     runs.retain(|run| !run.text.is_empty() || run.image.is_some());
     runs
-}
-
-fn push_runs(
-    ctx: &Ctx,
-    handle: tl::NodeHandle,
-    style: &Style,
-    extras: RunExtras,
-    runs: &mut Vec<Run>,
-    chain: &[Ancestor],
-) {
-    match handle.get(ctx.parser) {
-        Some(tl::Node::Raw(text)) => {
-            let text = decode_entities(&text.as_utf8_str());
-            match runs.last_mut() {
-                Some(last)
-                    if last.style == *style && last.extras == extras && last.image.is_none() =>
-                {
-                    last.text.push_str(&text);
-                }
-                _ => runs.push(Run {
-                    text,
-                    style: style.clone(),
-                    extras,
-                    image: None,
-                }),
-            }
-        }
-        Some(tl::Node::Tag(tag)) => {
-            // The tag's own interaction state (`:hover` on a link span, say):
-            // entities with `DomNode` carry it (the link spans do).
-            let state = ctx
-                .states
-                .and_then(|states| states.get(&handle))
-                .copied()
-                .unwrap_or_default();
-            // The element, computed once: `element` consumes a named
-            // overlay's entry (each usable once), so all uses share it.
-            let element = ctx.element(tag);
-            // This element becomes the nearest ancestor for its content.
-            let child_chain = {
-                let mut child_chain = Vec::with_capacity(chain.len() + 1);
-                child_chain.push(Ancestor {
-                    element: element.clone().unwrap_or_default(),
-                    pseudo: state,
-                });
-                child_chain.extend(chain.iter().cloned());
-                child_chain
-            };
-            if tag.name().as_utf8_str() == *"img" {
-                push_image_run(ctx, tag, &element, state, style, extras, runs, chain);
-                return;
-            }
-            // An unmatched `data-l10n-name` element is plain text.
-            let style = element.as_ref().map_or_else(
-                || style.clone(),
-                |element| {
-                    let inline = cascade::inline_style(tag);
-                    ctx.styler
-                        .style_of(element, style, state, inline.as_ref(), chain)
-                },
-            );
-            // This element's `background`/`text-decoration` over the
-            // subtree's running values, faded with its opacity.
-            let inherited_link = extras.link.clone();
-            let mut extras = element
-                .as_ref()
-                .and_then(|element| {
-                    let inline = cascade::inline_style(tag);
-                    ctx.styler
-                        .run_extras(&element, state, inline.as_ref(), chain)
-                })
-                .map(|extras| extras.faded(style.opacity))
-                .unwrap_or(extras);
-            // A link: its runs become picked span entities that emit the
-            // `open` signal with the href when clicked (plus the element's
-            // own `data-on-*` hooks). No href → plain styled text, as in
-            // browsers. Nested elements inherit the enclosing link (their
-            // own extras would otherwise replace it).
-            if tag.name().as_utf8_str() == *"a"
-                && let Some(href) = tag.attributes().get("href").flatten()
-            {
-                let href = decode_entities(&href.as_utf8_str());
-                if !href.is_empty() {
-                    let mut bindings = signals::signal_bindings(tag);
-                    bindings.push(SignalBinding {
-                        trigger: SignalTrigger::Click,
-                        name: "open".to_owned(),
-                        payload: serde_json::json!({ "href": href }),
-                    });
-                    extras.link = Some(LinkRun {
-                        bindings,
-                        element: element_of(tag),
-                        handle,
-                    });
-                    push_content_runs(ctx, handle, tag, &style, extras, runs, &child_chain);
-                    return;
-                }
-            }
-            extras.link = inherited_link;
-            push_content_runs(ctx, handle, tag, &style, extras, runs, &child_chain);
-        }
-        Some(tl::Node::Comment(_)) | None => {}
-    }
 }
 
 /// An `<img>` attribute in px (`width`/`height`); `%` and other units are

@@ -2825,6 +2825,58 @@ fn deep_nesting_is_capped() {
     assert!(dump.contains("\"after\""), "content after the deep tree vanished:\n{dump}");
 }
 
+/// Deep *inline* content (runs, not nodes) is bounded too: 1000 nested
+/// `<b>` used to overflow the stack in `push_runs`. The text survives;
+/// the cap drops the deepest levels.
+#[test]
+fn deep_inline_nesting_is_capped() {
+    let deep = format!("<p>x{}y{}</p>", "<b>".repeat(1000), "</b>".repeat(1000));
+    let mut ui = TestUi::new(
+        "deep-inline",
+        &[("page.html", "{{ deep | safe }}")],
+    )
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("deep", &deep),
+        Node::default(),
+    );
+    ui.settle();
+    let dump = ui.dump();
+    assert!(
+        dump.contains("\"x"),
+        "the paragraph before the deep runs vanished:\n{dump}"
+    );
+    assert!(dump.contains('y'), "the run content vanished:\n{dump}");
+}
+
+/// The outline renderer walks the whole document; 3000 levels used to
+/// overflow it (it is depth-bounded like the build walks now).
+#[test]
+fn deep_outline_does_not_overflow() {
+    let deep = format!(
+        "{}x{}",
+        "<div>".repeat(3000),
+        "</div>".repeat(3000)
+    );
+    let mut ui = TestUi::new(
+        "deep-outline",
+        &[("page.html", "{{ deep | safe }}")],
+    )
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("deep", &deep),
+        Node::default(),
+    );
+    let root = ui.root();
+    ui.world_mut()
+        .entity_mut(root)
+        .insert(bevy_markup::html::HtmlDebugOutline);
+    ui.settle_quiet();
+    // The outline is logged at debug; reaching a settled dump without an
+    // overflow is the assertion.
+    let _ = ui.dump();
+}
+
 /// `<a href>` links: the link's runs become a picked span entity that
 /// emits the `open` signal with the href when clicked; the text styles by
 /// the cascade (`a` rules); a link without an href is plain styled text.
