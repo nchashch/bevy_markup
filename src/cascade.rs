@@ -933,20 +933,19 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
             }
         }
     }
-    // The fixpoint: a referenced `--` name's own references join the set.
-    loop {
-        let mut grew = false;
-        for (name, refs) in &declarations {
-            if names.contains(name) {
-                for r in refs {
-                    if names.insert(r.clone()) {
-                        grew = true;
-                    }
+    // The transitive closure, as a worklist (linear: every name enters
+    // once — the fixpoint loop re-scanned every declaration per round,
+    // quadratic in the chain length).
+    let mut by_name: HashMap<String, Vec<String>> =
+        declarations.into_iter().collect();
+    let mut work: Vec<String> = names.iter().cloned().collect();
+    while let Some(active) = work.pop() {
+        if let Some(refs) = by_name.get(&active) {
+            for r in refs {
+                if names.insert(r.clone()) {
+                    work.push(r.clone());
                 }
             }
-        }
-        if !grew {
-            break;
         }
     }
     names.into_iter().collect()
@@ -4057,6 +4056,27 @@ mod tests {
             "the pathological sheets took {:?}",
             start.elapsed()
         );
+    }
+
+    /// The transitive var() closure runs in linear time (a worklist): a
+    /// 4000-level chain used to re-scan every declaration per fixpoint
+    /// round (quadratic, seconds at load).
+    #[test]
+    fn var_names_closure_is_linear() {
+        let mut sheet = String::from("p { ");
+        for i in 0..20000 {
+            sheet.push_str(&format!("--v{i}: var(--v{}); ", i + 1));
+        }
+        sheet.push_str("width: var(--v0) }");
+        let parsed = owned_sheet(&sheet);
+        let start = std::time::Instant::now();
+        let names = var_names(&parsed);
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(50),
+            "the closure took {:?}",
+            start.elapsed()
+        );
+        assert!(names.contains(&"--v19999".to_owned()));
     }
 
     /// Pathologically large track counts drop the declaration instead of
