@@ -729,6 +729,101 @@ pub fn node_rect(world: &World, entity: Entity) -> Option<Rect> {
     Some(Rect::from_center_size(center, size))
 }
 
+/// The `Node` bevy_markup spawns for this kind of entity before CSS applies:
+/// an `HtmlUi` root keeps the app's node (the harness spawns
+/// `Node::default()`) with `min-width`/`min-height: 0`; text blocks shrink 0
+/// and size their content box; containers, box wrappers and text inputs are
+/// also columns.
+pub fn spawned_node(root: bool, is_text: bool) -> Node {
+    if root {
+        return Node {
+            min_width: Val::Px(0.0),
+            min_height: Val::Px(0.0),
+            ..default()
+        };
+    }
+    Node {
+        flex_direction: if is_text {
+            FlexDirection::default()
+        } else {
+            FlexDirection::Column
+        },
+        flex_shrink: 0.0,
+        box_sizing: BoxSizing::ContentBox,
+        ..default()
+    }
+}
+
+/// `node`'s display, flex and size fields that differ from `spawned`.
+pub fn layout_fields(node: &Node, spawned: &Node, line: &mut String) {
+    if node.display != spawned.display {
+        write!(line, " display={:?}", node.display).unwrap();
+    }
+    if node.flex_direction != spawned.flex_direction {
+        write!(line, " dir={:?}", node.flex_direction).unwrap();
+    }
+    for (name, value, base) in [
+        ("w", node.width, spawned.width),
+        ("h", node.height, spawned.height),
+        ("min-w", node.min_width, spawned.min_width),
+        ("min-h", node.min_height, spawned.min_height),
+        ("max-w", node.max_width, spawned.max_width),
+        ("max-h", node.max_height, spawned.max_height),
+        ("basis", node.flex_basis, spawned.flex_basis),
+        ("col-gap", node.column_gap, spawned.column_gap),
+    ] {
+        if value != base {
+            write!(line, " {name}={}", val(value)).unwrap();
+        }
+    }
+    for (name, value, base) in [
+        ("grow", node.flex_grow, spawned.flex_grow),
+        ("shrink", node.flex_shrink, spawned.flex_shrink),
+    ] {
+        if value != base {
+            write!(line, " {name}={value}").unwrap();
+        }
+    }
+    // Grid tracks only expose `Debug`; placements print CSS-like.
+    for (name, value, base) in [
+        ("grid-cols", &node.grid_template_columns, &spawned.grid_template_columns),
+        ("grid-rows", &node.grid_template_rows, &spawned.grid_template_rows),
+    ] {
+        if value != base {
+            write!(line, " {name}={value:?}").unwrap();
+        }
+    }
+    for (name, value, base) in [
+        ("grid-auto-cols", &node.grid_auto_columns, &spawned.grid_auto_columns),
+        ("grid-auto-rows", &node.grid_auto_rows, &spawned.grid_auto_rows),
+    ] {
+        if value != base {
+            write!(line, " {name}={value:?}").unwrap();
+        }
+    }
+    if node.grid_auto_flow != spawned.grid_auto_flow {
+        write!(line, " grid-flow={:?}", node.grid_auto_flow).unwrap();
+    }
+    // `start,span,end` as Bevy stores them, `_` for unset.
+    let placement = |placement: GridPlacement| {
+        let part = |value: Option<String>| value.unwrap_or_else(|| "_".to_owned());
+        format!(
+            "{},{},{}",
+            part(placement.get_start().map(|start| start.to_string())),
+            part(placement.get_span().map(|span| span.to_string())),
+            part(placement.get_end().map(|end| end.to_string())),
+        )
+    };
+    for (name, value, base) in [
+        ("grid-row", node.grid_row, spawned.grid_row),
+        ("grid-col", node.grid_column, spawned.grid_column),
+    ] {
+        if value != base {
+            write!(line, " {name}={}", placement(value)).unwrap();
+        }
+    }
+}
+
 pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut String) {
     let entity_ref = world.entity(entity);
     let indent = "  ".repeat(depth);
@@ -786,6 +881,32 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
             };
             write!(line, " radius={}", corners.map(|c| radius_of(&c)).join(",")).unwrap();
         }
+        let spawned = spawned_node(
+            depth == 0 || entity_ref.contains::<HtmlUi>(),
+            entity_ref.contains::<Text>(),
+        );
+        layout_fields(node, &spawned, &mut line);
+    }
+    if let Some(visibility) = entity_ref.get::<Visibility>()
+        && *visibility != Visibility::Inherited
+    {
+        write!(line, " vis={visibility:?}").unwrap();
+    }
+    if let Some(focusable) = entity_ref.get::<Focusable>() {
+        line += if focusable.autofocus {
+            " focus=auto"
+        } else {
+            " focus"
+        };
+    }
+    // The element's bindings (link spans print theirs on the run line).
+    if let Some(signals) = entity_ref.get::<ElementSignals>() {
+        let bindings: Vec<String> = signals
+            .0
+            .iter()
+            .map(|binding| format!("{:?}:{}", binding.trigger, binding.name))
+            .collect();
+        write!(line, " on={}", bindings.join(",")).unwrap();
     }
     if let Some(colors) = entity_ref.get::<BorderColor>()
         && *colors != BorderColor::DEFAULT

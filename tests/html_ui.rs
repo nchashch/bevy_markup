@@ -373,7 +373,7 @@ html-ui border=16,16,16,16 padding=10,20,10,20 slice=frame.png 4,4,4,4 stretch
   p.framed border=6,8,6,8 bg=#102030 slice=frame.png 6,8,6,8 tile
     -
       "Framed" serif 20px #ffffff
-  div.panel border=12,12,12,12 padding=4,4,4,4 gap=7 bg=#333333 slice=frame.png 2,3,4,5 stretch
+  div.panel border=12,12,12,12 padding=4,4,4,4 gap=7 col-gap=7 bg=#333333 slice=frame.png 2,3,4,5 stretch
     p
       "One" serif 20px #ffffff
     p
@@ -2363,7 +2363,7 @@ html-ui
       "second" default 16px #ffffff
   p.markdown
     "frame.png" img 32x24
-  div
+  div focus on=Click:buy
     -
       "Buy" default 16px #ffffff
 "#,
@@ -2433,9 +2433,9 @@ html-ui
 
 /// `<input type="text">` (the `text-input` feature): a block element with
 /// Bevy 0.20's editable-text widget — the initial value from the `value`
-/// attribute, `maxlength` → `max_characters`, the text styled by the
-/// cascade, the box by CSS. The element is focusable (press-to-focus,
-/// navigation).
+/// attribute, the text styled by the cascade, the box by CSS. The element
+/// is focusable (press-to-focus, navigation). (`maxlength` and
+/// `placeholder` are not supported: Bevy 0.20's widget has neither.)
 #[cfg(feature = "text-input")]
 #[test]
 fn text_input_element_maps_to_the_widget() {
@@ -2460,7 +2460,7 @@ fn text_input_element_maps_to_the_widget() {
     ui.update(30).assert_dump(
         r#"
 html-ui
-  input.field padding=4,4,4,4 bg=#222222
+  input.field padding=4,4,4,4 w=200 focus bg=#222222
     "hello" default 20px #ffffff
 "#,
     );
@@ -2478,6 +2478,73 @@ fn transitive_var_change_restyles() {
             (
                 "style.css",
                 "html { color: #ffffff } p { --a: var(--brand); color: var(--a) }",
+
+/// Other `type`s stay unsupported (ADR 0016): only a text (or missing)
+/// `type` builds the field; the others are dropped like any unsupported
+/// empty inline leaf — no field, no element. The `type` attribute is the
+/// real attribute, not a `data-type`.
+#[cfg(feature = "text-input")]
+#[test]
+fn non_text_input_types_are_not_fields() {
+    let mut ui = TestUi::new(
+        "input-types",
+        &[
+            (
+                "page.html",
+                r#"<input type="checkbox"><input type="password"><input>"#,
+            ),
+            ("style.css", "html { color: #ffffff }"),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.update(20);
+    let world = ui.world_mut();
+    let mut query = world.query::<(
+        Entity,
+        &bevy_markup::html::HtmlElement,
+        Option<&bevy::text::EditableText>,
+        Option<&bevy::ui_widgets::TextInput>,
+        Option<&Focusable>,
+    )>();
+    let inputs: Vec<_> = query
+        .iter(world)
+        .map(|(entity, element, text, widget, focus)| {
+            (
+                element.tag.clone(),
+                text.is_some(),
+                widget.is_some(),
+                focus.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        inputs,
+        vec![("input".to_owned(), true, true, true)],
+        "the checkbox and password inputs must not become fields"
+    );
+}
+
+/// A kept `<input>` is updated in place: the text follows the `value`
+/// attribute only when the attribute changed (the typed text is app
+/// state), and the cascade's font/color restyle it.
+#[cfg(feature = "text-input")]
+#[test]
+fn kept_input_follows_value_and_styles() {
+    let mut ui = TestUi::new(
+        "input-update",
+        &[
+            (
+                "page.html",
+                r#"<p>{{ n }}</p><input type="text" class="field" value="{{ v }}">"#,
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff; font-size: 20px } .field { color: #00ffff }",
+            ),
+            (
+                "b.css",
+                "html { color: #ffffff; font-size: 20px } .field { color: #ff00ff; font-size: 30px }",
             ),
         ],
     )
@@ -2494,6 +2561,12 @@ html-ui
     "colored" default 16px #ff0000
 "#,
     );
+
+        TemplateContext::new().with("n", &1).with("v", &"one"),
+        Node::default(),
+    );
+    ui.update(30);
+    // The `value` attribute changed: the field's text follows it.
     let root = ui.root();
     ui.world_mut()
         .get_mut::<TemplateContext>(root)
@@ -2506,6 +2579,242 @@ html-ui
     "colored" default 16px #00ff00
 "#,
     );
+}
+
+
+        .insert("v", &"two");
+    ui.update(30);
+    let entity = {
+        let world = ui.world_mut();
+        world
+            .query::<(Entity, &bevy::ui_widgets::TextInput)>()
+            .iter(world)
+            .map(|(entity, _)| entity)
+            .next()
+            .expect("the text field")
+    };
+    let text = ui
+        .world_mut()
+        .get::<bevy::text::EditableText>(entity)
+        .unwrap()
+        .value()
+        .to_string();
+    assert_eq!(text, "two", "the value attribute change did not land");
+
+    // The attribute is unchanged; typed text survives a re-render.
+    ui.world_mut()
+        .entity_mut(entity)
+        .insert(bevy::text::EditableText::new("typed by the user"));
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &2);
+    ui.update(30);
+    let text = ui
+        .world_mut()
+        .get::<bevy::text::EditableText>(entity)
+        .unwrap()
+        .value()
+        .to_string();
+    assert_eq!(
+        text, "typed by the user",
+        "the re-render clobbered the typed text"
+    );
+
+    // A restyle updates the field's cascade styling.
+    let b_sheet = ui.load::<Stylesheet>("b.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
+    ui.update(30);
+    let color = ui
+        .world_mut()
+        .get::<bevy::prelude::TextColor>(entity)
+        .expect("the field kept its TextColor")
+        .0;
+    assert_eq!(color, bevy::color::Color::srgb(1.0, 0.0, 1.0));
+}
+
+/// The text-input branch must style the field from the same box the
+/// normal path computed: the `resolve_names` call resolves its grid
+/// placement, and dropping it lost a *named* `grid-row`/`-column`
+/// (numeric placement maps without the names).
+#[cfg(feature = "text-input")]
+#[test]
+fn text_input_keeps_its_grid_placement() {
+    let mut ui = TestUi::new(
+        "input-grid",
+        &[
+            (
+                "page.html",
+                r#"<div class="grid"><input type="text" style="grid-row: mid"></div>"#,
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff } .grid { display: grid; grid-template-rows: [top] auto [mid] auto auto }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.update(30);
+    let world = ui.world_mut();
+    let rows: Vec<_> = world
+        .query::<(&bevy_markup::html::HtmlElement, &Node)>()
+        .iter(world)
+        .filter(|(element, _)| element.tag == "input")
+        .map(|(_, node)| (node.grid_row.get_start(), node.grid_row.get_span()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![(Some(2), None)],
+        "the input lost its named grid placement"
+    );
+}
+
+/// A root `calc()` resolves against the viewport — including on a
+/// top-level root, which the resolution pass skipped entirely — and stops
+/// resolving once the declaration goes (the `CalcSized` component was
+/// never removed, so the old calc kept overwriting the width).
+#[test]
+fn root_calc_applies_and_stops() {
+    let mut ui = TestUi::with_layout(
+        "root-calc",
+        &[
+            ("page.html", "<p>x</p>"),
+            ("a.css", "html { width: calc(50% - 20px) }"),
+            ("b.css", "html { padding: 5px }"),
+        ],
+        UVec2::new(640, 480),
+    )
+    .stylesheet("a.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let root = ui.root();
+    let width = ui.world_mut().get::<Node>(root).unwrap().width;
+    assert_eq!(width, Val::Px(300.0), "the root's calc() did not resolve");
+
+    // A theme that drops the calc: the width goes back to the app's node.
+    let b_sheet = ui.load::<Stylesheet>("b.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
+    ui.settle();
+    let width = ui.world_mut().get::<Node>(root).unwrap().width;
+    assert_eq!(
+        width,
+        Val::Auto,
+        "the dropped calc() kept overwriting the width"
+    );
+}
+
+/// A restyle that respawns spans (runs merging under a new sheet) must
+/// fire `HtmlUiBuilt`, not `HtmlUiRestyled`: the promise behind the
+/// restyled event is that every element was kept, and link spans are new
+/// entities the app's `HtmlUiBuilt` wiring has to see.
+#[test]
+fn restyle_that_respawns_spans_reports_a_build() {
+    #[derive(Resource, Default)]
+    struct Counts {
+        built: usize,
+        restyled: usize,
+    }
+
+    let mut ui = TestUi::new(
+        "span-respawn",
+        &[
+            ("page.html", "<p>Plain <b>bold</b> text</p>"),
+            ("a.css", "html { color: #ffffff } b { color: #ff0000 }"),
+            ("b.css", "html { color: #ffffff }"),
+        ],
+    )
+    .stylesheet("a.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.world_mut().insert_resource(Counts::default());
+    ui.app_mut().add_observer(
+        |_: On<HtmlUiBuilt>, mut counts: ResMut<Counts>| {
+            counts.built += 1;
+        },
+    );
+    ui.app_mut().add_observer(
+        |_: On<HtmlUiRestyled>, mut counts: ResMut<Counts>| {
+            counts.restyled += 1;
+        },
+    );
+    ui.settle();
+    let (built, restyled) = {
+        let counts = ui.world_mut().resource::<Counts>();
+        (counts.built, counts.restyled)
+    };
+
+    // The merged runs change the span count: the restyle respawns them.
+    let b_sheet = ui.load::<Stylesheet>("b.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
+    ui.settle();
+    let counts = ui.world_mut().resource::<Counts>();
+    assert_eq!(counts.built, built + 1, "the respawn was not reported as a build");
+    assert_eq!(
+        counts.restyled, restyled,
+        "a span respawn must not fire HtmlUiRestyled"
+    );
+}
+
+/// Syncing Bevy's `RemSize` to the root rule's font-size (16px vs Bevy's
+/// 20px default) must not queue a restyle: Bevy's layout re-resolves
+/// `Val::Rem`s itself, and a spurious `HtmlUiRestyled` broke the "kept"
+/// promise right after the first build.
+#[test]
+fn rem_size_sync_does_not_restyle() {
+    #[derive(Resource, Default)]
+    struct Counts {
+        built: usize,
+        restyled: usize,
+    }
+
+    let mut ui = TestUi::new(
+        "rem-sync",
+        &[("page.html", "<p>x</p>"), ("style.css", "html { color: #ffffff }")],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.world_mut().insert_resource(Counts::default());
+    ui.app_mut().add_observer(
+        |_: On<HtmlUiBuilt>, mut counts: ResMut<Counts>| {
+            counts.built += 1;
+        },
+    );
+    ui.app_mut().add_observer(
+        |_: On<HtmlUiRestyled>, mut counts: ResMut<Counts>| {
+            counts.restyled += 1;
+        },
+    );
+    ui.settle();
+    let counts = ui.world_mut().resource::<Counts>();
+    assert!(counts.built >= 1, "the UI never built");
+    assert_eq!(counts.restyled, 0, "the RemSize sync queued a restyle");
+}
+
+/// Pathologically deep user content is capped: ~150 nesting levels
+/// overflowed a debug-build stack in the recursive walks. Deeper content
+/// is dropped (warned once); the capped prefix builds normally.
+#[test]
+fn deep_nesting_is_capped() {
+    let deep = format!(
+        "{}x{}",
+        "<div>".repeat(200),
+        "</div>".repeat(200)
+    );
+    let mut ui = TestUi::new(
+        "deep-nesting",
+        &[("page.html", "<p>before</p>{{ deep | safe }}<p>after</p>")],
+    )
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("deep", &deep),
+        Node::default(),
+    );
+    ui.settle();
+    let dump = ui.dump();
+    let divs = dump.lines().filter(|line| line.trim_start().starts_with("div")).count();
+    assert_eq!(divs, 100, "the cap should keep exactly 100 levels:\n{dump}");
+    assert!(dump.contains("\"before\""), "content before the deep tree vanished:\n{dump}");
+    assert!(dump.contains("\"after\""), "content after the deep tree vanished:\n{dump}");
 }
 
 /// `<a href>` links: the link's runs become a picked span entity that

@@ -136,13 +136,14 @@ impl UiModel {
     /// text, the sheet and fonts the styling), the latter only when the
     /// outline hasn't replaced content.
     fn expected(&self) -> (String, Option<String>) {
+        // `dir=Column`: the app's root node is a column (see `spawn`).
         let root = match self.effective() {
             Theme::Framed => {
-                "html-ui border=16,16,16,16 padding=10,10,10,10 slice=frame.png 4,4,4,4 stretch"
+                "html-ui border=16,16,16,16 padding=10,10,10,10 dir=Column slice=frame.png 4,4,4,4 stretch"
             }
-            Theme::Plain => "html-ui padding=4,4,4,4",
+            Theme::Plain => "html-ui padding=4,4,4,4 dir=Column",
             // Unstyled: the app's own 3px padding is restored.
-            Theme::Broken => "html-ui padding=3,3,3,3",
+            Theme::Broken => "html-ui padding=3,3,3,3 dir=Column",
         };
         let text = match self.locale {
             Locale::Raw => self.n.to_string(),

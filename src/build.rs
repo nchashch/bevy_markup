@@ -124,6 +124,13 @@ struct TextInputSpec {
     name: Option<String>,
 }
 
+/// The `value` attribute the field's text was last set from: the field's
+/// text is app state (the user types into `EditableText`), so a re-render
+/// sets it only when the attribute changed.
+#[cfg(feature = "text-input")]
+#[derive(Component, Debug, Default, Clone, PartialEq)]
+struct InputValue(String);
+
 /// An `<img>`: the loaded image and its `width`/`height` attributes (px;
 /// `None` keeps the image's size, one `None` preserves the aspect ratio).
 /// Percentages resolve against the containing block's content box at
@@ -1220,15 +1227,11 @@ pub(crate) fn build_html_ui(
             .collect();
         commands.entity(entity).insert(InlineImages(inline_images));
         // CSS `rem` resolves against the root font-size: keep Bevy's
-        // `RemSize` resource in sync. A change restyles this UI, so its
-        // `Val::Rem`s re-convert against the new value.
+        // `RemSize` resource in sync. No restyle is queued: Bevy's layout
+        // re-resolves every `Val::Rem` when the resource changes, and the
+        // calc pass reads the new size on its next frame anyway.
         if **rem_size != root_size {
             commands.insert_resource(RemSize(root_size));
-            commands.queue(move |world: &mut World| {
-                if let Some(mut state) = world.get_mut::<RebuildState>(entity) {
-                    state.queue_restyle();
-                }
-            });
         }
         let mut connected = Vec::new();
         let spawned = update_children(
@@ -1948,7 +1951,9 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
                 boxed.clone(),
                 *pointer_events,
                 *font_size,
-                children.clone(),
+                // Only iterated: borrowing avoids a deep copy of the whole
+                // subtree per container.
+                children,
             ),
         };
     let mut node = Node {
@@ -2187,7 +2192,8 @@ fn spawn_spec(
         // `EditableText`), and the box from CSS on the node.
         let input = spec.text_input.clone().unwrap();
         entity.insert((
-            EditableText::new(input.initial),
+            EditableText::new(input.initial.clone()),
+            InputValue(input.initial),
             input.font,
             TextColor(input.color),
             TextInput,
@@ -2425,11 +2431,14 @@ fn update_children(
     for &stale in owned.iter().filter(|child| !kept.contains(*child)) {
         commands.entity(stale).despawn();
     }
+    // The non-`owned` children are exactly the nested ones: membership in
+    // the (small) nested set instead of a linear scan per current child.
+    let nested_set: HashSet<Entity> = nested.iter().copied().collect();
     desired.extend(nested);
     let remaining: Vec<Entity> = current
         .iter()
         .copied()
-        .filter(|child| kept.contains(child) || !owned.contains(child))
+        .filter(|child| kept.contains(child) || nested_set.contains(child))
         .collect();
     if desired != remaining {
         commands.entity(parent).replace_children(&desired);
@@ -2534,11 +2543,16 @@ fn update_spec(
         signals::observe_pointer_signals(&mut target);
     }
     let queued = Arc::clone(spec);
+    #[cfg(feature = "text-input")]
+    let is_text_input = queued.text_input.is_some();
+    #[cfg(not(feature = "text-input"))]
+    let is_text_input = false;
     target.queue(move |mut entity: EntityWorldMut| {
         put_ref(&mut entity, Some(&queued.node));
         // Non-text nodes get their `EmSize` from the cascade (text blocks
-        // have a `TextFont`, which Bevy derives it from).
-        if !is_text {
+        // have a `TextFont`, which Bevy derives it from; a text input's
+        // `EmSize` comes from its `TextFont` too, as on spawn).
+        if !is_text && !is_text_input {
             put(&mut entity, Some(EmSize(queued.font_size)));
         }
         put(
@@ -2548,6 +2562,38 @@ fn update_spec(
                 exprs: queued.calc.clone(),
             }),
         );
+        // The editable text field's styling follows the cascade, and its
+        // text is set only when the `value` attribute it was built from
+        // changed (the text itself is app state: the user types into
+        // `EditableText`).
+        #[cfg(feature = "text-input")]
+        if let Some(input) = &queued.text_input {
+            put(&mut entity, Some(input.font.clone()));
+            put(&mut entity, Some(TextColor(input.color)));
+            let stored = entity.get::<InputValue>().map(|value| value.0.as_str());
+            if stored != Some(input.initial.as_str()) {
+                entity.insert((
+                    EditableText::new(input.initial.clone()),
+                    InputValue(input.initial.clone()),
+                ));
+            }
+            match (&input.name, entity.get::<signals::InputName>()) {
+                (Some(name), Some(current)) if current.0 == *name => {}
+                (Some(name), _) => {
+                    entity.insert(signals::InputName(name.clone()));
+                }
+                (None, Some(_)) => {
+                    entity.remove::<signals::InputName>();
+                }
+                (None, None) => {}
+            }
+        }
+        // The element stopped being a text input (its `type` attribute
+        // changed): the widget components go.
+        #[cfg(feature = "text-input")]
+        if queued.text_input.is_none() {
+            entity.remove::<(EditableText, TextInput, InputValue, signals::InputName)>();
+        }
         if queued.element.is_some() {
             put_ref(&mut entity, queued.element.as_ref());
         }
@@ -2777,6 +2823,10 @@ fn update_spec(
         commands.entity(entity).with_children(|spans| {
             spawn_spans(spans, text, spec.pickable);
         });
+        // New span entities: the restyle's "everything was kept" promise
+        // no longer holds — report a build so `HtmlUiBuilt` fires and
+        // observers re-wire the replacements (link spans, in particular).
+        return true;
     }
     false
 }
@@ -2788,31 +2838,55 @@ fn update_spec(
 /// placeholders until the first resolution; later builds overwrite the
 /// fresh spec's placeholder each frame until the values are unchanged).
 pub(crate) fn resolve_calc(
-    mut sized: Query<(Entity, &ChildOf, &mut Node, &CalcSized)>,
+    mut sized: Query<(Entity, Option<&ChildOf>, &mut Node, &CalcSized)>,
     boxes: Query<&ComputedNode>,
     parents: Query<&ChildOf>,
     rem: Res<RemSize>,
+    cameras: Query<(&Camera, Option<&IsDefaultUiCamera>)>,
 ) {
-    for (_entity, child_of, mut node, calc) in &mut sized {
-        let (Ok(parent_box), Ok(parent)) = (
-            boxes.get(child_of.parent()),
-            parents.get(child_of.parent()).map(|p| p.0),
-        ) else {
-            continue;
+    // The viewport for a top-level root (no parent): the UI camera's
+    // target, preferring the default UI camera. A root's own box is *not*
+    // the viewport — an auto-sized root shrinks to its content.
+    let viewport_of_camera = || {
+        cameras
+            .iter()
+            .min_by_key(|(_, default)| default.is_some())
+            .and_then(|(camera, _)| camera.logical_viewport_size())
+    };
+    for (entity, child_of, mut node, calc) in &mut sized {
+        let (content, viewport) = match child_of {
+            Some(child_of) => {
+                let (Ok(parent_box), Ok(parent)) = (
+                    boxes.get(child_of.parent()),
+                    parents.get(child_of.parent()).map(|p| p.0),
+                ) else {
+                    continue;
+                };
+                let inset = parent_box.border + parent_box.padding;
+                let content = Vec2::new(
+                    (parent_box.size.x - inset.min_inset.x - inset.max_inset.x).max(0.0),
+                    (parent_box.size.y - inset.min_inset.y - inset.max_inset.y).max(0.0),
+                );
+                // The viewport: the topmost node's box (a UI root measures
+                // the window; deeper roots measure their own layout, which
+                // is not the viewport — walk past them).
+                let mut top = parent;
+                while let Ok(ancestor) = parents.get(top).map(|p| p.0) {
+                    top = ancestor;
+                }
+                let viewport = boxes.get(top).map(|box_| box_.size).unwrap_or_default();
+                (content, viewport)
+            }
+            // A top-level `HtmlUi` root has no parent: its containing
+            // block is the viewport. Without any camera (a headless edge),
+            // the root's own box is the only reference available.
+            None => {
+                let size = viewport_of_camera()
+                    .or_else(|| boxes.get(entity).ok().map(|box_| box_.size))
+                    .unwrap_or_default();
+                (size, size)
+            }
         };
-        let inset = parent_box.border + parent_box.padding;
-        let content = Vec2::new(
-            (parent_box.size.x - inset.min_inset.x - inset.max_inset.x).max(0.0),
-            (parent_box.size.y - inset.min_inset.y - inset.max_inset.y).max(0.0),
-        );
-        // The viewport: the topmost node's box (a UI root measures the
-        // window; deeper roots measure their own layout, which is not the
-        // viewport — walk past them).
-        let mut top = parent;
-        while let Ok(ancestor) = parents.get(top).map(|p| p.0) {
-            top = ancestor;
-        }
-        let viewport = boxes.get(top).map(|box_| box_.size).unwrap_or_default();
         let basis = CalcBasis {
             em: calc.em,
             rem: rem.0,
@@ -3008,6 +3082,9 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
             em: root_size,
             exprs: boxed.calc.clone(),
         });
+    } else {
+        // The declaration went: the old calc must stop resolving.
+        entity.remove::<CalcSized>();
     }
 }
 
@@ -3195,11 +3272,22 @@ fn pair_trees_into(
     clean: &mut HashSet<tl::NodeHandle>,
 ) {
     for (old_child, fresh_child) in old.children().iter().zip(fresh.children().iter()) {
-        pair_node(old.parser(), *old_child, fresh.parser(), *fresh_child, pairing, reverse, clean);
+        pair_node(
+            old.parser(),
+            *old_child,
+            fresh.parser(),
+            *fresh_child,
+            pairing,
+            reverse,
+            clean,
+            0,
+        );
     }
 }
 
-/// Pairs the two nodes; returns whether their whole subtrees match.
+/// Pairs the two nodes; returns whether their whole subtrees match. Trees
+/// deeper than [`MAX_DOM_DEPTH`] never match (the fresh collect caps
+/// them, so a cached spec could not describe them anyway).
 fn pair_node(
     old_parser: &tl::Parser,
     old: tl::NodeHandle,
@@ -3208,7 +3296,11 @@ fn pair_node(
     pairing: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
     reverse: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
     clean: &mut HashSet<tl::NodeHandle>,
+    depth: usize,
 ) -> bool {
+    if depth >= MAX_DOM_DEPTH {
+        return false;
+    }
     let (Some(old_node), Some(fresh_node)) = (old.get(old_parser), fresh.get(fresh_parser)) else {
         return false;
     };
@@ -3235,7 +3327,16 @@ fn pair_node(
             }
             let mut all = true;
             for (old_child, fresh_child) in old_children.iter().zip(fresh_children.iter()) {
-                all &= pair_node(old_parser, *old_child, fresh_parser, *fresh_child, pairing, reverse, clean);
+                all &= pair_node(
+                    old_parser,
+                    *old_child,
+                    fresh_parser,
+                    *fresh_child,
+                    pairing,
+                    reverse,
+                    clean,
+                    depth + 1,
+                );
             }
             if all {
                 pairing.insert(fresh, old);
@@ -3381,6 +3482,20 @@ fn remap_spec_handles(specs: &mut [SpecNode], reverse: &HashMap<tl::NodeHandle, 
     }
 }
 
+/// User content nested deeper than this is dropped with a warning: the
+/// build's walks recurse per level (and clone the ancestor chain), and
+/// ~150 nesting levels already overflow a debug-build task-pool stack.
+/// Browsers parse far deeper; this only bounds pathological documents.
+const MAX_DOM_DEPTH: usize = 100;
+
+/// Warns once per process when content is dropped for its depth.
+fn warn_overdepth() {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        warn!("document nesting deeper than {MAX_DOM_DEPTH} elements: deeper content is dropped");
+    }
+}
+
 fn collect_items(
     dom: &tl::VDom,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
@@ -3402,7 +3517,7 @@ fn collect_items(
     };
     let mut items = Vec::new();
     for handle in dom.children() {
-        collect_node(&ctx, *handle, &root, &mut items, &[], grid);
+        collect_node(&ctx, *handle, &root, &mut items, &[], grid, 0);
     }
     items
 }
@@ -3414,7 +3529,12 @@ fn collect_node(
     items: &mut Vec<Item>,
     chain: &[Ancestor],
     grid: Option<&GridNames>,
+    depth: usize,
 ) {
+    if depth >= MAX_DOM_DEPTH {
+        warn_overdepth();
+        return;
+    }
     let Some(node) = handle.get(ctx.parser) else {
         return;
     };
@@ -3476,7 +3596,7 @@ fn collect_node(
     let Some(element) = ctx.element(tag) else {
         // Unmatched `data-l10n-name` in a translation: content only.
         for child in tag.children().top().iter() {
-            collect_node(ctx, *child, inherited, items, chain, None);
+            collect_node(ctx, *child, inherited, items, chain, None, depth + 1);
         }
         return;
     };
@@ -3509,15 +3629,18 @@ fn collect_node(
     boxed.fade(style.opacity);
     #[cfg(feature = "text-input")]
     if element.tag == "input"
-        && element
-            .dataset
+        && tag
+            .attributes()
             .get("type")
-            .is_none_or(|kind| kind == "text")
+            .flatten()
+            .map(|kind| kind.as_utf8_str() == "text")
+            .unwrap_or(true)
     {
         // An editable text field (ADR 0016): a block with the widget's
         // components; its content is the field's state, not walked markup.
-        // An `<input>` is focusable like a block with `data-on-click`
-        // (HTML inputs are focusable), unless `tabindex="-1"`.
+        // Other `type`s stay unsupported (the field is not built). An
+        // `<input>` is focusable like a block with `data-on-click` (HTML
+        // inputs are focusable), unless `tabindex="-1"`.
         focus = Some(Focusable {
             autofocus: tag.attributes().get("autofocus").flatten().is_some(),
         });
@@ -3531,9 +3654,8 @@ fn collect_node(
             .get("name")
             .flatten()
             .map(|name| decode_entities(&name.as_utf8_str()).to_string());
-        let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), chain);
-        boxed.drawn_outline = boxed.outline(style.color);
-        boxed.fade(style.opacity);
+        // The outer `boxed` already has the placement (`resolve_names`),
+        // the outline and the fade applied.
         items.push(Item::TextInput {
             element,
             handle: Some(handle),
@@ -3629,6 +3751,7 @@ fn collect_node(
                         target,
                         &child_chain,
                         grid_of_own.as_ref(),
+                        depth + 1,
                     );
                 }
             });
@@ -3641,6 +3764,7 @@ fn collect_node(
                         target,
                         &child_chain,
                         grid_of_own.as_ref(),
+                        depth + 1,
                     );
                 }
             }
