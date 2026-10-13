@@ -2751,12 +2751,12 @@ fn update_spec<'a>(
                 (None, None) => {}
             }
         }
-        // The element stopped being a text input (its `type` attribute
-        // changed): the widget components go.
-        #[cfg(feature = "text-input")]
-        if queued.text_input.is_none() {
-            entity.remove::<(EditableText, TextInput, InputValue, signals::InputName)>();
-        }
+        // An element that stopped being a text input doesn't exist (a
+        // non-text `type` builds no item and the entity is despawned), so
+        // there is no widget state to strip here - and a blanket remove
+        // would strip components an app's custom element attached
+        // (violating the "kept elements keep what the app attached"
+        // promise). Nothing to do.
         if queued.element.is_some() {
             put_ref(&mut entity, queued.element.as_ref());
         }
