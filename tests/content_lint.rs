@@ -137,18 +137,23 @@ fn inline_contexts() -> Vec<Value> {
 /// `examples/inputs/main.rs`: the fields' initial values and the preview
 /// following them (empty, half typed, both set).
 fn inputs_contexts() -> Vec<Value> {
+    // The preview's `data-l10n-args` is the app-serialized map: one
+    // context carries a quote and a backslash (the spliced-JSON bug).
     vec![
         json!({
             "name": "Ada", "title": "Cartographer",
             "live_name": "Ada", "live_title": "Cartographer",
+            "preview_args": r#"{"name":"Ada","title":"Cartographer"}"#,
         }),
         json!({
             "name": "Ada", "title": "Cartographer",
             "live_name": "", "live_title": "",
+            "preview_args": r#"{"name":"","title":""}"#,
         }),
         json!({
             "name": "Ada", "title": "Cartographer",
-            "live_name": "Ada", "live_title": "",
+            "live_name": "Ada \"The\" \\ Brave", "live_title": "",
+            "preview_args": "{\"name\":\"Ada \\\"The\\\" \\\\ Brave\",\"title\":\"\"}",
         }),
     ]
 }

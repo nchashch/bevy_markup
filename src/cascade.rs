@@ -936,7 +936,7 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
     // The transitive closure, as a worklist (linear: every name enters
     // once — the fixpoint loop re-scanned every declaration per round,
     // quadratic in the chain length).
-    let mut by_name: HashMap<String, Vec<String>> =
+    let by_name: HashMap<String, Vec<String>> =
         declarations.into_iter().collect();
     let mut work: Vec<String> = names.iter().cloned().collect();
     while let Some(active) = work.pop() {
