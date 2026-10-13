@@ -4065,13 +4065,24 @@ fn collect_node(
         };
         // A missing translation falls back to the element's own content.
         let preformatted = matches!(kind, BlockKind::Preformatted);
+        // Only a submit button *of a form with a submit hook* carries the
+        // marker: any button is a submit button in HTML, but outside such
+        // a form it has no submit semantics — and `covered_by_deeper`
+        // counts the button as bound, which would swallow the enclosing
+        // wrapper's click.
         let submit = is_button
             && tag
                 .attributes()
                 .get("type")
                 .flatten()
                 .map(|kind| kind.as_utf8_str())
-                .is_none_or(|kind| kind == "submit");
+                .is_none_or(|kind| kind == "submit")
+            && chain
+                .iter()
+                .any(|ancestor| {
+                    ancestor.element.tag == "form"
+                        && ancestor.element.data("on-submit").is_some()
+                });
         let mut runs = Vec::new();
         push_content_runs(
             ctx,

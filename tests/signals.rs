@@ -1159,6 +1159,47 @@ fn type_button_clicks_do_not_submit() {
     );
 }
 
+/// A `<button>` with no `type` is a submit button *in HTML*, but outside
+/// a form with a submit hook it has no submit semantics — and it must
+/// not count as bound: a click on it reaches the enclosing wrapper's
+/// binding (the submit marker made `covered_by_deeper` swallow it).
+#[test]
+fn plain_button_outside_a_form_does_not_swallow_the_wrapper_click() {
+    let page = r#"<div id="wrap" data-on-click="wrap"><button id="plain">Plain</button></div>"#;
+    let mut ui = page_ui(
+        "plain-button",
+        page,
+        "button { height: 24px; width: 100px }",
+        TemplateContext::new(),
+    );
+    ui.settle();
+    ui.update(1);
+    let plain = {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement)>();
+        elements
+            .iter(world)
+            .find(|(_, element)| element.id.as_deref() == Some("plain"))
+            .map(|(entity, _)| entity)
+            .expect("plain")
+    };
+    let at = node_rect(ui.world_mut(), plain).expect("laid out").center();
+    ui.click_at(at);
+    let signals: Vec<ElementSignal> = ui.take_signals();
+    assert!(
+        signals
+            .iter()
+            .any(|signal| signal.name.as_ref() == "wrap"),
+        "the wrapper's click never fired: {signals:?}"
+    );
+    assert!(
+        signals
+            .iter()
+            .all(|signal| signal.trigger != SignalTrigger::Submit),
+        "a button outside a form submitted: {signals:?}"
+    );
+}
+
 /// Activation (Enter / gamepad A) on a submit button submits the form,
 /// with the activation as the signal source.
 #[test]
