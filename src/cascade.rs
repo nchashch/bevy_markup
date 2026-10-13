@@ -155,7 +155,9 @@ impl GridNames {
             Axis::Column => &self.columns,
         };
         // The registrations per name are pairs (the 1-based line and its
-        // negative spelling): partition by sign, then pick the occurrence.
+        // negative spelling), in document order: the negative spellings
+        // grow with the lines, so `-k from the end` is the `k`th entry
+        // counted backwards.
         let occurrences = lines.get(name)?;
         let (positive, negative): (Vec<i16>, Vec<i16>) =
             occurrences.iter().partition(|line| **line > 0);
@@ -163,7 +165,13 @@ impl GridNames {
         let line = if index > 0 {
             positive.get(index as usize - 1)
         } else {
-            negative.get((negative.len() as i32 + index as i32 - 1).max(0) as usize)
+            let position = negative.len() as i32 + index;
+            if position < 0 {
+                // More from the end than there are occurrences: no such
+                // line (auto placement).
+                return None;
+            }
+            negative.get(position as usize)
         };
         Some(GridLineDecl::Line(*line?))
     }
@@ -663,16 +671,30 @@ impl LayoutDecl {
         );
         put(&mut node.overflow.x, &base.overflow.x, &self.overflow[0]);
         put(&mut node.overflow.y, &base.overflow.y, &self.overflow[1]);
-        // `apply_to` sets the position and insets only for `relative`/`absolute`.
+        // `apply_to` sets the position and insets for every non-`static`
+        // position (`fixed` resolves against the viewport through the
+        // `FixedNode` component, but the insets and the position type are
+        // the node's).
         if matches!(
             self.position,
-            Some(CssPosition::Absolute | CssPosition::Relative)
+            Some(CssPosition::Absolute | CssPosition::Relative | CssPosition::Fixed)
         ) {
             node.position_type = base.position_type;
             put(&mut node.top, &base.top, &self.inset[0]);
             put(&mut node.right, &base.right, &self.inset[1]);
             put(&mut node.bottom, &base.bottom, &self.inset[2]);
             put(&mut node.left, &base.left, &self.inset[3]);
+        }
+        // `grid-template-areas` implies `auto` tracks when the template
+        // fields are undeclared (apply_to writes them); a later sheet
+        // without the areas must take them back.
+        if let Some(names) = &self.grid_names {
+            if self.grid_template_rows.is_none() && names.implied_rows > 0 {
+                node.grid_template_rows = base.grid_template_rows.clone();
+            }
+            if self.grid_template_columns.is_none() && names.implied_columns > 0 {
+                node.grid_template_columns = base.grid_template_columns.clone();
+            }
         }
     }
 }
@@ -828,13 +850,17 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
     urls
 }
 
-/// Every `var()` name the sheet's supported declarations reference, sorted:
-/// the names whose context values a change restyles
-/// (`Frame::vars_changed`). Only top-level style rules (what the cascade
-/// reads), only `Property::Unparsed` values (the only `var()` the resolver
-/// handles).
+/// Every `var()` name the sheet's supported declarations reference,
+/// sorted: the names whose context values a change restyles
+/// (`Frame::vars_changed`). Transitively: a `--a: var(--brand)`
+/// declaration contributes `--brand` when `--a` is itself referenced.
+/// A name a sheet-level `--` declaration references but nothing reads is
+/// not tracked. Computed once at load (cached on `Stylesheet`).
 pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
     let mut names = BTreeSet::new();
+    // The sheet's `--` declarations: name → the `var()` names their
+    // values reference (joined into the set by the fixpoint below).
+    let mut declarations: Vec<(String, Vec<String>)> = Vec::new();
     for rule in sheet.rules.0.iter() {
         let CssRule::Style(rule) = rule else {
             continue;
@@ -845,9 +871,39 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
             .iter()
             .chain(&rule.declarations.important_declarations)
         {
-            if let Property::Unparsed(unparsed) = declaration {
-                collect_var_names(&unparsed.value, &mut names);
+            match declaration {
+                Property::Unparsed(unparsed) => {
+                    collect_var_names(&unparsed.value, &mut names);
+                }
+                Property::Custom(custom) => {
+                    let name = match &custom.name {
+                        CustomPropertyName::Custom(dashed) => dashed.0.as_ref().to_owned(),
+                        CustomPropertyName::Unknown(_) => continue,
+                    };
+                    let mut refs = BTreeSet::new();
+                    collect_var_names(&custom.value, &mut refs);
+                    if !refs.is_empty() {
+                        declarations.push((name, refs.into_iter().collect()));
+                    }
+                }
+                _ => {}
             }
+        }
+    }
+    // The fixpoint: a referenced `--` name's own references join the set.
+    loop {
+        let mut grew = false;
+        for (name, refs) in &declarations {
+            if names.contains(name) {
+                for r in refs {
+                    if names.insert(r.clone()) {
+                        grew = true;
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
         }
     }
     names.into_iter().collect()
@@ -1958,34 +2014,34 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::GridTemplateRows(rows) => {
             let (tracks, names) = track_sizing(rows, Axis::Row);
             style.layout.grid_template_rows = tracks;
-            if let Some(names) = names {
-                let table = style
-                    .layout
-                    .grid_names
-                    .get_or_insert_with(GridNames::default);
-                table.rows = names.rows;
-            }
+            // A nameless later declaration takes the earlier rule's row
+            // names back.
+            let table = style
+                .layout
+                .grid_names
+                .get_or_insert_with(GridNames::default);
+            table.rows = names.map(|names| names.rows).unwrap_or_default();
         }
         Property::GridTemplateColumns(columns) => {
             let (tracks, names) = track_sizing(columns, Axis::Column);
             style.layout.grid_template_columns = tracks;
-            if let Some(names) = names {
-                let table = style
-                    .layout
-                    .grid_names
-                    .get_or_insert_with(GridNames::default);
-                table.columns = names.columns;
-            }
+            // A nameless later declaration takes the earlier rule's
+            // column names back.
+            let table = style
+                .layout
+                .grid_names
+                .get_or_insert_with(GridNames::default);
+            table.columns = names.map(|names| names.columns).unwrap_or_default();
         }
         Property::GridTemplate(template) => {
             let (rows, row_lines) = track_sizing(&template.rows, Axis::Row);
             let (columns, column_lines) = track_sizing(&template.columns, Axis::Column);
             style.layout.grid_template_rows = rows;
             style.layout.grid_template_columns = columns;
-            let names = style
-                .layout
-                .grid_names
-                .get_or_insert_with(GridNames::default);
+            // The shorthand resets the whole name table: an earlier
+            // rule's names don't survive a new `grid-template`.
+            style.layout.grid_names = Some(GridNames::default());
+            let names = style.layout.grid_names.as_mut().unwrap();
             if let Some(lines) = row_lines {
                 names.rows = lines.rows;
             }
@@ -2011,11 +2067,11 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             style.layout.grid_auto_rows = track_size_list(&grid.auto_rows);
             style.layout.grid_auto_columns = track_size_list(&grid.auto_columns);
             style.layout.grid_auto_flow = Some(grid_auto_flow(grid.auto_flow));
+            // The shorthand resets the name table; an earlier rule's
+            // names don't survive a new `grid`.
+            style.layout.grid_names = Some(GridNames::default());
+            let names = style.layout.grid_names.as_mut().unwrap();
             if let Some(areas) = parse_areas(&grid.areas) {
-                let names = style
-                    .layout
-                    .grid_names
-                    .get_or_insert_with(GridNames::default);
                 names.areas = areas.areas;
                 names.implied_rows = areas.implied_rows;
                 names.implied_columns = areas.implied_columns;
@@ -2036,14 +2092,20 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             }
         }
         Property::GridTemplateAreas(areas) => {
+            // A later declaration replaces the areas and the tracks they
+            // implied; `none` (or an unparsable matrix) takes them back.
+            let names = style
+                .layout
+                .grid_names
+                .get_or_insert_with(GridNames::default);
             if let Some(areas) = parse_areas(areas) {
-                let names = style
-                    .layout
-                    .grid_names
-                    .get_or_insert_with(GridNames::default);
                 names.areas = areas.areas;
                 names.implied_rows = areas.implied_rows;
                 names.implied_columns = areas.implied_columns;
+            } else {
+                names.areas.clear();
+                names.implied_rows = 0;
+                names.implied_columns = 0;
             }
         }
         Property::GridRowStart(line) => style.layout.grid_row[0] = grid_line(line),
@@ -2443,10 +2505,14 @@ fn track_sizing(
                         RepeatCount::Number(n) => *n as usize,
                         _ => 1,
                     };
-                    // The repeat's internal boundaries, once per repetition.
+                    // The repeat's internal boundaries, once per
+                    // repetition. The end boundary of repetition k is the
+                    // SAME line as repetition k+1's start (adjacent
+                    // repetitions merge): registering it every repetition
+                    // puts both names on that line.
                     for repetition in 0..count {
                         for (j, boundary) in repeat.line_names.iter().enumerate() {
-                            if j < tracks {
+                            if j <= tracks {
                                 register(line + repetition * tracks + j, boundary, map);
                             }
                         }
@@ -2459,10 +2525,43 @@ fn track_sizing(
             register(line, std::slice::from_ref(name), map);
         }
     } else if has_names {
-        debug!(
-            "html css: grid line names in auto-fill/auto-fit repeats don't resolve \
-             (the repeat count is layout-dependent)"
-        );
+        // An auto-fill/auto-fit repeat's count is layout-dependent: the
+        // names around it keep what is knowable — boundaries before the
+        // first repeat resolve as positive lines, the list's final
+        // boundary (the grid's last line) resolves from the end. Names
+        // inside or after (before the last line) stay unresolved.
+        let first_repeat = list
+            .items
+            .iter()
+            .position(|item| !matches!(item, TrackListItem::TrackSize(_)));
+        let mut line = 0usize;
+        for (index, item) in list.items.iter().enumerate() {
+            // Boundary `index` precedes item `index`: boundaries up to and
+            // including the first repeat's own start are knowable (their
+            // line doesn't depend on the repeat count); everything after
+            // the repeat starts is not.
+            let before_or_at_first_repeat =
+                first_repeat.is_none_or(|first| index <= first);
+            for name in &list.line_names[index] {
+                if before_or_at_first_repeat {
+                    // Positive spelling only: the negative spelling
+                    // depends on the (layout-dependent) total line count.
+                    let entries = map.entry(name.0.to_string()).or_default();
+                    entries.push((line + 1) as i16);
+                }
+            }
+            match item {
+                TrackListItem::TrackSize(_) => line += 1,
+                TrackListItem::TrackRepeat(repeat) => {
+                    line += repeat.track_sizes.len();
+                }
+            }
+        }
+        let last = list.items.len();
+        for name in &list.line_names[last] {
+            let entries = map.entry(name.0.to_string()).or_default();
+            entries.push(-1);
+        }
     }
     let tracks: Option<Vec<RepeatedGridTrack>> = list
         .items
@@ -3462,6 +3561,78 @@ mod tests {
         assert_eq!(child.layout.grid_column[0], Some(GridLineDecl::Auto));
     }
 
+    /// Negative named-line occurrences count from the end: `-1 a` is the
+    /// last `a` line (its negative spelling), and going further back than
+    /// there are occurrences leaves the placement auto (the old code
+    /// clamped to the first).
+    #[test]
+    fn negative_named_lines_count_from_the_end() {
+        let style = declared(
+            "display: grid; grid-template-columns: [a] 1fr [a] 1fr [a] 1fr [b]",
+        );
+        let grid = style.layout.grid_names.as_ref();
+        let resolve = |placement: &str| {
+            let mut child = declared(&format!("grid-column: {placement}"));
+            child.layout.resolve_names(grid);
+            child.layout.grid_column[0].clone()
+        };
+        // `-1 a` = the last `a` (line 3 of 4 = `-2`), `-2 a` = line 2
+        // (`-3`), `-3 a` = line 1 (`-4`), and `-4 a` doesn't exist.
+        assert_eq!(resolve("-1 a"), Some(GridLineDecl::Line(-2)));
+        assert_eq!(resolve("-2 a"), Some(GridLineDecl::Line(-3)));
+        assert_eq!(resolve("-3 a"), Some(GridLineDecl::Line(-4)));
+        assert_eq!(resolve("-4 a"), Some(GridLineDecl::Auto));
+    }
+
+    /// A name at the end of a `repeat()` registers (the end boundary
+    /// exists after the last repetition), and the names around an
+    /// `auto-fill` repeat keep their knowable spellings: before the
+    /// repeat as positive lines, the final boundary from the end.
+    #[test]
+    fn repeat_names_register() {
+        let style = declared(
+            "display: grid; grid-template-columns: repeat(2, [a] 1fr [b]) [c]",
+        );
+        let names = style.layout.grid_names.expect("line names");
+        // One track per repetition: `a`@1, then the merged boundary
+        // (`b` and `a` on the same line), then `b` and the trailing `c`.
+        assert_eq!(names.columns["a"], &[1, -3, 2, -2]);
+        assert_eq!(names.columns["b"], &[2, -2, 3, -1]);
+        assert_eq!(names.columns["c"], &[3, -1]);
+
+        let style = declared(
+            "display: grid; grid-template-columns: [full-start] repeat(auto-fill, 100px) [full-end]",
+        );
+        let names = style.layout.grid_names.expect("line names");
+        assert_eq!(names.columns["full-start"], &[1]);
+        assert_eq!(names.columns["full-end"], &[-1]);
+    }
+
+    /// A later grid declaration takes the earlier rule's names back: a
+    /// nameless `grid-template-rows` clears the row names, `none` clears
+    /// the areas, and the `grid-template`/`grid` shorthands reset the
+    /// whole table.
+    #[test]
+    fn later_grid_declarations_reset_names() {
+        let style = declared(
+            "display: grid; grid-template-rows: [a] 1fr; grid-template-rows: 1fr",
+        );
+        assert_eq!(
+            style.layout.grid_names.map(|names| names.rows.is_empty()),
+            Some(true)
+        );
+        let style = declared(
+            "display: grid; grid-template-areas: \"x y\"; grid-template-areas: none",
+        );
+        let names = style.layout.grid_names.expect("table");
+        assert!(names.areas.is_empty() && names.implied_rows == 0);
+        let style = declared(
+            "display: grid; grid-template-areas: \"x y\"; grid-template: 1fr / 1fr",
+        );
+        let names = style.layout.grid_names.expect("table");
+        assert!(names.areas.is_empty() && names.rows.is_empty() && names.columns.is_empty());
+    }
+
     /// `grid-area: name` places on the area's whole region (all four
     /// sides, side-aware).
     #[test]
@@ -3542,6 +3713,48 @@ mod tests {
             &[("--pe", "auto")],
         );
         assert_eq!(style.pointer_events, Some(true));
+    }
+
+    /// `var_names` follows references through the sheet's own `--`
+    /// declarations: `--a: var(--brand)` contributes `--brand` when `--a`
+    /// is referenced (a template change to `--brand` must restyle), and
+    /// an unreferenced declaration contributes nothing.
+    #[test]
+    fn var_names_are_transitive() {
+        assert_eq!(
+            var_names(&owned_sheet(
+                "p { --a: var(--brand); color: var(--a) } div { --unused: var(--other) }"
+            )),
+            ["--a", "--brand"]
+        );
+        assert_eq!(var_names(&owned_sheet("p { color: var(--brand) }")), ["--brand"]);
+    }
+
+    /// `restore_from` undoes everything `apply_to` writes: a `fixed`
+    /// position (the insets and the position type are the node's; the
+    /// old code restored only `absolute`/`relative`) and the `auto`
+    /// tracks implied by `grid-template-areas` (written when the
+    /// template fields are undeclared).
+    #[test]
+    fn restore_from_undoes_fixed_and_implied_tracks() {
+        let mut names = GridNames::default();
+        names.implied_rows = 2;
+        let layout = LayoutDecl {
+            position: Some(CssPosition::Fixed),
+            inset: [Some(Val::Px(10.0)), None, None, None],
+            grid_names: Some(names),
+            ..LayoutDecl::default()
+        };
+        let base = Node::default();
+        let mut node = base.clone();
+        layout.apply_to(&mut node);
+        assert_eq!(node.position_type, PositionType::Absolute);
+        assert_eq!(node.top, Val::Px(10.0));
+        assert_eq!(node.grid_template_rows.len(), 2);
+        layout.restore_from(&base, &mut node);
+        assert_eq!(node.position_type, base.position_type);
+        assert_eq!(node.top, base.top);
+        assert_eq!(node.grid_template_rows, base.grid_template_rows);
     }
 
     /// `initial`/`inherit`/`unset`/`revert` return the field to its

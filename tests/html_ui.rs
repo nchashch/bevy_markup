@@ -2466,6 +2466,48 @@ html-ui
     );
 }
 
+/// A context `--` value that reaches the styles only transitively
+/// (`--a: var(--brand)`) restyles when it changes: the vars hash used to
+/// track only directly referenced names.
+#[test]
+fn transitive_var_change_restyles() {
+    let mut ui = TestUi::new(
+        "transitive-var",
+        &[
+            ("page.html", "<p>colored</p>"),
+            (
+                "style.css",
+                "html { color: #ffffff } p { --a: var(--brand); color: var(--a) }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("--brand", &"#ff0000"),
+        Node::default(),
+    );
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "colored" default 16px #ff0000
+"#,
+    );
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--brand", &"#00ff00");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "colored" default 16px #00ff00
+"#,
+    );
+}
+
 /// `<a href>` links: the link's runs become a picked span entity that
 /// emits the `open` signal with the href when clicked; the text styles by
 /// the cascade (`a` rules); a link without an href is plain styled text.

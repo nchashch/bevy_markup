@@ -202,6 +202,9 @@ pub struct Stylesheet {
     pub(crate) sheet: StyleSheet<'static>,
     /// URLs as written, parallel to `images`.
     pub(crate) image_urls: Vec<String>,
+    /// The `var()` names the sheet (transitively, through its own `--`
+    /// declarations) reads from the context — computed once at load.
+    pub(crate) var_names: Vec<String>,
     #[dependency]
     pub(crate) images: Vec<Handle<Image>>,
 }
@@ -271,6 +274,7 @@ impl AssetLoader for StylesheetLoader {
             images.push(load_context.load(path));
         }
         Ok(Stylesheet {
+            var_names: crate::cascade::var_names(&sheet),
             sheet: sheet.into_owned(),
             image_urls,
             images,
