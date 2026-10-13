@@ -296,6 +296,14 @@ impl TestUi {
             }
         }
 
+        // `finish` runs the plugins' `finish` (BevyMarkupPlugin adds Bevy's
+        // DirectionalNavigationPlugin there, after every `build`, so an app
+        // adding that plugin itself is detected instead of hitting Bevy's
+        // duplicate-plugin error). Headless tests never `run`, so this is
+        // the only place it happens. It comes after every `add_plugins`
+        // above.
+        app.finish();
+
         Self {
             app,
             dir,

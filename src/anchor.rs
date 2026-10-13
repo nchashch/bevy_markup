@@ -123,6 +123,13 @@ pub(crate) fn place_anchored(
             (Some(extent), Some(limit)) => start.min(limit - extent).max(0.0),
             _ => start,
         };
+        // The `right`/`bottom` form: the inset is measured from the far
+        // edge, so keeping the overlay inside the viewport means
+        // `inset <= limit` (the overlay's other edge at `limit - inset`).
+        let clamp_from_far = |start: f32, extent: Option<f32>, limit: Option<f32>| match (extent, limit) {
+            (Some(extent), Some(limit)) => start.min(limit),
+            _ => start,
+        };
         let (width, height) = (own.map(|own| own.x), own.map(|own| own.y));
         let (view_w, view_h) = (viewport.map(|v| v.x), viewport.map(|v| v.y));
         let gap = anchor.gap;
@@ -141,12 +148,14 @@ pub(crate) fn place_anchored(
             ],
             // Bottom-anchored: right without knowing the overlay's height
             // (top-anchored by its measured height without a viewport).
+            // Clamped to the viewport once the overlay's height (width) is
+            // known — a tooltip at the screen's top edge stays on screen.
             AnchorPlacement::Above => match view_h {
                 Some(view_h) => [
                     Some(clamp(min.x, width, view_w)),
                     None,
                     None,
-                    Some(view_h - min.y + gap),
+                    Some(clamp_from_far(view_h - min.y + gap, height, Some(view_h))),
                 ],
                 None => [
                     Some(min.x),
@@ -159,7 +168,7 @@ pub(crate) fn place_anchored(
                 Some(view_w) => [
                     None,
                     Some(clamp(min.y, height, view_h)),
-                    Some(view_w - min.x + gap),
+                    Some(clamp_from_far(view_w - min.x + gap, width, Some(view_w))),
                     None,
                 ],
                 None => [
@@ -267,6 +276,8 @@ pub(crate) fn place_world_anchored(
     targets: Query<(&GlobalTransform, Option<&InheritedVisibility>)>,
     cameras: Query<(&Camera, &GlobalTransform)>,
     default_camera: DefaultUiCamera,
+    // Not registered by minimal headless apps.
+    scale: Option<Res<UiScale>>,
     mut commands: Commands,
 ) {
     for (overlay, anchor, mut view, mut node, mut visibility, own, ui_camera) in &mut overlays {
@@ -287,10 +298,15 @@ pub(crate) fn place_world_anchored(
         let projected = camera
             .world_to_viewport(camera_transform, point)
             .ok()
-            .filter(|position| {
-                camera.logical_viewport_size().is_some_and(|size| {
-                    position.cmpge(Vec2::ZERO).all() && position.cmple(size).all()
-                })
+            .and_then(|position| {
+                let rect = camera.logical_viewport_rect()?;
+                // `world_to_viewport` is in window-logical px relative to
+                // the viewport's origin; UI px are relative to the
+                // viewport's top-left and scaled by UiScale too.
+                let ui_scale = scale.as_ref().map_or(1.0, |scale| scale.0);
+                let position = (position - rect.min) / ui_scale;
+                (position.cmpge(Vec2::ZERO).all() && position.cmple(rect.size()).all())
+                    .then_some(position)
             });
         let measured = HtmlWorldAnchorView {
             distance: camera_transform.translation().distance(point),

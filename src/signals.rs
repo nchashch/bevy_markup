@@ -208,6 +208,8 @@ pub(crate) struct InputName(pub String);
 
 /// Marks a `<button type="submit">` inside a form: clicking it collects
 /// the enclosing form's named inputs and emits the form's `Submit` signal.
+/// For the deepest-bound-element rule it counts as bound for `click`: a
+/// bound ancestor's `click` doesn't fire for a click on it.
 #[derive(Component)]
 pub(crate) struct FormSubmitButton;
 
@@ -272,6 +274,7 @@ struct PointerParams<'w, 's> {
     signals: Query<'w, 's, &'static ElementSignals>,
     parents: Query<'w, 's, &'static ChildOf>,
     elements: Query<'w, 's, &'static HtmlElement>,
+    submits: Query<'w, 's, (), With<FormSubmitButton>>,
     #[cfg(feature = "text-input")]
     children: Query<'w, 's, &'static Children>,
     #[cfg(feature = "text-input")]
@@ -295,6 +298,28 @@ fn on_release(event: On<PointerRelease>, params: PointerParams) {
     on_pointer(&*event, hit, params)
 }
 
+/// System params for activation (Enter / gamepad A): the same queries the
+/// pointer observers use, so activation on a submit button submits its
+/// form and activation bindings write like click bindings.
+#[derive(SystemParam)]
+pub(crate) struct ActivationParams<'w, 's> {
+    pub(crate) writer: MessageWriter<'w, ElementSignal>,
+    pub(crate) signals: Query<'w, 's, &'static ElementSignals>,
+    pub(crate) parents: Query<'w, 's, &'static ChildOf>,
+    pub(crate) elements: Query<'w, 's, &'static HtmlElement>,
+    /// The elements paired with their `Option<&HtmlElement>` (the
+    /// `activate_element` observer's shape).
+    pub(crate) elements_and_state:
+        Query<'w, 's, (&'static ElementSignals, Option<&'static HtmlElement>)>,
+    pub(crate) submits: Query<'w, 's, (), With<FormSubmitButton>>,
+    #[cfg(feature = "text-input")]
+    pub(crate) children: Query<'w, 's, &'static Children>,
+    #[cfg(feature = "text-input")]
+    pub(crate) editable: Query<'w, 's, &'static EditableText>,
+    #[cfg(feature = "text-input")]
+    pub(crate) names: Query<'w, 's, &'static InputName>,
+}
+
 /// Emits the observed element's bindings for the event's trigger, unless a
 /// deeper bound element under the pointer owns it. `event_target()` is the
 /// entity this invocation runs for; `hit` the deepest picked entity
@@ -305,7 +330,14 @@ fn on_pointer<E: PointerSignal>(event: &E, hit: Entity, mut params: PointerParam
     let Ok(bound) = params.signals.get(target) else {
         return;
     };
-    if covered_by_deeper(hit, target, trigger, &params.signals, &params.parents) {
+    if covered_by_deeper(
+        hit,
+        target,
+        trigger,
+        &params.signals,
+        &params.submits,
+        &params.parents,
+    ) {
         return;
     }
     let pointer = event.pointer();
@@ -329,37 +361,67 @@ fn on_pointer<E: PointerSignal>(event: &E, hit: Entity, mut params: PointerParam
     // A submit button clicked: collect the enclosing form's named inputs
     // and emit the form's `Submit` signal with their values (ADR: form
     // submissions are signals — Bevy has no HTTP client, the app decides
-    // what submitting means).
-    if trigger == SignalTrigger::Click && params.parents.contains(target) {
-        emit_form_submit(target, &mut params);
+    // what submitting means). Only submit buttons: any other bound element
+    // in a form (`type="button"`, a link, a bound wrapper) just clicks.
+    if trigger == SignalTrigger::Click && params.submits.contains(target) {
+        emit_form_submit(target, source.clone(), &mut params);
     }
 }
 
 /// Finds the enclosing form of `button` (a `<form>` whose bindings include
 /// a `Submit` hook), collects the named inputs' values from its subtree,
 /// and emits the form's `Submit` signal.
-fn emit_form_submit(button: Entity, params: &mut PointerParams) {
+fn emit_form_submit(button: Entity, source: SignalSource, params: &mut PointerParams) {
+    emit_form(
+        button,
+        source,
+        &mut params.writer,
+        &params.parents,
+        &params.elements,
+        &params.signals,
+        #[cfg(feature = "text-input")]
+        &params.children,
+        #[cfg(feature = "text-input")]
+        &params.editable,
+        #[cfg(feature = "text-input")]
+        &params.names,
+    );
+}
+
+/// Submits `button`'s enclosing form: the form's `Submit` signal with the
+/// named inputs' values. Called by the pointer observers (the click's
+/// source) and by activation on a submit button (Enter / gamepad A).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_form(
+    button: Entity,
+    source: SignalSource,
+    writer: &mut MessageWriter<ElementSignal>,
+    parents: &Query<'_, '_, &'static ChildOf>,
+    elements: &Query<'_, '_, &'static HtmlElement>,
+    signals: &Query<'_, '_, &'static ElementSignals>,
+    #[cfg(feature = "text-input")] children: &Query<'_, '_, &'static Children>,
+    #[cfg(feature = "text-input")] editable: &Query<'_, '_, &'static EditableText>,
+    #[cfg(feature = "text-input")] names: &Query<'_, '_, &'static InputName>,
+) {
     // The nearest form ancestor with a `data-on-submit` hook.
     let Some((form, name)) = std::iter::successors(
-        params
-            .parents
+        parents
             .get(button)
             .ok()
             .map(|child_of| child_of.parent()),
         |current| {
-            params
-                .parents
+            parents
                 .get(*current)
                 .ok()
                 .map(|child_of| child_of.parent())
         },
     )
     .find_map(|form| {
-        let element = params.elements.get(form).ok()?;
+        let element = elements.get(form).ok()?;
         if element.tag != "form" {
             return None;
         }
-        let signals = params.signals.get(form).ok()?;
+        let signals = signals.get(form).ok()?;
         let binding = signals
             .0
             .iter()
@@ -375,20 +437,15 @@ fn emit_form_submit(button: Entity, params: &mut PointerParams) {
     #[allow(unused_mut)]
     let mut payload = serde_json::Map::new();
     #[cfg(feature = "text-input")]
-    collect_input_values(form, params, &mut payload);
+    collect_input_values(form, children, editable, names, &mut payload);
 
-    params.writer.write(ElementSignal {
+    writer.write(ElementSignal {
         name: Cow::Owned(name),
         trigger: SignalTrigger::Submit,
         target: form,
-        element: params.elements.get(form).cloned().unwrap_or_default(),
+        element: elements.get(form).cloned().unwrap_or_default(),
         payload: serde_json::Value::Object(payload),
-        source: SignalSource::Pointer {
-            pointer: PointerId::Mouse,
-            button: PointerButton::Primary,
-            position: Vec2::ZERO,
-            count: 1,
-        },
+        source,
     });
 }
 
@@ -397,16 +454,18 @@ fn emit_form_submit(button: Entity, params: &mut PointerParams) {
 #[cfg(feature = "text-input")]
 fn collect_input_values(
     form: Entity,
-    params: &PointerParams,
+    children: &Query<'_, '_, &'static Children>,
+    editable: &Query<'_, '_, &'static EditableText>,
+    names: &Query<'_, '_, &'static InputName>,
     payload: &mut serde_json::Map<String, serde_json::Value>,
 ) {
     let mut stack: Vec<Entity> = vec![form];
     while let Some(entity) = stack.pop() {
-        if let Ok(children) = params.children.get(entity) {
+        if let Ok(children) = children.get(entity) {
             stack.extend(children.iter().rev());
         }
-        if let Ok(name) = params.names.get(entity)
-            && let Ok(editable) = params.editable.get(entity)
+        if let Ok(name) = names.get(entity)
+            && let Ok(editable) = editable.get(entity)
         {
             payload.insert(
                 name.0.clone(),
@@ -418,13 +477,15 @@ fn collect_input_values(
 
 /// Whether the interaction hit a bound element between `hit` and `target`
 /// (excluding `target`, which is checked by its own invocation): that
-/// element is deeper and owns the interaction. `false` when `target` isn't
-/// an ancestor of `hit` at all.
+/// element is deeper and owns the interaction. A form's submit button
+/// counts as bound for `click` (its click is the form's submit). `false`
+/// when `target` isn't an ancestor of `hit` at all.
 fn covered_by_deeper(
     hit: Entity,
     target: Entity,
     trigger: SignalTrigger,
     signals: &Query<&ElementSignals>,
+    submits: &Query<(), With<FormSubmitButton>>,
     parents: &Query<&ChildOf>,
 ) -> bool {
     let mut current = hit;
@@ -435,7 +496,8 @@ fn covered_by_deeper(
         }
         deeper |= signals
             .get(current)
-            .is_ok_and(|signals| signals.0.iter().any(|binding| binding.trigger == trigger));
+            .is_ok_and(|signals| signals.0.iter().any(|binding| binding.trigger == trigger))
+            || (trigger == SignalTrigger::Click && submits.contains(current));
         match parents.get(current) {
             Ok(parent) => current = parent.0,
             // `target` isn't an ancestor of `hit`; don't suppress.
@@ -633,6 +695,24 @@ pub(crate) fn hover_signals(
     }
     for (pointer, previous) in entered.iter_mut() {
         let Some(set) = now.get(pointer) else {
+            // The pointer vanished (Bevy despawns touch pointers on touch
+            // end and drops them from the hover map): emit every entered
+            // element's leaves and drop the pointer's entries, so touch
+            // never leaves `data-on-leave` unset and the map doesn't grow
+            // by one entry per touch.
+            for entity in previous.keys().copied().collect::<Vec<_>>() {
+                let hovering = previous.remove(&entity).expect("keyed");
+                for binding in &hovering.leaves {
+                    writer.write(ElementSignal {
+                        name: Cow::Owned(binding.name.clone()),
+                        trigger: SignalTrigger::Leave,
+                        target: entity,
+                        element: hovering.element.clone(),
+                        payload: binding.payload.clone(),
+                        source: SignalSource::Hover { pointer: *pointer },
+                    });
+                }
+            }
             continue;
         };
         for entity in previous.keys().copied().collect::<Vec<_>>() {
@@ -841,11 +921,34 @@ mod tests {
 
         let (click, enter, outside) = world
             .run_system_once(
-                move |signals: Query<&ElementSignals>, parents: Query<&ChildOf>| {
+                move |signals: Query<&ElementSignals>,
+                      parents: Query<&ChildOf>,
+                      submits: Query<(), With<FormSubmitButton>>| {
                     (
-                        covered_by_deeper(hit, parent, SignalTrigger::Click, &signals, &parents),
-                        covered_by_deeper(hit, parent, SignalTrigger::Enter, &signals, &parents),
-                        covered_by_deeper(hit, unrelated, SignalTrigger::Click, &signals, &parents),
+                        covered_by_deeper(
+                            hit,
+                            parent,
+                            SignalTrigger::Click,
+                            &signals,
+                            &submits,
+                            &parents,
+                        ),
+                        covered_by_deeper(
+                            hit,
+                            parent,
+                            SignalTrigger::Enter,
+                            &signals,
+                            &submits,
+                            &parents,
+                        ),
+                        covered_by_deeper(
+                            hit,
+                            unrelated,
+                            SignalTrigger::Click,
+                            &signals,
+                            &submits,
+                            &parents,
+                        ),
                     )
                 },
             )
