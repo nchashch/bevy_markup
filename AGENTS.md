@@ -219,7 +219,7 @@ examples/
                    fresh `EditableText` (by id via `HtmlElements`); arrows
                    / D-pad move between fields, ← → move the caret while a
                    field holds focus (shared input.rs is input-aware);
-                   Language button, Space / Y
+                   Space / Y = language
   links/           `<a href>` links (ADR 0011): two inline in the intro
                    (from the Fluent value), three standalone; a click (or
                    activation) emits the `open` signal and the status line

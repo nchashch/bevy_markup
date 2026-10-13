@@ -195,6 +195,16 @@
 //!
 //! - `system_fonts`: fall back to installed system fonts per script (e.g. CJK)
 //!   when the chosen font lacks glyphs.
+//! - `text-input`: `<input type="text">` maps to Bevy's editable-text widget
+//!   ([`EditableText`](bevy::text::EditableText) + `TextInput`); the widget
+//!   crate isn't part of the crate's minimal `ui_api` bevy features, so it's
+//!   opt-in.
+//! - `hot-reload`: Bevy's asset file watcher, for editing an asset file and
+//!   restyling without a restart (the library already reacts to asset events).
+//! - `fuzzing`: exposes `bevy_markup::fuzz` (`#[doc(hidden)]`, not covered by
+//!   semver): internal glue for the fuzz targets in `fuzz/`.
+//! - `dev-tools`: QA only — serves the examples over localhost BRP + MCP so
+//!   agents can playtest them. Never enabled in a shipped build.
 
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
