@@ -1582,7 +1582,11 @@ fn anchored_overlay_follows_clamps_and_despawns() {
     for (placement, min) in [
         (AnchorPlacement::Below, Vec2::new(20.0, 154.0)),
         (AnchorPlacement::Above, Vec2::new(20.0, 96.0)),
-        (AnchorPlacement::Left, Vec2::new(-44.0, 120.0)),
+        // Clamped inside the left edge (`inset <= view_w - width`): the
+        // overlay overlaps the element instead of going off screen (the
+        // same trade the far-edge Right/Below clamps make; the docs
+        // promise clamping, not flipping).
+        (AnchorPlacement::Left, Vec2::new(0.0, 120.0)),
     ] {
         ui.world_mut()
             .get_mut::<HtmlAnchor>(overlay)
@@ -4699,11 +4703,11 @@ fn unapproved_paths_fail_their_loads() {
 
 /// `Above`/`Left` overlays clamp to the viewport once their own size is
 /// known (bug_0077): the `bottom`/`right` inset is measured from the
-/// viewport's far edge, so staying inside means `inset <= limit` — clamped
-/// on the inset alone, not keyed on the overlay's extent. An element flush
-/// with the top (left) edge gets `bottom` (right) `= view_h` (`view_w`),
-/// not `view_h + gap` (`view_w + gap`, which put the whole overlay past
-/// the viewport's edge).
+/// viewport's far edge, so staying inside means `inset <= limit - extent`
+/// — the overlay's extent, not the inset alone. An element flush with
+/// the top (left) edge gets `bottom` `= view_h - height` (`right =
+/// view_w - width`) — the overlay sits flush inside the edge — not
+/// `view_h + gap`, which put the whole overlay past the viewport's edge.
 #[test]
 fn anchored_overlay_above_left_clamp_to_the_viewport() {
     let mut ui = TestUi::with_layout(
@@ -4749,16 +4753,22 @@ fn anchored_overlay_above_left_clamp_to_the_viewport() {
         )
     };
 
-    // Above: `bottom` counts up from the viewport's bottom edge, so the
-    // unclamped value is `240 - 0 + 4`; clamped it is the viewport height
-    // itself, the overlay's near edge touching the viewport's top limit.
+    // Above: `bottom` counts up from the viewport's bottom edge; the
+    // unclamped value is `240 - 0 + 4` = 244, and keeping the 20px-tall
+    // overlay inside the viewport clamps it to `240 - 20` — the overlay
+    // sits at the top edge, flush (the gap is given up, the tooltip is
+    // not placed off screen).
     let (rect, insets) = placed(&mut ui);
     assert_eq!(
         insets,
-        (Val::Px(0.0), Val::Auto, Val::Auto, Val::Px(240.0)),
-        "the bottom inset clamps to the viewport height (unclamped: 240 + gap)"
+        (Val::Px(0.0), Val::Auto, Val::Auto, Val::Px(220.0)),
+        "the bottom inset clamps to `viewport - overlay height` (unclamped: 240 + gap)"
     );
-    assert_eq!(rect.max.y, 0.0, "the overlay's edge reaches the top limit");
+    assert_eq!(
+        rect,
+        Rect::new(0.0, 0.0, 60.0, 20.0),
+        "the overlay is inside the viewport, not above it"
+    );
 
     ui.world_mut()
         .get_mut::<HtmlAnchor>(overlay)
@@ -4767,10 +4777,14 @@ fn anchored_overlay_above_left_clamp_to_the_viewport() {
     let (rect, insets) = placed(&mut ui);
     assert_eq!(
         insets,
-        (Val::Auto, Val::Px(0.0), Val::Px(320.0), Val::Auto),
-        "the right inset clamps to the viewport width (unclamped: 320 + gap)"
+        (Val::Auto, Val::Px(0.0), Val::Px(260.0), Val::Auto),
+        "the right inset clamps to `viewport - overlay width` (unclamped: 320 + gap)"
     );
-    assert_eq!(rect.max.x, 0.0, "the overlay's edge reaches the left limit");
+    assert_eq!(
+        rect,
+        Rect::new(0.0, 0.0, 60.0, 20.0),
+        "the overlay is inside the viewport, not left of it"
+    );
 }
 
 /// `HtmlWorldAnchor` divides the projection by `UiScale` and measures

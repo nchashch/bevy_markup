@@ -124,14 +124,19 @@ pub(crate) fn place_anchored(
             _ => start,
         };
         // The `right`/`bottom` form: the inset is measured from the far
-        // edge, so keeping the overlay inside the viewport means
-        // `inset <= limit` (the overlay's other edge at `limit - inset`).
-        let clamp_from_far = |start: f32, extent: Option<f32>, limit: Option<f32>| match (extent, limit) {
-            // `extent` is only matched on: the far-edge form clamps the
-            // inset alone (`inset <= limit`).
-            (Some(_extent), Some(limit)) => start.min(limit),
-            _ => start,
-        };
+        // edge, so the overlay's near edge sits at `limit - inset` and
+        // its far edge at `limit - inset - extent`; keeping the whole
+        // overlay inside the viewport means `inset <= limit - extent`
+        // (and `>= 0`, which flips the overlay inside when the anchor
+        // element is beyond the far edge). Without the overlay's extent
+        // (first frame) the inset is bounded alone; the next frame
+        // clamps exactly.
+        let clamp_from_far =
+            |start: f32, extent: Option<f32>, limit: Option<f32>| match (extent, limit) {
+                (Some(extent), Some(limit)) => start.min(limit - extent).max(0.0),
+                (_, Some(limit)) => start.min(limit).max(0.0),
+                _ => start,
+            };
         let (width, height) = (own.map(|own| own.x), own.map(|own| own.y));
         let (view_w, view_h) = (viewport.map(|v| v.x), viewport.map(|v| v.y));
         let gap = anchor.gap;
