@@ -59,6 +59,11 @@ jobs:
       # features and skipped by --all-targets.
       - name: Gated examples compile
         run: cargo check --examples --features hot-reload,dev-tools,text-input
+      # Example `#[cfg(test)]` modules (the hot-reload palette's
+      # round trip through the committed stylesheet) don't run under
+      # plain `cargo test` or `cargo check --examples`.
+      - name: Example unit tests
+        run: cargo test --example hot-reload --features hot-reload
       - name: Fuzz harness unit tests
         run: cargo test --lib --features fuzzing
       - name: Docs
