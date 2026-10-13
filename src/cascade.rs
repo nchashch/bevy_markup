@@ -2092,10 +2092,18 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::Visibility(visibility) => {
             // `subtree-hide` semantics: `hidden` maps to Bevy's propagating
             // `Visibility::Hidden`; `collapse` (table-specific) is skipped.
-            style.layout.visibility = match visibility {
+            let visible = match visibility {
                 lightningcss::properties::display::Visibility::Visible => Some(true),
                 lightningcss::properties::display::Visibility::Hidden => Some(false),
-                lightningcss::properties::display::Visibility::Collapse => unsupported("visibility: collapse"),
+                // `collapse` is unsupported: the declaration is dropped,
+                // the earlier value stands.
+                lightningcss::properties::display::Visibility::Collapse => {
+                    debug!("html css: unsupported visibility: collapse");
+                    None
+                }
+            };
+            if visible.is_some() {
+                style.layout.visibility = visible;
             };
         }
         Property::Transition(entries, _) => {
@@ -2363,19 +2371,32 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 names.implied_columns = 0;
             }
         }
-        Property::GridRowStart(line) => style.layout.grid_row[0] = grid_line(line),
-        Property::GridRowEnd(line) => style.layout.grid_row[1] = grid_line(line),
-        Property::GridColumnStart(line) => style.layout.grid_column[0] = grid_line(line),
-        Property::GridColumnEnd(line) => style.layout.grid_column[1] = grid_line(line),
+        // An unsupported line drops the declaration: the earlier side
+        // keeps its value.
+        Property::GridRowStart(line) => style.layout.grid_row[0] = grid_line(line).or(style.layout.grid_row[0].take()),
+        Property::GridRowEnd(line) => style.layout.grid_row[1] = grid_line(line).or(style.layout.grid_row[1].take()),
+        Property::GridColumnStart(line) => style.layout.grid_column[0] = grid_line(line).or(style.layout.grid_column[0].take()),
+        Property::GridColumnEnd(line) => style.layout.grid_column[1] = grid_line(line).or(style.layout.grid_column[1].take()),
         Property::GridRow(row) => {
-            style.layout.grid_row = [grid_line(&row.start), grid_line(&row.end)];
+            let sides = [grid_line(&row.start), grid_line(&row.end)];
+            for (side, value) in sides.into_iter().enumerate() {
+                style.layout.grid_row[side] = value.or(style.layout.grid_row[side].take());
+            }
         }
         Property::GridColumn(column) => {
-            style.layout.grid_column = [grid_line(&column.start), grid_line(&column.end)];
+            let sides = [grid_line(&column.start), grid_line(&column.end)];
+            for (side, value) in sides.into_iter().enumerate() {
+                style.layout.grid_column[side] =
+                    value.or(style.layout.grid_column[side].take());
+            }
         }
         Property::GridArea(area) => {
-            style.layout.grid_row = [grid_line(&area.row_start), grid_line(&area.row_end)];
-            style.layout.grid_column = [grid_line(&area.column_start), grid_line(&area.column_end)];
+            let sides =
+                [grid_line(&area.row_start), grid_line(&area.row_end), grid_line(&area.column_start), grid_line(&area.column_end)];
+            for (side, value) in sides.into_iter().enumerate() {
+                let target = if side < 2 { &mut style.layout.grid_row } else { &mut style.layout.grid_column };
+                target[side % 2] = value.or(target[side % 2].take());
+            }
         }
         Property::Position(position) => {
             style.layout.position = match position {
@@ -2433,25 +2454,33 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::BorderBottomColor(color) => style.border_color[2] = to_color(color),
         Property::BorderLeftColor(color) => style.border_color[3] = to_color(color),
         Property::BorderRadius(radius, _) => {
-            style.layout.border_radius = [
+            // An unsupported corner drops the declaration: the earlier
+            // corners keep their values.
+            let corners = [
                 &radius.top_left,
                 &radius.top_right,
                 &radius.bottom_right,
                 &radius.bottom_left,
             ]
             .map(corner_radius);
+            for (corner, value) in corners.into_iter().enumerate() {
+                style.layout.border_radius[corner] =
+                    value.or(style.layout.border_radius[corner].take());
+            }
         }
+        // An unsupported value drops the declaration: the earlier
+        // corners keep their values.
         Property::BorderTopLeftRadius(radius, _) => {
-            style.layout.border_radius[0] = corner_radius(radius);
+            style.layout.border_radius[0] = corner_radius(radius).or(style.layout.border_radius[0].take());
         }
         Property::BorderTopRightRadius(radius, _) => {
-            style.layout.border_radius[1] = corner_radius(radius);
+            style.layout.border_radius[1] = corner_radius(radius).or(style.layout.border_radius[1].take());
         }
         Property::BorderBottomRightRadius(radius, _) => {
-            style.layout.border_radius[2] = corner_radius(radius);
+            style.layout.border_radius[2] = corner_radius(radius).or(style.layout.border_radius[2].take());
         }
         Property::BorderBottomLeftRadius(radius, _) => {
-            style.layout.border_radius[3] = corner_radius(radius);
+            style.layout.border_radius[3] = corner_radius(radius).or(style.layout.border_radius[3].take());
         }
         Property::Outline(outline) => {
             style.outline = OutlineDecl {
@@ -2464,7 +2493,7 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::OutlineStyle(outline_style) => {
             style.outline.visible = Some(outline_visible(outline_style));
         }
-        Property::OutlineWidth(width) => style.outline.width = side_width(width),
+        Property::OutlineWidth(width) => style.outline.width = side_width(width).or(style.outline.width.take()),
         Property::OutlineColor(color) => style.outline.color = Some(to_color(color)),
         // lightningcss has no typed `outline-offset` either.
         Property::Custom(custom) if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "outline-offset") =>
@@ -2472,11 +2501,14 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             let value = declaration
                 .value_to_css_string(PrinterOptions::default())
                 .unwrap_or_default();
-            style.outline.offset = match value.trim().strip_suffix("px").map(str::parse::<f32>) {
+            let offset = match value.trim().strip_suffix("px").map(str::parse::<f32>) {
                 Some(Ok(px)) => Some(px),
                 _ if value.trim() == "0" => Some(0.0),
                 _ => unsupported("outline-offset value (px only)"),
             };
+            if offset.is_some() {
+                style.outline.offset = offset;
+            }
         }
         // lightningcss has no typed `pointer-events` (it's SVG/UI-only): it
         // arrives as an unknown property with its raw value.
@@ -2485,11 +2517,14 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             let value = declaration
                 .value_to_css_string(PrinterOptions::default())
                 .unwrap_or_default();
-            style.pointer_events = match value.trim().to_ascii_lowercase().as_str() {
+            let pointer_events = match value.trim().to_ascii_lowercase().as_str() {
                 "none" => Some(false),
                 "auto" => Some(true),
                 _ => unsupported("pointer-events value (only `auto`/`none`)"),
             };
+            if pointer_events.is_some() {
+                style.pointer_events = pointer_events;
+            }
         }
         _ => {}
     }
@@ -4080,6 +4115,26 @@ mod tests {
         // Control: without the invalid value the later declaration wins.
         let style = get("p { width: 10px } p { width: 20px }", &[]);
         assert_eq!(style.layout.width, Some(Val::Px(20.0)));
+        // The remaining `= helper(value)` sites keep the earlier value
+        // when the helper rejects it.
+        let style = get(
+            "p { grid-column: 2 / 3 } p { grid-column: span x / 4 }",
+            &[],
+        );
+        assert_eq!(style.layout.grid_column[0], Some(GridLineDecl::Line(2)));
+        let style = get("p { outline-width: 2px } p { outline-width: 1ex }", &[]);
+        assert_eq!(style.outline.width, Some(2.0));
+        let style = get("p { outline-offset: 2px } p { outline-offset: 1em }", &[]);
+        assert_eq!(style.outline.offset, Some(2.0));
+        let style = get("p { pointer-events: none } p { pointer-events: visiblePainted }", &[]);
+        assert_eq!(style.pointer_events, Some(false));
+        let style = get("p { visibility: hidden } p { visibility: collapse }", &[]);
+        assert_eq!(style.layout.visibility, Some(false));
+        let style = get(
+            "p { border-radius: 8px } p { border-radius: calc(10% + 2px) }",
+            &[],
+        );
+        assert_eq!(style.layout.border_radius[0], Some((Val::Px(8.0), Val::Px(8.0))));
     }
 
     /// `initial`/`inherit`/`unset`/`revert` return the field to its
