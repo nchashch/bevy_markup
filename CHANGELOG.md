@@ -9,6 +9,8 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Added
+- The crate docs list every cargo feature (`text-input`, `hot-reload`,
+  `fuzzing`, `dev-tools`); only `system_fonts` was documented.
 - `maxlength` on `<input type="text">` maps to the widget's
   `EditableText::max_characters`: edits past the limit are ignored
   (ADR 0023; supersedes the `maxlength` half of ADR 0022, whose "no API

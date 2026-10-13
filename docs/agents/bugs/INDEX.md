@@ -235,3 +235,14 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   R76–R80 (stale docs, fixed by the doc edits).
 - **Discovery agent:** model `anthropic/claude-opus-5-5:high` with six
   `reviewer` subagents.
+- **Fix session for this review** (`opencode-zen/glm-5.3-flash`, same day):
+  the follow-up review 2026-10-13 (`F01`–`F43`: the first session's own
+  unverified claims, regressions and gaps) was fixed end to end and
+  re-guarded. New defect reports from that wave: bug_0081 (F27),
+  bug_0082 (F28), bug_0083 (F29), bug_0084 (F31), bug_0085 (F39),
+  bug_0086 (F40), bug_0087 (F32, open — documented deviation). The
+  remaining `F` ids map onto the bug files above (re-findings of an
+  `R` finding or its test) or are internal-only (F01 CI warnings,
+  F04/F21/F41/F42 test and CI work, F22/F23/F26 perf, F33 a test's
+  misread, F35/F36/F42 example/CI-only) — see
+  `docs/agents/reviews/2026-10-13-followup.md` for the mapping.
