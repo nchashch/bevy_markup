@@ -153,7 +153,8 @@
 //! - **Text inputs and forms** ([`signals`], `text-input` feature):
 //!   `<input type="text">` (a missing `type` counts as `text`; other types
 //!   don't become fields) renders Bevy's editable-text widget (its
-//!   `value` and `name` attributes carry over; it is
+//!   `value`/`name`/`maxlength` attributes carry over — `maxlength` is the
+//!   widget's `max_characters`, ADR 0023; it is
 //!   focusable, and the app binds keyboard input — the widget edits the
 //!   focused field's text). `<form data-on-submit="name">` collects its
 //!   named inputs' values: clicking the form's `<button type="submit">` —

@@ -2440,8 +2440,9 @@ html-ui
 /// `<input type="text">` (the `text-input` feature): a block element with
 /// Bevy 0.20's editable-text widget — the initial value from the `value`
 /// attribute, the text styled by the cascade, the box by CSS. The element
-/// is focusable (press-to-focus, navigation). (`maxlength` and
-/// `placeholder` are not supported: Bevy 0.20's widget has neither.)
+/// is focusable (press-to-focus, navigation). `maxlength` maps to the
+/// widget's `max_characters` (edits past it are ignored; `placeholder`
+/// is not supported — ADR 0022/0023).
 #[cfg(feature = "text-input")]
 #[test]
 fn text_input_element_maps_to_the_widget() {
@@ -2469,6 +2470,22 @@ html-ui
   input.field padding=4,4,4,4 w=200 focus bg=#222222
     "hello" default 20px #ffffff
 "#,
+    );
+    // `maxlength` maps to the widget's `max_characters` (ADR 0023).
+    let root = ui.root();
+    let world = ui.world_mut();
+    let field = world
+        .query::<(Entity, &bevy::ui_widgets::TextInput)>()
+        .iter(world)
+        .next()
+        .expect("the field")
+        .0;
+    assert_eq!(
+        world
+            .get::<bevy::text::EditableText>(field)
+            .unwrap()
+            .max_characters,
+        Some(12)
     );
 }
 
@@ -5071,6 +5088,17 @@ fn update_without_finish_drives_the_focus_systems() {
     app.register_asset_loader(bevy::image::ImageLoader::new(
         bevy::image::CompressedImageFormats::empty(),
     ));
+    // The text-input feature's widget systems read these (the harness's
+    // recipe; without them the autoscroll system's `Res<PointerState>`
+    // fails validation).
+    #[cfg(feature = "text-input")]
+    {
+        use bevy::picking::events::{PointerMove, PointerPress, PointerRelease, PointerState};
+        app.init_resource::<PointerState>()
+            .add_message::<PointerRelease>()
+            .add_message::<PointerPress>()
+            .add_message::<PointerMove>();
+    }
     app.update();
     // `HtmlFocus` is app-driven (`run_system_once`): its navigator's
     // params must validate without `finish()`.
@@ -5080,7 +5108,3 @@ fn update_without_finish_drives_the_focus_systems() {
     .expect("HtmlFocus's navigator validated without finish()");
     app.update();
 }
-
-// Silence the unused-import lint if the file's scope already has them.
-#[allow(unused)]
-fn _unused(_: bevy::input_focus::directional_navigation::DirectionalNavigationMap) {}

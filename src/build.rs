@@ -122,6 +122,9 @@ struct TextInputSpec {
     color: Color,
     /// The form identity: submissions collect the value under this name.
     name: Option<String>,
+    /// The `maxlength` attribute: the widget ignores edits past it (its
+    /// own `set_text` still writes longer text — the app's value wins).
+    max_characters: Option<usize>,
 }
 
 /// The `value` attribute the field's text was last set from: the field's
@@ -2300,8 +2303,10 @@ fn spawn_attached(
         // the cascade via `TextFont`/`TextColor` (required by
         // `EditableText`), and the box from CSS on the node.
         let input = spec.text_input.clone().unwrap();
+        let mut text = EditableText::new(input.initial.clone());
+        text.max_characters = input.max_characters;
         entity.insert((
-            EditableText::new(input.initial.clone()),
+            text,
             InputValue(input.initial),
             input.font,
             TextColor(input.color),
@@ -2705,10 +2710,17 @@ fn update_spec<'a>(
             put(&mut entity, Some(TextColor(input.color)));
             let stored = entity.get::<InputValue>().map(|value| value.0.as_str());
             if stored != Some(input.initial.as_str()) {
-                entity.insert((
-                    EditableText::new(input.initial.clone()),
-                    InputValue(input.initial.clone()),
-                ));
+                let mut text = EditableText::new(input.initial.clone());
+                text.max_characters = input.max_characters;
+                entity.insert((text, InputValue(input.initial.clone())));
+            } else if entity.get::<EditableText>().map(|text| text.max_characters)
+                != Some(input.max_characters)
+            {
+                // The maxlength attribute changed; the typed text is
+                // app state and stays.
+                entity.get_mut::<EditableText>().map(|mut text| {
+                    text.max_characters = input.max_characters;
+                });
             }
             match (&input.name, entity.get::<signals::InputName>()) {
                 (Some(name), Some(current)) if current.0 == *name => {}
@@ -3962,6 +3974,11 @@ fn collect_node(
                     font: ctx.styler.text_font(&style),
                     color: faded(style.color, style.opacity),
                     name,
+                    max_characters: tag
+                        .attributes()
+                        .get("maxlength")
+                        .flatten()
+                        .and_then(|max| max.as_utf8_str().parse().ok()),
                 },
             });
             continue;

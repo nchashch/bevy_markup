@@ -1385,7 +1385,8 @@ are silently ignored):
   `TextInput`; the value is app state — read the entity's `EditableText`, a
   re-render sets the text only when the `value` attribute changes; the
   input's grid placement (named lines included) and styling are kept on
-  updates like any element's; `maxlength`/`placeholder` aren't read).
+  updates like any element's; `maxlength` maps to `max_characters`
+  (ADR 0023), `placeholder` isn't read).
   Declaratively
   (always): `data-on-<trigger>`/`data-with` emit
   [`ElementSignal`] messages (`signals.rs`; click/auxclick/press/release via

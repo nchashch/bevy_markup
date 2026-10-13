@@ -8,6 +8,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+- `maxlength` on `<input type="text">` maps to the widget's
+  `EditableText::max_characters`: edits past the limit are ignored
+  (ADR 0023; supersedes the `maxlength` half of ADR 0022, whose "no API
+  to map onto" premise was wrong — bevy_text 0.20 has the field).
+
 ### Changed
 - **Breaking:** only a `<button type="submit">` submits its `<form
   data-on-submit>`. Any other primary click inside a form (a `type="button"`
@@ -55,8 +61,9 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `password` or `submit` field became an editable text field (the old code
   read `data-type`). Only a text (or missing) `type` builds a field now;
   the other types render nothing, like any unsupported empty inline leaf.
-  `maxlength`/`placeholder` were documented but never read (Bevy 0.20's
-  widget has neither) — the docs no longer claim them (ADR 0022).
+  `placeholder` was documented but never read — the docs no longer claim
+  it (ADR 0022, narrowed by 0023). `maxlength` maps to the widget's
+  `max_characters` now (edits past the limit are ignored; see Added).
 - **A kept `<input>` was never updated:** a re-render with a new `value`
   attribute left the old text, restyles (theme swap, `:focus`) left stale
   `TextFont`/`TextColor`, and a changed `name` was ignored. The field now
