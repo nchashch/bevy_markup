@@ -669,11 +669,17 @@ fn nine_slice_manifest_maps_each_side(
 /// skeleton before every change, so every build there is fresh. The ops
 /// cover the shapes reuse got wrong: walk-through-tag siblings of dynamic
 /// content, stylesheet swaps in the same frame as a content change, the
-/// debug outline freezing the skeleton, and all-dirty changes that trip
-/// the adaptive gate and then retry it.
+/// debug outline freezing the skeleton, all-dirty changes that trip
+/// the adaptive gate and then retry it, and hover (a restyle that must
+/// hand the reused subtree's `DomNode` handles on).
+///
+/// Inputs are only touched when the op changes them: every insert
+/// (even of the same value) is a change signal, and a style-side change
+/// turns reuse off — re-inserting the stylesheet every op would make the
+/// property compare two fresh builds, exercising no reuse at all.
 #[proptest(cases = 16)]
 fn skeleton_reuse_matches_a_fresh_build(
-    #[strategy(proptest::collection::vec(0..5u8, 1..12))] ops: Vec<u8>,
+    #[strategy(proptest::collection::vec(0..7u8, 1..24))] ops: Vec<u8>,
 ) {
     let page = r#"
 <h1>Report {{ a }}</h1>
@@ -688,33 +694,46 @@ fn skeleton_reuse_matches_a_fresh_build(
 <p class="row">Row {{ i }}: {{ b }}</p>
 {% endfor %}
 "#;
+    // The `:hover` rule makes a hover op a real restyle (pseudo-only
+    // compounds match any hovered element): without it a hover op changes
+    // nothing buildable, and `settle` (which demands a new build) hangs.
     let sheet_a = r#"
 html { color: #ffffff; font-size: 20px; flex-direction: column }
 .panel { padding: 8px }
+:hover { color: #ff8888 }
 "#;
     let sheet_b = r#"
 html { color: #ffff88; font-size: 24px; flex-direction: column }
 .panel { padding: 3px }
+:hover { color: #88ff88 }
 "#;
     let files = [
         ("page.html", page),
         ("a.css", sheet_a),
         ("b.css", sheet_b),
     ];
-    let mut reused = TestUi::new("prop-skeleton-reused", &files)
-        .stylesheet("a.css")
-        .spawn(
-            "page.html",
-            TemplateContext::new().with("a", &1).with("b", &"x"),
-            Node::default(),
-        );
-    let mut fresh = TestUi::new("prop-skeleton-fresh", &files)
-        .stylesheet("a.css")
-        .spawn(
-            "page.html",
-            TemplateContext::new().with("a", &1).with("b", &"x"),
-            Node::default(),
-        );
+    let mut reused = TestUi::with_pointer(
+        "prop-skeleton-reused",
+        &files,
+        UVec2::new(640, 480),
+    )
+    .stylesheet("a.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("a", &1).with("b", &"x"),
+        Node::default(),
+    );
+    let mut fresh = TestUi::with_pointer(
+        "prop-skeleton-fresh",
+        &files,
+        UVec2::new(640, 480),
+    )
+    .stylesheet("a.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("a", &1).with("b", &"x"),
+        Node::default(),
+    );
     reused.settle();
     fresh.settle();
     prop_assert_eq!(reused.dump(), fresh.dump());
@@ -722,10 +741,14 @@ html { color: #ffff88; font-size: 24px; flex-direction: column }
     // Every op changes something (a no-op render rebuilds nothing —
     // covered elsewhere). Ops 2 and 5 swap the stylesheet: 2 alone (a pure
     // restyle), 5 in the same frame as a content change — the theme-button
-    // case reuse got wrong.
+    // case reuse got wrong. Op 6 toggles the pointer between a hovered
+    // element and off-content (the hover restyle, then the restyle back).
     let (mut a, mut b): (u32, &str) = (1, "x");
-    let (mut sheet_b, mut outlined) = (false, false);
+    let (mut sheet_b, mut outlined, mut hovered) = (false, false, false);
     for op in ops {
+        let (mut prev_a, mut prev_b) = (a, b.clone());
+        let mut prev_sheet_b = sheet_b;
+        let mut prev_outlined = outlined;
         match op {
             0 => a = if a == 1 { 2 } else { 1 },
             1 => b = if b == "x" { "y" } else { "x" },
@@ -735,9 +758,21 @@ html { color: #ffff88; font-size: 24px; flex-direction: column }
                 a = if a == 1 { 2 } else { 1 };
                 b = if b == "x" { "y" } else { "x" };
             }
-            _ => {
+            5 => {
                 sheet_b = !sheet_b;
                 a = if a == 1 { 2 } else { 1 };
+            }
+            _ => {
+                hovered = !hovered;
+                // Over the heading when hovering; the bottom-right corner
+                // is off-content (a leave).
+                for ui in [&mut reused, &mut fresh] {
+                    ui.move_pointer(if hovered {
+                        Vec2::new(20.0, 20.0)
+                    } else {
+                        Vec2::new(630.0, 470.0)
+                    });
+                }
             }
         }
         for (ui, keep_skeleton) in [(&mut reused, true), (&mut fresh, false)] {
@@ -747,26 +782,42 @@ html { color: #ffff88; font-size: 24px; flex-direction: column }
                 // build there collects everything from scratch.
                 ui.world_mut().entity_mut(root).remove::<Skeleton>();
             }
-            let handle: Handle<Stylesheet> = if sheet_b {
-                ui.load("b.css")
-            } else {
-                ui.load("a.css")
-            };
-            let mut entity = ui.world_mut().entity_mut(root);
-            entity.insert(HtmlStylesheet(handle));
-            if outlined {
-                entity.insert(HtmlDebugOutline);
-            } else {
-                entity.remove::<HtmlDebugOutline>();
+            if sheet_b != prev_sheet_b {
+                let handle: Handle<Stylesheet> = if sheet_b {
+                    ui.load("b.css")
+                } else {
+                    ui.load("a.css")
+                };
+                ui.world_mut().entity_mut(root).insert(HtmlStylesheet(handle));
             }
-            entity
-                .get_mut::<TemplateContext>()
-                .unwrap()
-                .insert("a", &a);
-            entity.get_mut::<TemplateContext>().unwrap().insert("b", &b);
+            if outlined != prev_outlined {
+                let mut entity = ui.world_mut().entity_mut(root);
+                if outlined {
+                    entity.insert(HtmlDebugOutline);
+                } else {
+                    entity.remove::<HtmlDebugOutline>();
+                }
+            }
+            if a != prev_a || b != prev_b {
+                let mut entity = ui.world_mut().entity_mut(root);
+                if a != prev_a {
+                    entity.get_mut::<TemplateContext>().unwrap().insert("a", &a);
+                }
+                if b != prev_b {
+                    entity.get_mut::<TemplateContext>().unwrap().insert("b", &b);
+                }
+            }
         }
-        reused.settle();
-        fresh.settle();
+        // A pointer-only op can change nothing buildable (hover over the
+        // outline's anonymous text block matches no rule): the rebuild is
+        // allowed, not required.
+        if op == 6 {
+            reused.settle_quiet();
+            fresh.settle_quiet();
+        } else {
+            reused.settle();
+            fresh.settle();
+        }
         prop_assert_eq!(reused.dump(), fresh.dump());
     }
 }
