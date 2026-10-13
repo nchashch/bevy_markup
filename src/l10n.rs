@@ -61,8 +61,9 @@
 //! The manifest's `markdown: bool` opts the bundle's message values into
 //! Markdown (ADR 0014): each message's pattern converts to HTML once, at
 //! bundle load (ADR 0020's per-message cache — the formatted arguments
-//! substitute into the cached HTML; messages with select expressions or
-//! adjacent placeables convert per frame), CommonMark +
+//! substitute into the cached HTML; messages with select expressions,
+//! adjacent placeables, term/message references, or a value whose marker
+//! would land in a link destination, convert per frame), CommonMark +
 //! tables/strikethrough/task lists/footnotes. Off by default — HTML-authored
 //! bundles must not flip it (Markdown would read their literal `+`/`-`/`#`
 //! line starts as syntax). Note the interplay: string args are HTML-escaped

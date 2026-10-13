@@ -33,8 +33,8 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlDebugOutline` | Component | show the DOM outline (styled like `pre`) instead of the UI |
 | `RenderedHtml` | Component | `Pending` / `Ready(HtmlDocument)` / `Failed(msg)` (read-only) |
 | `HtmlElement { tag, id, classes, dataset }` | Component | on each spawned block and container node; `dataset` = `data-*` attributes (prefix stripped), `data(key)`; signals expose it as `ElementSignal::data` |
-| `HtmlUiBuilt { entity }` | EntityEvent | after a content update (or a restyle that spawned nodes); kept elements keep their entities *and what was attached*, so handlers must be idempotent (no `observe` here: it stacks per update — use `data-on-*` or `is=`) |
-| `HtmlUiRestyled { entity }` | EntityEvent | after a style-only change applied in place (entities and attached components kept) |
+| `HtmlUiBuilt { entity }` | EntityEvent | after a content update (or a restyle that spawned nodes or respawned an element's spans); kept elements keep their entities *and what was attached*, so handlers must be idempotent (no `observe` here: it stacks per update — use `data-on-*` or `is=`) |
+| `HtmlUiRestyled { entity }` | EntityEvent | after a style-only change applied in place (entities and attached components kept); a restyle that respawns an element's spans reports `HtmlUiBuilt` instead (new span entities: the kept-everything promise doesn't hold) |
 | `HtmlElements` | SystemParam | `iter` / `by_id` / `by_class` / `by_tag` below an `HtmlUi` |
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
 | `ActiveLocale(Option<Handle<LocaleBundle>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
@@ -42,11 +42,11 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlTemplate`, `Stylesheet`, `NineSlice`, `LocaleBundle` | Assets | `.html`/`.htm`/`.md`/`.markdown`, `.css`, `*.slice.ron`, `*.ftl.ron` |
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
 | `HtmlCustomElementsExt::define_html_element(name, system)`, `ElementConnected { entity, root, name, dataset }` | App ext, system input | `is="<name>"` customized built-ins: the system (`In<ElementConnected>`, `data-*` attributes as `dataset`) runs on every spawn of the element, in document order, before `HtmlUiBuilt`; not on restyles |
-| `HtmlWorldAnchor { target, offset, pivot, camera }`, `HtmlWorldAnchorView { distance, on_screen }` | Component | keeps a UI root's `pivot` (fraction of its size, default bottom center) over `target`'s translation + `offset` projected through `camera` / its `UiTargetCamera` / the default UI camera; owns its `Visibility` (hidden behind the camera, off screen, or over an invisible target); despawned with `target`; `place_world_anchored`, `PostUpdate` before `UiSystems::Prepare` (last frame's transforms) |
-| `HtmlAnchor { element, placement, gap }`, `AnchorPlacement::{Right, Left, Above, Below}` | Component | keeps an (absolute) overlay node beside `element` each frame: insets from its rect, clamped to the viewport by the overlay's size, `UiTargetCamera` copied, despawned with the element |
+| `HtmlWorldAnchor { target, offset, pivot, camera }`, `HtmlWorldAnchorView { distance, on_screen }` | Component | keeps a UI root's `pivot` (fraction of its size, default bottom center) over `target`'s translation + `offset` projected through `camera` / its `UiTargetCamera` / the default UI camera (viewport-relative and `UiScale`-divided: offset viewports and scale factors read correctly); owns its `Visibility` (hidden behind the camera, off screen, or over an invisible target); despawned with `target`; `place_world_anchored`, `PostUpdate` before `UiSystems::Prepare` (last frame's transforms) |
+| `HtmlAnchor { element, placement, gap }`, `AnchorPlacement::{Right, Left, Above, Below}` | Component | keeps an (absolute) overlay node beside `element` each frame: insets from its rect, clamped to the viewport for every placement (Right/Below by the overlay's size; Above/Left measured from the far edge, clamped once that size is known), `UiTargetCamera` copied, despawned with the element |
 | `HtmlSignalsExt::on_html_click(name, system)` / `on_html_signal(name, system)` | App ext | route `ElementSignal`s by name to systems taking `In<ElementSignal>` (`on_html_click`: `Click` only); run by `dispatch_signals` (exclusive, `PostUpdate` before `Render`, own message cursor); messages still sent |
-| `HtmlTooltips { template, gap }`, `HtmlTooltip { element }` | Resource, Component | `data-tooltip="key"` (+ `data-tooltip-args` JSON, `data-tooltip-placement` right/left/above/below): while a pointer hovers the element or a descendant (nearest wins), an `HtmlUi` of `template` with `key`/`args`/`placement` is anchored beside it; refreshed by updates, despawned on leave |
-| `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger`, `SignalSource`, `ActivationInput` | Message, Component, enums | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click = primary button or activation, auxclick = other buttons, press/release = any button, enter/leave, submit = a `<form>`'s submit button clicked — payload `{name: value}` of its named inputs); `source`: `Pointer { pointer, button, position, count }` / `Hover { pointer }` / `Activation(input)`; deepest bound element wins |
+| `HtmlTooltips { template, gap }`, `HtmlTooltip { element }` | Resource, Component | `data-tooltip="key"` (+ `data-tooltip-args` JSON, `data-tooltip-placement` right/left/above/below): while a pointer hovers the element or a descendant (nearest wins), an `HtmlUi` of `template` with `key`/`args`/`placement` is anchored beside it (the nearest ancestor that has a node — a link span carries the tooltip but no box); refreshed by updates, despawned on leave |
+| `ElementSignal`, `ElementSignals`, `SignalBinding`, `SignalTrigger`, `SignalSource`, `ActivationInput` | Message, Component, enums | `data-on-<trigger>`/`data-with` hooks: buffered interaction signals (click = primary button or activation, auxclick = other buttons, press/release = any button, enter/leave — a pointer that vanishes (touch end: Bevy despawns it and drops it from the hover map) emits every entered element's leave —, submit = the form's `<button type="submit">` (or a `type`-less `<button>`) clicked or activated — it counts as bound for `click`, so a bound ancestor's click doesn't fire, and the activation is the submit's source — payload `{name: value}` of its named inputs); `source`: `Pointer { pointer, button, position, count }` / `Hover { pointer }` / `Activation(input)`; deepest bound element wins |
 | `PseudoState { hovered, active, focused, focus_visible }` | Component | `:hover`/`:active` (from picking) and `:focus`/`:focus-visible` (from `InputFocus`/`InputFocusVisible`) per element; a change restyles in place; apps may set it |
 | `Focusable { autofocus }` | Component | on focusable elements (`data-on-click` or `tabindex >= 0`, not `tabindex="-1"`) |
 | `HtmlFocus` | SystemParam | `navigate(CompassOctant)` (shows focus; `FocusEdge` at an edge), `activate(ActivationInput)` (the input the app saw: `Key`, `GamepadButton`, `Synthetic` for harnesses, `Other`), `focused()` — the app binds its own input |
@@ -72,12 +72,17 @@ src/
                    paths resolved relative to the file, rewritten, loaded with read_asset_bytes
                    (loader dependencies: Bevy's file watcher reloads every user of an edited
                    file; a manual `AssetServer::reload` reloads only its own path — bug_0026)
-                   → one Tera set per template, components shared), HtmlDocument (+ outline),
+                   → one Tera set per template, components shared), each file converted by its
+                   own root extension (a `.md` partial included from an `.html` page converts,
+                   an `.html` partial from a `.md` page stays HTML), HtmlDocument (+ outline),
                    decode_entities
   l10n.rs          LocaleBundle asset + loader (`.ftl.ron`: manifest → Fluent resources, read as
                    dependencies), ActiveLocale, LocalizedText; localize system (data-l10n-id/-args);
-                   with `markdown: true`, each message's pattern pre-converts at load and every
-                   frame substitutes the formatted args into the cached HTML (ADR 0020 Decision 3)
+                   with `markdown: true`, each cacheable message's pattern pre-converts at load
+                   into HTML with placeable markers and every frame substitutes the formatted
+                   args into it (values escaped once by the args parser, substituted verbatim;
+                   selects, adjacent placeables, term/message references and values whose
+                   marker would land in a link destination convert per value) (ADR 0020)
   style.rs         Stylesheet asset + loader, DefaultStylesheet, HtmlStylesheet; CSS subset docs
   cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
   fonts.rs         FontFamilies, FontFaces, GenericFamily
@@ -85,13 +90,22 @@ src/
   rebuild.rs       (internal) pure rebuild decision: Frame (load phases + change signals) → Build/Skip/Wait
   signals.rs       `data-on-*`/`data-with` → ElementSignal messages (picking observers, hover tracking)
   tooltips.rs      HtmlTooltips/HtmlTooltip: show_tooltips (Update; HoverMap → nearest `data-tooltip`
-                   ancestor per hovered node → anchored tooltip HtmlUi, refreshed, despawned on leave)
+                   ancestor per hovered node → anchored tooltip HtmlUi (anchored to the nearest
+                   ancestor that has a node — a link span carries no box), refreshed, despawned
+                   on leave)
   anchor.rs        HtmlAnchor/AnchorPlacement: place_anchored (PostUpdate, after Build, before
-                   UiSystems::Prepare; reads the previous frame's layout)
+                   UiSystems::Prepare; reads the previous frame's layout; clamped to the
+                   viewport for every placement — Above/Left measured from the far edge,
+                   clamped once the overlay's size is known)
   custom_elements.rs  `is="…"` + `data-*` dataset → app-defined systems run on spawn
                    (define_html_element, ElementConnected; CustomElements registry)
   focus.rs         Focusable/HtmlFocus/HtmlModal/HtmlNoFocus: focus scope sync, repair (id restore,
-                   autofocus), focus pseudo-state, press-to-focus, activation (InputFocus-based)
+                   autofocus, else the first focusable in document order), despawn-safe focus
+                   states (a signal handler that despawns the UI the same frame a focus state
+                   changes can't panic — `try_insert`; `(remember_focus, update_focus_states)`
+                   run after `dispatch_signals`, so a handler-driven focus move styles the same
+                   frame), focus pseudo-state, press-to-focus, activation (InputFocus-based;
+                   a submit button's activation submits its form)
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
 examples/
                    One directory per example (`<name>/main.rs`, which cargo finds as the
@@ -141,6 +155,19 @@ examples/
                    each grid, the details panel follows the focused cell (`selected` = its
                    id: `slot-`/`gear-`/`quest-`); small grids in slots/stats; Language
                    button, L / Y
+  grid-names/      named grid lines and areas: a camp board whose panels place by area
+                   (`grid-area: portrait`; the cat panel spans two rows) and a supply
+                   list placing between named column lines (`grid-column: left /
+                   right`) — the areas imply the board's explicit tracks; clicking a
+                   panel or a supply row checks it off in place (context flags dim it;
+                   focus and hover survive), arrows / D-pad / Enter / A drive it;
+                   Language button, Space / Y
+  combinators/     descendant and child combinators: three group panels, one selected
+                   at a time (click / Enter / A); `.selected p` highlights every
+                   paragraph inside (the nested one goes mint) while `.selected > p`
+                   hits only the direct child (blue, bold) and `.selected .nested`
+                   lights the nested block's border — one class flip in the context,
+                   re-rendered in place; Language button, Space / Y
   calc/            CSS calc() in layout: a sidebar (templated px) + a fluid content column
                    (`style="width: calc(100% - {{ sidebar }}px - 12px)"` — inline styles carry
                    the context values), cards dividing the column (`calc(100% / {{ cards }} -
@@ -314,6 +341,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
                    locales/{en-US,de}
   quickstart/      hello.html, style.css (html rule: border-image frame), locales/{en-US,de}
   grid/            grid.html, style.css (all of the grid example's layout), locales/{en-US,de}
+  grid-names/      board.html, style.css (the areas, the named lines, the panel chrome),
+                   locales/{en-US,de}
+  combinators/     panel.html, style.css (the two depth rules), locales/{en-US,de}
   menu/            menu.html, dialog.html, tooltip.html, style.css
                    (every root's rule), locales/{en-US,de}
   live/            party.html, stats.html, style.css, locales/{en-US,de}
@@ -381,7 +411,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   (`Arc<NodeSpec>`) and the diff skips them entirely (their entities
   already match; the one queued write refreshes the `DomNode` handle,
   remapped up front while the `Arc`s are exclusively held), skipping the
-  cascade, the run construction and all copying for them. `:hover`/`:active`,
+  cascade, the run construction and all copying for them. Reuse is
+  content-only: a pending style-side change (`RebuildState::style_pending` —
+  set on any style signal, surviving a `Wait` until an update applies it)
+  skips reuse, since the cached specs' styles would be stale. `:hover`/`:active`,
   `var()` values, font or image changes rebuild fully, translated elements
   never reuse, and an all-dirty workload turns the pairing off (retried
   every 16th build). Per sibling list, an element whose `id` is unique among the old *and* new
@@ -394,8 +427,11 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `ElementSignals`, background, frame, CSS-owned; spans updated, or respawned
   when their count changes); others are despawned/spawned and the list is put
   in document order (`replace_children`) with app-nested `HtmlUi` roots kept
-  last. `HtmlUiRestyled` fires only for a restyle that spawned nothing,
-  otherwise `HtmlUiBuilt`. Pointer signal observers are attached once per
+  last. `HtmlUiRestyled` fires only for a restyle that spawned nothing — a
+  span respawn counts (new span entities: the kept-everything promise no
+  longer holds, so `HtmlUiBuilt` fires and its observers re-wire the
+  replacements, link spans in particular). Pointer signal observers are
+  attached once per
   element (`PointerSignalObservers`) and read the element's current
   `ElementSignals` at event time, so updated bindings need no new observers.
   UIs are processed deepest first, so a nested UI's queued commands come
@@ -407,7 +443,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `custom_elements::connect` for each (document order) after the spawn
   commands and before the `HtmlUiBuilt` trigger, so `HtmlUiBuilt` observers
   see what definitions attached; kept elements never re-run them.
-  An undefined name warns once per name. Shape compares only what the spec owns: a frame is the
+  An undefined name warns once per name. User content nested deeper than
+  `MAX_DOM_DEPTH` (100) is dropped with a one-time warning (the walks
+  recurse per level; such subtrees also never pair for reuse). Shape compares
+  only what the spec owns: a frame is the
   `CssFrame` marker spawned with its `ImageNode` (an app `ImageNode` is app
   state, bug_0018), nested `HtmlUi` children are skipped (bug_0017).
 - Inline styles and opacity (`cascade.rs` `InlineStyle`/`HtmlStyles::get_with`,
@@ -457,21 +496,33 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   task lists, footnotes; raw HTML passes through unclassed; every element
   the conversion constructs carries `class="markdown"` — `img.markdown`
   styles a document's Markdown images apart from raw-HTML `<img>` tags)
-  converts once at template load (ADR 0020): Tera syntax survives verbatim
-  (`to_html_template`), and `separate_statements` puts every `{% … %}`/`{# … #}`
-  on its own line first so statements can't merge with Markdown content.
+  converts once per file, at template load (ADR 0020): each file in the
+  include graph decides by its own root extension — an `.html` partial
+  included from a `.md` page is never converted, a `.md` partial included
+  from an `.html` page is. Tera syntax survives verbatim (`to_html_template`:
+  Tera runs pass raw, a Tera-only paragraph keeps no `<p>` wrapper; text
+  inside code fences and code spans stays Tera-literal escaped text —
+  `{% … %}` there doesn't execute), and `separate_statements` puts a
+  `{% … %}`/`{# … #}` on its own line only when it already owns the line
+  (an inline statement and `{{ … }}` stay where they are) so statements
+  can't merge with Markdown content.
   Fluent bundles set `markdown: true` in the manifest to pre-convert each
-  message's pattern at bundle load; localization substitutes the formatted
-  arguments into the cached HTML (messages with selectors or adjacent
-  placeables, or a pattern that fails to anchor the substitution, convert
-  per value as before).
+  cacheable message's pattern at bundle load; localization substitutes the
+  formatted arguments into the cached HTML (the values were escaped once by
+  the args parser and are substituted verbatim; messages with selectors or
+  adjacent placeables, term/message references, values whose marker would
+  land in a link destination, or a pattern that fails to anchor the
+  substitution, convert per value as before).
 - Update triggers: rebuild on template/context change or reload when the
   rendered HTML differs from the previous render (`render_templates` compares
   `HtmlDocument::source`; an identical render leaves `RenderedHtml`
   untouched, a repeated identical error is logged once), locale
   change or bundle (re)load, outline marker added or removed; restyle on
   stylesheet swap or (re)load (a failed sheet updates unstyled once, when it
-  resolves), a stylesheet's `border-image` image loading, `FontFamilies`
+  resolves), a stylesheet's `border-image` image loading (a `url()` behind a
+  `var()` loads too — the sheet's `--` declaration carries the URL tokens),
+  a context `var()` change (the sheet's tracked `var()` names, computed at
+  load), `FontFamilies`
   change. The UI isn't built while its stylesheet is loading (images may
   arrive later; their load restyles).
 - Structure (`build.rs`: DOM → `Item` tree → nodes): blocks `h1`–`h6`, `p`,
@@ -498,13 +549,28 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   HTML-escaped, fluent-rs number formatting (no grouping). CJK paragraphs go
   on one line (a wrapped line becomes a stray space).
 - CSS subset (`style.rs` docs): compound selectors (type or `*` + `.class` /
-  `#id` parts, comma lists, plus `:hover`/`:active`/`:focus`/`:focus-visible`; combinators/attributes/
-  other pseudo-classes skipped at `debug`), matched per element (`HtmlElement`
+  `#id` parts, comma lists, joined by descendant/child combinators —
+  `.panel p`, `.panel > p`; ancestors match with their own pseudo-state,
+  specificity sums over the compounds, and the per-element match cache folds
+  the ancestor chain into its key and memoizes failed (compound, offset)
+  states, so a deep `.b .a×7 p` chain is linear; attribute selectors,
+  sibling combinators, other pseudo-classes skipped at `debug`), plus
+  `:hover`/`:active`/`:focus`/`:focus-visible`,
+  matched per element (`HtmlElement`
   tag/id/classes + `PseudoState`, cached per combination) with CSS
   precedence: `!important`, then specificity (ids,
-  classes, type), then source order. `var()` resolves the UI's
-  `TemplateContext` first (a `--name` key), then the sheet's own `--name:`
-  declarations (sheet-level, last wins), then the reference's fallback;
+  classes, type), then source order. An unsupported value drops only its
+  declaration — an earlier rule's value stands (track lists with one
+  unsupported track, unsupported `display`/alignment/flex/sizing values, an
+  invalid side of a `border-width`/`padding` shorthand, `%`/`calc()` gap, a
+  `fit-content()` with a non-px/% limit, var() failures).
+  `var()` resolves the UI's
+  `TemplateContext` first (a `--name` key; its values are opaque — their own
+  `var()`s don't resolve), then the sheet's own `--name:`
+  declarations (sheet-level, last wins; substituted transitively, memoized
+  with cycle detection and a 64 KiB budget per declaration — an unresolvable,
+  cyclic or over-budget reference drops just that declaration), then the
+  reference's fallback;
   `transition` (the shorthand) animates a restyled color's change
   (`color`/`background-color`/`border-color`), driven by an
   `advance_transitions` system after `Build`.
@@ -531,10 +597,18 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   by taffy): track lists (`grid-template-*`, `grid-template`, `grid`;
   lengths/%/viewport units, `fr`, `auto`, `min-`/`max-content`, `minmax()`,
   `fit-content()`, `repeat()` incl. `auto-fill`/`auto-fit`; one unsupported
-  track drops the declaration), `grid-auto-rows`/`-columns`/`-flow`, and
-  numeric line/`span` placement (`grid-row`/`-column` + longhands,
-  `grid-area`; `GridLineDecl` pairs → `GridPlacement`). Named lines and
-  `grid-template-areas` are skipped (Bevy places by number only). Bare
+  track drops the whole declaration — an earlier rule's tracks stand),
+  `grid-auto-rows`/`-columns`/`-flow`, and line/`span` placement
+  (`grid-row`/`-column` + longhands, `grid-area`; `GridLineDecl` pairs →
+  `GridPlacement`) by number or by name: named lines (the `[name]`s in the
+  parent's track lists, positive and negative spellings) and
+  `grid-template-areas` regions resolve at collection against the parent
+  grid's `GridNames` table; areas imply the explicit tracks they span (sized
+  `auto`). A name the parent doesn't have — or one inside an
+  `auto-fill`/`auto-fit` repeat (its count is layout-dependent) or an
+  occurrence past the template — places `auto`; `span` anchored at a named
+  line is unsupported. `grid-template`/`grid` reset the name table, a later
+  nameless track list clears that axis's names. Bare
   `grid-auto-flow: dense` fails lightningcss's parser (UPSTREAM.md U10).
   `position` (`CssPosition`: static/relative/absolute/fixed) + insets
   (`top`/`right`/`bottom`/`left`/`inset`), and `border-radius` corners
@@ -586,7 +660,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 
 - **`RemSize` is global — HtmlUis with different root font-sizes fight.**
   The build syncs Bevy's `RemSize` resource to each UI's `html` rule
-  font-size (CSS `rem` semantics) and queues a restyle when it changes.
+  font-size (CSS `rem` semantics); no restyle is queued — Bevy's layout
+  re-resolves every `Val::Rem` when the resource changes, and the calc pass
+  reads the new size on its next frame.
   Two `HtmlUi`s whose root font-sizes differ would flip `RemSize` on every
   rebuild of the other. Keep root font-sizes equal across UIs, or use
   explicit px/em.
@@ -990,6 +1066,12 @@ known gaps:
   `#[doc(hidden)]` `bevy_markup::fuzz` harness (feature `fuzzing`), which calls the
   internal glue directly — a full Bevy app is far too slow per exec.
   Contract for every target: no panic/hang/abort; errors are values.
+  Every input also runs through the Markdown path (`md::to_html_template`
+  on the same bytes, then the converted template renders); the `css` target
+  cascades over elements with ancestor chains and pseudo states (the
+  `A B`/`A > B` paths and the match cache — a second round re-runs it), and
+  the `ftl` target drives the `markdown: true` cache (`markdown_cache` +
+  `substitute`).
   Easiest entry point: `scripts/fuzz-<driver>.sh <html|css|ftl> [seconds]`.
   - `cargo fuzz` (`fuzz/`, libFuzzer/ASan, nightly):
     `cargo +nightly fuzz run <target> -- -max_total_time=60`.
@@ -1217,7 +1299,9 @@ check its entries and drop workarounds upstream has made unnecessary.
 
 ## Limits and next steps
 
-Known limits (each skipped/ignored value is logged at `debug`):
+Known limits (each skipped/ignored value is logged at `debug`, except
+`text-align`/`line-height`/`letter-spacing`, which have no arm at all and
+are silently ignored):
 
 - **Layout:** flex and grid layout, sizes, margins and `box-sizing` work on
   blocks, containers and the root (see the CSS subset); `position: sticky`, `order`,
@@ -1227,7 +1311,7 @@ Known limits (each skipped/ignored value is logged at `debug`):
   (Bevy's `Val::Em`/`Val::Rem`: `em` against each node's `EmSize` — the
   build sets it from the cascade's computed font-size on non-text nodes —
   and `rem` against the `RemSize` resource, synced to the root rule's
-  font-size; a change queues a restyle). `absolute` resolves against
+  font-size; no restyle is queued, Bevy re-resolves `Val::Rem` itself). `absolute` resolves against
   the parent (Bevy has no containing-block search); `fixed` resolves against
   the viewport (`FixedNode`). The `HtmlUi` node's default `Node` is a
   flex *row*: set `flex_direction: Column` on it or `html { flex-direction:
@@ -1247,12 +1331,14 @@ Known limits (each skipped/ignored value is logged at `debug`):
   now because changing it alters every existing layout (examples, p19's
   templates) and those vectors; revisit as a deliberate change, re-deriving
   the vectors against plain browser defaults.
-- **Grid placement by name:** named lines and areas resolve at collection
-  (`cascade.rs`'s `GridNames`: `[name]`s in the track lists + the
-  `grid-template-areas` matrix; areas also imply the explicit tracks they
-  span, sized `auto`). A name the template doesn't have — or one in an
-  `auto-fill`/`auto-fit` repeat — places `auto` (browsers extend the
-  implicit grid with the repeated pattern instead; taffy auto-places).
+- **Grid placement by name:** names the parent template defines resolve
+  (the Layout properties section covers the exact scope). Still open: names
+  inside an `auto-fill`/`auto-fit` repeat (its count is layout-dependent —
+  names before/at the repeat's start keep their positive spellings and the
+  list's final boundary registers as `-1`), an occurrence past the template,
+  `span` anchored at a named line, and a CSS cascade of names (the
+  `GridNames` table is container-level: `grid-template`/`grid` reset it, a
+  nameless track list clears that axis's names).
 - **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
   hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
 - **Selectors:** compound selectors (type/`*` + `.class` + `#id`) joined by
@@ -1264,11 +1350,13 @@ Known limits (each skipped/ignored value is logged at `debug`):
   sibling combinators (`+`, `~`), attribute selectors, other
   pseudo-classes or pseudo-elements (a selector with one skips the rule).
 - **Properties:** no `text-align`, `line-height`, `letter-spacing`,
-  `text-decoration`, border styles (every
+  `text-decoration`'s `overline`/`blink`/`-thickness`/`-style` (underline,
+  line-through and a declared color work), border styles (every
   border is solid); `overflow: auto` scrolls always (Bevy has no
   scroll-if-needed). Lengths: px/em/rem/% for `font-size`, absolute only
   for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins,
-  plus `calc()` in sizes/margins/insets (single-unit expressions at style
+  plus `calc()` in sizes/margins/insets, including `min()`/`max()`/`clamp()`
+  (`clamp(min, v, max)` = `max(min, min(v, max))`; single-unit expressions at style
   time, mixed-unit resolved per frame by `resolve_calc` against the
   containing block's content box, the font sizes and the viewport).
 - **border-image:** center always drawn, `-width`/`-outset` ignored, one
@@ -1292,17 +1380,26 @@ Known limits (each skipped/ignored value is logged at `debug`):
   link spans), and `display: inline-block` with widget children isn't
   supported (Bevy reserves the space but doesn't place content in it).
 - **Interactivity:** text input behind the `text-input` feature
-  (`<input type="text" value maxlength>` → Bevy 0.20's `EditableText` +
+  (`<input type="text">` — a missing `type` counts as `text`; other types
+  don't become fields — → Bevy 0.20's `EditableText` +
   `TextInput`; the value is app state — read the entity's `EditableText`, a
-  re-render sets the text only when the attribute changes). Declaratively
+  re-render sets the text only when the `value` attribute changes; the
+  input's grid placement (named lines included) and styling are kept on
+  updates like any element's; `maxlength`/`placeholder` aren't read).
+  Declaratively
   (always): `data-on-<trigger>`/`data-with` emit
   [`ElementSignal`] messages (`signals.rs`; click/auxclick/press/release via
   picking observers — one per event type per element, mapping the pointer
   button to the trigger and reporting it in `SignalSource::Pointer` — enter/leave via hover tracking that survives rebuilds — the
   deepest bound element wins, so buttons can nest; forms: a `<form
-  data-on-submit="name">` whose `<button type="submit">` is clicked emits
-  the form's `Submit` signal with the named inputs' values as a JSON
-  object — unnamed inputs excluded; the collection reads each input's live
+  data-on-submit="name">` whose `<button type="submit">` (or a `type`-less
+  `<button>`) is clicked — or activated (Enter / A on the focused one; the
+  activation is the submit's source) — emits the form's `Submit` signal with
+  the named inputs' values as a JSON
+  object — unnamed inputs excluded; only the submit button submits — any
+  other bound element in the form (`type="button"`, a link, a bound wrapper)
+  just clicks, and a click on the submit button suppresses a bound
+  ancestor's `click`; the collection reads each input's live
   `EditableText`, so without `text-input` (no input entities) the payload
   is empty; the submit button is a plain block carrying the
   `FormSubmitButton` marker — no bindings of its own, but its click
@@ -1326,7 +1423,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
   no `PartialEq`), so unchanged elements keep their change ticks. ADR 0021
   went further: unchanged subtrees reuse the previous build's specs by
   reference and skip the cascade, the spec construction and the diff visit
-  (the skeleton, `SpecNode::Fresh`/`Cached`, `put_ref`); measured
+  (the skeleton, `SpecNode::Fresh`/`Cached`, `put_ref`) — content-only:
+  a pending style-side change (`RebuildState::style_pending`) skips reuse;
+  measured
   (criterion, 600 elements, skeleton on/off): changing 2.09 → 1.17 ms,
   markdown 8.75 → 6.27 ms, all-dirty/localized/idle within noise. The
   remaining per-frame costs are the render, the parse, the localize walk

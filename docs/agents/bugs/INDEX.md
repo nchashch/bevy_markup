@@ -17,7 +17,7 @@ Bugs found by the automated testing infrastructure. One file per bug,
 `bug_NNNN.md`, numbered in discovery order. This page is the title/metadata
 record; each discovery session has its own metadata section below
 (bug_0001–0005: property testing, stateful testing and fuzzing — the fuzzers
-immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s; bug_0020: the picking-driven signals tests; bug_0021: prototype_19 integration; bug_0022: the `menu` example's smoke run; bug_0023: user report; bug_0024: code reading; bug_0025: repeated suite runs; bug_0027: the `world` example's smoke run; bug_0028: user report; bug_0029–0030: user report).
+immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–0013: property tests and the layout oracle; bug_0014: mutation-testing triage; bug_0015: the fuzz-corpus coverage replay; bug_0016–0017: demo crashes with nested `HtmlUi`s; bug_0020: the picking-driven signals tests; bug_0021: prototype_19 integration; bug_0022: the `menu` example's smoke run; bug_0023: user report; bug_0024: code reading; bug_0025: repeated suite runs; bug_0027: the `world` example's smoke run; bug_0028: user report; bug_0029–0030: user report; bug_0031–0080: the 2026-10-13 whole-crate code review's findings, fixed the same day).
 
 ## Bugs
 
@@ -53,6 +53,56 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0028](bug_0028.md) | The demo's panels never scroll: the layout grows to the tallest content instead (`flex-shrink: 0` default vs the browser scroll idiom) | demo themes (`examples/assets/ui/themes/*.css`) | medium | fixed (uncommitted at filing) | user report |
 | [bug_0029](bug_0029.md) | Links from a Fluent translation never match `:hover`/`:active`/`:focus` (fragment walks cascaded with no state; `run_extras` ignored state for every inline element) | `src/build.rs` (fragment state maps, `run_extras`) | medium | fixed (uncommitted at filing) | user report (`links` example) |
 | [bug_0030](bug_0030.md) | `repair_focus` cleared focus the app set on an activation target (a link span) every frame | `src/focus.rs` (`repair_focus`) | medium | fixed (uncommitted at filing) | user report (`links` example) |
+| [bug_0031](bug_0031.md) | A context change dropped unchanged siblings of the reused subtree (walk-through tags produced no spec) | `src/build.rs` (`collect_node` reuse) | high | fixed (`0ede9b6`) | code review 2026-10-13 (R02) |
+| [bug_0032](bug_0032.md) | Reused subtrees kept the previous stylesheet's styles across a swap (+ the failing-sheet variant) | `src/build.rs` (`skeleton_eligible`) | high | fixed (`0ede9b6`) | code review 2026-10-13 (R03) |
+| [bug_0033](bug_0033.md) | Builds that skipped the reuse walk served stale cached specs | `src/build.rs` (reuse gate) | high | fixed (`0ede9b6`) | code review 2026-10-13 (R04) |
+| [bug_0034](bug_0034.md) | The skeleton's document fell out of step with its specs after Wait/outline frames | `src/build.rs` (skeleton document) | high | fixed (`0ede9b6`) | code review 2026-10-13 (R05) |
+| [bug_0035](bug_0035.md) | Reused subtrees kept stale `DomNode` handles (`:hover`/`:active` died or hit the wrong element) | `src/build.rs` (`refresh_cached_handles`) | high | fixed (`0ede9b6`) | code review 2026-10-13 (R06) |
+| [bug_0036](bug_0036.md) | The reuse gate scored the dynamic-header/static-body case useless and switched pairing off | `src/build.rs` (`spec_count`) | medium | fixed (`0ede9b6`) | code review 2026-10-13 (R07) |
+| [bug_0037](bug_0037.md) | Any `type` attribute became an editable text field (the code read `data-type`) | `src/build.rs` (text-input mapping) | medium | fixed (`bbd0959`) | code review 2026-10-13 (R08) |
+| [bug_0038](bug_0038.md) | A kept `<input>` was never updated (value/name/cascade; `maxlength`/`placeholder` retracted) | `src/build.rs` (`update_spec`) | medium | fixed (`bbd0959`) | code review 2026-10-13 (R09, R10) |
+| [bug_0039](bug_0039.md) | A named grid-line placement on an `<input>` fell back to `auto` | `src/build.rs` (text-input branch) | low | fixed (`bbd0959`) | code review 2026-10-13 (R11) |
+| [bug_0040](bug_0040.md) | Deeply nested content overflowed the stack (~150 nested `<div>`s abort) | `src/build.rs` (unbounded recursion) | high | fixed (`c07dda7`) | code review 2026-10-13 (R12) |
+| [bug_0041](bug_0041.md) | A dropped root `calc()` kept resolving; a top-level root never resolved one | `src/build.rs` (`apply_root`, `resolve_calc`) | low | fixed (`c07dda7`) | code review 2026-10-13 (R13) |
+| [bug_0042](bug_0042.md) | A restyle that respawned spans reported only `HtmlUiRestyled` (app wiring lost) | `src/build.rs` (`update_spec`) | low | fixed (`c07dda7`) | code review 2026-10-13 (R14) |
+| [bug_0043](bug_0043.md) | Syncing `RemSize` queued a spurious restyle on the first build of every UI | `src/build.rs`/`src/rebuild.rs` | low | fixed (`c07dda7`) | code review 2026-10-13 (R17) |
+| [bug_0044](bug_0044.md) | `var()` substitution was exponential and could hang the app on one element | `src/cascade.rs` (`substitute`) | high | fixed (`e992bf1`) | code review 2026-10-13 (R19) |
+| [bug_0045](bug_0045.md) | Pseudo-only compounds never matched (`:focus-visible { … }` dropped) | `src/cascade.rs` (compound matching) | medium | fixed (`e992bf1`) | code review 2026-10-13 (R20) |
+| [bug_0046](bug_0046.md) | CSS-wide keywords (`initial`/`inherit`/`unset`) silently ignored | `src/cascade.rs` | medium | fixed (`e992bf1`) | code review 2026-10-13 (R21) |
+| [bug_0047](bug_0047.md) | Context variables referenced only transitively (`--a: var(--brand)`) never restyled (inline `style` names still untracked) | `src/cascade.rs` (`var_names`) | medium | fixed (`6195a88`, partly open) | code review 2026-10-13 (R22) |
+| [bug_0048](bug_0048.md) | `restore_from` left the root positioned (`fixed`) and kept the areas' implied tracks | `src/cascade.rs` (`restore_from`) | medium | fixed (`6195a88`) | code review 2026-10-13 (R23) |
+| [bug_0049](bug_0049.md) | Negative named-line occurrences off by one; out-of-range clamped instead of `auto` | `src/cascade.rs` (named lines) | low | fixed (`6195a88`) | code review 2026-10-13 (R24) |
+| [bug_0050](bug_0050.md) | Grid names at the end of a `repeat()` or around `auto-fill` never registered | `src/cascade.rs` (track lists) | low | fixed (`6195a88`) | code review 2026-10-13 (R25) |
+| [bug_0051](bug_0051.md) | A `border-image` URL behind a `var()` never loaded | `src/cascade.rs` (`image_urls`) | low | fixed (`49525d2`) | code review 2026-10-13 (R26) |
+| [bug_0052](bug_0052.md) | An unsupported value erased the earlier rule's value | `src/cascade.rs` (declaration application) | low | fixed (`49525d2`) | code review 2026-10-13 (R27) |
+| [bug_0053](bug_0053.md) | Later grid declarations never took the earlier rule's names back | `src/cascade.rs` (grid name table) | low | fixed (`6195a88`) | code review 2026-10-13 (R28) |
+| [bug_0054](bug_0054.md) | Descendant-combinator matching was exponential in the ancestor chain (~600 ms/element) | `src/cascade.rs` (`matches_rest`) | low–medium | fixed (`49525d2`) | code review 2026-10-13 (R30) |
+| [bug_0055](bug_0055.md) | `var()` in `pointer-events`/`outline-offset` treated as unsupported | `src/cascade.rs` (raw properties) | low | fixed (`e992bf1`) | code review 2026-10-13 (R31) |
+| [bug_0056](bug_0056.md) | The Markdown Fluent cache misaligned arguments with their markers (control characters in the UI) | `src/l10n.rs` (`markdown_cache`) | high | fixed (`402362c`) | code review 2026-10-13 (R32) |
+| [bug_0057](bug_0057.md) | String arguments were escaped twice through the Markdown cache | `src/l10n.rs` (`substitute`) | high | fixed (`402362c`) | code review 2026-10-13 (R33) |
+| [bug_0058](bug_0058.md) | Code spans/blocks in `.md` templates ran through Tera (contradicting ADR 0020) | `src/md.rs` | high | fixed (`402362c`) | code review 2026-10-13 (R34) |
+| [bug_0059](bug_0059.md) | `separate_statements` split inline statements; mis-ordered `{%`/`{#`; empty paragraphs from comments | `src/md.rs` (`separate_statements`) | medium | fixed (`402362c`) | code review 2026-10-13 (R35, R42) |
+| [bug_0060](bug_0060.md) | Markdown conversion was chosen by the root template's path, not per file | `src/template.rs` (loader) | medium | fixed (`402362c`) | code review 2026-10-13 (R36) |
+| [bug_0061](bug_0061.md) | Cached Markdown messages escaped term/message references as literal text | `src/l10n.rs` (Markdown cache) | medium | fixed (`402362c`) | code review 2026-10-13 (R37) |
+| [bug_0062](bug_0062.md) | A placeable in a Markdown link destination killed the link (cache path) | `src/l10n.rs` (Markdown cache) | medium | fixed (`402362c`) | code review 2026-10-13 (R38) |
+| [bug_0063](bug_0063.md) | A cache substitution failure errored (no per-value fallback); duplicate ids kept the later pattern | `src/l10n.rs` (Markdown cache) | medium | fixed (`402362c`) | code review 2026-10-13 (R39) |
+| [bug_0064](bug_0064.md) | A freshly rendered document inherited the previous document's translations (bundle loading/failed) | `src/l10n.rs` (`localize`) | medium | fixed (`402362c`) | code review 2026-10-13 (R40) |
+| [bug_0065](bug_0065.md) | Messages without placeables were Markdown-converted every frame | `src/l10n.rs` (Markdown cache) | low | fixed (`402362c`) | code review 2026-10-13 (R41) |
+| [bug_0066](bug_0066.md) | Arguments containing a later literal part disturbed the substitution | `src/l10n.rs` (`substitute`) | low | fixed (`402362c`) | code review 2026-10-13 (R43) |
+| [bug_0067](bug_0067.md) | `resolve_references` followed includes inside comments, raw blocks and code samples | `src/template.rs` (`resolve_references`) | low | fixed (`402362c`) | code review 2026-10-13 (R44) |
+| [bug_0068](bug_0068.md) | A second matching bundle event in a frame was served a frame late (`events.read().any`) | `src/l10n.rs` (`localize`) | low | fixed (`402362c`) | code review 2026-10-13 (R45) |
+| [bug_0069](bug_0069.md) | Template includes and FTL resources could escape the asset root with `../` paths | `src/template.rs`, `src/l10n.rs` (loaders) | low | fixed (`402362c`) | code review 2026-10-13 (R46) |
+| [bug_0070](bug_0070.md) | Nine-slice manifests weren't validated (`Tile(0.0)` → infinite repeats) | `src/nine_slice.rs` (loader) | low | fixed (`402362c`) | code review 2026-10-13 (R47) |
+| [bug_0071](bug_0071.md) | Every primary click inside a `<form data-on-submit>` submitted the form | `src/signals.rs` (`on_pointer`) | high | fixed (`cd21ffd`) | code review 2026-10-13 (R49) |
+| [bug_0072](bug_0072.md) | A same-frame despawn panicked `update_focus_states` (plain `insert`) | `src/focus.rs` (`update_focus_states`) | high | fixed (`cd21ffd`) | code review 2026-10-13 (R50) |
+| [bug_0073](bug_0073.md) | Activation never submitted forms; the `Submit` source was a hard-coded mouse click | `src/focus.rs`, `src/signals.rs` | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R51, R58) |
+| [bug_0074](bug_0074.md) | A tooltip on a link was respawned every frame and never shown | `src/tooltips.rs`, `src/anchor.rs` | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R52) |
+| [bug_0075](bug_0075.md) | The first-focusable fallback picked by `Entity` order, not document order | `src/focus.rs` (fallback) | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R53) |
+| [bug_0076](bug_0076.md) | Touch pointers never emitted `data-on-leave`; the entered map leaked per touch | `src/signals.rs` (hover tracking) | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R54) |
+| [bug_0077](bug_0077.md) | `Above`/`Left` overlays weren't clamped to the viewport | `src/anchor.rs` (`place_anchored`) | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R55) |
+| [bug_0078](bug_0078.md) | `HtmlWorldAnchor` ignored `UiScale` and the viewport's origin | `src/anchor.rs` (`place_world_anchored`) | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R56, R57) |
+| [bug_0079](bug_0079.md) | An app adding `DirectionalNavigationPlugin` after `BevyMarkupPlugin` panicked | `src/focus.rs`/`src/lib.rs` | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R59) |
+| [bug_0080](bug_0080.md) | Focus moved by a signal handler showed its state a frame late | `src/lib.rs`, `src/focus.rs` | low | fixed (`cd21ffd`) | code review 2026-10-13 (R60) |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -172,9 +222,16 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   integrator re-read the highest-impact claims directly. Evidence levels
   per finding: [probe] reproduced, [code] verified by reading,
   [traced] path traced without execution.
-- **Fix status:** a fix session later that day (six per-slice git
-  worktrees, branches `fix/<slice>`) was cut off by a provider rate limit
-  before any fix landed; the branches hold only partial, uncommitted agent
-  edits. All 80 findings are **open**.
+- **Fix status:** a fix session later that day (six per-slice branches,
+  `fix/reuse`, `fix/build`, `fix/cascade`, `fix/content`,
+  `fix/interaction`, `fix/examples`) landed the fixes: merged to `main`
+  the same day (merge base `aed8fbf`, HEAD `97e16bc`). Findings with their
+  own report: R02–R12, R13–R14, R17, R19–R28, R30–R47, R49–R60 →
+  bug_0031–bug_0080 (sequential in review order). Not filed here: R01/R18
+  (test-infrastructure fixes), R10 (doc retraction, folded into
+  bug_0038/ADR 0022), R15/R16/R29 (internal perf, no observable defect),
+  R48 (fuzz-harness coverage), R58 (folded into bug_0073),
+  R61–R75 (example/CI-only, fixed in the same pass),
+  R76–R80 (stale docs, fixed by the doc edits).
 - **Discovery agent:** model `anthropic/claude-opus-5-5:high` with six
   `reviewer` subagents.

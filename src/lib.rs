@@ -70,7 +70,10 @@
 //! [custom elements](custom_elements) for components and observers (run
 //! once per element). Style-only changes
 //! (stylesheets, fonts) restyle the existing children in place and fire
-//! [`HtmlUiRestyled`](html::HtmlUiRestyled) instead, keeping what you attached.
+//! [`HtmlUiRestyled`](html::HtmlUiRestyled) instead, keeping what you
+//! attached — unless the restyle respawns an element's spans (new span
+//! entities need their observers wired, link spans in particular), which
+//! reports [`HtmlUiBuilt`](html::HtmlUiBuilt) as any other update.
 //!
 //! ## Supported subset
 //!
@@ -88,7 +91,8 @@
 //!   `font-style`, `pointer-events` (inherited); `border-image` (9-slice),
 //!   `border-width`, `padding`, `background-color`, `gap`, flex and grid
 //!   layout (including named lines and areas), sizes, margins, `box-sizing`,
-//!   `calc()` (mixed-unit, re-resolved per frame), `var()`, `transition`
+//!   `calc()`, `min()`/`max()`/`clamp()` (mixed-unit, re-resolved per
+//!   frame), `var()`, `transition`
 //!   (color changes), `position` with insets, `z-index`, `border-radius`,
 //!   `border-color`, `outline`, `text-decoration` and `opacity` (fades the
 //!   subtree) on blocks, containers and
@@ -111,11 +115,14 @@
 //!   lists and `![images](…)` come out as ordinary elements carrying
 //!   `class="markdown"` (so documents style their Markdown content apart
 //!   from raw-HTML `<img>` tags), and the per-frame path is Tera-only.
-//!   Raw HTML passes through, so a Markdown page can embed real UI
+//!   Conversion is per file: an `.html` partial included from a Markdown
+//!   page is never converted, a `.md` partial included from an HTML page
+//!   is. Raw HTML passes through, so a Markdown page can embed real UI
 //!   (`data-on-click` buttons, containers). Fluent bundles opt their
 //!   message values into Markdown with the manifest's `markdown: bool`
 //!   (default off): each message's pattern converts once at bundle load
-//!   and the formatted arguments substitute into the cached HTML.
+//!   and the formatted arguments substitute into the cached HTML (the
+//!   values are escaped once, when the arguments are parsed).
 //! - **Interaction signals** ([`signals`]): elements declare hooks with
 //!   `data-on-click`/`-auxclick`/`-press`/`-release`/`-enter`/`-leave`
 //!   naming an app-side signal (`click` is the primary button, `auxclick`
@@ -144,11 +151,13 @@
 //!
 //!   Nested hooks: the deepest bound element under the pointer wins.
 //! - **Text inputs and forms** ([`signals`], `text-input` feature):
-//!   `<input type="text">` renders Bevy's editable-text widget (its
-//!   `value`, `placeholder` and `name` attributes carry over; it is
+//!   `<input type="text">` (a missing `type` counts as `text`; other types
+//!   don't become fields) renders Bevy's editable-text widget (its
+//!   `value` and `name` attributes carry over; it is
 //!   focusable, and the app binds keyboard input — the widget edits the
 //!   focused field's text). `<form data-on-submit="name">` collects its
-//!   named inputs' values: clicking the form's `<button type="submit">`
+//!   named inputs' values: clicking the form's `<button type="submit">` —
+//!   or activating it while focused (Enter / gamepad A) —
 //!   emits the form's `Submit` signal with a JSON object of
 //!   `{name: value}` (unnamed inputs excluded; the submit needs the
 //!   `text-input` feature's input entities — without it the payload is

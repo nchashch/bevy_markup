@@ -8,6 +8,224 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** only a `<button type="submit">` submits its `<form
+  data-on-submit>`. Any other primary click inside a form (a `type="button"`
+  button, a link, a bound wrapper) emitted the form's `Submit` signal too —
+  the forms example's Clear button swapped in the receipt. A bound wrapper
+  *around* the submit button submits exactly once (the button counts as
+  bound for `click`, so the deepest-bound-element rule gives it the
+  interaction), and activation (Enter / gamepad A) on a submit button now
+  submits as well — keyboard and gamepad users couldn't submit before, and
+  the `Submit` signal's `source` reports that activation (it used to be a
+  hard-coded mouse click at `(0, 0)`).
+- **Breaking:** syncing Bevy's `RemSize` resource to the root rule's
+  font-size no longer queues a restyle — Bevy's layout re-resolves every
+  `Val::Rem` itself when the resource changes. If your UIs have different
+  root `font-size`s, the extra restyled frame you used to get on a
+  `RemSize` flip is gone (the values resolve the same frame); apps that
+  observed `HtmlUiRestyled` after a `RemSize` change no longer see it.
+  This also removes the spurious `HtmlUiRestyled` every UI fired on its
+  first build (Bevy's default 20 px vs the CSS default 16 px).
+
+### Fixed
+- **A context change could drop unchanged siblings of the changing
+  subtree.** A reused (skeleton-cached, ADR 0021) subtree whose root tag
+  produced no node of its own (`span`, `b`, `<img>` in a container,
+  `<body>` when `<head>` carried the change) lost its content: reuse fell
+  through to a fresh collect that returned early. Fixed.
+- **A stylesheet swap in the same frame as a content change left reused
+  subtrees styled by the previous sheet** — the theme-button case kept the
+  old colors until something else forced a restyle. Same for a change that
+  arrived while the replacement sheet was loading (a failing sheet emits no
+  event): those builds are no longer treated as content-only.
+- **Builds whose adaptive reuse gate skipped the walk served stale cached
+  specs**, showing older content than a fresh build; and the skeleton's
+  document could fall out of step with its specs after frames that held
+  the build (a loading sheet, the debug outline) — the UI showed stale
+  text. Both pairing paths re-check now.
+- **`:hover`/`:active` stopped working inside reused subtrees**: their
+  `DomNode` handles were never refreshed to the current document, so the
+  state walk missed them (and a stale handle could hover the *wrong*
+  element). Handles are refreshed positionally.
+- **The flagship reuse case — a dynamic header over a static Markdown
+  body — scored "useless" and switched pairing off** for every following
+  build: a reused subtree counted 1 against every node inside it.
+- **Text input gated by the real `type` attribute:** a `type="checkbox"`,
+  `password` or `submit` field became an editable text field (the old code
+  read `data-type`). Only a text (or missing) `type` builds a field now;
+  the other types render nothing, like any unsupported empty inline leaf.
+  `maxlength`/`placeholder` were documented but never read (Bevy 0.20's
+  widget has neither) — the docs no longer claim them (ADR 0022).
+- **A kept `<input>` was never updated:** a re-render with a new `value`
+  attribute left the old text, restyles (theme swap, `:focus`) left stale
+  `TextFont`/`TextColor`, and a changed `name` was ignored. The field now
+  follows the cascade and its attributes — typed text survives (it is app
+  state; the text is only rewritten when the `value` attribute it was
+  built from changes) — and a named grid-line placement (`grid-row: mid`)
+  on an `<input>` no longer falls back to `auto`.
+- **Deeply nested content overflowed the stack:** ~150 nested `<div>`s
+  aborted the app in a debug build (from user data, e.g. `{{ doc | safe
+  }}`). Content nested more than 100 elements deep is dropped (warned
+  once) and every recursion below is bounded.
+- **A root `calc()` kept resolving after the declaration was dropped** (a
+  theme swap removing `html { width: calc(…) }` kept the old size), and a
+  top-level root (no parent) never resolved root calc at all. It resolves
+  against the viewport (the UI camera's target) and stops when the
+  declaration goes (`CalcSized` is removed).
+- **A restyle that respawned spans reported only `HtmlUiRestyled`** —
+  run merges under a new sheet create fresh span entities without app
+  wiring, but the event promised every element was kept. The respawn is
+  reported as a build (`HtmlUiBuilt`), matching the documented contract.
+- **`var()` substitution was exponential and could hang the app on one
+  element:** `--a: var(--a, 1px) var(--a, 1px)` recursed ~2³² times, and a
+  doubling reference chain doubled its output per level (~1.5 s at 20
+  levels in a debug build) — reachable from any stylesheet. Substitution
+  is memoized per declaration, detects cycles and stops at a 64 KiB output
+  budget.
+- `:focus-visible { … }` never applied: rules whose compound has no
+  type/class/id (lightningcss prints `*:hover` back as `:hover`) were
+  dropped — including the standard focus-ring shape. Pseudo-only compounds
+  match now.
+- `inherit`, `initial`, `unset` (and `revert`) were silently ignored, so a
+  lower-priority rule's value showed through (`width: initial` kept the
+  earlier 200px). They reset the field to its initial value; `inherit`
+  resolves to it too (the cascade keeps no parent computed style).
+- **Changing a context variable that reached the styles only transitively
+  (`--a: var(--brand)`) never restyled:** the tracked `var()` names were
+  only the directly referenced ones. Names are followed through the
+  sheet's own `--` declarations now, and collected once at load instead of
+  per frame per UI.
+- **A `border-image: var(--frame) 16` URL never loaded:** the URL lives in
+  the `--frame` declaration's tokens, and only typed `BorderImage` values
+  were collected for the image dependency. The sheet's `--` declarations
+  are scanned for `url()` now.
+- **An unsupported value erased an earlier rule's value instead of being
+  dropped:** `grid-template-columns: 100px 1fr` then `fit-content(2em)
+  1fr` left the element with no columns; `row-gap: 8px` then `5%` left no
+  gap; `fit-content` after `calc()` did the same for `width`. Invalid
+  declarations are dropped, keeping the earlier value.
+- **Named-line fixes:** a negative occurrence index was off by one
+  (`grid-column: -1 a` picked the wrong line) and running past the
+  occurrences clamped instead of going `auto`; a name at the end of a
+  `repeat()` and names around `auto-fill`/`auto-fit` repeats never
+  registered; and later grid declarations never took the earlier rule's
+  names back (`grid-template-areas: "x y"` then `none` kept the names and
+  the implied 1×2 tracks).
+- **A theme swap left the root positioned:** `restore_from` undid only
+  `absolute`/`relative`, not `position: fixed`, nor the `auto` tracks
+  implied by `grid-template-areas` — the root kept the old
+  positioning/tracks, and `apply_root` saved that as the app's new
+  baseline.
+- **Descendant-combinator matching retried every ancestor combination**:
+  a `.b .a`×7 `p` selector against 40 nested `.a` ancestors spent ~600 ms
+  per element (debug). Failed (compound, offset) states are memoized;
+  matching is linear.
+- `var()` in properties read as raw/unknown values (`pointer-events`,
+  `outline-offset`) was treated as unsupported, though every property
+  accepts `var()`. Those substitute now.
+- **The `markdown: true` Fluent cache misaligned arguments with their
+  markers:** a pattern starting or ending with a placeable, or a
+  multi-line pattern, substituted the formatted arguments into the wrong
+  literal runs — `lead = { $n } items here` printed the control-character
+  markers and lost the argument, and multi-line paragraphs lost *every*
+  argument. Cached parts anchor the text's start and end, each marker is
+  replaced verbatim, and a text that no longer splits falls back to the
+  per-value conversion instead of erroring.
+- **String arguments were escaped twice through the Markdown cache**
+  (`parse_args` already escapes): `O'Brien & Co` displayed as
+  `O&#39;Brien &amp; Co`. Escaped once now.
+- **Term and message references (`{ -brand }`) in cached Markdown messages
+  rendered as escaped literal text** instead of the referenced value, and
+  a placeable in a Markdown link destination (`[docs]({ $url })`) killed
+  the link. Such messages convert per value now, like duplicate message
+  ids (which keep the bundle's first pattern, not the later one).
+- **Messages without placeables were Markdown-converted on every
+  `localize`** — every frame for a per-frame context — instead of once per
+  bundle load. They are cached too.
+- **Markdown conversion is per file:** an `.html` partial included from a
+  `.md` page was Markdown-converted (its indented HTML became a code
+  block), and a `.md` partial included from an `.html` page was never
+  converted.
+- **Tera in code:** code spans, fenced and indented code in `.md`
+  templates ran through Tera — `` `{{ x }}` `` rendered the variable (or
+  failed the render), a literal `{% raw %}` inside code failed the whole
+  load. Code content is Tera-literal now (ADR 0020's contract).
+- **`separate_statements` split statements that share a line with
+  content:** `src="{% if hd %}hd{% endif %}.png"` became
+  `src="\n\nhd\n\n.png"` (broken images, and a statement inside an `id` or
+  `class` broke matching), statements in list items, headings and table
+  cells split their elements, a later `{%` was preferred over an earlier
+  `{#`, and multi-line comments left an empty `<p class="markdown">`.
+  Only statements that own their line are separated; the earliest of
+  `{%`/`{#` wins; fenced code, code spans and multi-line comments are left
+  alone.
+- **While the active locale bundle was loading (or had failed to load), a
+  freshly rendered document inherited the previous document's
+  translations:** frozen arguments, translations on the wrong elements.
+  The stale map is dropped; elements show their fallback content until
+  the bundle arrives.
+- A second matching bundle event in one frame (a hot reload's `Modified`
+  then `LoadedWithDependencies`) was served next frame with an extra
+  re-resolve and rebuild; all matching events are consumed now.
+- **`{% include %}` inside `{# comments #}`, `{% raw %}` blocks or
+  Markdown code samples was followed** — a commented-out include of a
+  deleted file failed the whole template load (blank UI). Skipped now.
+- **Template includes and `.ftl.ron` resources could escape the asset
+  root with `../` paths:** the loaders read through `read_asset_bytes`,
+  which skips Bevy's unapproved-path check that `AssetServer::load`
+  enforces. They check it themselves now (matters for user-generated
+  content).
+- **Nine-slice manifests weren't validated:** `Tile(0.0)` divided by zero
+  (infinite repeats in Bevy's slicer), and negative insets and NaN/≤0
+  `max_corner_scale` drew garbage with no load error. Invalid values fail
+  the load.
+- **A signal handler that despawned a UI the same frame a focus changed
+  panicked** (`insert<PseudoState>` on a despawned entity — the bug_0021
+  class, which missed this system). `try_insert` now.
+- **The first-focusable fallback picked by `Entity` order** (autofocus
+  missing, a modal opening, focus lost): recycled ids made `#a #b #c`
+  focus `#c`. It walks document order (a DFS of the in-scope roots) now.
+- **Touch pointers never emitted `data-on-leave`:** Bevy despawns a touch
+  pointer on touch end and drops it from the hover map, so its entered
+  elements kept their state (and the map grew by an entry per touch).
+  Leaves emit when the touch ends.
+- **A tooltip on a link was respawned every frame and never shown:** the
+  hover hit is the link span, which carries the tooltip data but no node,
+  so the anchor treated it as gone. The tooltip anchors to the nearest
+  ancestor with a node now.
+- **`Above`/`Left` overlays weren't clamped to the viewport:** a tooltip
+  above an element at the top edge went entirely off screen, although the
+  docs promise clamping "by the overlay's size". Clamped once the
+  overlay's size is known.
+- **`HtmlWorldAnchor` ignored `UiScale`:** window-logical pixels were
+  written as `Val::Px` (which Bevy scales again), so with `UiScale(2.0)`
+  plates landed at twice the position. It also compared its on-screen test
+  against `0..viewport size` while the projection includes the viewport's
+  origin, so every visible point of an offset viewport (split screen) read
+  off-screen and the plate hid. Both fixed.
+- **An app adding `DirectionalNavigationPlugin` after `BevyMarkupPlugin`
+  panicked** with Bevy's duplicate-plugin error (the crate auto-adds it;
+  the auto-add moved to the plugin's `finish`, so an app adding it itself
+  is detected instead).
+- Focus moved by a signal handler showed its `:focus` state a frame late:
+  `update_focus_states` runs after `dispatch_signals` now.
+- **Examples:** Space no longer switches the language while a text field
+  holds the caret (`inputs`, `forms`); the forms receipt's
+  `data-l10n-args` is the whole submitted map, serialized by the app
+  (typed `"` or `\` broke the hand-spliced JSON); the forms Clear button
+  actually clears (the inputs carry `id`s now); grid-names' picks persist
+  (cells can be unchecked, and checking one no longer unchecks the
+  others); the launcher takes `shared_input` (default on) and examples
+  with their own handlers opt out, so Enter / A no longer fired twice and
+  arrows moved one step instead of two; focus-visible rings on the inline
+  example's quests and the forms receipt's "Edit again"; hot-reload's
+  starting palette is byte-identical to the committed stylesheet (name and
+  colors agree on launch); linear arrow stepping honors `HtmlNoFocus`
+  roots and confines to an open `HtmlModal` (the old filter was a no-op);
+  the harness's injected exit keys run in `PreUpdate`, where every system
+  sees them.
+
 ## [0.6.0] - 2026-10-12
 
 ### Added

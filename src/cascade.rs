@@ -1,5 +1,7 @@
 //! Stylesheet → declared style per element (the subset documented in
-//! [`crate::style`]): compound selectors matched against tag, id and classes.
+//! [`crate::style`]): compound selectors, joined by descendant/child
+//! combinators against the element's ancestor chain, matched against
+//! tag, id, classes and pseudo-state.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -2839,8 +2841,9 @@ fn grid_auto_flow(flow: css_grid::GridAutoFlow) -> GridAutoFlow {
     }
 }
 
-/// One placement side: `auto`, a line number or a span; named lines and
-/// areas are unsupported (Bevy places by number only).
+/// One placement side: `auto`, a line number, a named line or area (resolved
+/// against the parent grid's `GridNames` at collection — see
+/// `LayoutDecl::resolve_names`) or a span.
 fn grid_line(line: &css_grid::GridLine) -> Option<GridLineDecl> {
     match line {
         css_grid::GridLine::Auto => Some(GridLineDecl::Auto),

@@ -89,7 +89,9 @@
 //!   `sticky` is skipped. Font-relative lengths resolve like CSS: `em`
 //!   against the element's own computed font-size (each node's `EmSize`),
 //!   `rem` against the root rule's font-size (the `RemSize` resource,
-//!   kept in sync; a change restyles). Grid tracks take them too
+//!   kept in sync; no restyle is queued — Bevy's layout re-resolves every
+//!   `Val::Rem` when the resource changes, and the calc pass reads the new
+//!   size on its next frame). Grid tracks take them too
 //!   (taffy's font-relative track sizing). `ex`/`ch` and font-relative
 //!   `padding`/`border-width`/`gap` are skipped.
 //! - `var()` in any property's value: `var(--name)` resolves the UI's
