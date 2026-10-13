@@ -200,6 +200,53 @@ const REFERENCE_TAGS: [&str; 2] = ["include", "extends"];
 /// `embedded://…` keeps its source), and rewrites the reference to the
 /// resolved path, which is the name it's registered under. Returns the
 /// rewritten source and the resolved paths.
+/// The index just past the closer (`%}` for a tag, `}}` for an
+/// expression) of the Tera span at `source` (which starts with its
+/// two-byte opener); quoted strings inside are skipped.
+fn tera_span_end(source: &str, closer: [u8; 2]) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut cursor = 2;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'"' | b'\'' => {
+                let quote = bytes[cursor];
+                cursor += 1;
+                while cursor < bytes.len() && bytes[cursor] != quote {
+                    cursor += if bytes[cursor] == b'\\' { 2 } else { 1 };
+                }
+                cursor += 1;
+            }
+            first if first == closer[0]
+                && cursor + 1 < bytes.len()
+                && bytes[cursor + 1] == closer[1] =>
+            {
+                return Some(cursor + 2);
+            }
+            _ => cursor += 1,
+        }
+    }
+    None
+}
+
+/// The index just past the `{% endraw %}` group closing the raw block
+/// whose opener ends at `after`; `None` when there is none.
+fn tera_raw_end(source: &str, after: usize) -> Option<usize> {
+    let mut cursor = after;
+    while let Some(next) = source[cursor..].find("{%") {
+        let at = cursor + next;
+        let end = at + tera_span_end(&source[at..], *b"%}")?;
+        let body = source[at + 2..end - 2]
+            .trim()
+            .trim_matches(['-', '+'])
+            .trim();
+        if body == "endraw" {
+            return Some(end);
+        }
+        cursor = end;
+    }
+    None
+}
+
 pub(crate) fn resolve_references(
     path: &AssetPath<'static>,
     source: &str,
@@ -220,13 +267,15 @@ pub(crate) fn resolve_references(
                 let marker = &trimmed[..3];
                 let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
                 let info = &rest[indent + 3..line_end.min(rest.len())];
-                if fence.is_none() && !info.trim().is_empty() {
-                    fence = Some(marker.to_owned());
-                } else if fence.as_deref() == Some(marker) && info.trim().is_empty() {
+                if fence.as_deref() == Some(marker) && info.trim().is_empty() {
                     fence = None;
+                } else if fence.is_none() {
+                    fence = Some(marker.to_owned());
                 }
                 out.push_str(&rest[..line_end]);
                 rest = &rest[line_end..];
+                // A whole line was copied; the next one is at a line start
+                // (a fence at the file's start must close).
                 at_line_start = true;
                 continue;
             }
@@ -235,17 +284,18 @@ pub(crate) fn resolve_references(
             let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
             out.push_str(&rest[..line_end]);
             rest = &rest[line_end..];
-            at_line_start = rest.is_empty() || rest.starts_with('\n');
+            at_line_start = true;
             continue;
         }
-        // The earliest of: a reference tag, a comment (its `{% include %}`
-        // examples are commented out, not references), a raw block
-        // (verbatim), or — in Markdown — an inline code span.
+        // The earliest of: a code span opener, a comment (its examples are
+        // commented out, not references), or a Tera tag/expression —
+        // copied as a unit (its quoted strings can contain `{#`, `{%` or
+        // `{{`), with a reference tag resolved and a raw block verbatim.
         let tag_start = rest.find("{%");
+        let expression_start = rest.find("{{");
         let comment_start = rest.find("{#");
-        let raw_start = rest.find("{% raw");
         let code_start = if is_markdown { rest.find('`') } else { None };
-        let start = [tag_start, comment_start, raw_start, code_start]
+        let start = [tag_start, expression_start, comment_start, code_start]
             .into_iter()
             .flatten()
             .min();
@@ -253,19 +303,21 @@ pub(crate) fn resolve_references(
             out.push_str(rest);
             return Ok((out, references));
         };
-        if Some(start) == code_start && Some(start) != tag_start && Some(start) != raw_start {
+        if Some(start) == code_start && Some(start) != tag_start {
             // An inline code span: copy through its closing backtick run.
+            // An unmatched run is text: advance past it (skipping to EOF
+            // would drop every later include).
             let ticks = rest[start..].len() - rest[start..].trim_start_matches('`').len();
             let closer = "`".repeat(ticks);
             let end = rest[start + ticks..]
                 .find(&closer)
-                .map_or(rest.len(), |at| start + ticks + at + ticks);
+                .map_or(start + ticks, |at| start + ticks + at + ticks);
             out.push_str(&rest[..end]);
             rest = &rest[end..];
             at_line_start = false;
             continue;
         }
-        if Some(start) == comment_start && Some(start) != tag_start {
+        if Some(start) == comment_start {
             // A `{# … #}` comment: copied verbatim, its contents skipped.
             let Some(end) = rest[start..].find("#}") else {
                 out.push_str(rest);
@@ -277,22 +329,34 @@ pub(crate) fn resolve_references(
             at_line_start = false;
             continue;
         }
-        if Some(start) == raw_start {
-            // `{% raw %} … {% endraw %}`: verbatim to the end tag.
-            let Some(end) = rest[start..].find("{% endraw") else {
-                out.push_str(rest);
-                return Ok((out, references));
+        // A Tera tag or expression; the text before it is copied as is.
+        out.push_str(&rest[..start]);
+        if Some(start) == expression_start {
+            // A `{{ … }}` expression: copied verbatim (its strings can
+            // contain anything).
+            let Some(span_len) = tera_span_end(&rest[start..], *b"}}") else {
+                out.push_str(&rest[start..start + 2]);
+                rest = &rest[start + 2..];
+                at_line_start = false;
+                continue;
             };
-            let end = rest[end..].find("%}").map_or(rest.len(), |at| end + at + 2);
-            out.push_str(&rest[..end]);
-            rest = &rest[end..];
+            out.push_str(&rest[start..start + span_len]);
+            rest = &rest[start + span_len..];
             at_line_start = false;
             continue;
         }
-        // A reference tag (or a `{%` that isn't one): the original logic.
-        let (before, tag) = rest.split_at(start);
-        out.push_str(before);
-        let body = tag[2..].trim_start_matches('-').trim_start();
+        let Some(tag_len) = tera_span_end(&rest[start..], *b"%}") else {
+            // A lone `{%` without its closer: text; keep scanning after it.
+            out.push_str(&rest[start..start + 2]);
+            rest = &rest[start + 2..];
+            at_line_start = false;
+            continue;
+        };
+        let tag = &rest[start..start + tag_len];
+        let body = tag[2..tag.len() - 2]
+            .trim()
+            .trim_start_matches(['-', '+'])
+            .trim_start();
         let keyword = REFERENCE_TAGS.into_iter().find(|keyword| {
             body.strip_prefix(keyword)
                 .is_some_and(|after| after.starts_with(char::is_whitespace))
@@ -304,8 +368,20 @@ pub(crate) fn resolve_references(
             Some((after, &after[1..1 + end], quote))
         });
         let Some((after, literal, quote)) = literal else {
-            out.push_str("{%");
-            rest = &tag[2..];
+            let keyword_word = body.split_whitespace().next().unwrap_or("");
+            if keyword_word == "raw" {
+                // `{% raw %} … {% endraw %}`: verbatim through the endraw
+                // group (whitespace-control variants included).
+                let Some(end) = tera_raw_end(rest, start + tag_len) else {
+                    out.push_str(&rest[start..]);
+                    return Ok((out, references));
+                };
+                out.push_str(&rest[start..end]);
+                rest = &rest[end..];
+            } else {
+                out.push_str(tag);
+                rest = &rest[start + tag_len..];
+            }
             at_line_start = false;
             continue;
         };
@@ -319,13 +395,15 @@ pub(crate) fn resolve_references(
             )
             .into());
         }
-        // Everything up to the literal, the resolved path, then on.
-        let literal_offset = tag.len() - after.len();
-        out.push_str(&tag[..literal_offset]);
+        // The resolved path replaces the literal; everything else in the
+        // tag (opening, closing quote, whitespace control, `%}`) keeps
+        // its original bytes.
+        let quote_offset = after.as_ptr() as usize - tag.as_ptr() as usize;
+        out.push_str(&tag[..quote_offset]);
         out.push(quote);
         out.push_str(&resolved.to_string());
-        out.push(quote);
-        rest = &after[literal.len() + 2..];
+        out.push_str(&tag[quote_offset + 1 + literal.len()..]);
+        rest = &rest[start + tag_len..];
         at_line_start = false;
         references.push(resolved);
     }
@@ -464,6 +542,46 @@ mod tests {
         let (_, references) =
             resolve_references(&embedded, r#"{% include "part.html" %}"#).unwrap();
         assert_eq!(references[0].to_string(), "embedded://app/ui/part.html");
+    }
+
+    /// The scanner's edge cases: an unmatched backtick run is text (it
+    /// used to skip to EOF, dropping later includes), a fence at the
+    /// file's start closes (it never did), and a `"{#"` inside a Tera
+    /// string — in a tag or an expression — is not a comment (it
+    /// swallowed everything to the next `#}` or to EOF).
+    #[test]
+    fn scanner_edge_cases_keep_later_references() {
+        let markdown = AssetPath::parse("main.md").clone_owned();
+        let (_, references) = resolve_references(
+            &markdown,
+            "It`s here\n{% include \"a.md\" %}\n",
+        )
+        .unwrap();
+        assert_eq!(references.len(), 1);
+
+        let (_, references) = resolve_references(
+            &markdown,
+            "```rust\nx\n```\n{% include \"a.md\" %}\n",
+        )
+        .unwrap();
+        assert_eq!(references.len(), 1);
+
+        let html = AssetPath::parse("main.html").clone_owned();
+        let (out, references) = resolve_references(
+            &html,
+            "{% set x = \"{#\" %}\n{% include \"a.html\" %}\n",
+        )
+        .unwrap();
+        assert_eq!(references.len(), 1);
+        assert!(out.contains("x = \"{#\""), "the tag is verbatim: {out}");
+
+        let (out, references) = resolve_references(
+            &html,
+            "{% include \"a.html\" %}{{ \"{#\" }}{% include \"b.html\" %}\n",
+        )
+        .unwrap();
+        assert_eq!(references.len(), 2, "{references:?}");
+        assert!(out.contains("{{ \"{#\" }}"), "{out}");
     }
 
     /// Each of the five references Tera's autoescaping emits decodes to its
