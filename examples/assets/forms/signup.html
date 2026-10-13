@@ -4,19 +4,22 @@
 {% if submitted %}
 <div class="receipt">
   <h2 data-l10n-id="signup-done-title">Welcome aboard!</h2>
-  <p data-l10n-id="signup-done-name" data-l10n-args='{"name": "{{ submitted.name }}"}'>Signed up as {{ submitted.name }}</p>
-  <p data-l10n-id="signup-done-role" data-l10n-args='{"role": "{{ submitted.role }}"}'>Role: {{ submitted.role }}</p>
+  {# The Fluent args are the whole submitted map, serialized by the app
+     (`submitted_args`): typed text spliced into hand-written JSON would
+     break it on a `"` or `\`. #}
+  <p data-l10n-id="signup-done-name" data-l10n-args='{{ submitted_args }}'>Signed up as {{ submitted.name }}</p>
+  <p data-l10n-id="signup-done-role" data-l10n-args='{{ submitted_args }}'>Role: {{ submitted.role }}</p>
   <p id="again" class="action" data-on-click="edit-again" data-l10n-id="signup-again">Edit again</p>
 </div>
 {% else %}
 <form id="signup" data-on-submit="signup">
   <div class="field">
     <p class="label" data-l10n-id="signup-name-label">Name</p>
-    <input type="text" name="name" value="{{ name }}" autofocus>
+    <input type="text" id="name" name="name" value="{{ name }}" autofocus>
   </div>
   <div class="field">
     <p class="label" data-l10n-id="signup-role-label">Role</p>
-    <input type="text" name="role" value="Cartographer">
+    <input type="text" id="role" name="role" value="Cartographer">
   </div>
   <div class="actions">
     <button type="submit" id="submit" class="action" data-l10n-id="signup-submit">Sign up</button>

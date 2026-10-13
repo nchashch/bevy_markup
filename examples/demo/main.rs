@@ -34,6 +34,7 @@ fn main() {
             // Wide enough for the shell's 420px panels (3 across the
             // bottom, two columns on top).
             resolution: (1600, 900),
+            ..Default::default()
         },
         |app| {
             // Left / right move focus, up / down scroll (`shell::scroll_focused`).

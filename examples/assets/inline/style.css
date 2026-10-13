@@ -98,7 +98,8 @@ kbd {
   padding: 6px 16px;
 }
 
-.action:focus-visible {
+.action:focus-visible,
+.quest:focus-visible {
   outline: 3px solid #7fdbff;
   outline-offset: 2px;
 }

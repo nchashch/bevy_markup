@@ -32,12 +32,17 @@ use bevy::prelude::*;
 use bevy::time::TimePlugin;
 use bevy::window::ExitCondition;
 
-/// The windowed composition's window settings.
+/// The launcher's settings: the windowed composition's window, and whether
+/// the example uses the shared input bindings.
 pub struct ExampleWindow {
     /// The window title (headless runs ignore it).
     pub title: &'static str,
     /// The resolution; default 1280×720.
     pub resolution: (u32, u32),
+    /// Add [`super::input::ExampleInputPlugin`] (arrows / D-pad / stick
+    /// navigation, Enter / A activation); default on. Off for an example
+    /// that binds those inputs itself — both bindings would act on one press.
+    pub shared_input: bool,
 }
 
 impl Default for ExampleWindow {
@@ -45,6 +50,7 @@ impl Default for ExampleWindow {
         Self {
             title: "",
             resolution: (1280, 720),
+            shared_input: true,
         }
     }
 }
@@ -86,7 +92,6 @@ pub fn run(window: ExampleWindow, setup: impl FnOnce(&mut App)) {
                 }),
             ScheduleRunnerPlugin::run_loop(std::time::Duration::from_secs_f64(HEADLESS_FRAME_RATE)),
             bevy_markup::BevyMarkupPlugin,
-            super::input::ExampleInputPlugin,
             HarnessPlugin { headless: true },
         ));
     } else if headless {
@@ -140,7 +145,6 @@ pub fn run(window: ExampleWindow, setup: impl FnOnce(&mut App)) {
             // as a duplicate.
             bevy::ui_widgets::UiWidgetsPlugins,
             bevy_markup::BevyMarkupPlugin,
-            super::input::ExampleInputPlugin,
             HarnessPlugin { headless },
         ));
     } else {
@@ -163,8 +167,10 @@ pub fn run(window: ExampleWindow, setup: impl FnOnce(&mut App)) {
                 }),
             bevy_markup::BevyMarkupPlugin,
             HarnessPlugin { headless: false },
-            super::input::ExampleInputPlugin,
         ));
+    }
+    if window.shared_input {
+        app.add_plugins(super::input::ExampleInputPlugin);
     }
     setup(&mut app);
     run_bounded(&mut app);
@@ -189,12 +195,13 @@ fn run_bounded(app: &mut App) {
                 .ok()
                 .and_then(|frames| frames.parse::<u32>().ok())
         });
-    let Some(frames) = frames else {
-        app.run();
-        return;
-    };
-    app.insert_resource(ExitAfter(frames));
-    app.add_systems(Update, exit_after);
+    if let Some(frames) = frames {
+        app.insert_resource(ExitAfter(frames));
+        // After `keyboard_input_system` (which clears `just_pressed` each
+        // frame): every `Update` system sees the injected press.
+        app.add_systems(PreUpdate, exit_after.after(bevy::input::InputSystems));
+    }
+    app.run();
 }
 
 #[derive(Resource)]

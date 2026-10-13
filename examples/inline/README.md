@@ -50,11 +50,8 @@ everything, wherever the window goes.
   don't move it, and nothing clips it.
 - **Interaction** — `data-on-click` turns clicks into `ElementSignal`
   messages (the quest's name carries its index), focusable with a
-  `:focus-visible` ring, keyboard and gamepad as in the quickstart.
-
-Like the quickstart, the example keeps its navigation inline (no
-`examples/shared/input.rs`) so it reads top to bottom; the only shared
-module is the `dev-tools` harness.
+  `:focus-visible` ring; arrows / D-pad / left stick and Enter / A come
+  from the examples' shared input bindings (`examples/shared/input.rs`).
 
 ## Files
 
@@ -65,6 +62,7 @@ module is the `dev-tools` harness.
 | `../assets/inline/notes.md` | The Markdown side panel |
 | `../assets/inline/style.css` | The stylesheet (the features are commented) |
 | `../assets/inline/locales/{en-US,de}/` | Fluent bundles |
+| `../shared/input.rs` | Keyboard / gamepad focus navigation shared by the examples |
 | `../assets/shared/frame.png` | 9-slice frame of the page, and the seals' image |
 
 With the `dev-tools` feature, the example also serves the localhost

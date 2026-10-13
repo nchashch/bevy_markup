@@ -44,15 +44,10 @@ LAYERS = {
     "content-lint": ["--test", "content_lint"],
     "fuzz-corpora": ["--features", "fuzzing", "--test", "fuzz_corpus", "--", "--ignored"],
     # The benchmarks (ADR 0018 + 0019): what the benches exercise (short
-    # sampling — coverage doesn't care how long each benchmark runs).
-    "benchmarks": [
-        # Criterion: the statistical harness (benches/pipeline.rs).
-        ["--bench", "pipeline", "--",
-         "--warm-up-time", "0.1", "--measurement-time", "0.2"],
-        # Divan: the allocation-counting harness (benches/pipeline-divan.rs;
-        # each harness has its own CLI flags, hence two invocations).
-        ["--bench", "pipeline-divan", "--", "--max-time", "0.2"],
-    ],
+    # sampling — coverage doesn't care how long each benchmark runs). One
+    # layer per harness: the two runs are disjoint, and subsets listed as
+    # their own layers ran the benches twice and reported 0 "only here"
+    # by construction.
     "benchmarks-criterion": [
         ["--bench", "pipeline", "--",
          "--warm-up-time", "0.1", "--measurement-time", "0.2"],

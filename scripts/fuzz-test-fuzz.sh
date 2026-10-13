@@ -17,4 +17,16 @@ duration=${2:-60}
 cd test-fuzz
 export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
 export AFL_SKIP_CPUFREQ=1
-exec timeout "$((duration + 30))" cargo +nightly test-fuzz "tests::fuzz_$target"
+# Build first (unbounded: a cold build can exceed the run budget); the
+# timeout then bounds only the run. `timeout` exits 124 when the budget
+# elapses — that is a normal, successful end for a fuzz campaign.
+cargo +nightly test-fuzz --no-run "tests::fuzz_$target"
+set +e
+timeout "$duration" cargo +nightly test-fuzz "tests::fuzz_$target"
+status=$?
+set -e
+cd ..
+case $status in
+    0 | 124) exit 0 ;;
+    *) exit $status ;;
+esac
