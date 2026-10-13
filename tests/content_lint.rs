@@ -168,7 +168,13 @@ fn links_contexts() -> Vec<Value> {
 fn forms_contexts() -> Vec<Value> {
     vec![
         json!({ "name": "Ada" }),
-        json!({ "name": "Ada", "submitted": { "name": "Ada", "role": "Cartographer" } }),
+        json!({
+            "name": "Ada",
+            "submitted": { "name": "Ada", "role": "Cartographer" },
+            // The receipt's `data-l10n-args`: the whole submitted map,
+            // serialized by the app.
+            "submitted_args": r#"{"name":"Ada","role":"Cartographer"}"#,
+        }),
     ]
 }
 

@@ -45,10 +45,20 @@ jobs:
           shared-key: dev
       - name: Library with minimal Bevy features
         run: cargo check --lib
+      # The text-input mapping arms compile only under the feature (plain
+      # checks never see them) and its tests are gated too.
+      - name: Library with text-input
+        run: cargo check --lib --features text-input
       - name: All targets
         run: cargo build --all-targets
       - name: Tests
         run: cargo test
+      - name: Tests with text-input
+        run: cargo test --features text-input
+      # The hot-reload and demo dev-tools examples are gated behind those
+      # features and skipped by --all-targets.
+      - name: Gated examples compile
+        run: cargo check --examples --features hot-reload,dev-tools,text-input
       - name: Fuzz harness unit tests
         run: cargo test --lib --features fuzzing
       - name: Docs
@@ -67,7 +77,10 @@ jobs:
         run: scripts/fluent_oracle.sh
       - name: Compare with the committed references
         run: |
-          if ! git diff --exit-code -- tests/vectors; then
+          # Untracked files (a new vector committed without its generated
+          # output) don't show in git diff — catch them too.
+          if [ -n "$(git status --porcelain tests/vectors)" ] \
+            || ! git diff --exit-code -- tests/vectors; then
             echo "::error::fluent.html is stale: run scripts/fluent_oracle.sh, review and commit the diff"
             exit 1
           fi

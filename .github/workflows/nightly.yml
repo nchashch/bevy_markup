@@ -42,8 +42,10 @@ jobs:
       - name: Run the criterion suite
         run: cargo bench --bench pipeline -- --warm-up-time 0.5 --measurement-time 2
       - name: Run the divan suite (allocation counts)
-        run: |
-          cargo bench --bench pipeline-divan -- --max-time 2 | tee target/divan.txt
+        shell: bash
+        # `shell: bash` gives `-e -o pipefail`: a panicking bench fails the
+        # step instead of `tee`'s exit status masking it.
+        run: cargo bench --bench pipeline-divan -- --max-time 2 | tee target/divan.txt
       - name: Upload the reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -154,7 +156,10 @@ jobs:
         run: scripts/browser_oracle.py
       - name: Compare with the committed references (ignoring the generator line)
         run: |
-          if ! git diff --exit-code -I '"generator"' -- tests/vectors; then
+          # Untracked files (a new vector committed without its generated
+          # output) don't show in git diff — catch them too.
+          if [ -n "$(git status --porcelain tests/vectors)" ] \
+            || ! git diff --exit-code -I '"generator"' -- tests/vectors; then
             echo "::error::Chrome computes differently from the committed browser.json: review; if the browser is right, regenerate and commit, then fix bevy_markup"
             exit 1
           fi
@@ -205,6 +210,7 @@ jobs:
           key: fuzz-corpus-ftl-for-coverage-${{ github.run_id }}
           restore-keys: fuzz-corpus-ftl-
       - name: Measure
+        shell: bash
         run: |
           scripts/coverage.py --html | tee coverage.txt
           { echo '### Line coverage of src/ per testing layer'; echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

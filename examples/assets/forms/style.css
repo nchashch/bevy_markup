@@ -73,7 +73,9 @@ button:hover {
   border-color: #f0b429;
 }
 
-button:focus-visible {
+/* The receipt's "Edit again" is a focusable `p` (`data-on-click`). */
+button:focus-visible,
+p.action:focus-visible {
   outline: 3px solid #7fdbff;
   outline-offset: 2px;
 }

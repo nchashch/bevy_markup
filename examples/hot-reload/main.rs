@@ -10,9 +10,8 @@
 //! `H` / B to cycle the palette, click or activate the buttons, `L` / Y
 //! switches the language.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use bevy::math::CompassOctant;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 
@@ -31,10 +30,8 @@ fn main() {
             ..Default::default()
         },
         |app| {
-            app.add_systems(Startup, setup).add_systems(
-                Update,
-                (navigate, handle_signals, switch_language, cycle_palette),
-            );
+            app.add_systems(Startup, setup)
+                .add_systems(Update, (handle_signals, switch_language, cycle_palette));
         },
     );
 }
@@ -49,22 +46,24 @@ struct Languages(Vec<Handle<LocaleBundle>>);
 struct PaletteFile(PathBuf);
 
 /// The accent palettes, cycled by H / B: one stylesheet per palette,
-/// otherwise identical (only the two accent colors change).
+/// otherwise identical (only the two accent colors and the comment naming
+/// the palette change).
 const PALETTES: usize = 3;
 
-/// The stylesheet with palette `n`'s accent colors, in place of the two
-/// accent declarations of the committed copy (palette 0).
+/// The stylesheet with palette `n`'s accent colors. Palette 0 is
+/// byte-identical to the committed copy, so cycling back to it leaves the
+/// tracked file unmodified.
 fn palette_css(n: usize) -> String {
-    let (accent, ring) = match n {
-        1 => ("#34c8c8", "#f0b429"),     // Ocean.
-        2 => ("#4dcc71", "#f0ea92"),     // Forest.
-        _ => ("#f0b429", "#7fdbff"),     // Crimson: the committed copy.
+    let (name, accent, ring) = match n {
+        1 => ("ocean", "#34c8c8", "#f0b429"),
+        2 => ("forest", "#4dcc71", "#f0ea92"),
+        _ => ("crimson", "#f0b429", "#7fdbff"),
     };
     format!(
         r#"/* Written by the example's palette cycling (and safe to edit by hand):
    the app rewrites this file with a different accent each press of H, and
    the file watcher restyles every user of the stylesheet without a
-   restart. Palette {n} of {PALETTES}. */
+   restart. The committed copy is palette 0. */
 html {{
   color: #e6e6e6;
   font-family: serif;
@@ -75,7 +74,7 @@ html {{
   padding: 20px 32px;
 }}
 
-/* The accent the palette cycling rewrites. */
+/* The accent the palette cycling rewrites (palette {n}: {name}). */
 h1 {{
   color: {accent};
   font-size: 44px;
@@ -105,7 +104,6 @@ kbd {{
   outline-offset: 2px;
 }}
 
-/* One full-width button per line: the same layout in every language. */
 .actions {{
   gap: 8px;
 }}
@@ -148,17 +146,19 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
     commands.insert_resource(ActiveLocale::new(languages[0].clone()));
     commands.insert_resource(Languages(languages));
 
-    commands.insert_resource(PaletteFile(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/assets/hot-reload/style.css"),
-    ));
+    let stylesheet =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/assets/hot-reload/style.css");
+    // The file keeps the last palette a run wrote: start from it, so the
+    // palette name matches the colors.
+    let palette = palette_on_disk(&stylesheet);
+    commands.insert_resource(PaletteFile(stylesheet));
 
     commands.spawn((
         HtmlUi::new(asset_server.load("hot-reload/page.html")),
         TemplateContext::new()
             .with("player", "Ada")
             .with("coins", &0)
-            .with("palette", &0),
+            .with("palette", &(palette as i64)),
         Node {
             width: Val::Px(560.0),
             margin: UiRect::all(Val::Auto),
@@ -167,46 +167,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
             ..default()
         },
     ));
-}
-
-/// Keyboard and gamepad navigation (arrows / D-pad, Enter / A), like
-/// quickstart's.
-fn navigate(
-    keys: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<(Entity, &Gamepad)>,
-    mut focus: HtmlFocus,
-) {
-    let pad = |button| gamepads.iter().find(|(_, pad)| pad.just_pressed(button));
-    for (key, button, direction) in [
-        (KeyCode::ArrowUp, GamepadButton::DPadUp, CompassOctant::North),
-        (
-            KeyCode::ArrowDown,
-            GamepadButton::DPadDown,
-            CompassOctant::South,
-        ),
-        (
-            KeyCode::ArrowLeft,
-            GamepadButton::DPadLeft,
-            CompassOctant::West,
-        ),
-        (
-            KeyCode::ArrowRight,
-            GamepadButton::DPadRight,
-            CompassOctant::East,
-        ),
-    ] {
-        if keys.just_pressed(key) || pad(button).is_some() {
-            focus.navigate(direction);
-        }
-    }
-    if keys.just_pressed(KeyCode::Enter) {
-        focus.activate(ActivationInput::Key(KeyCode::Enter));
-    } else if let Some((gamepad, _)) = pad(GamepadButton::South) {
-        focus.activate(ActivationInput::GamepadButton {
-            gamepad,
-            button: GamepadButton::South,
-        });
-    }
 }
 
 /// Clicks (and activations) arrive as `ElementSignal` messages.
@@ -272,6 +232,20 @@ fn cycle(contexts: &mut Query<&mut TemplateContext>, stylesheet: &PathBuf) {
     }
 }
 
+/// The palette number in the stylesheet's accent comment (`palette_css`'s
+/// `(palette N: name)`); 0 when the file is missing or the comment was
+/// edited away.
+fn palette_on_disk(stylesheet: &Path) -> usize {
+    std::fs::read_to_string(stylesheet)
+        .ok()
+        .and_then(|css| {
+            let (_, rest) = css.split_once("(palette ")?;
+            rest.split_once(':')?.0.parse().ok()
+        })
+        .filter(|&n| n < PALETTES)
+        .unwrap_or(0)
+}
+
 fn switch_language(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
@@ -293,4 +267,34 @@ fn next_language(languages: &Languages, active: &mut ActiveLocale) {
         .position(|bundle| active.0.as_ref() == Some(bundle))
         .unwrap_or(0);
     active.set(languages.0[(current + 1) % languages.0.len()].clone());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cycling back to palette 0 restores the committed stylesheet
+    /// byte for byte (no stray diff in the working tree), and every palette
+    /// reads back as itself.
+    #[test]
+    fn palettes_round_trip_through_the_file() {
+        let committed = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/assets/hot-reload/style.css"),
+        )
+        .unwrap();
+        assert_eq!(
+            palette_css(0),
+            committed,
+            "palette 0 must be the committed style.css (if a run left another \
+             palette in the working tree, cycle back to palette 0 first)"
+        );
+        let dir = std::env::temp_dir().join(format!("hot-reload-palette-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in 0..PALETTES {
+            let file = dir.join("style.css");
+            std::fs::write(&file, palette_css(n)).unwrap();
+            assert_eq!(palette_on_disk(&file), n);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

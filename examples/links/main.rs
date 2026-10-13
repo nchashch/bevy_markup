@@ -26,6 +26,9 @@ fn main() {
     harness::run(
         harness::ExampleWindow {
             title: "bevy_markup: links",
+            // The arrows cycle the link runs (`cycle_links`), not the shared
+            // directional navigation, so the example binds its input itself.
+            shared_input: false,
             ..Default::default()
         },
         |app| {

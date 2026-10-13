@@ -31,7 +31,7 @@ fi
 tmp=${BEVY_MARKUP_MUTANTS_TMP:-$HOME/.cache/bevy_markup-mutants}
 parked="$tmp/parked"
 mkdir -p "$parked"
-caches="fuzz/target fuzz/corpus fuzz/artifacts honggfuzz/target test-fuzz/target fuzzcheck/target fuzzcheck/fuzz hfuzz_target hfuzz_workspace"
+caches="fuzz/target fuzz/corpus fuzz/artifacts fuzz/coverage honggfuzz/target test-fuzz/target fuzzcheck/target fuzzcheck/fuzz hfuzz_target hfuzz_workspace"
 
 restore() {
     for d in $caches; do
@@ -42,7 +42,11 @@ restore() {
     done
     find "$tmp" -maxdepth 1 -name 'cargo-mutants-*' -exec rm -rf {} +
 }
-trap restore EXIT INT TERM
+# EXIT restores on normal end; INT/TERM restore and exit with the signal's
+# status — without the `exit`, the script continued into `cargo mutants`
+# after Ctrl-C.
+trap restore EXIT
+trap 'restore; exit 130' INT TERM
 
 for d in $caches; do
     if [ -e "$d" ]; then

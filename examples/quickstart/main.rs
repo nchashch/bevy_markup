@@ -21,6 +21,9 @@ fn main() {
     harness::run(
         harness::ExampleWindow {
             title: "bevy_markup: quickstart",
+            // The example binds its own input (`navigate` below), kept
+            // self-contained so the whole API shows in this one file.
+            shared_input: false,
             ..Default::default()
         },
         |app| {

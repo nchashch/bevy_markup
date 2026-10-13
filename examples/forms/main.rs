@@ -97,9 +97,15 @@ fn handle_signals(
     for signal in signals.read() {
         match signal.trigger {
             // `Submit` carries the named inputs' values as a JSON object.
+            // The receipt's `data-l10n-args` gets the whole map
+            // serialized: typed text spliced into hand-written JSON would
+            // break the JSON on a `"` or `\`.
             SignalTrigger::Submit if signal.name == "signup" => {
                 for mut context in &mut contexts {
                     context.insert("submitted", &signal.payload);
+                    let args = serde_json::to_string(&signal.payload)
+                        .unwrap_or_else(|_| "{}".to_owned());
+                    context.insert("submitted_args", &args);
                 }
             }
             SignalTrigger::Click if signal.name == "edit-again" => {
@@ -125,13 +131,20 @@ fn handle_signals(
 fn switch_language(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
+    focused_text: Query<(), (With<bevy::ui_widgets::TextInput>, With<EditableText>)>,
     languages: Res<Languages>,
     mut active: ResMut<ActiveLocale>,
 ) {
     let pad = gamepads
         .iter()
         .any(|pad| pad.just_pressed(GamepadButton::North));
-    if keys.just_pressed(KeyCode::Space) || pad {
+    // Space is a typed character in a text field: only switch the
+    // language while nothing holds the caret.
+    let typing = focused_text
+        .iter()
+        .any(|_| true)
+        && keys.pressed(KeyCode::Space);
+    if keys.just_pressed(KeyCode::Space) && !typing || pad {
         next_language(&languages, &mut active);
     }
 }

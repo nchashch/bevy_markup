@@ -151,13 +151,17 @@ fn handle_signals(
 fn switch_language(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
+    focused_text: Query<(), With<bevy::ui_widgets::TextInput>>,
     languages: Res<Languages>,
     mut active: ResMut<ActiveLocale>,
 ) {
     let pad = gamepads
         .iter()
         .any(|pad| pad.just_pressed(GamepadButton::North));
-    if keys.just_pressed(KeyCode::Space) || pad {
+    // Space is a typed character in a text field: only switch the
+    // language while nothing holds the caret.
+    let typing = focused_text.iter().any(|_| true) && keys.pressed(KeyCode::Space);
+    if keys.just_pressed(KeyCode::Space) && !typing || pad {
         next_language(&languages, &mut active);
     }
 }

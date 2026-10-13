@@ -7,7 +7,6 @@
 //!
 //! `cargo run --example markdown`
 
-use bevy::math::CompassOctant;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 
@@ -19,7 +18,7 @@ fn main() {
         },
         |app| {
             app.add_systems(Startup, setup)
-                .add_systems(Update, (navigate, hotkeys, handle_signals, switch_language));
+                .add_systems(Update, (hotkeys, handle_signals, switch_language));
         },
     );
 }
@@ -65,49 +64,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
             ..default()
         },
     ));
-}
-
-/// Keyboard and gamepad navigation, as in the quickstart example.
-fn navigate(
-    keys: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<(Entity, &Gamepad)>,
-    mut focus: HtmlFocus,
-) {
-    let pad = |button| gamepads.iter().find(|(_, pad)| pad.just_pressed(button));
-    for (key, button, direction) in [
-        (
-            KeyCode::ArrowUp,
-            GamepadButton::DPadUp,
-            CompassOctant::North,
-        ),
-        (
-            KeyCode::ArrowDown,
-            GamepadButton::DPadDown,
-            CompassOctant::South,
-        ),
-        (
-            KeyCode::ArrowLeft,
-            GamepadButton::DPadLeft,
-            CompassOctant::West,
-        ),
-        (
-            KeyCode::ArrowRight,
-            GamepadButton::DPadRight,
-            CompassOctant::East,
-        ),
-    ] {
-        if keys.just_pressed(key) || pad(button).is_some() {
-            focus.navigate(direction);
-        }
-    }
-    if keys.just_pressed(KeyCode::Enter) {
-        focus.activate(ActivationInput::Key(KeyCode::Enter));
-    } else if let Some((gamepad, _)) = pad(GamepadButton::South) {
-        focus.activate(ActivationInput::GamepadButton {
-            gamepad,
-            button: GamepadButton::South,
-        });
-    }
 }
 
 /// Page and language hotkeys: Q / E and the bumpers switch pages (the same

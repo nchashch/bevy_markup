@@ -94,7 +94,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut fonts: ResM
 /// flips the flag and the template re-renders (the checked part dims).
 fn handle_signals(
     mut signals: MessageReader<ElementSignal>,
-    picks: Res<Picks>,
+    mut picks: ResMut<Picks>,
     mut contexts: Query<&mut TemplateContext>,
 ) {
     let picked = |name: &str| -> Option<usize> {
@@ -116,9 +116,13 @@ fn handle_signals(
             continue;
         }
         if let Some(index) = picked(signal.name.as_ref()) {
-            let mut flags = picks.0.clone();
-            let index = index.min(flags.len() - 1);
-            flags[index] = !flags[index];
+            let index = index.min(picks.0.len() - 1);
+            // Flip in place and write back: the previous code cloned into
+            // the context only, so every click restarted from the initial
+            // flags (cells couldn't be unchecked, checking one unchecked
+            // the others).
+            picks.0[index] = !picks.0[index];
+            let flags = picks.0.clone();
             for mut context in &mut contexts {
                 context.insert("picks", &flags);
             }

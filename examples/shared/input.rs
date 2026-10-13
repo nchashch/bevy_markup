@@ -212,6 +212,8 @@ fn step_linear(
     roots: Query<Entity, (With<HtmlUi>, Without<ChildOf>)>,
     children: Query<&Children>,
     focusable: Query<(), (With<Focusable>, Without<HtmlNoFocus>)>,
+    no_focus_roots: Query<(), With<HtmlNoFocus>>,
+    modals: Query<(), With<HtmlModal>>,
     mut focus: ResMut<InputFocus>,
     mut visible: ResMut<InputFocusVisible>,
 ) {
@@ -219,9 +221,25 @@ fn step_linear(
     if step == 0 {
         return;
     }
+    // Which subtrees participate: `HtmlNoFocus` roots are skipped
+    // entirely; an open `HtmlModal` confines the walk to its subtree.
+    let topmost: Vec<Entity> = {
+        let all: Vec<Entity> = roots.iter().collect();
+        let modal = all
+            .iter()
+            .copied()
+            .find(|&root| modals.contains(root))
+            .into_iter()
+            .collect::<Vec<_>>();
+        if modal.is_empty() {
+            all.into_iter().filter(|root| !no_focus_roots.contains(*root)).collect()
+        } else {
+            modal
+        }
+    };
     let mut order = Vec::new();
-    for root in &roots {
-        let mut stack = vec![root];
+    for root in &topmost {
+        let mut stack = vec![*root];
         while let Some(entity) = stack.pop() {
             if focusable.contains(entity) {
                 order.push(entity);
