@@ -1,9 +1,18 @@
-# Code review 2026-10-13 (follow-up)
+# review_0002 — Code review 2026-10-13 (follow-up)
+
+| field | value |
+|---|---|
+| ID | review_0002 |
+| Date | 2026-10-13 |
+| Scope | whole crate at `a07a12a` (after the six `fix/*` merges) |
+| Method | six parallel slices, re-running the R findings' scenarios; revert-tested each fix's guard |
+| Findings | verdicts on `R01`–`R80`; new defects `F01`–`F43` (stable ids) |
+| Discovery agent | omp session, `anthropic/claude-opus-5-5:high` |
 
 A re-review at `a07a12a` (main after the six `fix/*` merges, the integration
 docs `0089dae` and the regression tests `a07a12a`). It does two things:
 
-1. It checks every finding of the [first review](2026-10-13.md) (`R01`–`R80`,
+1. It checks every finding of the [first review](review_0001.md) (`R01`–`R80`,
    at `b224619`) against HEAD: is it really fixed, and does the cited
    regression test fail when the fix is reverted?
 2. It records new defects (`F01`…), including regressions introduced by the
@@ -445,7 +454,7 @@ at HEAD (F01, F02).
 
 These records claim something the code doesn't do, or are out of date:
 
-- **Prior review:** `2026-10-13.md:3-7` still says "Findings are **open** —
+- **Prior review:** `review_0001.md:3-7` still says "Findings are **open** —
   none has a fix yet … hold no changes". INDEX.md:8 says "80 open findings".
   INDEX.md:235 says R76–R80 are fixed (R79 and R80 aren't). Its "not filed"
   list misses R42 (folded into bug_0059) and R57 (folded into bug_0078).

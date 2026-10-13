@@ -15,7 +15,7 @@
 ADR 0016's Decision 1 described the text-input mapping including
 "`max_characters` from `maxlength`". The code never read `maxlength` (or
 `placeholder`) — the whole-crate review of 2026-10-13 (finding R10,
-`docs/agents/reviews/2026-10-13.md`) found the attributes were documented
+`docs/agents/reviews/review_0001.md`) found the attributes were documented
 in lib.rs, AGENTS.md and the `text_input_element_maps_to_the_widget`
 comment but read nowhere. Bevy 0.20's `TextInput`/`EditableText` widget
 supports neither a character limit nor placeholder rendering: there is no

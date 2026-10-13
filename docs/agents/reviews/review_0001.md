@@ -1,4 +1,13 @@
-# Code review 2026-10-13
+# review_0001 — Code review 2026-10-13
+
+| field | value |
+|---|---|
+| ID | review_0001 |
+| Date | 2026-10-13 |
+| Scope | whole crate at `b224619` (0.6.0 + the bounded-run commit) |
+| Method | six parallel review slices + integrator checks |
+| Findings | `R01`–`R80` (stable ids; [follow-up](review_0002.md) re-checks them) |
+| Discovery agent | omp session, `anthropic/claude-opus-5-5:high` |
 
 A full-crate code review at `b224619` (0.6.0 + the bounded-run commit).
 Findings are **open** — none has a fix yet; a fix session the same day was

@@ -4,7 +4,7 @@ Upstream defects (in dependencies and tools) are also tracked in
 [UPSTREAM.md](UPSTREAM.md) until they're reported and fixed upstream.
 
 Whole-crate review sessions are filed in [reviews/](../reviews/) as one
-report per date; the latest is [2026-10-13](../reviews/2026-10-13.md)
+report per date; the latest is [review_0001](../reviews/review_0001.md)
 (80 open findings, stable IDs `R01`–`R80`). A finding gets its own
 `bug_NNNN.md` here when its fix lands.
 
@@ -210,7 +210,7 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   pinned by the vector `restyle_with_nested_uis_keeps_them`).
 - **Discovery agent:** model `zai/glm-5.3-flash:high`.
 
-## Discovery session metadata: code review 2026-10-13 (reviews/2026-10-13.md)
+## Discovery session metadata: code review 2026-10-13 (reviews/review_0001.md)
 
 - **Date:** 2026-10-13; same machine (`anne`, kernel `7.2.8-arch1-2`).
 - **Repository state:** `bevy_markup` at `b224619` ("Bounded headless
@@ -245,4 +245,4 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   `R` finding or its test) or are internal-only (F01 CI warnings,
   F04/F21/F41/F42 test and CI work, F22/F23/F26 perf, F33 a test's
   misread, F35/F36/F42 example/CI-only) — see
-  `docs/agents/reviews/2026-10-13-followup.md` for the mapping.
+  `docs/agents/reviews/review_0002.md` for the mapping.
