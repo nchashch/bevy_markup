@@ -2776,6 +2776,12 @@ fn track_sizing(
         for name in names {
             let lower = (line + 1) as i16;
             let entries = map.entry(name.0.to_string()).or_default();
+            // A merged repeat boundary is one line: the same name on it
+            // registers once (a duplicate occurrence made `3 a` resolve
+            // to the first occurrence instead of the third).
+            if entries.contains(&lower) {
+                continue;
+            }
             entries.push(lower);
             // CSS: line `i` of `L` lines is also `i - L - 1` (line 1 of 4
             // is -4); `total_lines` counts tracks, so `L` is tracks + 1.
@@ -3901,11 +3907,33 @@ mod tests {
             "display: grid; grid-template-columns: repeat(2, [a] 1fr [b]) [c]",
         );
         let names = style.layout.grid_names.expect("line names");
-        // One track per repetition: `a`@1, then the merged boundary
-        // (`b` and `a` on the same line), then `b` and the trailing `c`.
+        // One track per repetition: `a`@1, the merged boundary (`b` and
+        // `a` on the SAME line — registered once each; a duplicate
+        // occurrence made `3 a` resolve to the first occurrence), then
+        // `b` and the trailing `c`.
         assert_eq!(names.columns["a"], &[1, -3, 2, -2]);
         assert_eq!(names.columns["b"], &[2, -2, 3, -1]);
         assert_eq!(names.columns["c"], &[3, -1]);
+
+        // A name on both sides of a merged boundary counts once: `3 a`
+        // resolves to the third occurrence (the second track's end).
+        let style = declared(
+            "display: grid; grid-template-columns: repeat(2, [a] 1fr [a]); grid-column: 3 a",
+        );
+        let names = style.layout.grid_names.expect("line names");
+        assert_eq!(names.columns["a"], &[1, -3, 2, -2, 3, -1]);
+        let line = names.line(Axis::Column, Side::Start, "a", Some(3));
+        assert_eq!(
+            line,
+            Some(GridLineDecl::Line(3)),
+            "the merged boundary counts once, so the third occurrence is the last line"
+        );
+        let line = names.line(Axis::Column, Side::Start, "a", Some(-3));
+        assert_eq!(
+            line,
+            Some(GridLineDecl::Line(-3)),
+            "the third occurrence from the end resolves to the first line"
+        );
 
         let style = declared(
             "display: grid; grid-template-columns: [full-start] repeat(auto-fill, 100px) [full-end]",
