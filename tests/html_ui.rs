@@ -2970,6 +2970,81 @@ fn deep_outline_does_not_overflow() {
     let _ = ui.dump();
 }
 
+/// An inline `style` attribute's `var()` references the context: a change
+/// to the variable restyles the element (the vars hash hashes the inline
+/// names the last build collected — the sheet can't know them).
+#[test]
+fn inline_style_var_change_restyles() {
+    let mut ui = TestUi::new(
+        "inline-var",
+        &[(
+            "page.html",
+            r#"<p style="color: var(--brand); --x: var(--brand)">colored</p>"#,
+        )],
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("--brand", &"#ff0000"),
+        Node::default(),
+    );
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "colored" default 16px #ff0000
+"#,
+    );
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--brand", &"#00ff00");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "colored" default 16px #00ff00
+"#,
+    );
+}
+
+/// An unknown property's `var()` (`pointer-events`, `outline-offset`) is
+/// tracked too: `var_names` used to skip the property entirely, so a
+/// context change never restyled.
+#[test]
+fn unknown_property_var_change_restyles() {
+    let mut ui = TestUi::new(
+        "unknown-var",
+        &[("page.html", "<p>x</p>"), ("a.css", "p { pointer-events: var(--pe) }")],
+    )
+    .stylesheet("a.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("--pe", &"auto"),
+        Node::default(),
+    );
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "x" default 16px #ffffff
+"#,
+    );
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--pe", &"none");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p pick=none
+    "x" default 16px #ffffff
+"#,
+    );
+}
+
 /// `<a href>` links: the link's runs become a picked span entity that
 /// emits the `open` signal with the href when clicked; the text styles by
 /// the cascade (`a` rules); a link without an href is plain styled text.

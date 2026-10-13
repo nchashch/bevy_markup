@@ -522,7 +522,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   resolves), a stylesheet's `border-image` image loading (a `url()` behind a
   `var()` loads too — the sheet's `--` declaration carries the URL tokens),
   a context `var()` change (the sheet's tracked `var()` names, computed at
-  load), `FontFamilies`
+  load, plus the inline `style` attributes' names the last build
+  collected — unknown properties' refs (`pointer-events`,
+  `outline-offset`) count too), `FontFamilies`
   change. The UI isn't built while its stylesheet is loading (images may
   arrive later; their load restyles).
 - Structure (`build.rs`: DOM → `Item` tree → nodes): blocks `h1`–`h6`, `p`,

@@ -101,6 +101,10 @@ pub(crate) struct RebuildState {
     /// `vars_changed` compares against it. Only restyled builds record it
     /// (a `Wait` keeps the old hash, so the change outlives the wait).
     pub(crate) vars: u64,
+    /// The `var(--name)` names the last build's inline `style`
+    /// attributes referenced: hashed with the sheet's names (the sheet
+    /// can't know them — they are per element).
+    pub(crate) inline_vars: Vec<String>,
 }
 
 impl RebuildState {

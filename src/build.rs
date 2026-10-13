@@ -424,11 +424,20 @@ pub(crate) struct ActiveTransition {
 /// collected transitively at load): the seed input that invalidates
 /// collection fingerprints when a variable changes, and the `Frame`'s
 /// `vars_changed` signal.
-fn context_vars_hash(sheet: Option<&Stylesheet>, context: Option<&TemplateContext>) -> u64 {
+fn context_vars_hash(
+    sheet: Option<&Stylesheet>,
+    context: Option<&TemplateContext>,
+    inline_names: &[String],
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let no_names: &[String] = &[];
-    for name in sheet.map(|sheet| &sheet.var_names[..]).unwrap_or(no_names) {
+    for name in sheet
+        .map(|sheet| &sheet.var_names[..])
+        .unwrap_or(no_names)
+        .iter()
+        .chain(inline_names)
+    {
         name.hash(&mut hasher);
         context
             .and_then(|context| context.get(name))
@@ -904,7 +913,7 @@ pub(crate) fn build_html_ui(
             (Some(Phase::Failed) | None, _) => None,
         };
         let context = contexts.get(entity).ok();
-        let vars_hash = context_vars_hash(names_sheet, context);
+        let vars_hash = context_vars_hash(names_sheet, context, &rebuild.inline_vars);
 
         let frame = Frame {
             own: own_phase,
@@ -1184,16 +1193,25 @@ pub(crate) fn build_html_ui(
         } else {
             match &*rendered {
                 RenderedHtml::Pending => continue,
-                RenderedHtml::Ready(document) => collect_items(
-                    document.dom(),
-                    &localized.0,
-                    Some(&states),
-                    &fragments,
-                    &styler,
-                    root,
-                    root_grid.as_ref(),
-                    pass.as_ref(),
-                ),
+                RenderedHtml::Ready(document) => {
+                    let (items, inline_vars) = collect_items(
+                        document.dom(),
+                        &localized.0,
+                        Some(&states),
+                        &fragments,
+                        &styler,
+                        root,
+                        root_grid.as_ref(),
+                        pass.as_ref(),
+                    );
+                    // The fresh names weren't in the recorded hash; the
+                    // next context change must restyle.
+                    if rebuild.inline_vars != inline_vars {
+                        rebuild.inline_vars = inline_vars;
+                        rebuild.vars = 0;
+                    }
+                    items
+                }
                 RenderedHtml::Failed(message) => vec![Item::Block(Block {
                     kind: BlockKind::Paragraph,
                     element: None,
@@ -3300,6 +3318,13 @@ struct Ctx<'a, 'p, 'buf> {
     /// ADR 0021: the previous build's tree, when this build may reuse its
     /// clean subtrees. `None` inside a translation (fragments are rebuilt).
     skeleton: Option<&'a SkeletonPass<'a>>,
+    /// The `var(--name)` names every parsed inline `style` references
+    /// (the main walk's accumulator; fragments create their own and
+    /// discard it — translations are rebuilt every frame, so their
+    /// inline vars are never stale). Feeds the frame's vars hash: a
+    /// context change must restyle elements whose *inline* styles use
+    /// the variable.
+    inline_vars: std::cell::RefCell<std::collections::BTreeSet<String>>,
 }
 
 impl Ctx<'_, '_, '_> {
@@ -3362,6 +3387,9 @@ fn walk_translation(
         styler: ctx.styler,
         named: Some(&named),
         skeleton: None,
+        // Discarded: translations are rebuilt every frame, so their
+        // inline vars are never stale.
+        inline_vars: std::cell::RefCell::default(),
     };
     walk(&fragment_ctx, fragment.children());
     true
@@ -3733,7 +3761,7 @@ fn collect_items(
     root: Style,
     grid: Option<&GridNames>,
     skeleton: Option<&SkeletonPass>,
-) -> Vec<Item> {
+) -> (Vec<Item>, Vec<String>) {
     let ctx = Ctx {
         parser: dom.parser(),
         localized,
@@ -3742,12 +3770,13 @@ fn collect_items(
         styler,
         named: None,
         skeleton,
+        inline_vars: std::cell::RefCell::default(),
     };
     let mut items = Vec::new();
     for handle in dom.children() {
         collect_node(&ctx, *handle, &root, &mut items, &[], grid, 0);
     }
-    items
+    (items, ctx.inline_vars.borrow().iter().cloned().collect())
 }
 
 fn collect_node(
@@ -3905,6 +3934,14 @@ fn collect_node(
             continue;
         };
         let inline = cascade::inline_style(tag);
+        if let Some(Some(style_attribute)) = tag.attributes().get("style")
+            && style_attribute.as_utf8_str().contains("var(")
+        {
+            let text = decode_entities(&style_attribute.as_utf8_str());
+            for name in cascade::raw_var_names(&text) {
+                ctx.inline_vars.borrow_mut().insert(name);
+            }
+        }
         // This element becomes the nearest ancestor for everything inside it.
         let own = Ancestor {
             element: element.clone(),

@@ -912,14 +912,21 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
                     collect_var_names(&unparsed.value, &mut names);
                 }
                 Property::Custom(custom) => {
-                    let name = match &custom.name {
-                        CustomPropertyName::Custom(dashed) => dashed.0.as_ref().to_owned(),
-                        CustomPropertyName::Unknown(_) => continue,
-                    };
                     let mut refs = BTreeSet::new();
                     collect_var_names(&custom.value, &mut refs);
-                    if !refs.is_empty() {
-                        declarations.push((name, refs.into_iter().collect()));
+                    match &custom.name {
+                        CustomPropertyName::Custom(dashed) => {
+                            if !refs.is_empty() {
+                                declarations
+                                    .push((dashed.0.as_ref().to_owned(), refs.into_iter().collect()));
+                            }
+                        }
+                        // An unknown property the build reads raw
+                        // (`pointer-events`, `outline-offset`): its refs
+                        // are direct dependencies of the declaration.
+                        CustomPropertyName::Unknown(_) => {
+                            names.extend(refs);
+                        }
                     }
                 }
                 _ => {}
@@ -943,6 +950,28 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
         }
     }
     names.into_iter().collect()
+}
+
+/// The `var(--name)` names a raw `style` attribute references: a cheap
+/// scan of the decoded text (the names feed the frame's vars hash — an
+/// inline style is rebuilt with the element, so the exact nested-fallback
+/// resolution of `var_names` isn't needed).
+pub(crate) fn raw_var_names(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("var(") {
+        rest = &rest[at + 4..];
+        let trimmed = rest.trim_start();
+        if let Some(name) = trimmed.strip_prefix("--") {
+            let end = name
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .unwrap_or(name.len());
+            if end > 0 {
+                names.push(format!("--{}", &name[..end]));
+            }
+        }
+    }
+    names
 }
 
 /// The `var()` names a token list references, function arguments included.
