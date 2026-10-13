@@ -2635,6 +2635,153 @@ fn text_input_keeps_its_grid_placement() {
     );
 }
 
+/// A root `calc()` resolves against the viewport — including on a
+/// top-level root, which the resolution pass skipped entirely — and stops
+/// resolving once the declaration goes (the `CalcSized` component was
+/// never removed, so the old calc kept overwriting the width).
+#[test]
+fn root_calc_applies_and_stops() {
+    let mut ui = TestUi::with_layout(
+        "root-calc",
+        &[
+            ("page.html", "<p>x</p>"),
+            ("a.css", "html { width: calc(50% - 20px) }"),
+            ("b.css", "html { padding: 5px }"),
+        ],
+        UVec2::new(640, 480),
+    )
+    .stylesheet("a.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let root = ui.root();
+    let width = ui.world_mut().get::<Node>(root).unwrap().width;
+    assert_eq!(width, Val::Px(300.0), "the root's calc() did not resolve");
+
+    // A theme that drops the calc: the width goes back to the app's node.
+    let b_sheet = ui.load::<Stylesheet>("b.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
+    ui.settle();
+    let width = ui.world_mut().get::<Node>(root).unwrap().width;
+    assert_eq!(
+        width,
+        Val::Auto,
+        "the dropped calc() kept overwriting the width"
+    );
+}
+
+/// A restyle that respawns spans (runs merging under a new sheet) must
+/// fire `HtmlUiBuilt`, not `HtmlUiRestyled`: the promise behind the
+/// restyled event is that every element was kept, and link spans are new
+/// entities the app's `HtmlUiBuilt` wiring has to see.
+#[test]
+fn restyle_that_respawns_spans_reports_a_build() {
+    #[derive(Resource, Default)]
+    struct Counts {
+        built: usize,
+        restyled: usize,
+    }
+
+    let mut ui = TestUi::new(
+        "span-respawn",
+        &[
+            ("page.html", "<p>Plain <b>bold</b> text</p>"),
+            ("a.css", "html { color: #ffffff } b { color: #ff0000 }"),
+            ("b.css", "html { color: #ffffff }"),
+        ],
+    )
+    .stylesheet("a.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.world_mut().insert_resource(Counts::default());
+    ui.app_mut().add_observer(
+        |_: On<HtmlUiBuilt>, mut counts: ResMut<Counts>| {
+            counts.built += 1;
+        },
+    );
+    ui.app_mut().add_observer(
+        |_: On<HtmlUiRestyled>, mut counts: ResMut<Counts>| {
+            counts.restyled += 1;
+        },
+    );
+    ui.settle();
+    let (built, restyled) = {
+        let counts = ui.world_mut().resource::<Counts>();
+        (counts.built, counts.restyled)
+    };
+
+    // The merged runs change the span count: the restyle respawns them.
+    let b_sheet = ui.load::<Stylesheet>("b.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
+    ui.settle();
+    let counts = ui.world_mut().resource::<Counts>();
+    assert_eq!(counts.built, built + 1, "the respawn was not reported as a build");
+    assert_eq!(
+        counts.restyled, restyled,
+        "a span respawn must not fire HtmlUiRestyled"
+    );
+}
+
+/// Syncing Bevy's `RemSize` to the root rule's font-size (16px vs Bevy's
+/// 20px default) must not queue a restyle: Bevy's layout re-resolves
+/// `Val::Rem`s itself, and a spurious `HtmlUiRestyled` broke the "kept"
+/// promise right after the first build.
+#[test]
+fn rem_size_sync_does_not_restyle() {
+    #[derive(Resource, Default)]
+    struct Counts {
+        built: usize,
+        restyled: usize,
+    }
+
+    let mut ui = TestUi::new(
+        "rem-sync",
+        &[("page.html", "<p>x</p>"), ("style.css", "html { color: #ffffff }")],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.world_mut().insert_resource(Counts::default());
+    ui.app_mut().add_observer(
+        |_: On<HtmlUiBuilt>, mut counts: ResMut<Counts>| {
+            counts.built += 1;
+        },
+    );
+    ui.app_mut().add_observer(
+        |_: On<HtmlUiRestyled>, mut counts: ResMut<Counts>| {
+            counts.restyled += 1;
+        },
+    );
+    ui.settle();
+    let counts = ui.world_mut().resource::<Counts>();
+    assert!(counts.built >= 1, "the UI never built");
+    assert_eq!(counts.restyled, 0, "the RemSize sync queued a restyle");
+}
+
+/// Pathologically deep user content is capped: ~150 nesting levels
+/// overflowed a debug-build stack in the recursive walks. Deeper content
+/// is dropped (warned once); the capped prefix builds normally.
+#[test]
+fn deep_nesting_is_capped() {
+    let deep = format!(
+        "{}x{}",
+        "<div>".repeat(200),
+        "</div>".repeat(200)
+    );
+    let mut ui = TestUi::new(
+        "deep-nesting",
+        &[("page.html", "<p>before</p>{{ deep | safe }}<p>after</p>")],
+    )
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("deep", &deep),
+        Node::default(),
+    );
+    ui.settle();
+    let dump = ui.dump();
+    let divs = dump.lines().filter(|line| line.trim_start().starts_with("div")).count();
+    assert_eq!(divs, 100, "the cap should keep exactly 100 levels:\n{dump}");
+    assert!(dump.contains("\"before\""), "content before the deep tree vanished:\n{dump}");
+    assert!(dump.contains("\"after\""), "content after the deep tree vanished:\n{dump}");
+}
+
 /// `<a href>` links: the link's runs become a picked span entity that
 /// emits the `open` signal with the href when clicked; the text styles by
 /// the cascade (`a` rules); a link without an href is plain styled text.
