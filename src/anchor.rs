@@ -302,18 +302,34 @@ pub(crate) fn place_world_anchored(
             continue;
         };
         let point = target.translation() + anchor.offset;
+        // The UI camera's viewport: the root's `Val::Px` coordinates are
+        // relative to its top-left (a split-screen UI camera differs from
+        // the projecting one).
+        let ui_rect = ui_camera
+            .map(UiTargetCamera::entity)
+            .or_else(|| default_camera.get())
+            .and_then(|camera| cameras.get(camera).ok())
+            .and_then(|(camera, _)| camera.logical_viewport_rect());
         let projected = camera
             .world_to_viewport(camera_transform, point)
             .ok()
             .and_then(|position| {
                 let rect = camera.logical_viewport_rect()?;
-                // `world_to_viewport` is in window-logical px relative to
-                // the viewport's origin; UI px are relative to the
-                // viewport's top-left and scaled by UiScale too.
+                // On-screen: the window-logical position relative to the
+                // projecting camera's viewport, inside the viewport —
+                // both sides in the same units (dividing by UiScale
+                // before the test mixed them: a visible point hid with
+                // UiScale < 1, an off-screen one showed with UiScale > 1).
+                let local = position - rect.min;
+                let on_screen =
+                    local.cmpge(Vec2::ZERO).all() && local.cmple(rect.size()).all();
+                // UI px: relative to the UI camera's viewport top-left,
+                // divided by UiScale (Bevy multiplies `Val::Px` back by
+                // the scale factor × UiScale).
                 let ui_scale = scale.as_ref().map_or(1.0, |scale| scale.0);
-                let position = (position - rect.min) / ui_scale;
-                (position.cmpge(Vec2::ZERO).all() && position.cmple(rect.size()).all())
-                    .then_some(position)
+                let min = ui_rect.unwrap_or(rect).min;
+                let ui = (position - min) / ui_scale;
+                on_screen.then_some(ui)
             });
         let measured = HtmlWorldAnchorView {
             distance: camera_transform.translation().distance(point),

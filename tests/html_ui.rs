@@ -4886,8 +4886,10 @@ fn anchored_overlay_above_left_clamp_to_the_viewport() {
 /// `HtmlWorldAnchor` divides the projection by `UiScale` and measures
 /// against the viewport, not the render target (bug_0078): with
 /// `UiScale(2.0)` the root sits at half the projected window px (not
-/// double), and with an offset (split-screen) viewport a point inside the
-/// viewport reads on-screen instead of hidden.
+/// double), with an offset (split-screen) viewport a point inside the
+/// viewport reads on-screen instead of hidden, and the on-screen bounds
+/// are tested in the same units as the position (with `UiScale` ≠ 1 the
+/// old mixed-unit test hid visible points and showed off-screen ones).
 #[test]
 fn world_anchor_respects_ui_scale_and_viewport_origin() {
     // With `UiScale(2.0)`: the point (0.5, 0.5) projects to window px
@@ -4982,13 +4984,64 @@ fn world_anchor_respects_ui_scale_and_viewport_origin() {
         ))
         .id();
     // The point (0.5, 0.5) projects to window px (280, 110) — (160, 80)
-    // into the viewport, well inside its 160×120.
+    // into the viewport, well inside its 160×120 (on-screen). The UI root
+    // spans the full window (its own `UiTargetCamera` would shift the
+    // origin), so the plate lands at the point's window position.
     let ((left, top), visibility, view) = state(&mut ui, overlay);
     assert_eq!(
         (left, top),
-        (Val::Px(110.0), Val::Px(20.0)),
-        "(280, 110) relative to the viewport's (160, 80) origin, minus the pivot"
+        (Val::Px(270.0), Val::Px(100.0)),
+        "(280, 110) in the full-window UI's px, minus the pivot"
     );
     assert_eq!(visibility, Visibility::Inherited, "the point is on screen");
+    assert!(view.on_screen);
+
+    // The bounds use the same units as the position: with `UiScale(2.0)`
+    // a point past the window's edge (world 1.0 + offset 0.25 projects
+    // past window px 320) is off screen — the old mixed-unit test
+    // compared the divided position with the undivided size and showed
+    // it.
+    let mut ui = TestUi::with_layout("world-anchor-scale-far", &[], UVec2::new(320, 240));
+    ui.world_mut().insert_resource(UiScale(2.0));
+    let world = ui.world_mut();
+    let target = world.spawn(Visibility::Inherited).id();
+    world.entity_mut(target).insert((
+        Transform::from_translation(Vec3::new(1.0, 0.5, 0.0)),
+        GlobalTransform::from_translation(Vec3::new(1.0, 0.5, 0.0)),
+    ));
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            HtmlWorldAnchor::new(target).with_offset(Vec3::new(0.25, 0.0, 0.0)),
+        ))
+        .id();
+    let (_, visibility, view) = state(&mut ui, overlay);
+    assert_eq!(visibility, Visibility::Hidden, "off the window's edge");
+    assert!(!view.on_screen);
+
+    // And with `UiScale(0.5)` a visible point (window px 240 of 320) is
+    // on screen — the old test hid it (divided: 480, compared with 320).
+    let mut ui = TestUi::with_layout("world-anchor-scale-half", &[], UVec2::new(320, 240));
+    ui.world_mut().insert_resource(UiScale(0.5));
+    let world = ui.world_mut();
+    let target = world.spawn(Visibility::Inherited).id();
+    world.entity_mut(target).insert((
+        Transform::from_translation(Vec3::new(0.25, 0.5, 0.0)),
+        GlobalTransform::from_translation(Vec3::new(0.25, 0.5, 0.0)),
+    ));
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            HtmlWorldAnchor::new(target).with_offset(Vec3::new(0.25, 0.0, 0.0)),
+        ))
+        .id();
+    let (_, visibility, view) = state(&mut ui, overlay);
+    assert_eq!(visibility, Visibility::Inherited, "the point is visible");
     assert!(view.on_screen);
 }
