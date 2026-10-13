@@ -837,20 +837,6 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
             .iter()
             .chain(&rule.declarations.important_declarations);
         for declaration in declarations {
-            // A `url()` behind a `var()`: the frame declaration carries
-            // the reference, the URL lives in the sheet's own `--`
-            // declaration's tokens — load both sides.
-            if let Property::Custom(custom) = declaration {
-                for token in &custom.value.0 {
-                    if let TokenOrValue::Url(url) = token {
-                        let url = url.url.to_string();
-                        if !urls.contains(&url) {
-                            urls.push(url);
-                        }
-                    }
-                }
-                continue;
-            }
             let image = match declaration {
                 Property::BorderImage(border_image, _) => &border_image.source,
                 Property::BorderImageSource(image) => image,
@@ -860,6 +846,40 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
                 && !urls.contains(&url)
             {
                 urls.push(url);
+            }
+        }
+    }
+    urls
+}
+
+/// Every `url()` in the sheet's own `--` declarations: a `var()`-loaded
+/// `border-image` resolves through a custom property, so its image is a
+/// dependency of the sheet. These URLs can be anything (`data:` URIs, a
+/// scheme the resolver rejects) — the loader skips the unresolvable ones
+/// instead of failing the sheet (the `var()` consumer drops the
+/// declaration then, like any unresolvable reference).
+pub(crate) fn custom_image_urls(sheet: &StyleSheet) -> Vec<String> {
+    let mut urls = Vec::new();
+    for rule in &sheet.rules.0 {
+        let CssRule::Style(rule) = rule else {
+            continue;
+        };
+        let declarations = rule
+            .declarations
+            .declarations
+            .iter()
+            .chain(&rule.declarations.important_declarations);
+        for declaration in declarations {
+            let Property::Custom(custom) = declaration else {
+                continue;
+            };
+            for token in &custom.value.0 {
+                if let TokenOrValue::Url(url) = token {
+                    let url = url.url.to_string();
+                    if !urls.contains(&url) {
+                        urls.push(url);
+                    }
+                }
             }
         }
     }
@@ -4743,11 +4763,14 @@ mod tests {
         assert_eq!(image_urls(&sheet), ["b.png", "c.png"]);
         // A url() behind a var(): the sheet's `--` declaration carries the
         // URL — it is loaded even though the frame declaration only
-        // references the name.
+        // references the name. The custom-property URL is a separate
+        // list: unresolvable ones (a data URI, a scheme) are skipped by
+        // the loader instead of failing the sheet.
         let sheet = owned_sheet(
             r#"p { --frame: url("a.png"); border-image: var(--frame) 4 }"#,
         );
-        assert_eq!(image_urls(&sheet), ["a.png"]);
+        assert_eq!(image_urls(&sheet), Vec::<String>::new());
+        assert_eq!(custom_image_urls(&sheet), ["a.png"]);
     }
 
     /// `position` and the insets: shorthand and longhands, `static` kept as

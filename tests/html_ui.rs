@@ -4724,6 +4724,30 @@ html-ui
 /// reading the outside file, and a manifest naming an outside resource
 /// fails its bundle load.
 #[test]
+/// A `url()` inside a `--` declaration can be anything (a data URI, a
+/// scheme): an unresolvable one is skipped at load instead of failing the
+/// whole stylesheet (a `data:image/svg+xml` value in a custom property is
+/// the normal shape for an icon registry).
+#[test]
+fn a_custom_property_url_does_not_fail_the_sheet() {
+    let sheet = ":root { --icon: url(\"data:image/svg+xml;utf8,<svg/>\") } \
+         p { --x: url(\"https://example.com/icon.svg\") } \
+         html { color: #ffffff } p { color: #ff0000 }";
+    let mut ui = TestUi::new(
+        "custom-url",
+        &[("page.html", r#"<p>colored</p>"#), ("style.css", sheet)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "colored" default 16px #ff0000
+"#,
+    );
+}
+
 fn unapproved_paths_fail_their_loads() {
     static RUN: AtomicUsize = AtomicUsize::new(0);
     let unique = |suffix: &str| {

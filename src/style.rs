@@ -276,10 +276,30 @@ impl AssetLoader for StylesheetLoader {
         };
         // The parse error borrows `source`; render it before `source` drops.
         let sheet = StyleSheet::parse(&source, options).map_err(|err| err.to_string())?;
-        let image_urls = crate::cascade::image_urls(&sheet);
+        // Border-image URLs: a dependency of the sheet (an unresolvable
+        // one fails the load, as before). Custom-property URLs: a
+        // `--icon: url(...)` can be anything (a data URI, a scheme) —
+        // those are skipped, not the whole sheet.
+        let border_urls = crate::cascade::image_urls(&sheet);
+        let custom_urls = crate::cascade::custom_image_urls(&sheet);
+        let mut image_urls = border_urls.clone();
+        image_urls.extend(custom_urls.iter().cloned());
         let mut images = Vec::with_capacity(image_urls.len());
-        for url in &image_urls {
+        for url in &border_urls {
             let path = load_context.path().resolve_embed_str(url)?;
+            images.push(load_context.load(path));
+        }
+        for url in &custom_urls {
+            // Anything with a scheme (`data:`, `https:` — Bevy's asset
+            // paths never contain `:`) isn't a file in the asset root;
+            // the `var()` consumer drops the declaration at substitution
+            // time, like any unresolvable reference.
+            if url.contains(':') {
+                continue;
+            }
+            let Ok(path) = load_context.path().resolve_embed_str(url) else {
+                continue;
+            };
             images.push(load_context.load(path));
         }
         Ok(Stylesheet {
