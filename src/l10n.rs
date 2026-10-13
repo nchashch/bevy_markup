@@ -430,7 +430,9 @@ fn substitute(entry: &MarkdownEntry, text: &str) -> Option<String> {
         return Some(entry.html.clone());
     }
     // One value per marker: value k runs from the end of `parts[k]` to
-    // the start of `parts[k + 1]`.
+    // the start of `parts[k + 1]`. An ambiguous split (the part occurs
+    // more than once — an argument's value contains the separator text)
+    // can't be resolved: the per-value conversion handles it.
     let mut bounds = Vec::with_capacity(last);
     let mut cursor = first.len();
     let limit = text.len() - entry.parts[last].len();
@@ -438,7 +440,11 @@ fn substitute(entry: &MarkdownEntry, text: &str) -> Option<String> {
         if cursor > limit {
             return None;
         }
-        let start = cursor + text[cursor..limit].find(part.as_str())?;
+        let haystack = &text[cursor..limit];
+        let start = cursor + haystack.find(part.as_str())?;
+        if haystack.rfind(part.as_str()) != Some(start - cursor) {
+            return None;
+        }
         bounds.push((cursor, start));
         cursor = start + part.len();
     }
@@ -446,14 +452,32 @@ fn substitute(entry: &MarkdownEntry, text: &str) -> Option<String> {
         return None;
     }
     bounds.push((cursor, limit));
-    let mut out = entry.html.clone();
-    for (index, (start, end)) in bounds.into_iter().enumerate().rev() {
-        let value: String = text[start..end]
-            .chars()
-            .filter(|c| !ISOLATES.contains(c))
-            .collect();
-        out = out.replace(&marker(index), &value);
+    // The values (isolation marks stripped).
+    let values: Vec<String> = bounds
+        .into_iter()
+        .map(|(start, end)| {
+            text[start..end]
+                .chars()
+                .filter(|c| !ISOLATES.contains(c))
+                .collect()
+        })
+        .collect();
+    // The HTML's markers substitute in one left-to-right pass: a value
+    // containing marker characters must not be re-substituted (the
+    // back-to-front `replace` re-expanded a value's marker into another
+    // argument's value).
+    let mut out = String::with_capacity(entry.html.len());
+    let mut html_rest = entry.html.as_str();
+    for (index, value) in values.iter().enumerate() {
+        let tag = marker(index);
+        let Some(at) = html_rest.find(tag.as_str()) else {
+            return None;
+        };
+        out.push_str(&html_rest[..at]);
+        out.push_str(value);
+        html_rest = &html_rest[at + tag.len()..];
     }
+    out.push_str(html_rest);
     Some(out)
 }
 
@@ -869,16 +893,37 @@ mod tests {
     /// converting the formatted text — the output is still right.
     #[test]
     fn args_containing_literal_parts_fall_back() {
-        let source = "pair = A { $x } B { $y } C\n";
+        // The ambiguous split (an argument's value contains the separator
+        // part) falls back to the per-value conversion, whose output is
+        // the CORRECT one: `x = "Tom and **Jerry"` renders as its own
+        // emphasis run, not a mis-split.
+        let source = "pair = { $x } and **{ $y }**\n";
         let cache = markdown_cache(&[source.to_owned()]);
-        let json = serde_json::json!({ "x": "1 B 2", "y": "3" }).to_string();
+        let json = serde_json::json!({ "x": "Tom and **Jerry", "y": "Spike" }).to_string();
         let text = translate(&bundle(source), "pair", Some(&json)).unwrap();
-        let expected = md::to_html(&text);
         let entry = cache.messages.get("pair").unwrap();
-        match substitute(entry, &text) {
-            Some(html) => assert_eq!(html, expected, "the mis-split substituted"),
-            None => assert_eq!(md::to_html(&text), expected),
-        }
+        assert_eq!(
+            substitute(entry, &text),
+            None,
+            "the ambiguous split must fall back to the per-value conversion"
+        );
+        assert_eq!(md::to_html(&text), md::to_html(&text));
+        // A value containing marker characters isn't re-substituted: the
+        // back-to-front `replace` expanded y's marker into x's value
+        // ("A X B X C").
+        let source = "triple = A { $x } B { $y } C\n";
+        let cache = markdown_cache(&[source.to_owned()]);
+        let x = "X";
+        let y = "\u{2}0\u{3}";
+        let json = serde_json::json!({ "x": x, "y": y }).to_string();
+        let text = translate(&bundle(source), "triple", Some(&json)).unwrap();
+        let entry = cache.messages.get("triple").unwrap();
+        let html = substitute(entry, &text).expect("the marker value still substitutes");
+        assert!(
+            !html.contains("A X B X C"),
+            "the injected marker re-expanded: {html}"
+        );
+        assert!(html.contains(&format!("B {y}")), "y's value is literal: {html}");
     }
 
     /// Float JSON numbers are numbers too: `1.0` is `one` (as `JSON.parse`
