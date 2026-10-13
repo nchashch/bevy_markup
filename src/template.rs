@@ -602,4 +602,27 @@ div class=\"a\"
             "render failed: in t.html: unknown variable `x`"
         );
     }
+
+    /// Comments, raw blocks and — in Markdown — fenced code blocks and
+    /// inline code spans protect their content: an include inside them is
+    /// copied verbatim and not resolved (a commented-out include of a
+    /// deleted file must not fail the load; bug_0067). In an `.html` file
+    /// backticks are text: an include between them is still a reference.
+    #[test]
+    fn comments_raw_and_code_are_not_references() {
+        let markdown = AssetPath::parse("page.md").clone_owned();
+        for source in [
+            r#"{# {%- include "gone.html" -%} #}"#,
+            r#"{% raw %}{% include "gone.html" %}{% endraw %}"#,
+            "```html\n{% include \"gone.html\" %}\n```",
+            r#"`{% include "gone.html" %}`"#,
+        ] {
+            let (out, references) = resolve_references(&markdown, source).unwrap();
+            assert!(references.is_empty(), "{source:?}: {references:?}");
+            assert_eq!(out, source, "{source:?}: rewritten");
+        }
+        let html = AssetPath::parse("page.html").clone_owned();
+        let (_, references) = resolve_references(&html, r#"`{% include "part.html" %}`"#).unwrap();
+        assert_eq!(references.len(), 1, "{references:?}");
+    }
 }

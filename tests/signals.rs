@@ -1274,3 +1274,264 @@ fn touch_end_emits_leave() {
     assert_eq!(leaves.len(), 1, "one leave: {leaves:?}");
     assert_eq!(leaves[0].target, entered[0].target);
 }
+
+/// bug_0072: a signal handler that despawns the whole UI in a frame where
+/// focus also changed must not panic. `update_focus_states` walks the
+/// frame's elements and queued a plain `insert<PseudoState>` on the
+/// focused element; the click handler's despawn (the exclusive dispatcher
+/// applies its handlers' commands mid-frame) landed before that insert
+/// applied, and the insert hit a despawned entity.
+#[test]
+fn same_frame_despawn_with_a_focus_change_does_not_panic() {
+    let page = r#"<div id="close" tabindex="0" data-on-click="close"><p>Close</p></div>
+<button id="cycle-a" tabindex="0">A</button>
+<button id="cycle-b" tabindex="0">B</button>"#;
+    let mut ui = page_ui(
+        "focus-despawn",
+        page,
+        "div, button { width: 100px; height: 40px }",
+        TemplateContext::new(),
+    );
+    ui.settle();
+    ui.update(1);
+    let root = ui.root();
+    let (_, at) = center(ui.world_mut(), root, "close");
+    // The app drives focus from its own input handling (a keyboard cycle,
+    // say): every frame while the UI lives, focus moves, so the click's
+    // release frame is one of the frames where `update_focus_states` has
+    // state changes queued for elements that are about to be despawned.
+    let (a_id, b_id) = {
+        let world = ui.world_mut();
+        (
+            element_by_id(world, root, "cycle-a"),
+            element_by_id(world, root, "cycle-b"),
+        )
+    };
+    ui.app_mut().add_systems(
+        Update,
+        move |mut focus: ResMut<InputFocus>, mut flip: Local<bool>| {
+            if *flip {
+                focus.set(a_id, FocusCause::Navigated);
+            } else {
+                focus.set(b_id, FocusCause::Navigated);
+            }
+            *flip = !*flip;
+        },
+    );
+    // The click closes the UI (the whole root, focused element included).
+    ui.app_mut()
+        .on_html_click("close", move |_: In<ElementSignal>, mut commands: Commands| {
+            commands.entity(root).despawn();
+        });
+    ui.click_at(at);
+    assert!(
+        ui.world_mut().get_entity(root).is_err(),
+        "the handler despawned the UI"
+    );
+    // And the next frame settles without a panic either (repair finds
+    // nothing left to focus).
+    ui.update(2);
+}
+
+/// bug_0074: a tooltip on a link (`<a href data-tooltip>`) must survive
+/// hovering. The hover hit is the link's span, which carries the tooltip
+/// data but no `ComputedNode`; anchoring to it treated the tooltip as gone
+/// every frame — spawned and despawned 30 frames in a row, never visible.
+/// The tooltip anchors to the nearest ancestor that has a node instead.
+#[test]
+fn a_tooltip_on_a_link_survives_hover() {
+    let page =
+        r#"<div id="page"><p>Read <a href="one://x" data-tooltip="link-tip">the report</a>.</p></div>"#;
+    let mut ui = TestUi::with_pointer(
+        "tooltip-link",
+        &[("page.html", page), ("tooltip.html", "<p>{{ key }}</p>")],
+        VIEWPORT,
+    )
+    .spawn(
+        "page.html",
+        TemplateContext::new(),
+        Node {
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+    );
+    let template = ui.load::<HtmlTemplate>("tooltip.html");
+    ui.world_mut().insert_resource(HtmlTooltips::new(template));
+    ui.settle();
+    ui.update(1);
+    let root = ui.root();
+    let tooltips = |ui: &mut TestUi| {
+        let world = ui.world_mut();
+        let mut query = world.query::<(Entity, &HtmlTooltip, &HtmlAnchor)>();
+        query
+            .iter(world)
+            .map(|(entity, tooltip, anchor)| (entity, tooltip.element, anchor.element))
+            .collect::<Vec<_>>()
+    };
+    let (link, block, at) = {
+        let world = ui.world_mut();
+        let link = {
+            let mut elements = world.query::<(Entity, &HtmlElement)>();
+            elements
+                .iter(world)
+                .filter(|(entity, element)| {
+                    element.tag == "a"
+                        && std::iter::successors(Some(*entity), |&current| {
+                            world.get::<ChildOf>(current).map(ChildOf::parent)
+                        })
+                        .any(|ancestor| ancestor == root)
+                })
+                .map(|(entity, _)| entity)
+                .next()
+                .expect("one link span")
+        };
+        // Hovering needs a position over the link's run: probe across its
+        // block (the nearest ancestor with a node) like a real user.
+        let block = {
+            let mut current = link;
+            loop {
+                current = world
+                    .get::<ChildOf>(current)
+                    .map(|parent| parent.0)
+                    .expect("no block above the link");
+                if node_rect(world, current).is_some() {
+                    break current;
+                }
+            }
+        };
+        (link, block, node_rect(world, block).expect("laid out"))
+    };
+
+    // Hover the link and hold: the tooltip shows and stays shown.
+    let tooltip = 'found: {
+        for step in 1..=10 {
+            ui.move_pointer(Vec2::new(
+                at.min.x + at.width() * (step as f32 / 11.0),
+                at.min.y + 10.0,
+            ))
+            .update(2);
+            if let Some(&(_, element, _)) = tooltips(&mut ui).first() {
+                assert_eq!(element, link, "the tooltip is the link's");
+                break 'found tooltips(&mut ui).remove(0).0;
+            }
+        }
+        panic!("the link's tooltip never showed (hovered {link:?} via {block:?})");
+    };
+    // Several more hovered frames: one stable tooltip, anchored beside the
+    // link's block (the span itself has no node to anchor to).
+    ui.update(6);
+    let shown = tooltips(&mut ui);
+    assert_eq!(
+        shown,
+        vec![(tooltip, link, block)],
+        "the tooltip survives hover, anchored to the link's block"
+    );
+    assert!(
+        ui.world_mut().get_entity(tooltip).is_ok(),
+        "the tooltip is alive"
+    );
+
+    // And leaving despawns it (the pre-fix churn never got this far).
+    ui.move_pointer(Vec2::splat(-1000.0)).update(2);
+    assert!(
+        tooltips(&mut ui).is_empty(),
+        "leaving the link despawns its tooltip"
+    );
+}
+
+/// bug_0075: the first-focusable fallback picks by document order, not
+/// `Entity` order. Entity ids recycle: a page built over a previous UI's
+/// ids can hold its last element under the lowest `Entity`, and the old
+/// `.min()` focused that one.
+#[test]
+fn first_focusable_fallback_picks_document_order() {
+    // The page grows over #z (focused by the first build, so `FocusMemory`
+    // remembers it): the growth replaces #z with #a #b #c, so the
+    // focus-lost fallback re-picks with the memory stale. The build spawns
+    // in document order, so document order (#a first) and `Entity` order
+    // disagree (#c holds the largest index).
+    let real = r#"{% if grown %}<div id="a" tabindex="0">A</div><div id="b" tabindex="0">B</div><div id="c" tabindex="0">C</div>{% else %}<div id="z" tabindex="0">Z</div>{% endif %}"#;
+    let mut ui = page_ui(
+        "focus-doc-order",
+        real,
+        "div { width: 40px; height: 20px }",
+        TemplateContext::new().with("grown", &false),
+    );
+    ui.settle();
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("grown", &true);
+    ui.settle();
+    ui.update(1);
+    let (a, b, c) = {
+        let world = ui.world_mut();
+        (
+            element_by_id(world, root, "a"),
+            element_by_id(world, root, "b"),
+            element_by_id(world, root, "c"),
+        )
+    };
+    // The document-order setup this regression is about: document order
+    // (#a first) and `Entity` order disagree (#c holds the largest index,
+    // so an `Entity`-ordered fallback never picks #a).
+    assert!(
+        a.index_u32() < b.index_u32() && b.index_u32() < c.index_u32(),
+        "precondition: the page's entities order {a:?} {b:?} {c:?}"
+    );
+
+    // The focus-lost fallback: point focus somewhere that isn't a markup
+    // focusable (the window, as Bevy's input dispatch does at startup) and
+    // let `repair_focus` re-pick.
+    let window = ui.window();
+    ui.world_mut()
+        .resource_mut::<InputFocus>()
+        .set(window, FocusCause::Navigated);
+    ui.update(1);
+    let focused = {
+        let world = ui.world_mut();
+        world.resource::<InputFocus>().get()
+    };
+    assert_eq!(
+        focused,
+        Some(a),
+        "the fallback focuses the document-first element, not the lowest Entity"
+    );
+}
+
+/// bug_0080: a signal handler that moves `InputFocus` shows the new
+/// element's focus state the same frame — `update_focus_states` runs after
+/// the dispatcher, so the frame that carried the click restyles the
+/// element; it used to lag a frame behind.
+#[test]
+fn a_handler_moved_focus_shows_its_state_the_same_frame() {
+    let page = r#"<div id="move" data-on-click="focus-target"><p>Move</p></div>
+<button id="target" tabindex="0">Target</button>"#;
+    let mut ui = page_ui(
+        "handler-focus-state",
+        page,
+        "div, button { width: 100px; height: 40px }",
+        TemplateContext::new(),
+    );
+    ui.settle();
+    ui.update(1);
+    let root = ui.root();
+    let (target, _) = center(ui.world_mut(), root, "target");
+    let (_, at) = center(ui.world_mut(), root, "move");
+    ui.app_mut()
+        .on_html_click("focus-target", move |_: In<ElementSignal>, mut focus: ResMut<InputFocus>| {
+            focus.set(target, FocusCause::Navigated);
+        });
+    // The click's release frame runs the handler; the target's focused
+    // state must be set by the end of that very frame.
+    ui.click_at(at);
+    let state = {
+        let world = ui.world_mut();
+        pseudo(world, target)
+    };
+    assert!(
+        state.focused,
+        "the handler's focus shows its state the same frame (state {state:?})"
+    );
+}

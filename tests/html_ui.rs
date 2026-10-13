@@ -16,7 +16,9 @@
 mod common;
 use common::*;
 
+use bevy::asset::AssetEvent;
 use bevy::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use bevy_markup::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -4368,4 +4370,464 @@ mod skeleton_reuse {
             ":hover was lost in the reused subtree:\n{dump}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Loader regressions
+// ---------------------------------------------------------------------------
+
+/// Markdown conversion is chosen per file (bug_0060): an `.html` partial
+/// included from a `.md` page stays HTML — its indented HTML is not a
+/// Markdown indented code block — and a `.md` partial included from an
+/// `.html` page converts. (The blank line ends the raw-HTML block, so
+/// converting `part.html` would wrap the indented `<p>` in `pre.markdown`.)
+#[test]
+fn markdown_conversion_is_per_file() {
+    TestUi::new(
+        "markdown-partials",
+        &[
+            (
+                "page.md",
+                "# Title\n\n{% include \"part.html\" %}\n\nTrailing.\n",
+            ),
+            (
+                "part.html",
+                "<div class=\"card\">\n\n    <p id=\"part\">indented</p>\n</div>\n",
+            ),
+        ],
+    )
+    .spawn("page.md", TemplateContext::new(), Node::default())
+    .settle()
+    .assert_dump(
+        r#"
+html-ui
+  h1.markdown
+    "Title" default 16px #ffffff
+  div.card
+    p#part
+      "indented" default 16px #ffffff
+  p.markdown
+    "Trailing." default 16px #ffffff
+"#,
+    );
+
+    TestUi::new(
+        "markdown-partial-from-html",
+        &[
+            ("page.html", "<h2>Doc</h2>\n{% include \"note.md\" %}\n"),
+            ("note.md", "# Note\n\nHello *there*.\n"),
+        ],
+    )
+    .spawn("page.html", TemplateContext::new(), Node::default())
+    .settle()
+    .assert_dump(
+        r#"
+html-ui
+  h2
+    "Doc" default 16px #ffffff
+  h1.markdown
+    "Note" default 16px #ffffff
+  p.markdown
+    "Hello there." default 16px #ffffff
+"#,
+    );
+}
+
+/// A render that changes while the active bundle is absent (loading, here:
+/// failed) drops the previous document's translations — the elements show
+/// their fallback content, not translations keyed on the old DOM's handles
+/// (which would land on whatever element now sits at those handles;
+/// bug_0064). When a real bundle arrives, the fresh document localizes.
+#[test]
+fn fresh_render_without_a_bundle_shows_fallback_not_stale_translations() {
+    let mut ui = TestUi::new(
+        "stale-localize",
+        &[
+            (
+                "page.html",
+                "{% if extra %}<div>extra</div>\n{% endif %}<p data-l10n-id=\"m\">fallback</p>",
+            ),
+            ("a.ftl.ron", "(locale: \"en-US\", resources: [\"a.ftl\"])"),
+            ("a.ftl", "m = translated\n"),
+            ("bad.ftl.ron", "(locale: \"en-US\", resources: [\"missing.ftl\"])"),
+            ("c.ftl.ron", "(locale: \"en-US\", resources: [\"c.ftl\"])"),
+            ("c.ftl", "m = localized again\n"),
+        ],
+    )
+    .locale("a.ftl.ron")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "translated" default 16px #ffffff
+"#,
+    );
+
+    // The bundle fails while the context change re-renders in the same
+    // frame: the fresh document adds a `<div>` before the `<p>`, shifting
+    // the DOM handles the old map keyed on.
+    let bad = ui.load::<LocaleBundle>("bad.ftl.ron");
+    let root = ui.root();
+    ui.world_mut().resource_mut::<ActiveLocale>().0 = Some(bad);
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("extra", &true);
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div
+    -
+      "extra" default 16px #ffffff
+  p
+    "fallback" default 16px #ffffff
+"#,
+    );
+
+    // A real bundle arrives: the fresh document localizes normally.
+    let c = ui.load::<LocaleBundle>("c.ftl.ron");
+    ui.world_mut().resource_mut::<ActiveLocale>().set(c);
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div
+    -
+      "extra" default 16px #ffffff
+  p
+    "localized again" default 16px #ffffff
+"#,
+    );
+}
+
+/// A hot reload delivers `Modified` and `LoadedWithDependencies` in one
+/// frame: the event scan must fold over all of them (one re-resolve, one
+/// `HtmlUiBuilt`), not stop at the first match and re-serve the second next
+/// frame (bug_0068).
+#[test]
+fn one_frame_bundle_events_build_once() {
+    let mut ui = TestUi::new(
+        "bundle-events",
+        &[
+            ("page.html", "<p data-l10n-id=\"m\">fallback</p>"),
+            ("b.ftl.ron", "(locale: \"en-US\", resources: [\"b.ftl\"])"),
+            ("b.ftl", "m = translated\n"),
+        ],
+    )
+    .locale("b.ftl.ron")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "translated" default 16px #ffffff
+"#,
+    );
+    let id = ui
+        .world_mut()
+        .resource::<ActiveLocale>()
+        .0
+        .as_ref()
+        .expect("active bundle")
+        .id();
+    let builds = ui.builds();
+    // Both events of a hot reload, delivered in one frame.
+    let mut messages = ui
+        .world_mut()
+        .resource_mut::<Messages<AssetEvent<LocaleBundle>>>();
+    messages.write(AssetEvent::Modified { id });
+    messages.write(AssetEvent::LoadedWithDependencies { id });
+    ui.update(10);
+    assert_eq!(
+        ui.builds(),
+        builds + 1,
+        "both events in one frame re-resolve once"
+    );
+    ui.assert_dump(
+        r#"
+html-ui
+  p
+    "translated" default 16px #ffffff
+"#,
+    );
+}
+
+/// Commented-out and raw-block includes are not references (bug_0067): an
+/// include of a deleted file inside them must not fail the load; Tera
+/// prints the raw block's tag literally. (The fenced-code/code-span skip is
+/// covered by the loader unit test `comments_raw_and_code_are_not_references`:
+/// end to end, a fenced `{% include %}` still fails the load at Tera's own
+/// add-time include validation, so no vector can assert a literal code
+/// sample while the load succeeds.)
+#[test]
+fn comments_raw_and_code_include_nothing() {
+    let mut ui = TestUi::new(
+        "skipped-includes",
+        &[(
+            "page.html",
+            "{# {%- include \"gone.html\" -%} #}\n<p>after comment</p>\n\
+             {% raw %}{% include \"gone.html\" %}{% endraw %}\n",
+        )],
+    );
+    let handle = ui.load::<HtmlTemplate>("page.html");
+    let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
+    // A failing template never builds (the UI stays `Pending`), so settle
+    // quietly and check the load state before the dump.
+    ui.settle_quiet();
+    assert!(
+        !ui.world_mut()
+            .resource::<AssetServer>()
+            .load_state(handle.id())
+            .is_failed(),
+        "the commented-out and raw-block includes must not fail the load"
+    );
+    ui.assert_dump(
+        r#"
+html-ui
+  p
+    "after comment" default 16px #ffffff
+  -
+    "{% include \"gone.html\" %}" default 16px #ffffff
+"#,
+    );
+}
+
+/// Template includes and FTL resource paths may not escape the asset root
+/// with `../` paths (bug_0069): the include fails its resolution without
+/// reading the outside file, and a manifest naming an outside resource
+/// fails its bundle load.
+#[test]
+fn unapproved_paths_fail_their_loads() {
+    static RUN: AtomicUsize = AtomicUsize::new(0);
+    let unique = |suffix: &str| {
+        format!(
+            "bevy_markup-escape-{}-{}.{suffix}",
+            std::process::id(),
+            RUN.fetch_add(1, Ordering::Relaxed)
+        )
+    };
+
+    // A file one level above the (temporary) asset root, which the
+    // include names.
+    let outside = unique("html");
+    std::fs::write(std::env::temp_dir().join(&outside), "<p>outside</p>").unwrap();
+    let page = format!("{{% include \"../{outside}\" %}}");
+    let mut ui = TestUi::new("unapproved-include", &[("page.html", page.as_str())]);
+    let handle = ui.load::<HtmlTemplate>("page.html");
+    ui.settle_quiet();
+    assert!(
+        ui.world_mut()
+            .resource::<AssetServer>()
+            .load_state(handle.id())
+            .is_failed(),
+        "an include escaping the asset root must fail the load"
+    );
+    drop(ui);
+    let _ = std::fs::remove_file(std::env::temp_dir().join(&outside));
+
+    let resource = unique("ftl");
+    std::fs::write(
+        std::env::temp_dir().join(&resource),
+        "m = outside\n",
+    )
+    .unwrap();
+    let manifest = format!("(locale: \"en-US\", resources: [\"../{resource}\"])");
+    let mut ui = TestUi::new("unapproved-resource", &[("bad.ftl.ron", manifest.as_str())]);
+    let bundle = ui.load::<LocaleBundle>("bad.ftl.ron");
+    ui.settle_quiet();
+    assert!(
+        ui.world_mut()
+            .resource::<AssetServer>()
+            .load_state(bundle.id())
+            .is_failed(),
+        "a manifest resource escaping the asset root must fail the load"
+    );
+    drop(ui);
+    let _ = std::fs::remove_file(std::env::temp_dir().join(&resource));
+}
+
+/// `Above`/`Left` overlays clamp to the viewport once their own size is
+/// known (bug_0077): the `bottom`/`right` inset is measured from the
+/// viewport's far edge, so staying inside means `inset <= limit` — clamped
+/// on the inset alone, not keyed on the overlay's extent. An element flush
+/// with the top (left) edge gets `bottom` (right) `= view_h` (`view_w`),
+/// not `view_h + gap` (`view_w + gap`, which put the whole overlay past
+/// the viewport's edge).
+#[test]
+fn anchored_overlay_above_left_clamp_to_the_viewport() {
+    let mut ui = TestUi::with_layout(
+        "anchor-edge",
+        &[
+            ("page.html", r#"<div id="a"></div>"#),
+            (
+                "style.css",
+                "html { padding: 0 }\n#a { width: 100px; height: 30px }",
+            ),
+        ],
+        UVec2::new(320, 240),
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let root = ui.root();
+    let world = ui.world_mut();
+    let a = element_by_id(world, root, "a");
+    assert_eq!(
+        node_rect(world, a),
+        Some(Rect::new(0.0, 0.0, 100.0, 30.0)),
+        "the element sits flush with the viewport's top-left corner"
+    );
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(60.0),
+                height: Val::Px(20.0),
+                ..default()
+            },
+            HtmlAnchor::new(a, AnchorPlacement::Above).with_gap(4.0),
+        ))
+        .id();
+    let placed = |ui: &mut TestUi| {
+        ui.update(3);
+        let world = ui.world_mut();
+        let node = world.get::<Node>(overlay).unwrap();
+        (
+            node_rect(world, overlay).unwrap(),
+            (node.left, node.top, node.right, node.bottom),
+        )
+    };
+
+    // Above: `bottom` counts up from the viewport's bottom edge, so the
+    // unclamped value is `240 - 0 + 4`; clamped it is the viewport height
+    // itself, the overlay's near edge touching the viewport's top limit.
+    let (rect, insets) = placed(&mut ui);
+    assert_eq!(
+        insets,
+        (Val::Px(0.0), Val::Auto, Val::Auto, Val::Px(240.0)),
+        "the bottom inset clamps to the viewport height (unclamped: 240 + gap)"
+    );
+    assert_eq!(rect.max.y, 0.0, "the overlay's edge reaches the top limit");
+
+    ui.world_mut()
+        .get_mut::<HtmlAnchor>(overlay)
+        .unwrap()
+        .placement = AnchorPlacement::Left;
+    let (rect, insets) = placed(&mut ui);
+    assert_eq!(
+        insets,
+        (Val::Auto, Val::Px(0.0), Val::Px(320.0), Val::Auto),
+        "the right inset clamps to the viewport width (unclamped: 320 + gap)"
+    );
+    assert_eq!(rect.max.x, 0.0, "the overlay's edge reaches the left limit");
+}
+
+/// `HtmlWorldAnchor` divides the projection by `UiScale` and measures
+/// against the viewport, not the render target (bug_0078): with
+/// `UiScale(2.0)` the root sits at half the projected window px (not
+/// double), and with an offset (split-screen) viewport a point inside the
+/// viewport reads on-screen instead of hidden.
+#[test]
+fn world_anchor_respects_ui_scale_and_viewport_origin() {
+    // With `UiScale(2.0)`: the point (0.5, 0.5) projects to window px
+    // (240, 60), and the anchor writes UI px — half of that.
+    let mut ui = TestUi::with_layout("world-anchor-scale", &[], UVec2::new(320, 240));
+    ui.world_mut().insert_resource(UiScale(2.0));
+    let world = ui.world_mut();
+    let target = world.spawn(Visibility::Inherited).id();
+    world.entity_mut(target).insert((
+        Transform::from_translation(Vec3::new(0.25, 0.5, 0.0)),
+        GlobalTransform::from_translation(Vec3::new(0.25, 0.5, 0.0)),
+    ));
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(20.0),
+                height: Val::Px(10.0),
+                ..default()
+            },
+            HtmlWorldAnchor::new(target).with_offset(Vec3::new(0.25, 0.0, 0.0)),
+        ))
+        .id();
+    let state = |ui: &mut TestUi, overlay: Entity| {
+        ui.update(3);
+        let world = ui.world_mut();
+        let node = world.get::<Node>(overlay).unwrap();
+        (
+            (node.left, node.top),
+            *world.get::<Visibility>(overlay).unwrap(),
+            *world.get::<HtmlWorldAnchorView>(overlay).unwrap(),
+        )
+    };
+    assert_eq!(
+        state(&mut ui, overlay),
+        (
+            (Val::Px(110.0), Val::Px(20.0)),
+            Visibility::Inherited,
+            HtmlWorldAnchorView {
+                distance: (0.5f32.powi(2) * 2.0).sqrt(),
+                on_screen: true,
+            }
+        ),
+        "window px (240, 60) divided by the UiScale of 2, minus the pivot"
+    );
+
+    // A split-screen camera with an offset viewport: projections come back
+    // relative to the render target, so measuring against the viewport
+    // (not the target's full size) keeps the point on-screen.
+    let mut ui = TestUi::with_layout("world-anchor-split", &[], UVec2::new(320, 240));
+    let world = ui.world_mut();
+    let target = world.spawn(Visibility::Inherited).id();
+    world.entity_mut(target).insert((
+        Transform::from_translation(Vec3::new(0.25, 0.5, 0.0)),
+        GlobalTransform::from_translation(Vec3::new(0.25, 0.5, 0.0)),
+    ));
+    let split = world
+        .spawn((
+            Camera2d,
+            Camera {
+                viewport: Some(bevy::camera::Viewport {
+                    physical_position: UVec2::new(160, 80),
+                    physical_size: UVec2::new(160, 120),
+                    ..default()
+                }),
+                computed: bevy::camera::ComputedCameraValues {
+                    target_info: Some(bevy::camera::RenderTargetInfo {
+                        physical_size: UVec2::new(320, 240),
+                        scale_factor: 1.0,
+                    }),
+                    ..default()
+                },
+                ..default()
+            },
+            bevy::camera::RenderTarget::None {
+                size: UVec2::new(320, 240),
+            },
+            GlobalTransform::from_translation(Vec3::ZERO),
+        ))
+        .id();
+    let overlay = world
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(20.0),
+                height: Val::Px(10.0),
+                ..default()
+            },
+            HtmlWorldAnchor::new(target)
+                .with_offset(Vec3::new(0.25, 0.0, 0.0))
+                .with_camera(split),
+        ))
+        .id();
+    // The point (0.5, 0.5) projects to window px (280, 110) — (160, 80)
+    // into the viewport, well inside its 160×120.
+    let ((left, top), visibility, view) = state(&mut ui, overlay);
+    assert_eq!(
+        (left, top),
+        (Val::Px(110.0), Val::Px(20.0)),
+        "(280, 110) relative to the viewport's (160, 80) origin, minus the pivot"
+    );
+    assert_eq!(visibility, Visibility::Inherited, "the point is on screen");
+    assert!(view.on_screen);
 }
