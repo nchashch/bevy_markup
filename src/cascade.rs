@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -18,6 +19,7 @@ use lightningcss::properties::border_image::{
     BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
 };
 use lightningcss::properties::custom::CustomPropertyName;
+use lightningcss::properties::custom::Token;
 use lightningcss::properties::custom::{TokenList, TokenOrValue};
 use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
 use lightningcss::properties::flex as css_flex;
@@ -1062,7 +1064,15 @@ impl Compound {
             }
             rest = &body[end..];
         }
-        if tag.is_none() && ids.is_empty() && classes.is_empty() && selector != "*" {
+        // A bare pseudo-class list (`*:hover` prints as `:hover`,
+        // `:focus-visible` alone) matches any element in that state — the
+        // standard focus-ring rule.
+        if tag.is_none()
+            && ids.is_empty()
+            && classes.is_empty()
+            && selector != "*"
+            && pseudo == Pseudo::default()
+        {
             return None;
         }
         Some(Self {
@@ -1410,35 +1420,60 @@ fn apply_resolved(
     variables: &HashMap<String, TokenList<'static>>,
     context: Option<&dyn Fn(&str) -> Option<String>>,
 ) {
-    let Property::Unparsed(unparsed) = declaration else {
-        apply(style, declaration);
-        return;
-    };
-    // Fast path: most values have no `var()` at all.
-    if !contains_var(&unparsed.value) {
-        apply(style, declaration);
+    // `initial`/`inherit`/`unset`/`revert` arrive as unparsed bare
+    // keywords: the field returns to its initial value (the cascade has
+    // no parent computed style, so `inherit`/`unset` on inherited
+    // properties resolve to it too — documented deviation).
+    if let Property::Unparsed(unparsed) = declaration
+        && unparsed.value.0.len() == 1
+        && let TokenOrValue::Token(token) = &unparsed.value.0[0]
+        && matches!(token, Token::Ident(ident)
+            if matches!(ident.as_ref().to_ascii_lowercase().as_str(),
+                "initial" | "inherit" | "unset" | "revert"))
+    {
+        apply_keyword(style, &unparsed.property_id);
         return;
     }
-    let resolved = match substitute(
-        &unparsed.value,
-        variables,
-        &context.unwrap_or(&|_| None),
-        0,
-    ) {
-        Some(text) => match Property::parse_string(
-            unparsed.property_id.clone(),
-            &text,
-            ParserOptions::default(),
-        ) {
-            Ok(property) => property.into_owned(),
-            Err(_) => {
-                debug!("html css: `var()` substitution produced an invalid value: {text:?}");
+    // The tokens to substitute: an unparsed value, or an unknown/custom
+    // property's raw tokens (`pointer-events` has no typed form in
+    // lightningcss and arrives as a custom property).
+    let (reparse, tokens) = match declaration {
+        Property::Unparsed(unparsed) => {
+            if !contains_var(&unparsed.value) {
+                apply(style, declaration);
                 return;
             }
-        },
-        None => return,
+            (Some(unparsed.property_id.clone()), &unparsed.value)
+        }
+        Property::Custom(custom) => {
+            if !contains_var(&custom.value) {
+                apply(style, declaration);
+                return;
+            }
+            (Some(PropertyId::Custom(custom.name.clone())), &custom.value)
+        }
+        _ => {
+            apply(style, declaration);
+            return;
+        }
     };
-    apply(style, &resolved);
+    let mut substitution = Substitution {
+        variables,
+        context: &context.unwrap_or(&|_| None),
+        resolved: HashMap::new(),
+        resolving: HashSet::new(),
+        budget: VAR_BUDGET,
+    };
+    let Some(text) = substitution.substitute(tokens) else {
+        debug!("html css: `var()` substitution failed");
+        return;
+    };
+    match Property::parse_string(reparse.unwrap(), &text, ParserOptions::default()) {
+        Ok(property) => apply(style, &property.into_owned()),
+        Err(_) => {
+            debug!("html css: `var()` substitution produced an invalid value: {text:?}");
+        }
+    }
 }
 
 /// Whether any `var()` appears in the tokens (function arguments included).
@@ -1450,60 +1485,248 @@ fn contains_var(tokens: &TokenList) -> bool {
     })
 }
 
-/// The tokens' CSS text, with every `var()` replaced: the context's value
-/// (interpolated as written), else a custom property's tokens (its own
-/// `var()`s resolved, `depth` bounding recursion), else the reference's
-/// fallback, else `None` (unresolvable).
-fn substitute(
-    tokens: &TokenList,
-    variables: &HashMap<String, TokenList<'static>>,
-    context: &dyn Fn(&str) -> Option<String>,
-    depth: usize,
-) -> Option<String> {
-    if depth > 32 {
-        return None;
-    }
-    let mut out = String::new();
-    for token in &tokens.0 {
-        let piece = match token {
-            TokenOrValue::Var(variable) => {
-                let name = variable.name.ident.as_ref();
-                match context(name).or_else(|| {
-                    variables
-                        .get(name)
-                        .and_then(|value| substitute(value, variables, context, depth + 1))
-                }) {
-                    Some(value) => value,
-                    None => match &variable.fallback {
-                        Some(fallback) => substitute(fallback, variables, context, depth + 1)?,
-                        None => return None,
-                    },
-                }
-            }
-            TokenOrValue::Function(function) => {
-                let arguments = substitute(&function.arguments, variables, context, depth + 1)?;
-                format!("{}({arguments})", function.name.as_ref())
-            }
-            TokenOrValue::Token(token) => token.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Color(color) => color.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Url(url) => url.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Length(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Angle(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Time(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Resolution(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::DashedIdent(name) => name.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::AnimationName(name) => name.to_css_string(PrinterOptions::default()).ok()?,
-            // `UnresolvedColor` and `env()` serialize only crate-internally:
-            // a `var()` among their components can't be resolved here, so
-            // the declaration is dropped (as an unresolvable one is).
-            TokenOrValue::UnresolvedColor(_) | TokenOrValue::Env(_) => return None,
-        };
-        if !out.is_empty() {
-            out.push(' ');
+/// The total substitution output one declaration may produce: a `var()`
+/// graph can be exponential (a doubling reference chain), and the budget
+/// bounds it. Beyond it the declaration is dropped, like an unresolvable
+/// one.
+const VAR_BUDGET: usize = 64 * 1024;
+
+/// One declaration's `var()` substitution: each custom property is
+/// resolved at most once (memoized), a name in the current chain is
+/// unresolvable (a cycle is invalid at computed-value time), and the
+/// output is budget-capped. Linear in the sheet, where the naive
+/// depth-bounded recursion was exponential.
+struct Substitution<'a> {
+    variables: &'a HashMap<String, TokenList<'static>>,
+    context: &'a dyn Fn(&str) -> Option<String>,
+    /// Resolved values by name; `None` = unresolvable (memoized). Keys
+    /// are owned: the names borrow the tokens being substituted.
+    resolved: HashMap<String, Option<String>>,
+    /// Names on the current resolution chain: re-entering one fails.
+    resolving: HashSet<String>,
+    budget: usize,
+}
+
+impl<'a> Substitution<'a> {
+    /// The value for one `var()` reference: the context first, then the
+    /// sheet's custom properties (resolved once, cycles fail), then —
+    /// handled by the caller — the reference's fallback.
+    fn var(&mut self, name: &str) -> Option<String> {
+        if let Some(value) = self.resolved.get(name) {
+            return value.clone();
         }
-        out.push_str(piece.trim());
+        if self.resolving.contains(name) {
+            // A cycle: invalid at computed-value time.
+            return None;
+        }
+        let value = if let Some(value) = (self.context)(name) {
+            Some(value)
+        } else {
+            self.resolving.insert(name.to_owned());
+            let value = self
+                .variables
+                .get(name)
+                .and_then(|tokens| self.substitute(tokens));
+            self.resolving.remove(name);
+            value
+        };
+        // Memoize even the failures: a name that doesn't resolve stays
+        // unresolvable for this declaration.
+        self.resolved.insert(name.to_owned(), value.clone());
+        value
     }
-    Some(out)
+
+    /// The tokens' CSS text with every `var()` replaced, else `None`
+    /// (unresolvable or over budget).
+    fn substitute(&mut self, tokens: &TokenList) -> Option<String> {
+        let mut out = String::new();
+        for token in &tokens.0 {
+            let piece = match token {
+                TokenOrValue::Var(variable) => {
+                    let name = variable.name.ident.as_ref();
+                    match self.var(name) {
+                        Some(value) => value,
+                        None => match &variable.fallback {
+                            Some(fallback) => self.substitute(fallback)?,
+                            None => return None,
+                        },
+                    }
+                }
+                TokenOrValue::Function(function) => {
+                    let arguments = self.substitute(&function.arguments)?;
+                    format!("{}({arguments})", function.name.as_ref())
+                }
+                TokenOrValue::Token(token) => token.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Color(color) => color.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Url(url) => url.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Length(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Angle(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Time(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Resolution(value) => {
+                    value.to_css_string(PrinterOptions::default()).ok()?
+                }
+                TokenOrValue::DashedIdent(name) => {
+                    name.to_css_string(PrinterOptions::default()).ok()?
+                }
+                TokenOrValue::AnimationName(name) => {
+                    name.to_css_string(PrinterOptions::default()).ok()?
+                }
+                // `UnresolvedColor` and `env()` serialize only
+                // crate-internally: a `var()` among their components can't
+                // be resolved here, so the declaration is dropped (as an
+                // unresolvable one is).
+                TokenOrValue::UnresolvedColor(_) | TokenOrValue::Env(_) => return None,
+            };
+            self.budget = self.budget.checked_sub(piece.len())?;
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(piece.trim());
+        }
+        Some(out)
+    }
+}
+
+/// `initial`/`inherit`/`unset`/`revert` for one property: its field(s)
+/// return to the initial value (the `ElementStyle` default — the build's
+/// defaults). `inherit` and `unset`-on-inherited also resolve here: the
+/// cascade keeps no parent computed style to inherit from (a documented
+/// deviation; the earlier rule's value no longer shows through either
+/// way). Unknown properties are ignored.
+fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
+    // Matched by name: `PropertyId`'s variants carry vendor prefixes for
+    // some properties and not others; the names are stable.
+    match id.name() {
+        "color" => style.color = None,
+        "background-color" => style.background = None,
+        "opacity" => style.opacity = None,
+        "z-index" => style.z_index = None,
+        "font-family" => style.font_family = None,
+        "font-size" => style.font_size = None,
+        "font-weight" => style.bold = None,
+        "font-style" => style.italic = None,
+        "text-decoration" | "text-decoration-line" => style.text_decoration = None,
+        "text-decoration-color" => {
+            if let Some(decoration) = &mut style.text_decoration {
+                decoration.color = None;
+            }
+        }
+        "outline" => style.outline = OutlineDecl::default(),
+        "outline-width" => style.outline.width = None,
+        "outline-color" => style.outline.color = None,
+        "outline-style" => style.outline.visible = None,
+        "outline-offset" => style.outline.offset = None,
+        "border-image" | "border-image-source" | "border-image-slice" | "border-image-repeat" => {
+            style.border_image = None;
+        }
+        "border-width" => style.border_width = [None; 4],
+        "border-top-width" => style.border_width[0] = None,
+        "border-right-width" => style.border_width[1] = None,
+        "border-bottom-width" => style.border_width[2] = None,
+        "border-left-width" => style.border_width[3] = None,
+        "border-color" => style.border_color = [None; 4],
+        "border-top-color" => style.border_color[0] = None,
+        "border-right-color" => style.border_color[1] = None,
+        "border-bottom-color" => style.border_color[2] = None,
+        "border-left-color" => style.border_color[3] = None,
+        "border-radius" | "border-top-left-radius" | "border-top-right-radius"
+        | "border-bottom-right-radius" | "border-bottom-left-radius" => {
+            style.layout.border_radius = [None; 4];
+        }
+        "padding" => style.padding = [None; 4],
+        "padding-top" => style.padding[0] = None,
+        "padding-right" => style.padding[1] = None,
+        "padding-bottom" => style.padding[2] = None,
+        "padding-left" => style.padding[3] = None,
+        "row-gap" => style.row_gap = None,
+        "column-gap" => style.layout.column_gap = None,
+        "gap" => {
+            style.row_gap = None;
+            style.layout.column_gap = None;
+        }
+        "display" => style.layout.display = None,
+        "visibility" => style.layout.visibility = None,
+        "flex-direction" => style.layout.flex_direction = None,
+        "flex-wrap" => style.layout.flex_wrap = None,
+        "flex-flow" => {
+            style.layout.flex_direction = None;
+            style.layout.flex_wrap = None;
+        }
+        "flex-grow" => style.layout.flex_grow = None,
+        "flex-shrink" => style.layout.flex_shrink = None,
+        "flex-basis" => style.layout.flex_basis = None,
+        "flex" => {
+            style.layout.flex_grow = None;
+            style.layout.flex_shrink = None;
+            style.layout.flex_basis = None;
+        }
+        "overflow" => style.layout.overflow = [None, None],
+        "overflow-x" => style.layout.overflow[0] = None,
+        "overflow-y" => style.layout.overflow[1] = None,
+        "justify-content" => style.layout.justify_content = None,
+        "align-items" => style.layout.align_items = None,
+        "align-content" => style.layout.align_content = None,
+        "align-self" => style.layout.align_self = None,
+        "justify-items" => style.layout.justify_items = None,
+        "justify-self" => style.layout.justify_self = None,
+        "width" => style.layout.width = None,
+        "height" => style.layout.height = None,
+        "min-width" => style.layout.min_width = None,
+        "min-height" => style.layout.min_height = None,
+        "max-width" => style.layout.max_width = None,
+        "max-height" => style.layout.max_height = None,
+        "margin" => style.layout.margin = [None; 4],
+        "margin-top" => style.layout.margin[0] = None,
+        "margin-right" => style.layout.margin[1] = None,
+        "margin-bottom" => style.layout.margin[2] = None,
+        "margin-left" => style.layout.margin[3] = None,
+        "box-sizing" => style.layout.box_sizing = None,
+        "grid-template-rows" => style.layout.grid_template_rows = None,
+        "grid-template-columns" => style.layout.grid_template_columns = None,
+        "grid-template" => {
+            style.layout.grid_template_rows = None;
+            style.layout.grid_template_columns = None;
+            style.layout.grid_names = None;
+        }
+        "grid-auto-rows" => style.layout.grid_auto_rows = None,
+        "grid-auto-columns" => style.layout.grid_auto_columns = None,
+        "grid-auto-flow" => style.layout.grid_auto_flow = None,
+        "grid" => {
+            style.layout.grid_template_rows = None;
+            style.layout.grid_template_columns = None;
+            style.layout.grid_auto_rows = None;
+            style.layout.grid_auto_columns = None;
+            style.layout.grid_auto_flow = None;
+            style.layout.grid_names = None;
+        }
+        "grid-template-areas" => {
+            // The names table also carries the track names; dropping the
+            // areas takes the whole table.
+            style.layout.grid_names = None;
+        }
+        "grid-row" => style.layout.grid_row = [None, None],
+        "grid-row-start" => style.layout.grid_row[0] = None,
+        "grid-row-end" => style.layout.grid_row[1] = None,
+        "grid-column" => style.layout.grid_column = [None, None],
+        "grid-column-start" => style.layout.grid_column[0] = None,
+        "grid-column-end" => style.layout.grid_column[1] = None,
+        "grid-area" => {
+            style.layout.grid_row = [None, None];
+            style.layout.grid_column = [None, None];
+        }
+        "position" => style.layout.position = None,
+        "top" => style.set_calc(CalcProp::Top, None, Vec::new()),
+        "right" => style.set_calc(CalcProp::Right, None, Vec::new()),
+        "bottom" => style.set_calc(CalcProp::Bottom, None, Vec::new()),
+        "left" => style.set_calc(CalcProp::Left, None, Vec::new()),
+        "inset" => {
+            for side in [CalcProp::Top, CalcProp::Right, CalcProp::Bottom, CalcProp::Left] {
+                style.set_calc(side, None, Vec::new());
+            }
+        }
+        "transition" => style.transitions.clear(),
+        _ => {}
+    }
 }
 
 fn apply(style: &mut ElementStyle, declaration: &Property) {
@@ -3277,6 +3500,101 @@ mod tests {
         HtmlStyles::from_sheet(&sheet)
             .with_context(&context)
             .get(&element("p", None, &[]), Pseudo::default(), &[])
+    }
+
+    /// A `var()` graph can be exponential: a self-reference with two
+    /// fallbacks recursed ~2³² times, and a doubling reference chain
+    /// doubled the output per level (20 levels ≈ 1.5 s). Resolution is
+    /// memoized per declaration with cycle detection and a budget, so
+    /// both terminate fast; the declaration is dropped when unresolvable
+    /// or over budget.
+    #[test]
+    fn var_substitution_terminates_on_pathological_sheets() {
+        let start = std::time::Instant::now();
+        // A self-reference with fallbacks (the depth-bounded recursion
+        // never finished this).
+        let _ = declared("p { --a: var(--a, 1px) var(--a, 1px); width: var(--a) }");
+        // A doubling chain whose output would exceed the budget.
+        let mut sheet = String::from("--v0: 1px; ");
+        for i in 1..24 {
+            sheet.push_str(&format!("--v{i}: var(--v{}) var(--v{}); ", i - 1, i - 1));
+        }
+        sheet.push_str("width: var(--v23)");
+        let _ = declared(&sheet);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "the pathological sheets took {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// `var()` resolves in properties lightningcss has no typed form for
+    /// (`pointer-events`, `outline-offset`): they arrive as custom
+    /// properties, whose raw tokens are substituted like any other value.
+    #[test]
+    fn var_resolves_in_unknown_properties() {
+        let style = declared("--pe: none; pointer-events: var(--pe)");
+        assert_eq!(style.pointer_events, Some(false));
+        let style = declared("--offset: 2px; outline-offset: var(--offset)");
+        assert_eq!(style.outline.offset, Some(2.0));
+        let style = declared_with_context(
+            "pointer-events: var(--pe)",
+            &[("--pe", "auto")],
+        );
+        assert_eq!(style.pointer_events, Some(true));
+    }
+
+    /// `initial`/`inherit`/`unset`/`revert` return the field to its
+    /// initial value instead of being ignored (the earlier rule's value
+    /// used to show through). `inherit` resolves to the initial value
+    /// too: the cascade keeps no parent computed style (documented).
+    #[test]
+    fn inherit_initial_unset_clear_the_field() {
+        let get = |rules: &str| {
+            HtmlStyles::from_sheet(&owned_sheet(rules))
+                .get(&element("p", None, &[]), Pseudo::default(), &[])
+        };
+        assert_eq!(get("p { color: #ff0000 } p { color: initial }").color, None);
+        assert_eq!(get("p { color: #ff0000 } p { color: inherit }").color, None);
+        assert_eq!(get("p { color: #ff0000 } p { color: unset }").color, None);
+        // A layout keyword: the field clears.
+        assert_eq!(
+            get("p { width: 200px } p { width: initial }").layout.width,
+            None
+        );
+        // Control: without the keyword the later value still wins.
+        assert_eq!(
+            get("p { color: #ff0000 } p { color: #0000ff }").color,
+            Some(Color::srgb(0.0, 0.0, 1.0))
+        );
+    }
+
+    /// `*:hover` (lightningcss prints it back without the `*`) and a bare
+    /// `:focus-visible` match any element in that state — the focus-ring
+    /// rule's shape.
+    #[test]
+    fn pseudo_only_compounds_match_any_element() {
+        let style = |pseudo| {
+            let sheet = owned_sheet(":focus-visible { color: #ff0000 } *:hover { color: #00ff00 }");
+            HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), pseudo, &[])
+        };
+        assert_eq!(
+            style(Pseudo {
+                focus_visible: true,
+                ..default()
+            })
+            .color,
+            Some(Color::srgb(1.0, 0.0, 0.0))
+        );
+        assert_eq!(
+            style(Pseudo {
+                hover: true,
+                ..default()
+            })
+            .color,
+            Some(Color::srgb(0.0, 1.0, 0.0))
+        );
+        assert_eq!(style(Pseudo::default()).color, None);
     }
 
     /// `visibility`: `hidden`/`visible` map to the subtree-hide flag;
