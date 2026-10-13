@@ -5045,3 +5045,42 @@ fn world_anchor_respects_ui_scale_and_viewport_origin() {
     assert_eq!(visibility, Visibility::Inherited, "the point is visible");
     assert!(view.on_screen);
 }
+
+/// A headless app driving `update()` directly — never calling `finish()`
+/// — must not panic on the focus systems: the navigation resources
+/// `HtmlFocus` reads are registered in `build` too (F18; the R59 fix
+/// moved the plugin itself into `finish`, and `app.update()` without
+/// `finish()` failed the systems with "Resource does not exist").
+#[test]
+fn update_without_finish_drives_the_focus_systems() {
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::input_focus::directional_navigation::{DirectionalNavigationMap, AutoNavigationConfig};
+    #[allow(unused_imports)]
+    use bevy::prelude::*;
+    let _ = (DirectionalNavigationMap::default(), AutoNavigationConfig::default());
+    // A minimal app without the harness (which calls `finish()`): the
+    // same plugin stack as `TestUi::new` minus `app.finish()`.
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        bevy::asset::AssetPlugin::default(),
+        ImagePlugin::default(),
+        BevyMarkupPlugin,
+    ));
+    // bevy_render normally registers the image loader.
+    app.register_asset_loader(bevy::image::ImageLoader::new(
+        bevy::image::CompressedImageFormats::empty(),
+    ));
+    app.update();
+    // `HtmlFocus` is app-driven (`run_system_once`): its navigator's
+    // params must validate without `finish()`.
+    app.world_mut().run_system_once(|mut focus: HtmlFocus| {
+        let _ = focus.focused();
+    })
+    .expect("HtmlFocus's navigator validated without finish()");
+    app.update();
+}
+
+// Silence the unused-import lint if the file's scope already has them.
+#[allow(unused)]
+fn _unused(_: bevy::input_focus::directional_navigation::DirectionalNavigationMap) {}

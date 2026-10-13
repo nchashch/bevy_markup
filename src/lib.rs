@@ -289,7 +289,16 @@ impl Plugin for BevyMarkupPlugin {
             // minimal apps (no `TextPlugin`) have it too.
             .init_resource::<RemSize>()
             .init_resource::<fonts::FontFamilies>()
-            .init_resource::<custom_elements::CustomElements>();
+            .init_resource::<custom_elements::CustomElements>()
+            // `HtmlFocus`'s navigator reads these; they are normally
+            // registered by the navigation plugin in `finish` — an app
+            // driving `update()` directly (headless apps, integration
+            // tests) never calls it, and the systems would panic with
+            // "Resource does not exist". `init_resource` keeps an
+            // existing value, so registering them again in `finish`
+            // changes nothing.
+            .init_resource::<bevy::input_focus::directional_navigation::DirectionalNavigationMap>()
+            .init_resource::<bevy::input_focus::directional_navigation::AutoNavigationConfig>();
         #[cfg(feature = "text-input")]
         {
             // The widget's keyboard editing keys off Bevy's
