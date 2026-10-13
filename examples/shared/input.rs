@@ -205,6 +205,14 @@ fn navigate(
 /// document order (a depth-first walk of the top-level UI roots), stopping
 /// at the ends, and show the focus ring like navigating does.
 #[allow(clippy::too_many_arguments)]
+/// The entity's (global, local) z-order, for picking the topmost modal.
+fn z_order(entity: Entity, global: &Query<&GlobalZIndex>, local: &Query<&ZIndex>) -> Option<(i32, i32)> {
+    Some((
+        global.get(entity).ok()?.0,
+        local.get(entity).ok()?.0,
+    ))
+}
+
 fn step_linear(
     time: Res<Time>,
     arrows: Arrows,
@@ -214,6 +222,10 @@ fn step_linear(
     focusable: Query<(), (With<Focusable>, Without<HtmlNoFocus>)>,
     no_focus_roots: Query<(), With<HtmlNoFocus>>,
     modals: Query<(), With<HtmlModal>>,
+    visibility: Query<&Visibility>,
+    parents: Query<&ChildOf>,
+    global_z: Query<&GlobalZIndex>,
+    z_index: Query<&ZIndex>,
     mut focus: ResMut<InputFocus>,
     mut visible: ResMut<InputFocusVisible>,
 ) {
@@ -223,12 +235,36 @@ fn step_linear(
     }
     // Which subtrees participate: `HtmlNoFocus` roots are skipped
     // entirely; an open `HtmlModal` confines the walk to its subtree.
+    // An open modal confines the walk: the *visible* one, topmost by
+    // z-order (the same rule the library's `active_modal` uses — a
+    // hidden modal must not capture the walk, and the topmost wins when
+    // several are open).
+    let visible_modal = |root: Entity| -> bool {
+        if !modals.contains(root) {
+            return false;
+        }
+        let mut visible = true;
+        let mut current = Some(root);
+        while let Some(entity) = current {
+            match visibility.get(entity) {
+                Ok(Visibility::Hidden) => {
+                    visible = false;
+                    break;
+                }
+                _ => current = parents.get(entity).ok().map(|parent| parent.0),
+            }
+        }
+        visible
+    };
     let topmost: Vec<Entity> = {
         let all: Vec<Entity> = roots.iter().collect();
         let modal = all
             .iter()
             .copied()
-            .find(|&root| modals.contains(root))
+            .filter(|&root| visible_modal(root))
+            .max_by_key(|&root| {
+                z_order(root, &global_z, &z_index).unwrap_or((0, 0))
+            })
             .into_iter()
             .collect::<Vec<_>>();
         if modal.is_empty() {
