@@ -210,6 +210,12 @@ fn first_focusable_in_scope(
                         .is_none_or(|modal| root == modal)
                 })
     };
+    // Nothing is navigable: the walk below (a stack of every in-scope
+    // entity) costs nothing to skip, and repair_focus runs it every frame
+    // while nothing is focused (HUD-only UIs).
+    if navigable.is_empty() {
+        return None;
+    }
     let mut stack: Vec<Entity> = roots_in_scope
         .iter()
         .map(|(root, ..)| root)
