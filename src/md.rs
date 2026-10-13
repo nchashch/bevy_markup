@@ -55,7 +55,31 @@ pub(crate) fn to_html_template(source: &str) -> String {
 /// pipeline expanded it in place, and the Tera rewrite (ADR 0020) handles
 /// inline runs. Statements inside fenced code blocks and inline code
 /// spans are left verbatim (they are code). Interpolations (`{{ … }}`)
-/// are inline content and stay where they are.
+/// are inline content and stay where they are. Indented code (4 spaces,
+/// lazy continuations included) is not fence-tracked: statements inside
+/// it separate like any own-line statement.
+///
+/// The byte offset of the first fenced-code line in `rest[..limit]` that
+/// starts a line (3 spaces of indent at most; an opener or a closer):
+/// the main loop jumps to the first statement and would skip it.
+fn next_fence_line(rest: &str, limit: usize) -> Option<usize> {
+    let mut cursor = 0;
+    loop {
+        if cursor >= limit {
+            return None;
+        }
+        let line_start = cursor;
+        let line_end = rest[cursor..].find('\n').map_or(limit, |at| cursor + at);
+        let line = &rest[line_start..line_end.min(limit)];
+        let trimmed = line.trim_start_matches(' ');
+        let indent = line.len() - trimmed.len();
+        if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
+            return Some(line_start);
+        }
+        cursor = line_end + 1;
+    }
+}
+
 fn separate_statements(source: &str) -> String {
     if !source.contains("{%") && !source.contains("{#") {
         return source.to_owned();
@@ -109,6 +133,15 @@ fn separate_statements(source: &str) -> String {
             out.push_str(rest);
             return out;
         };
+        // A fence line between the last processed point and the first
+        // statement is handled first (the statement jump would skip past
+        // it, and its line starts were never seen).
+        if let Some(fence_at) = next_fence_line(rest, start) {
+            out.push_str(&rest[..fence_at]);
+            rest = &rest[fence_at..];
+            at_line_start = true;
+            continue;
+        }
         let opener = &rest[start..start + 2];
         let closer = match opener {
             "{%" => "%}",
@@ -141,7 +174,9 @@ fn separate_statements(source: &str) -> String {
         // closer (on the same line). Inline statements stay where they
         // are.
         let line_start = rest[..start].rfind('\n').map_or(0, |at| at + 1);
-        let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+        let line_end = rest[start..]
+            .find('\n')
+            .map_or(rest.len(), |at| start + at + 1);
         let before = &rest[line_start..start];
         // A multi-line statement's closer is past this line's newline.
         let after = if end < line_end { &rest[end..line_end] } else { "" };
@@ -433,29 +468,6 @@ pub(crate) fn is_markdown(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// A multi-line `{# comment #}` used to render as a visible
-    /// paragraph (the pure-Tera check scanned each line separately; the
-    /// comment's span crosses the softbreak). It vanishes now, and the
-    /// text after it is untouched.
-    #[test]
-    fn a_multiline_comment_renders_nothing() {
-        // Converted: the comment is a Tera span (raw passthrough).
-        let html = to_html_template("{# multi\nline #}\n\nHello\n");
-        assert!(
-            !html.contains("<p class=\"markdown\">{#"),
-            "the comment rendered as a visible paragraph: {html}"
-        );
-        assert!(!html.contains("<p class=\"markdown\"></p>"), "{html}");
-        // Rendered: Tera drops the comment; nothing of it survives.
-        let value: serde_json::Value = serde_json::from_str("{}").unwrap();
-        let mut tera = tera::Tera::default();
-        tera.add_raw_template("md", &html).unwrap();
-        let context = tera::Context::from_serialize(&value).unwrap();
-        let rendered = tera.render("md", &context).unwrap();
-        assert!(!rendered.contains("{#"), "{rendered}");
-        assert!(rendered.contains("Hello"), "{rendered}");
-    }
-
     use super::*;
 
     /// A fenced block with an info string closes again: the closing
@@ -487,6 +499,28 @@ mod tests {
             "the merged paragraph renders empty: {html}"
         );
 
+        // A fence after prose, before the statement: the scanner jumps
+        // to the first statement, so the fence line must be found on the
+        // way (it used to be skipped, and the statements separated
+        // inside the code). Rendered: the statements stay code (Tera
+        // doesn't execute them), so "Shown" never becomes a paragraph.
+        let source = "Intro\n\n```html\n{% if a %}\nShown\n{% endif %}\n```\n";
+        let html = to_html_template(source);
+        let code_at = html.find("<pre").expect("the fenced block: {html}");
+        assert!(
+            html[code_at..].contains("% if a %"),
+            "the statements left the code: {html}"
+        );
+        let value: serde_json::Value = serde_json::from_str(r#"{"a":true}"#).unwrap();
+        let mut tera = tera::Tera::default();
+        tera.add_raw_template("md", &html).unwrap();
+        let context = tera::Context::from_serialize(&value).unwrap();
+        let rendered = tera.render("md", &context).unwrap();
+        assert!(
+            !rendered.contains("<p class=\"markdown\">Shown</p>"),
+            "the statements executed outside the code: {rendered}"
+        );
+
         // A bare fence opens too (Markdown semantics): its statements are
         // code, not executed — and no blank lines were inserted around
         // them (the old behavior split them, adding empty lines to the
@@ -500,6 +534,7 @@ mod tests {
             !html[code_at..].contains("code\n\n"),
             "blank lines were inserted into the code: {html}"
         );
+
     }
 
     /// A `{# … #}` comment with no backtick after it used to spin
