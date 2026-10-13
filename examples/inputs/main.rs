@@ -151,7 +151,8 @@ fn handle_signals(
 fn switch_language(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
-    focused_text: Query<(), With<bevy::ui_widgets::TextInput>>,
+    focus: Res<bevy::input_focus::InputFocus>,
+    focused_text: Query<(), (With<bevy::ui_widgets::TextInput>, With<EditableText>)>,
     languages: Res<Languages>,
     mut active: ResMut<ActiveLocale>,
 ) {
@@ -160,7 +161,10 @@ fn switch_language(
         .any(|pad| pad.just_pressed(GamepadButton::North));
     // Space is a typed character in a text field: only switch the
     // language while nothing holds the caret.
-    let typing = focused_text.iter().any(|_| true) && keys.pressed(KeyCode::Space);
+    let typing = focus
+        .get()
+        .is_some_and(|focused| focused_text.contains(focused))
+        && keys.pressed(KeyCode::Space);
     if keys.just_pressed(KeyCode::Space) && !typing || pad {
         next_language(&languages, &mut active);
     }
