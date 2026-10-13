@@ -55,8 +55,11 @@ pub fn render_html(source: &str, context_json: &str) -> Result<String, String> {
     let outline = document.outline(&LocalizedText::default());
 
     let md_name = "fuzz/template.md";
+    // The `.md` path: the load-time Markdown conversion (`to_html_template`,
+    // ADR 0020) runs on the same bytes, then the converted template renders.
+    let md_source = crate::md::to_html_template(source);
     let mut tera = tera::Tera::new();
-    tera.add_raw_template(md_name, source)
+    tera.add_raw_template(md_name, &md_source)
         .map_err(|err| err.to_string())?;
     let template = HtmlTemplate {
         tera,
@@ -138,11 +141,60 @@ pub fn cascade(css: &str) -> Result<String, String> {
         },
     ];
     let mut out = String::new();
-    // One hit per element, then a repeat: exercises the cascade's match cache.
+    // Ancestor chains for the combinator matching: descendants of the
+    // elements (nearest first), plus pseudo states on them. Exercises the
+    // `A B`/`A > B` paths, which the old harness passed no ancestors for.
+    let chains: Vec<(Vec<crate::cascade::Ancestor>, Pseudo)> = vec![
+        (
+            vec![
+                crate::cascade::Ancestor {
+                    element: HtmlElement {
+                        tag: "section".into(),
+                        id: None,
+                        classes: vec!["page".into()],
+                        ..Default::default()
+                    },
+                    pseudo: Pseudo::default(),
+                },
+                crate::cascade::Ancestor {
+                    element: HtmlElement {
+                        tag: "div".into(),
+                        id: None,
+                        classes: vec!["panel".into()],
+                        ..Default::default()
+                    },
+                    pseudo: Pseudo {
+                        hover: true,
+                        ..Default::default()
+                    },
+                },
+            ],
+            Pseudo::default(),
+        ),
+        (
+            vec![crate::cascade::Ancestor {
+                element: HtmlElement {
+                    tag: "ul".into(),
+                    id: None,
+                    classes: vec![],
+                    ..Default::default()
+                },
+                pseudo: Pseudo::default(),
+            }],
+            Pseudo {
+                focus_visible: true,
+                ..Default::default()
+            },
+        ),
+    ];
+    // One hit per element (with and without ancestors), then a repeat:
+    // exercises the cascade's match cache.
     for round in 0..2 {
         for element in &elements {
-            let style = styler.style_of(element, &root, Pseudo::default(), None, &[]);
-            let boxed: BoxStyle = styler.box_of(element, Pseudo::default(), None, &[]);
+            for (ancestors, pseudo) in &chains {
+                let style =
+                    styler.style_of(element, &root, *pseudo, None, ancestors);
+                let boxed: BoxStyle = styler.box_of(element, *pseudo, None, ancestors);
             std::fmt::write(
                 &mut out,
                 format_args!(
@@ -164,6 +216,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
                 ),
             )
             .ok();
+            }
         }
     }
     Ok(out)
@@ -181,7 +234,11 @@ pub fn translate(ftl: &str, id: &str, args_json: &str) -> Result<String, String>
     bundle
         .add_resource(resource)
         .map_err(|errors| format!("{errors:?}"))?;
-    crate::l10n::translate(&bundle, id, Some(args_json))
+    let text = crate::l10n::translate(&bundle, id, Some(args_json))?;
+    // The `markdown: true` path (ADR 0020): the same source builds the
+    // cache, and the formatted value substitutes into the converted HTML.
+    let _ = crate::l10n::markdown_fuzz(ftl, id, args_json);
+    Ok(text)
 }
 
 #[cfg(test)]

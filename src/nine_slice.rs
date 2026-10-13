@@ -101,6 +101,27 @@ impl AssetLoader for NineSliceLoader {
         reader.read_to_end(&mut bytes).await?;
         let desc: NineSliceDescriptor = ron::de::from_bytes(&bytes)?;
 
+        // Bevy's slicer divides by these values (a 0/NaN tile factor makes
+        // `target / 0 = inf` repeats; a negative scale flips corners) and
+        // insets negative values draw outside the image: reject them at
+        // load instead of drawing garbage.
+        let finite_positive = |value: f32| value.is_finite() && value > 0.0;
+        let bad_scale = |mode: &ScaleModeDescriptor| match mode {
+            ScaleModeDescriptor::Tile(factor) => !finite_positive(*factor),
+            ScaleModeDescriptor::Stretch => false,
+        };
+        if [desc.border.left, desc.border.right, desc.border.top, desc.border.bottom]
+            .iter()
+            .any(|inset| !inset.is_finite() || *inset < 0.0)
+            || bad_scale(&desc.sides)
+            || bad_scale(&desc.center)
+            || !finite_positive(desc.max_corner_scale)
+        {
+            return Err("invalid slice manifest: insets must be finite and \
+                >= 0, tile factors and max_corner_scale finite and > 0"
+                .into());
+        }
+
         let image_path = load_context.path().resolve_embed_str(&desc.image)?;
         let border = desc.border;
         Ok(NineSlice {
@@ -319,6 +340,42 @@ mod tests {
             "",
         ] {
             assert!(parse(ron).is_err(), "{ron}");
+        }
+    }
+
+    /// The loader rejects manifests whose values would make Bevy's slicer
+    /// divide by zero (a 0/NaN tile factor), flip corners (a negative
+    /// scale), or draw outside the image (a negative inset): a load
+    /// error, not silent garbage.
+    #[test]
+    fn manifests_validate_values() {
+        let valid = |ron: &str| {
+            let desc: NineSliceDescriptor = parse(ron).unwrap();
+            let finite_positive = |value: f32| value.is_finite() && value > 0.0;
+            let bad_scale = |mode: &ScaleModeDescriptor| match mode {
+                ScaleModeDescriptor::Tile(factor) => !finite_positive(*factor),
+                ScaleModeDescriptor::Stretch => false,
+            };
+            [desc.border.left, desc.border.right, desc.border.top, desc.border.bottom]
+                .iter()
+                .any(|inset| !inset.is_finite() || *inset < 0.0)
+                || bad_scale(&desc.sides)
+                || bad_scale(&desc.center)
+                || !finite_positive(desc.max_corner_scale)
+        };
+        assert!(!valid(
+            r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1))"#
+        ));
+        assert!(!valid(
+            r#"(image: "frame.png", border: (left: 0, right: 0, top: 0, bottom: 0), sides: Tile(2.0), center: Tile(2.0))"#
+        ));
+        for bad in [
+            r#"(image: "frame.png", border: (left: -1, right: 1, top: 1, bottom: 1))"#,
+            r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), sides: Tile(0.0))"#,
+            r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), center: Tile(-2.0))"#,
+            r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), max_corner_scale: 0.0)"#,
+        ] {
+            assert!(valid(bad), "{bad} must be rejected");
         }
     }
 }

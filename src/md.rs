@@ -47,19 +47,64 @@ pub(crate) fn to_html_template(source: &str) -> String {
     convert(&separate_statements(source), true)
 }
 
-/// Puts every Tera *statement* (`{% … %}`, `{# … #}`, including the `-`
-/// whitespace-control variants) on its own line, so it cannot merge with
-/// neighbouring Markdown content into one block. The old pipeline expanded
-/// Tera before converting, so statements never shaped Markdown structure;
-/// converting at load must reproduce that. Interpolations (`{{ … }}`) are
-/// inline content and stay where they are.
+/// Puts Tera *statements* (`{% … %}`, `{# … #}`, including the `-`
+/// whitespace-control variants) on their own line when they have a line
+/// to themselves, so they cannot merge with neighbouring Markdown
+/// content into one block. A statement *inside* a line (an attribute
+/// value, a list item, a heading, a table cell) stays inline — the old
+/// pipeline expanded it in place, and the Tera rewrite (ADR 0020) handles
+/// inline runs. Statements inside fenced code blocks and inline code
+/// spans are left verbatim (they are code). Interpolations (`{{ … }}`)
+/// are inline content and stay where they are.
 fn separate_statements(source: &str) -> String {
     if !source.contains("{%") && !source.contains("{#") {
         return source.to_owned();
     }
     let mut out = String::with_capacity(source.len() + 16);
     let mut rest = source;
-    while let Some(start) = rest.find("{%").or_else(|| rest.find("{#")) {
+    let mut fence: Option<String> = None;
+    let mut at_line_start = true;
+    while !rest.is_empty() {
+        // Verbatim inside fenced code blocks.
+        if fence.is_none() && at_line_start {
+            let trimmed = rest.trim_start_matches(' ');
+            let indent = rest.len() - trimmed.len();
+            if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
+                let marker = &trimmed[..3];
+                let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+                let info = &rest[indent + 3..line_end.min(rest.len())];
+                // A closing fence has nothing but whitespace after the
+                // marker; an opening one carries the info string.
+                if fence.is_none() && !info.trim().is_empty() {
+                    fence = Some(marker.to_owned());
+                } else if fence.as_deref() == Some(marker) && info.trim().is_empty() {
+                    fence = None;
+                }
+                out.push_str(&rest[..line_end]);
+                rest = &rest[line_end..];
+                at_line_start = true;
+                continue;
+            }
+        }
+        if fence.is_some() {
+            let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+            out.push_str(&rest[..line_end]);
+            rest = &rest[line_end..];
+            at_line_start = rest.is_empty() || rest.starts_with('\n');
+            continue;
+        }
+        // The earliest statement opener (a `{#` before a `{%` is a
+        // comment, not the tail of a `{%`).
+        let if_start = rest.find("{%");
+        let comment_start = rest.find("{#");
+        let start = match (if_start, comment_start) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let Some(start) = start else {
+            out.push_str(rest);
+            return out;
+        };
         let opener = &rest[start..start + 2];
         let closer = match opener {
             "{%" => "%}",
@@ -71,13 +116,41 @@ fn separate_statements(source: &str) -> String {
             return out;
         };
         let end = start + 2 + inner + closer.len();
-        out.push_str(&rest[..start]);
-        out.push('\n');
-        out.push_str(&rest[start..end]);
-        out.push('\n');
-        rest = &rest[end..];
+        // Inline code spans protect their content: a statement between
+        // backticks stays code. (A pragmatic backtick run: the span's
+        // closer is the next run of the same length.)
+        if opener == "{#" || rest[..start].ends_with('`') {
+            let ticks = rest[..start].len() - rest[..start].trim_end_matches('`').len();
+            let span_end = rest[start..].find(&"`".repeat(ticks.max(1))).map_or(
+                start,
+                |at| start + at + ticks.max(1),
+            );
+            out.push_str(&rest[..span_end.min(end)]);
+            rest = &rest[span_end.min(end)..];
+            at_line_start = false;
+            continue;
+        }
+        // Own line: whitespace-only before the statement and after its
+        // closer (on the same line). Inline statements stay where they
+        // are.
+        let line_start = rest[..start].rfind('\n').map_or(0, |at| at + 1);
+        let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+        let before = &rest[line_start..start];
+        // A multi-line statement's closer is past this line's newline.
+        let after = if end < line_end { &rest[end..line_end] } else { "" };
+        if before.trim().is_empty() && after.trim().is_empty() {
+            out.push_str(&rest[..start]);
+            out.push('\n');
+            out.push_str(&rest[start..end]);
+            out.push('\n');
+            rest = &rest[end..];
+            at_line_start = rest.starts_with('\n') || rest.is_empty();
+        } else {
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            at_line_start = false;
+        }
     }
-    out.push_str(rest);
     out
 }
 
@@ -509,3 +582,49 @@ mod tests {
         assert!(html.contains("<p class=\"markdown\">"), "{html}");
     }
 }
+
+    /// Tera in a template (ADR 0020): a paragraph of only statements
+    /// passes through unwrapped; inline statements (inside a line, an
+    /// attribute value, a list item, a heading) stay inline and render
+    /// where they are; a code span/block is Tera-literal; and a raw
+    /// `{% raw %}` example in text doesn't break the template.
+    #[test]
+    fn tera_templates_survive_the_conversion() {
+        // A pure-Tera paragraph: unwrapped.
+        let html = to_html_template("{% if hd %}<p>hd</p>{% endif %}\n");
+        assert!(html.contains("<p>hd</p>"), "{html}");
+        // An inline statement inside an attribute value: no newlines.
+        let html = to_html_template(
+            "<img src=\"{% if hd %}hd{% else %}sd{% endif %}.png\">\n",
+        );
+        assert!(
+            html.contains("src=\"{% if hd %}hd{% else %}sd{% endif %}.png\""),
+            "{html}"
+        );
+        // A statement inside a list item, a heading and a table cell.
+        let html = to_html_template("# Hello {% if a %}world{% endif %}\n");
+        assert!(
+            html.contains("<h1 class=\"markdown\">Hello {% if a %}world{% endif %}</h1>"),
+            "{html}"
+        );
+        let html = to_html_template("* {% if a %}one{% endif %} item\n");
+        assert!(
+            html.contains("<li class=\"markdown\">{% if a %}one{% endif %} item</li>"),
+            "{html}"
+        );
+        let html = to_html_template(
+            "| a | b |\n|---|---|\n| {% if a %}1{% endif %} | 2 |\n",
+        );
+        assert!(html.contains("{% if a %}1{% endif %}"), "{html}");
+        // A code span and a fenced block are Tera-literal.
+        let html = to_html_template("a `{{ x }}` span\n");
+        assert!(html.contains("<code>{{ x }}</code>"), "{html}");
+        let html = to_html_template("```\nlet s = \"{%\"; // %}\n```\n");
+        assert!(
+            html.contains("let s = \"{%\"; // %}"),
+            "the fenced code is verbatim: {html}"
+        );
+        // A literal `{% raw %}` in text: Tera-literal via the code span...
+        let html = to_html_template("text `{% raw %}` tail\n");
+        assert!(html.contains("<code>{% raw %}</code>"), "{html}");
+    }
