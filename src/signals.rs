@@ -693,15 +693,14 @@ pub(crate) fn hover_signals(
                 .insert(entity, Hovering { element, leaves });
         }
     }
-    for (pointer, previous) in entered.iter_mut() {
+    // Leaving (or despawned by a rebuild), per entered element; a pointer
+    // that vanished (Bevy despawns touch pointers on touch end and drops
+    // them from the hover map) emits every entered element's leaves and
+    // is dropped itself, so the outer map doesn't grow by one empty
+    // entry per touch.
+    entered.retain(|pointer, previous| {
         let Some(set) = now.get(pointer) else {
-            // The pointer vanished (Bevy despawns touch pointers on touch
-            // end and drops them from the hover map): emit every entered
-            // element's leaves and drop the pointer's entries, so touch
-            // never leaves `data-on-leave` unset and the map doesn't grow
-            // by one entry per touch.
-            for entity in previous.keys().copied().collect::<Vec<_>>() {
-                let hovering = previous.remove(&entity).expect("keyed");
+            for (entity, hovering) in previous.drain() {
                 for binding in &hovering.leaves {
                     writer.write(ElementSignal {
                         name: Cow::Owned(binding.name.clone()),
@@ -713,26 +712,26 @@ pub(crate) fn hover_signals(
                     });
                 }
             }
-            continue;
+            return false;
         };
-        for entity in previous.keys().copied().collect::<Vec<_>>() {
-            if set.contains(&entity) {
-                continue;
+        previous.retain(|entity, hovering| {
+            if set.contains(entity) {
+                return true;
             }
-            // Leaving (or despawned by a rebuild): emit from the snapshot.
-            let hovering = previous.remove(&entity).expect("keyed");
             for binding in &hovering.leaves {
                 writer.write(ElementSignal {
                     name: Cow::Owned(binding.name.clone()),
                     trigger: SignalTrigger::Leave,
-                    target: entity,
+                    target: *entity,
                     element: hovering.element.clone(),
                     payload: binding.payload.clone(),
                     source: SignalSource::Hover { pointer: *pointer },
                 });
             }
-        }
-    }
+            false
+        });
+        true
+    });
 }
 
 /// What a hovering pointer remembers about one entered element.

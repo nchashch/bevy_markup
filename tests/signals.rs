@@ -1314,6 +1314,40 @@ fn touch_end_emits_leave() {
         .collect::<Vec<_>>();
     assert_eq!(leaves.len(), 1, "one leave: {leaves:?}");
     assert_eq!(leaves[0].target, entered[0].target);
+
+    // A vanished pointer's outer entry is dropped too: a second touch
+    // doesn't stack on it (the outer map used to grow by one empty entry
+    // per touch).
+    ui.world_mut()
+        .resource_mut::<Messages<WindowEvent>>()
+        .write(WindowEvent::TouchInput(TouchInput {
+            phase: TouchPhase::Started,
+            position: at,
+            window,
+            id: 4,
+            force: None,
+        }));
+    ui.update(2);
+    ui.take_signals();
+    ui.world_mut()
+        .resource_mut::<Messages<WindowEvent>>()
+        .write(WindowEvent::TouchInput(TouchInput {
+            phase: TouchPhase::Ended,
+            position: at,
+            window,
+            id: 4,
+            force: None,
+        }));
+    ui.world_mut()
+        .resource_mut::<Messages<TouchInput>>()
+        .write(TouchInput {
+            phase: TouchPhase::Ended,
+            position: at,
+            window,
+            id: 4,
+            force: None,
+        });
+    ui.update_collecting_signals(4);
 }
 
 /// bug_0072: a signal handler that despawns the whole UI in a frame where
