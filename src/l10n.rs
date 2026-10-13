@@ -331,15 +331,21 @@ fn resolve_all(
                             // The cache is an accelerator: a text that
                             // doesn't split (an argument swallowing a
                             // literal part) falls back to converting the
-                            // formatted text directly.
+                            // formatted text directly — with the values
+                            // raw (pulldown escapes the conversion;
+                            // escaping first double-escaped code spans).
                             text.map(|text| {
-                                substitute(entry, &text)
-                                    .unwrap_or_else(|| md::to_html(&text))
+                                substitute(entry, &text).unwrap_or_else(|| {
+                                    md::to_html(&translate_raw(bundle, &id, args.as_deref()).unwrap_or(text))
+                                })
                             })
                         }
-                        None if markdown.is_some() => {
-                            text.map(|text| md::to_html(&text))
-                        }
+                        None if markdown.is_some() => text.map(|_| {
+                            md::to_html(
+                                &translate_raw(bundle, &id, args.as_deref())
+                                    .unwrap_or_default(),
+                            )
+                        }),
                         None => text,
                     },
                 );
@@ -361,6 +367,35 @@ where
     R: Borrow<FluentResource>,
     M: MemoizerKind,
 {
+    translate_with(bundle, id, args_json, false)
+}
+
+/// `raw`: string arguments keep their characters (no HTML escaping).
+/// The Markdown per-value path needs them raw — pulldown escapes the
+/// conversion itself; escaping first double-escaped code spans (a value
+/// in a code span displayed `&amp;` for `&`).
+pub(crate) fn translate_raw<R, M>(
+    bundle: &FluentBundle<R, M>,
+    id: &str,
+    args_json: Option<&str>,
+) -> Result<String, String>
+where
+    R: Borrow<FluentResource>,
+    M: MemoizerKind,
+{
+    translate_with(bundle, id, args_json, true)
+}
+
+fn translate_with<R, M>(
+    bundle: &FluentBundle<R, M>,
+    id: &str,
+    args_json: Option<&str>,
+    raw: bool,
+) -> Result<String, String>
+where
+    R: Borrow<FluentResource>,
+    M: MemoizerKind,
+{
     let message = bundle
         .get_message(id)
         .ok_or_else(|| format!("missing message `{id}`"))?;
@@ -369,7 +404,7 @@ where
         .ok_or_else(|| format!("message `{id}` has no value"))?;
 
     let args = args_json
-        .map(|json| parse_args(json).map_err(|err| format!("`{id}` data-l10n-args: {err}")))
+        .map(|json| parse_args(json, raw).map_err(|err| format!("`{id}` data-l10n-args: {err}")))
         .transpose()?;
 
     let mut errors = Vec::new();
@@ -642,7 +677,7 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
 }
 
 #[allow(clippy::needless_continue)]
-fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
+fn parse_args(json: &str, raw: bool) -> Result<FluentArgs<'static>, String> {
     let serde_json::Value::Object(map) =
         serde_json::from_str(json).map_err(|err| err.to_string())?
     else {
@@ -655,8 +690,16 @@ fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
                 Some(number) => args.set(key, number),
                 None => return Err(format!("`{key}`: number out of range")),
             },
-            // Translations are parsed as markup; keep values as text.
-            serde_json::Value::String(string) => args.set(key, escape_html(&string)),
+            // Translations are parsed as markup; keep values as text
+            // (escaped once, decoded once by the build — unless the
+            // Markdown conversion escapes them itself).
+            serde_json::Value::String(string) => {
+                if raw {
+                    args.set(key, string);
+                } else {
+                    args.set(key, escape_html(&string));
+                }
+            }
             serde_json::Value::Bool(flag) => args.set(key, flag.to_string()),
             _ => {
                 return Err(format!(
@@ -887,6 +930,37 @@ mod tests {
             cache.messages.contains_key("ok"),
             "the junk line hid the resource's messages"
         );
+    }
+
+    /// The per-value path (a message the cache can't take) keeps an `&`
+    /// an `&` in a code span: the values are raw, pulldown escapes the
+    /// conversion — the cached and per-value outputs agree.
+    #[test]
+    fn code_span_args_escape_once_per_value() {
+        // A select makes the message uncacheable: the per-value path.
+        let source = "cmd =\n    { $os ->\n       *[other] Run `{ $cmd }` now\n    }\n";
+        let bundle = bundle(source);
+        let json = serde_json::json!({ "cmd": "a & b", "os": "linux" }).to_string();
+        assert!(
+            markdown_cache(&[source.to_owned()]).messages.is_empty(),
+            "the select must make it uncacheable"
+        );
+        // The production per-value output (resolve_all's fallback): the
+        // `&` in the code span is escaped once (the values are raw;
+        // pulldown escapes the conversion — escaping first showed
+        // `&amp;` for `&`).
+        let dom = crate::template::HtmlDocument::parse(
+            r#"<p data-l10n-id="cmd" data-l10n-args='{"cmd":"a & b","os":"linux"}'></p>"#.to_owned(),
+        )
+        .unwrap();
+        let resource = std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
+        let mut concurrent = fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
+        concurrent.add_resource(resource).unwrap();
+        let cache = markdown_cache(&[source.to_owned()]);
+        let localized = resolve_all(dom.dom(), &concurrent, Some(&cache));
+        let html = localized.values().next().expect("localized").as_ref().unwrap();
+        assert!(html.contains("<code>a &amp; b</code>"), "{html}");
+        assert!(!html.contains("&amp;amp;"), "double-escaped: {html}");
     }
 
     /// Cached substitution never shows double-escaped text: the values
