@@ -176,7 +176,10 @@ impl AssetLoader for LocaleBundleLoader {
         for name in manifest.resources {
             let path = load_context.path().resolve_embed_str(&name)?;
             // `read_asset_bytes` skips Bevy's own unapproved-path check:
-            // enforce it, matching `AssetServer::load`'s default.
+            // enforce it (the mode is Bevy's DEFAULT, `Forbid`;
+            // `LoadContext` exposes no read of
+            // `AssetPlugin::unapproved_path_mode`, so an `Allow` app keeps
+            // its resources inside the asset root).
             if path.is_unapproved() {
                 return Err(format!("resource escapes the asset root: {name}").into());
             }

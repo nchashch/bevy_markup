@@ -387,8 +387,12 @@ pub(crate) fn resolve_references(
         };
         let resolved = path.resolve_embed_str(literal)?;
         // `read_asset_bytes` skips Bevy's own unapproved-path check
-        // (`../..` out of the asset root would load): enforce it here,
-        // matching `AssetServer::load`'s default.
+        // (`../..` out of the asset root would load): enforce it here.
+        // The mode is Bevy's DEFAULT (`Forbid`) and is not consulted:
+        // `LoadContext` exposes no read of
+        // `AssetPlugin::unapproved_path_mode`, so an app that opts into
+        // `Allow` keeps its includes inside the asset root (they can
+        // still name any file under it).
         if resolved.is_unapproved() {
             return Err(format!(
                 "template include escapes the asset root: {literal}"
