@@ -2667,10 +2667,18 @@ fn refresh_cached_handles(
             }
             continue;
         }
-        if entities.len() != spec.children.len() {
+        // The spec owns the non-nested children in order: an app-nested
+        // HtmlUi root sits among them (the count then disagreed and the
+        // whole subtree's handles went stale).
+        let owned: Vec<Entity> = entities
+            .iter()
+            .copied()
+            .filter(|&child| !tree.get(child).is_ok_and(|(.., nested)| nested))
+            .collect();
+        if owned.len() != spec.children.len() {
             continue;
         }
-        for (&child, child_spec) in entities.iter().zip(&spec.children) {
+        for (&child, child_spec) in owned.iter().zip(&spec.children) {
             if let Some(handle) = child_spec.spec().handle {
                 commands
                     .entity(child)

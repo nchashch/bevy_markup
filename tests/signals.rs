@@ -29,8 +29,12 @@ const VIEWPORT: UVec2 = UVec2::new(640, 480);
 
 /// A page under a full-width column root, the way apps set up their `HtmlUi`.
 fn page_ui(name: &str, page: &str, css: &str, context: TemplateContext) -> TestUi {
-    TestUi::with_pointer(name, &[("page.html", page), ("style.css", css)], VIEWPORT)
-        .stylesheet("style.css")
+    TestUi::with_pointer(
+        name,
+        &[("page.html", page), ("slot.html", "<p>slot</p>"), ("style.css", css)],
+        VIEWPORT,
+    )
+    .stylesheet("style.css")
         .spawn(
             "page.html",
             context,
@@ -446,6 +450,81 @@ fn the_deepest_bound_element_wins_the_click() {
 /// `enter`/`leave` count for a whole element subtree (like CSS `:hover`),
 /// and each bound element on the way enters and leaves.
 #[test]
+/// An app-nested `HtmlUi` root beside pipeline children: a kept subtree's
+/// `:hover` keeps working across a build that shifts the document indices
+/// (an insertion). The stale refresh used to give up when the entity count
+/// under the parent disagreed with the spec's (the nested root), leaving
+/// the subtree's `DomNode` handles in the old document — `:hover` died
+/// there while reuse kept succeeding.
+#[test]
+fn hover_survives_a_rebuild_around_a_nested_ui_root() {
+    let page = r#"<div id="wrap">{% for i in items %}<p>{{ i }}</p>{% endfor %}
+        <div id="target" data-on-enter="enter-target" data-on-leave="leave-target"><p>In</p></div>
+    </div>"#;
+    let spawn = |name: &str| {
+        page_ui(
+            name,
+            page,
+            "",
+            TemplateContext::new().with("items", &[0]),
+        )
+    };
+    let mut reused = spawn("nested-hover-reused");
+    let mut fresh = spawn("nested-hover-fresh");
+    reused.settle();
+    fresh.settle();
+    // Nest a slot UI into the wrap (the demo's slot pattern): the entity
+    // count under the wrap then disagrees with the spec's children.
+    reused.world_mut().add_observer(
+        |built: On<HtmlUiBuilt>,
+         mut commands: Commands,
+         mut elements: HtmlElements,
+         templates: Res<NestedSlot>| {
+            let Some(wrap) = elements.by_id(built.entity, "wrap") else {
+                return;
+            };
+            commands.entity(wrap).with_children(|children| {
+                children.spawn((
+                    HtmlUi::new(templates.0.clone()),
+                    TemplateContext::new(),
+                    Node::default(),
+                ));
+            });
+        },
+    );
+    #[derive(Resource)]
+    struct NestedSlot(Handle<HtmlTemplate>);
+    let template = reused.load::<HtmlTemplate>("slot.html");
+    reused.world_mut().insert_resource(NestedSlot(template));
+    // The insertion shifts every following index; the pairing walk runs
+    // with the nested root present.
+    for ui in [&mut reused, &mut fresh] {
+        let root = ui.root();
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("items", &[0, 1]);
+    }
+    reused.settle();
+    fresh.settle();
+    // Hover the target in the reused UI: its handles were refreshed.
+    let (target, at) = {
+        let root = reused.root();
+        let world = reused.world_mut();
+        center(world, root, "target")
+    };
+    reused.move_pointer(at);
+    assert!(pseudo(reused.world_mut(), target).hovered, "hovered");
+    // And the same hover works in the fresh UI (sanity).
+    let (ftarget, fat) = {
+        let root = fresh.root();
+        let world = fresh.world_mut();
+        center(world, root, "target")
+    };
+    fresh.move_pointer(fat);
+    assert!(pseudo(fresh.world_mut(), ftarget).hovered, "fresh hovered");
+}
+
 fn enter_and_leave_track_the_hovered_subtree() {
     let page = r#"<div id="parent" data-on-enter="enter-parent" data-on-leave="leave-parent">
         <div id="child" data-on-enter="enter-child" data-on-leave="leave-child"
