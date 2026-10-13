@@ -2466,7 +2466,6 @@ html-ui
     );
 }
 
-/// A context `--` value that reaches the styles only transitively
 /// (`--a: var(--brand)`) restyles when it changes: the vars hash used to
 /// track only directly referenced names.
 #[test]
@@ -2478,6 +2477,36 @@ fn transitive_var_change_restyles() {
             (
                 "style.css",
                 "html { color: #ffffff } p { --a: var(--brand); color: var(--a) }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("--brand", &"#ff0000"),
+        Node::default(),
+    );
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "colored" default 16px #ff0000
+"#,
+    );
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--brand", &"#00ff00");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "colored" default 16px #00ff00
+"#,
+    );
+}
+
 
 /// Other `type`s stay unsupported (ADR 0016): only a text (or missing)
 /// `type` builds the field; the others are dropped like any unsupported
@@ -2551,17 +2580,6 @@ fn kept_input_follows_value_and_styles() {
     .stylesheet("style.css")
     .spawn(
         "page.html",
-        TemplateContext::new().with("--brand", &"#ff0000"),
-        Node::default(),
-    );
-    ui.settle().assert_dump(
-        r#"
-html-ui
-  p
-    "colored" default 16px #ff0000
-"#,
-    );
-
         TemplateContext::new().with("n", &1).with("v", &"one"),
         Node::default(),
     );
@@ -2571,17 +2589,6 @@ html-ui
     ui.world_mut()
         .get_mut::<TemplateContext>(root)
         .unwrap()
-        .insert("--brand", &"#00ff00");
-    ui.settle().assert_dump(
-        r#"
-html-ui
-  p
-    "colored" default 16px #00ff00
-"#,
-    );
-}
-
-
         .insert("v", &"two");
     ui.update(30);
     let entity = {

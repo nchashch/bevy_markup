@@ -86,6 +86,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
     let stylesheet = Stylesheet {
         sheet,
         image_urls: urls,
+        var_names: Vec::new(),
         images: handles,
     };
 

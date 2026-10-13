@@ -127,7 +127,9 @@ pub(crate) fn place_anchored(
         // edge, so keeping the overlay inside the viewport means
         // `inset <= limit` (the overlay's other edge at `limit - inset`).
         let clamp_from_far = |start: f32, extent: Option<f32>, limit: Option<f32>| match (extent, limit) {
-            (Some(extent), Some(limit)) => start.min(limit),
+            // `extent` is only matched on: the far-edge form clamps the
+            // inset alone (`inset <= limit`).
+            (Some(_extent), Some(limit)) => start.min(limit),
             _ => start,
         };
         let (width, height) = (own.map(|own| own.x), own.map(|own| own.y));
