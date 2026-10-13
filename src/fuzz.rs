@@ -12,7 +12,7 @@ use bevy::image::Image;
 use bevy::prelude::*;
 
 use crate::build::{BoxStyle, Styler, element_tag, root_style};
-use crate::cascade::{HtmlStyles, Pseudo, image_urls};
+use crate::cascade::{HtmlStyles, Pseudo, custom_image_urls, image_urls, var_names};
 use crate::fonts::FontFamilies;
 use crate::html::HtmlElement;
 use crate::l10n::LocalizedText;
@@ -81,13 +81,17 @@ pub fn cascade(css: &str) -> Result<String, String> {
     let parsed = StyleSheet::parse(css, ParserOptions::default()).map_err(|err| err.to_string())?;
     let sheet = parsed.into_owned();
     let urls = image_urls(&sheet);
+    let mut custom_urls = custom_image_urls(&sheet);
     let mut assets = Assets::<Image>::default();
-    let handles: Vec<_> = (0..urls.len()).map(|_| assets.add(fake_frame())).collect();
+    let mut handles: Vec<_> = (0..urls.len()).map(|_| assets.add(fake_frame())).collect();
+    handles.extend((0..custom_urls.len()).map(|_| assets.add(fake_frame())));
+    custom_urls.extend(urls);
     let stylesheet = Stylesheet {
-        sheet,
-        image_urls: urls,
-        var_names: Vec::new(),
+        // The load-time scans: untrusted CSS, must not panic or hang.
+        var_names: var_names(&sheet),
+        image_urls: custom_urls,
         images: handles,
+        sheet,
     };
 
     let styles = HtmlStyles::from_sheet(&stylesheet.sheet);
@@ -146,6 +150,8 @@ pub fn cascade(css: &str) -> Result<String, String> {
     // elements (nearest first), plus pseudo states on them. Exercises the
     // `A B`/`A > B` paths, which the old harness passed no ancestors for.
     let chains: Vec<(Vec<crate::cascade::Ancestor>, Pseudo)> = vec![
+        // The no-ancestor case (the element's own pseudo only).
+        (vec![], Pseudo::default()),
         (
             vec![
                 crate::cascade::Ancestor {
@@ -245,6 +251,26 @@ pub fn translate(ftl: &str, id: &str, args_json: &str) -> Result<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cascade harness itself: untrusted CSS through the load-time
+    /// scans (`var_names`, the URL lists — never fuzzed before) and the
+    /// element/ancestor sweep must terminate with no panic.
+    #[test]
+    fn cascade_harness_is_safe_on_adversarial_css() {
+        for css in [
+            "p { --a: var(--a, 1px) var(--a, 1px); width: var(--a) }",
+            concat!(
+                "p { --v0: 1px; ",
+                "--v1: var(--v0); --v999: var(--v998); width: var(--v999) }"
+            ),
+            "p { --icon: url(\"data:image/svg+xml,<svg/>\"); border-image: var(--icon) 4 }",
+            "p { grid-template-columns: repeat(40000, [a] 1fr); border-image: url(\"x.png\") 4 }",
+        ] {
+            let _ = cascade(&format!("{css} NONSENSE {css}"));
+            let out = cascade(css).unwrap_or_default();
+            assert!(!out.is_empty(), "the harness output nothing for: {css}");
+        }
+    }
 
     /// bug_0005, found by honggfuzz (`ftl` target): fluent-syntax 0.11.1
     /// quotes an invalid `\U` escape plus the character that ended it, sliced
