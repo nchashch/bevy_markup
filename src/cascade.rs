@@ -1613,6 +1613,7 @@ fn apply_resolved(
         resolved: HashMap::new(),
         resolving: HashSet::new(),
         budget: VAR_BUDGET,
+        cycle: false,
     };
     let Some(text) = substitution.substitute(tokens) else {
         debug!("html css: `var()` substitution failed");
@@ -1663,6 +1664,11 @@ struct Substitution<'a> {
     /// Names on the current resolution chain: re-entering one fails.
     resolving: HashSet<String>,
     budget: usize,
+    /// Set when the resolution just hit a cycle: cycle members are
+    /// invalid at computed-value time *including their fallbacks*
+    /// (CSS Variables 1 §2.3) — the enclosing `var()` skips its
+    /// fallback instead of applying it.
+    cycle: bool,
 }
 
 impl<'a> Substitution<'a> {
@@ -1674,7 +1680,8 @@ impl<'a> Substitution<'a> {
             return value.clone();
         }
         if self.resolving.contains(name) {
-            // A cycle: invalid at computed-value time.
+            // A cycle: invalid at computed-value time, fallbacks included.
+            self.cycle = true;
             return None;
         }
         if self.resolving.len() >= MAX_VAR_DEPTH {
@@ -1709,6 +1716,12 @@ impl<'a> Substitution<'a> {
                     let name = variable.name.ident.as_ref();
                     match self.var(name) {
                         Some(value) => value,
+                        None if self.cycle => {
+                            // The cycle closes at *this* reference: its
+                            // fallback doesn't apply.
+                            self.cycle = false;
+                            return None;
+                        }
                         None => match &variable.fallback {
                             Some(fallback) => self.substitute(fallback)?,
                             None => return None,
@@ -4034,11 +4047,23 @@ mod tests {
         );
     }
 
-    /// A plain linear chain (`--v1: var(--v0)`, 1000 links) recursed
-    /// once per link and overflowed a task-pool stack (an abort, not a
-    /// panic). Deeper than [`MAX_VAR_DEPTH`], the name is unresolvable
-    /// and the declaration drops — the same surface as an over-budget
-    /// sheet. A chain within the cap still resolves.
+    /// A cycle is invalid at computed-value time, *including* the
+    /// fallbacks on the cycle's `var()`s (CSS Variables 1 §2.3): the
+    /// declaration drops instead of resolving through the fallback.
+    #[test]
+    fn var_cycle_fallbacks_dont_apply() {
+        // A self-reference with a fallback: the fallback doesn't rescue it.
+        let style = declared("--a: var(--a, 5px); width: var(--a)");
+        assert_eq!(style.layout.width, None);
+        // An indirect cycle: --a → --b → --a.
+        let style = declared("--a: var(--b); --b: var(--a, 5px); width: var(--a)");
+        assert_eq!(style.layout.width, None);
+        // The cycle is local: an unrelated property still resolves.
+        let style = declared("--a: var(--a, 5px); color: #00ff00; width: 10px");
+        assert_eq!(style.color, Some(Color::srgb(0.0, 1.0, 0.0)));
+        assert_eq!(style.layout.width, Some(Val::Px(10.0)));
+    }
+
     #[test]
     fn var_chain_depth_is_capped() {
         // Deep: drops instead of overflowing.
