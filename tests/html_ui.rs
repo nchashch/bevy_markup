@@ -2433,9 +2433,9 @@ html-ui
 
 /// `<input type="text">` (the `text-input` feature): a block element with
 /// Bevy 0.20's editable-text widget — the initial value from the `value`
-/// attribute, `maxlength` → `max_characters`, the text styled by the
-/// cascade, the box by CSS. The element is focusable (press-to-focus,
-/// navigation).
+/// attribute, the text styled by the cascade, the box by CSS. The element
+/// is focusable (press-to-focus, navigation). (`maxlength` and
+/// `placeholder` are not supported: Bevy 0.20's widget has neither.)
 #[cfg(feature = "text-input")]
 #[test]
 fn text_input_element_maps_to_the_widget() {
@@ -2460,9 +2460,178 @@ fn text_input_element_maps_to_the_widget() {
     ui.update(30).assert_dump(
         r#"
 html-ui
-  input.field padding=4,4,4,4 bg=#222222
+  input.field padding=4,4,4,4 w=200 focus bg=#222222
     "hello" default 20px #ffffff
 "#,
+    );
+}
+
+/// Other `type`s stay unsupported (ADR 0016): only a text (or missing)
+/// `type` builds the field; the others are dropped like any unsupported
+/// empty inline leaf — no field, no element. The `type` attribute is the
+/// real attribute, not a `data-type`.
+#[cfg(feature = "text-input")]
+#[test]
+fn non_text_input_types_are_not_fields() {
+    let mut ui = TestUi::new(
+        "input-types",
+        &[
+            (
+                "page.html",
+                r#"<input type="checkbox"><input type="password"><input>"#,
+            ),
+            ("style.css", "html { color: #ffffff }"),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.update(20);
+    let world = ui.world_mut();
+    let mut query = world.query::<(
+        Entity,
+        &bevy_markup::html::HtmlElement,
+        Option<&bevy::text::EditableText>,
+        Option<&bevy::ui_widgets::TextInput>,
+        Option<&Focusable>,
+    )>();
+    let inputs: Vec<_> = query
+        .iter(world)
+        .map(|(entity, element, text, widget, focus)| {
+            (
+                element.tag.clone(),
+                text.is_some(),
+                widget.is_some(),
+                focus.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        inputs,
+        vec![("input".to_owned(), true, true, true)],
+        "the checkbox and password inputs must not become fields"
+    );
+}
+
+/// A kept `<input>` is updated in place: the text follows the `value`
+/// attribute only when the attribute changed (the typed text is app
+/// state), and the cascade's font/color restyle it.
+#[cfg(feature = "text-input")]
+#[test]
+fn kept_input_follows_value_and_styles() {
+    let mut ui = TestUi::new(
+        "input-update",
+        &[
+            (
+                "page.html",
+                r#"<p>{{ n }}</p><input type="text" class="field" value="{{ v }}">"#,
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff; font-size: 20px } .field { color: #00ffff }",
+            ),
+            (
+                "b.css",
+                "html { color: #ffffff; font-size: 20px } .field { color: #ff00ff; font-size: 30px }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("n", &1).with("v", &"one"),
+        Node::default(),
+    );
+    ui.update(30);
+    // The `value` attribute changed: the field's text follows it.
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("v", &"two");
+    ui.update(30);
+    let entity = {
+        let world = ui.world_mut();
+        world
+            .query::<(Entity, &bevy::ui_widgets::TextInput)>()
+            .iter(world)
+            .map(|(entity, _)| entity)
+            .next()
+            .expect("the text field")
+    };
+    let text = ui
+        .world_mut()
+        .get::<bevy::text::EditableText>(entity)
+        .unwrap()
+        .value()
+        .to_string();
+    assert_eq!(text, "two", "the value attribute change did not land");
+
+    // The attribute is unchanged; typed text survives a re-render.
+    ui.world_mut()
+        .entity_mut(entity)
+        .insert(bevy::text::EditableText::new("typed by the user"));
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &2);
+    ui.update(30);
+    let text = ui
+        .world_mut()
+        .get::<bevy::text::EditableText>(entity)
+        .unwrap()
+        .value()
+        .to_string();
+    assert_eq!(
+        text, "typed by the user",
+        "the re-render clobbered the typed text"
+    );
+
+    // A restyle updates the field's cascade styling.
+    let b_sheet = ui.load::<Stylesheet>("b.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
+    ui.update(30);
+    let color = ui
+        .world_mut()
+        .get::<bevy::prelude::TextColor>(entity)
+        .expect("the field kept its TextColor")
+        .0;
+    assert_eq!(color, bevy::color::Color::srgb(1.0, 0.0, 1.0));
+}
+
+/// The text-input branch must style the field from the same box the
+/// normal path computed: the `resolve_names` call resolves its grid
+/// placement, and dropping it lost a *named* `grid-row`/`-column`
+/// (numeric placement maps without the names).
+#[cfg(feature = "text-input")]
+#[test]
+fn text_input_keeps_its_grid_placement() {
+    let mut ui = TestUi::new(
+        "input-grid",
+        &[
+            (
+                "page.html",
+                r#"<div class="grid"><input type="text" style="grid-row: mid"></div>"#,
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff } .grid { display: grid; grid-template-rows: [top] auto [mid] auto auto }",
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.update(30);
+    let world = ui.world_mut();
+    let rows: Vec<_> = world
+        .query::<(&bevy_markup::html::HtmlElement, &Node)>()
+        .iter(world)
+        .filter(|(element, _)| element.tag == "input")
+        .map(|(_, node)| (node.grid_row.get_start(), node.grid_row.get_span()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![(Some(2), None)],
+        "the input lost its named grid placement"
     );
 }
 

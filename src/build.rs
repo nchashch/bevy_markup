@@ -124,6 +124,13 @@ struct TextInputSpec {
     name: Option<String>,
 }
 
+/// The `value` attribute the field's text was last set from: the field's
+/// text is app state (the user types into `EditableText`), so a re-render
+/// sets it only when the attribute changed.
+#[cfg(feature = "text-input")]
+#[derive(Component, Debug, Default, Clone, PartialEq)]
+struct InputValue(String);
+
 /// An `<img>`: the loaded image and its `width`/`height` attributes (px;
 /// `None` keeps the image's size, one `None` preserves the aspect ratio).
 /// Percentages resolve against the containing block's content box at
@@ -2186,7 +2193,8 @@ fn spawn_spec(
         // `EditableText`), and the box from CSS on the node.
         let input = spec.text_input.clone().unwrap();
         entity.insert((
-            EditableText::new(input.initial),
+            EditableText::new(input.initial.clone()),
+            InputValue(input.initial),
             input.font,
             TextColor(input.color),
             TextInput,
@@ -2469,11 +2477,16 @@ fn update_spec(
         signals::observe_pointer_signals(&mut target);
     }
     let queued = Arc::clone(spec);
+    #[cfg(feature = "text-input")]
+    let is_text_input = queued.text_input.is_some();
+    #[cfg(not(feature = "text-input"))]
+    let is_text_input = false;
     target.queue(move |mut entity: EntityWorldMut| {
         put_ref(&mut entity, Some(&queued.node));
         // Non-text nodes get their `EmSize` from the cascade (text blocks
-        // have a `TextFont`, which Bevy derives it from).
-        if !is_text {
+        // have a `TextFont`, which Bevy derives it from; a text input's
+        // `EmSize` comes from its `TextFont` too, as on spawn).
+        if !is_text && !is_text_input {
             put(&mut entity, Some(EmSize(queued.font_size)));
         }
         put(
@@ -2483,6 +2496,38 @@ fn update_spec(
                 exprs: queued.calc.clone(),
             }),
         );
+        // The editable text field's styling follows the cascade, and its
+        // text is set only when the `value` attribute it was built from
+        // changed (the text itself is app state: the user types into
+        // `EditableText`).
+        #[cfg(feature = "text-input")]
+        if let Some(input) = &queued.text_input {
+            put(&mut entity, Some(input.font.clone()));
+            put(&mut entity, Some(TextColor(input.color)));
+            let stored = entity.get::<InputValue>().map(|value| value.0.as_str());
+            if stored != Some(input.initial.as_str()) {
+                entity.insert((
+                    EditableText::new(input.initial.clone()),
+                    InputValue(input.initial.clone()),
+                ));
+            }
+            match (&input.name, entity.get::<signals::InputName>()) {
+                (Some(name), Some(current)) if current.0 == *name => {}
+                (Some(name), _) => {
+                    entity.insert(signals::InputName(name.clone()));
+                }
+                (None, Some(_)) => {
+                    entity.remove::<signals::InputName>();
+                }
+                (None, None) => {}
+            }
+        }
+        // The element stopped being a text input (its `type` attribute
+        // changed): the widget components go.
+        #[cfg(feature = "text-input")]
+        if queued.text_input.is_none() {
+            entity.remove::<(EditableText, TextInput, InputValue, signals::InputName)>();
+        }
         if queued.element.is_some() {
             put_ref(&mut entity, queued.element.as_ref());
         }
@@ -3435,15 +3480,18 @@ fn collect_node(
     boxed.fade(style.opacity);
     #[cfg(feature = "text-input")]
     if element.tag == "input"
-        && element
-            .dataset
+        && tag
+            .attributes()
             .get("type")
-            .is_none_or(|kind| kind == "text")
+            .flatten()
+            .map(|kind| kind.as_utf8_str() == "text")
+            .unwrap_or(true)
     {
         // An editable text field (ADR 0016): a block with the widget's
         // components; its content is the field's state, not walked markup.
-        // An `<input>` is focusable like a block with `data-on-click`
-        // (HTML inputs are focusable), unless `tabindex="-1"`.
+        // Other `type`s stay unsupported (the field is not built). An
+        // `<input>` is focusable like a block with `data-on-click` (HTML
+        // inputs are focusable), unless `tabindex="-1"`.
         focus = Some(Focusable {
             autofocus: tag.attributes().get("autofocus").flatten().is_some(),
         });
@@ -3457,9 +3505,8 @@ fn collect_node(
             .get("name")
             .flatten()
             .map(|name| decode_entities(&name.as_utf8_str()).to_string());
-        let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), chain);
-        boxed.drawn_outline = boxed.outline(style.color);
-        boxed.fade(style.opacity);
+        // The outer `boxed` already has the placement (`resolve_names`),
+        // the outline and the fade applied.
         items.push(Item::TextInput {
             element,
             handle: Some(handle),
