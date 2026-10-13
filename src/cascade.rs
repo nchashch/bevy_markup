@@ -2763,6 +2763,12 @@ fn justify_self(value: &css_align::JustifySelf) -> Option<JustifySelf> {
 /// list; the `[name]` line names register on the container's name table
 /// (placements resolve against them). One unsupported track drops the
 /// whole declaration, as an invalid value would.
+/// The most tracks one axis may declare: beyond it the declaration drops
+/// (line numbers are `i16` — a `repeat(40000, …)` overflowed the
+/// arithmetic and a 32 767-row `grid-template-areas` overflowed the area
+/// bounds — and no authored grid needs a pathological count anyway).
+const MAX_GRID_TRACKS: usize = 1000;
+
 fn track_sizing(
     sizing: &TrackSizing,
     axis: Axis,
@@ -2771,6 +2777,9 @@ fn track_sizing(
         TrackSizing::None => return (Some(Vec::new()), None),
         TrackSizing::TrackList(list) => list,
     };
+    if total_lines(list) > MAX_GRID_TRACKS {
+        return (None, None);
+    }
     let has_names = list.line_names.iter().any(|names| !names.is_empty())
         || list.items.iter().any(|item| {
             matches!(item, TrackListItem::TrackRepeat(repeat) if repeat.line_names.iter().any(|names| !names.is_empty()))
@@ -3032,6 +3041,9 @@ fn parse_areas(areas: &css_grid::GridTemplateAreas) -> Option<GridNames> {
     };
     let columns = *columns as usize;
     let rows = areas.len() / columns.max(1);
+    if columns == 0 || columns > MAX_GRID_TRACKS || rows > MAX_GRID_TRACKS {
+        return None;
+    }
     // Each name's region: the min/max row and column it spans.
     let mut bounds: HashMap<String, (u16, u16, u16, u16)> = HashMap::new();
     for (index, name) in areas.iter().enumerate() {
@@ -4045,6 +4057,35 @@ mod tests {
             "the pathological sheets took {:?}",
             start.elapsed()
         );
+    }
+
+    /// Pathologically large track counts drop the declaration instead of
+    /// overflowing the line arithmetic (an `i16` line number; debug
+    /// builds panicked on the subtraction).
+    #[test]
+    fn pathological_track_counts_drop_the_declaration() {
+        // A 40 000-way repeat: no panic, no columns.
+        let style = declared("display: grid; grid-template-columns: repeat(40000, 1fr)");
+        assert_eq!(style.layout.grid_template_columns, None);
+        // With names (the registration path).
+        let style = declared("display: grid; grid-template-columns: repeat(40000, [a] 1fr)");
+        assert_eq!(style.layout.grid_template_columns, None);
+        // A 40 000-row template with names.
+        let style = declared(
+            concat!(
+                "display: grid; grid-template-columns: 1fr; grid-template-rows: ",
+                "repeat(40000, auto)"
+            ),
+        );
+        assert_eq!(style.layout.grid_template_rows, None);
+        // A normal grid still resolves.
+        let style = declared("display: grid; grid-template-columns: repeat(3, [a] 1fr)");
+        assert!(
+            style.layout.grid_template_columns.is_some(),
+            "a normal repeat was dropped"
+        );
+        let names = style.layout.grid_names.expect("line names");
+        assert_eq!(names.columns["a"], &[1, -4, 2, -3, 3, -2]);
     }
 
     /// A cycle is invalid at computed-value time, *including* the
