@@ -52,8 +52,8 @@ use bevy::ui::auto_directional_navigation::{AutoDirectionalNavigation, AutoDirec
 use crate::HtmlUiSystems;
 use crate::html::{HtmlElement, HtmlUi};
 use crate::signals::{
-    ActivationInput, ElementSignal, ElementSignals, PseudoState, SignalBinding, SignalSource,
-    SignalTrigger,
+    ActivationInput, ActivationParams, ElementSignal, ElementSignals, PseudoState, SignalBinding,
+    SignalSource, SignalTrigger,
 };
 
 /// A focusable element (see the [module docs](self)). `autofocus` is the
@@ -153,10 +153,12 @@ pub(crate) fn focusable(tag: &tl::HTMLTag, signals: &[SignalBinding]) -> Option<
     })
 }
 
+/// Directional navigation: focus memory, press-to-focus, activation and
+/// the app's `HtmlFocus` API. The navigation plugin itself is added in
+/// [`add_navigation_plugin`] (from the crate plugin's `finish`), so an app
+/// adding Bevy's [`DirectionalNavigationPlugin`] itself is detected
+/// instead of hitting Bevy's duplicate-plugin error.
 pub(crate) fn plugin(app: &mut App) {
-    if !app.is_plugin_added::<DirectionalNavigationPlugin>() {
-        app.add_plugins(DirectionalNavigationPlugin);
-    }
     app.init_resource::<InputFocus>()
         .init_resource::<InputFocusVisible>()
         .init_resource::<FocusMemory>()
@@ -165,13 +167,67 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(
             PostUpdate,
             (
-                (remember_focus, update_focus_states).before(HtmlUiSystems::Render),
+                (remember_focus, update_focus_states)
+                    // After the dispatcher: a signal handler that moves
+                    // focus shows the new state the same frame.
+                    .after(crate::signals::dispatch_signals)
+                    .before(HtmlUiSystems::Render),
                 (sync_navigation, repair_focus)
                     .chain()
                     .after(HtmlUiSystems::Build)
                     .before(UiSystems::Prepare),
             ),
         );
+}
+
+/// Adds Bevy's [`DirectionalNavigationPlugin`] when the app hasn't (its
+/// neighbor lookup backs the focus navigation). Called from the crate
+/// plugin's `finish`, after every plugin's `build`: an app adding the
+/// plugin itself anywhere in its `build` is detected here.
+pub(crate) fn add_navigation_plugin(app: &mut App) {
+    if !app.is_plugin_added::<DirectionalNavigationPlugin>() {
+        app.add_plugins(DirectionalNavigationPlugin);
+    }
+}
+
+/// The first navigable element in scope, in document order: a depth-first
+/// walk of each in-scope root's subtree (the same order the build
+/// spawns/updates in). `Entity`-ordered `.min()` picked recycled ids by
+/// generation, which could be the page's *last* element.
+fn first_focusable_in_scope(
+    roots_in_scope: &Query<ScopeRoot, (With<HtmlUi>, Without<HtmlNoFocus>)>,
+    navigable: &Query<(Entity, &HtmlElement, &Focusable), With<AutoDirectionalNavigation>>,
+    children: &Query<&'static Children>,
+    visibility: &Query<&Visibility>,
+    parents: &Query<&ChildOf>,
+    roots: &Query<(), With<HtmlUi>>,
+) -> Option<Entity> {
+    let in_scope = |entity: Entity| {
+        visible_in_hierarchy(entity, visibility, parents)
+            && html_root(entity, parents, roots)
+                .is_some_and(|root| {
+                    active_modal(roots_in_scope, visibility, parents)
+                        .is_none_or(|modal| root == modal)
+                })
+    };
+    let mut stack: Vec<Entity> = roots_in_scope
+        .iter()
+        .map(|(root, ..)| root)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    while let Some(entity) = stack.pop() {
+        if navigable.contains(entity) && in_scope(entity) {
+            return Some(entity);
+        }
+        if let Ok(children) = children.get(entity) {
+            // Depth-first, document order: children in order, revisited
+            // after the current level (hence the reverse push).
+            stack.extend(children.iter().rev());
+        }
+    }
+    None
 }
 
 /// The `HtmlUi` `entity` belongs to (itself included).
@@ -265,7 +321,11 @@ fn update_focus_states(
             ..current
         };
         if state.copied() != Some(desired) && (state.is_some() || focused) {
-            commands.entity(entity).insert(desired);
+            // `try_insert`, not `insert`: a signal handler that despawned
+            // the UI this frame (same frame as a focus change) leaves dead
+            // entities here — the bug_0021 class, which missed this
+            // system.
+            commands.entity(entity).try_insert(desired);
         }
     }
 }
@@ -321,6 +381,7 @@ fn repair_focus(
     targets: Query<(), With<ElementSignals>>,
     ui_nodes: Query<(), With<Node>>,
     roots_in_scope: Query<ScopeRoot, (With<HtmlUi>, Without<HtmlNoFocus>)>,
+    children: Query<&'static Children>,
     visibility: Query<&Visibility>,
     parents: Query<&ChildOf>,
     roots: Query<(), With<HtmlUi>>,
@@ -356,7 +417,20 @@ fn repair_focus(
                 .iter()
                 .find_map(|(entity, _, focusable)| focusable.autofocus.then_some(entity))
         })
-        .or_else(|| navigable.iter().map(|(entity, ..)| entity).min());
+        // The "first focusable element in scope" fallback: document order
+        // (a depth-first walk of the in-scope roots), not `Entity` order —
+        // recycled ids sort by generation, and the old `.min()` could
+        // focus the last element of the page.
+        .or_else(|| {
+            first_focusable_in_scope(
+                &roots_in_scope,
+                &navigable,
+                &children,
+                &visibility,
+                &parents,
+                &roots,
+            )
+        });
     match target {
         Some(entity) => focus.set(entity, FocusCause::Navigated),
         None if current.is_some() => focus.clear(),
@@ -388,10 +462,29 @@ fn focus_on_press(
 
 fn activate_element(
     activate: On<ActivateElement>,
-    elements: Query<(&ElementSignals, Option<&HtmlElement>)>,
-    mut writer: MessageWriter<ElementSignal>,
+    mut params: ActivationParams,
 ) {
-    let Ok((signals, element)) = elements.get(activate.entity) else {
+    let target = activate.entity;
+    // A submit button's activation is the form's submit (Enter / gamepad A
+    // on `<button type="submit">`), with the activation as its source —
+    // the same path a click on it takes.
+    if params.submits.get(target).is_ok() {
+        crate::signals::emit_form(
+            target,
+            SignalSource::Activation(activate.input),
+            &mut params.writer,
+            &params.parents,
+            &params.elements,
+            &params.signals,
+            #[cfg(feature = "text-input")]
+            &params.children,
+            #[cfg(feature = "text-input")]
+            &params.editable,
+            #[cfg(feature = "text-input")]
+            &params.names,
+        );
+    }
+    let Ok((signals, element)) = params.elements_and_state.get(target) else {
         return;
     };
     for binding in signals
@@ -399,7 +492,7 @@ fn activate_element(
         .iter()
         .filter(|binding| binding.trigger == SignalTrigger::Click)
     {
-        writer.write(ElementSignal {
+        params.writer.write(ElementSignal {
             name: Cow::Owned(binding.name.clone()),
             trigger: SignalTrigger::Click,
             target: activate.entity,

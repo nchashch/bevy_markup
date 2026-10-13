@@ -90,6 +90,7 @@ pub(crate) fn show_tooltips(
     config: Option<Res<HtmlTooltips>>,
     hover_map: Option<Res<HoverMap>>,
     elements: Query<&HtmlElement>,
+    nodes: Query<&ComputedNode>,
     parents: Query<&ChildOf>,
     mut tooltips: Query<(Entity, &HtmlTooltip, &mut TemplateContext, &mut HtmlAnchor)>,
     mut commands: Commands,
@@ -97,24 +98,32 @@ pub(crate) fn show_tooltips(
     let (Some(config), Some(hover_map)) = (config, hover_map) else {
         return;
     };
-    let mut wanted: HashMap<Entity, (TemplateContext, AnchorPlacement)> = HashMap::new();
+    let mut wanted: HashMap<Entity, (TemplateContext, AnchorPlacement, Entity)> = HashMap::new();
     for hovered in hover_map.values() {
         for &hit in hovered.keys() {
             let nearest = std::iter::once(hit)
                 .chain(parents.iter_ancestors(hit))
                 .find_map(|entity| {
                     let tooltip = tooltip_of(elements.get(entity).ok()?)?;
-                    Some((entity, tooltip))
+                    // The tooltip anchors to the nearest ancestor that has
+                    // a node: a link span (the hover hit) carries the
+                    // tooltip data but no `ComputedNode`, and an anchor to
+                    // it despawns every frame.
+                    let anchor = std::iter::once(entity)
+                        .chain(parents.iter_ancestors(entity))
+                        .find(|&candidate| nodes.get(candidate).is_ok())
+                        .unwrap_or(entity);
+                    Some((entity, tooltip, anchor))
                 });
-            if let Some((element, tooltip)) = nearest {
-                wanted.insert(element, tooltip);
+            if let Some((element, (tooltip, placement), anchor)) = nearest {
+                wanted.insert(element, (tooltip, placement, anchor));
             }
         }
     }
     for (tooltip, &HtmlTooltip { element }, mut context, mut anchor) in &mut tooltips {
         match wanted.remove(&element) {
             // Still wanted: refresh (an identical render changes nothing).
-            Some((new_context, placement)) => {
+            Some((new_context, placement, anchor_target)) => {
                 if **context != *new_context {
                     *context = new_context;
                 }
@@ -122,16 +131,19 @@ pub(crate) fn show_tooltips(
                     anchor.placement = placement;
                     anchor.gap = config.gap;
                 }
+                if anchor.element != anchor_target {
+                    anchor.element = anchor_target;
+                }
             }
             None => commands.entity(tooltip).despawn(),
         }
     }
-    for (element, (context, placement)) in wanted {
+    for (element, (context, placement, anchor_target)) in wanted {
         commands.spawn((
             HtmlTooltip { element },
             HtmlUi::new(config.template.clone()),
             context,
-            HtmlAnchor::new(element, placement).with_gap(config.gap),
+            HtmlAnchor::new(anchor_target, placement).with_gap(config.gap),
         ));
     }
 }

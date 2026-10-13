@@ -12,6 +12,7 @@ mod common;
 #[cfg(feature = "text-input")]
 use bevy::ecs::message::Messages;
 use bevy::input::ButtonState;
+use bevy::input::touch::TouchPhase;
 #[cfg(feature = "text-input")]
 use bevy::input::keyboard::Key;
 #[cfg(feature = "text-input")]
@@ -20,6 +21,7 @@ use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
 use bevy::math::Vec2;
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
+use bevy::window::WindowEvent;
 use bevy_markup::prelude::*;
 use common::{TestUi, node_rect};
 
@@ -932,8 +934,8 @@ fn form_submit_collects_named_inputs() {
     }
 }
 
-/// The harness's primary window entity (the keyboard event's target).
-#[cfg(feature = "text-input")]
+/// The harness's primary window entity (the keyboard/touch event's
+/// target).
 fn window_of(ui: &mut TestUi) -> Entity {
     use bevy::window::PrimaryWindow;
     ui.world_mut()
@@ -1111,4 +1113,164 @@ fn repair_keeps_focus_on_link_spans() {
     ui.update(2);
     let (focus, _) = focused(&mut ui);
     assert_eq!(focus, Some(link), "focus survives another repair");
+}
+
+/// Clicking a non-submit button inside a form must NOT submit it, and a
+/// bound wrapper around the submit button submits it exactly once (the
+/// deepest-bound-element rule counts the submit button as bound for
+/// `click`).
+#[test]
+fn type_button_clicks_do_not_submit() {
+    let page = r#"<form id="signup" data-on-submit="signup">
+  <button type="button" id="clear" data-on-click="clear-form">Clear</button>
+  <button type="submit" id="go">Sign up</button>
+</form>"#;
+    let mut ui = page_ui(
+        "no-submit",
+        page,
+        "button { height: 24px; width: 100px }",
+        TemplateContext::new(),
+    );
+    ui.settle();
+    ui.update(1);
+    let clear = {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement)>();
+        elements
+            .iter(world)
+            .find(|(_, element)| element.id.as_deref() == Some("clear"))
+            .map(|(entity, _)| entity)
+            .expect("clear")
+    };
+    let at = node_rect(ui.world_mut(), clear).expect("laid out").center();
+    ui.click_at(at);
+    let signals: Vec<ElementSignal> = ui.take_signals();
+    assert!(
+        signals
+            .iter()
+            .all(|signal| signal.trigger != SignalTrigger::Submit),
+        "the type=button click submitted: {signals:?}"
+    );
+    assert!(
+        signals
+            .iter()
+            .any(|signal| signal.name.as_ref() == "clear-form"),
+        "the button's own click fired: {signals:?}"
+    );
+}
+
+/// Activation (Enter / gamepad A) on a submit button submits the form,
+/// with the activation as the signal source.
+#[test]
+fn activation_on_submit_button_submits() {
+    let page = r#"<form id="signup" data-on-submit="signup">
+  <button type="submit" id="go">Sign up</button>
+</form>"#;
+    let mut ui = page_ui(
+        "activate-submit",
+        page,
+        "button { height: 24px; width: 100px }",
+        TemplateContext::new(),
+    );
+    ui.settle();
+    ui.update(1);
+    let go = {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement)>();
+        elements
+            .iter(world)
+            .find(|(_, element)| element.id.as_deref() == Some("go"))
+            .map(|(entity, _)| entity)
+            .expect("go")
+    };
+    ui.world_mut().trigger(ActivateElement {
+        entity: go,
+        input: ActivationInput::Synthetic,
+    });
+    // Per frame: a direct trigger writes during `trigger()`, and the
+    // message buffers rotate on each update.
+    let submits = ui
+        .update_collecting_signals(2)
+        .into_iter()
+        .filter(|signal| signal.trigger == SignalTrigger::Submit)
+        .collect::<Vec<_>>();
+    assert_eq!(submits.len(), 1, "one submit: {submits:?}");
+    assert_eq!(submits[0].name.as_ref(), "signup");
+    assert!(matches!(
+        submits[0].source,
+        SignalSource::Activation(ActivationInput::Synthetic)
+    ));
+}
+
+/// A touch pointer's entered elements emit their `data-on-leave` when the
+/// touch ends (Bevy despawns the pointer and drops it from the hover map).
+#[test]
+fn touch_end_emits_leave() {
+    let page = r#"<div id="any" data-on-enter="in" data-on-leave="out">zone</div>"#;
+    let mut ui = page_ui("touch-leave", page, "div { width: 100px; height: 50px }", TemplateContext::new());
+    ui.settle();
+    ui.update(1);
+    let at = {
+        let world = ui.world_mut();
+        let zone = {
+            let mut elements = world.query::<(Entity, &HtmlElement)>();
+            elements
+                .iter(world)
+                .find(|(_, element)| element.id.as_deref() == Some("any"))
+                .map(|(entity, _)| entity)
+                .expect("zone")
+        };
+        node_rect(world, zone).expect("laid out").center()
+    };
+    // Touch press: enter fires with the touch pointer.
+    let window = window_of(&mut ui);
+    ui.world_mut()
+        .resource_mut::<Messages<WindowEvent>>()
+        .write(WindowEvent::TouchInput(TouchInput {
+            phase: TouchPhase::Started,
+            position: at,
+            window,
+            id: 3,
+            force: None,
+        }));
+    ui.update(2);
+    let entered: Vec<ElementSignal> = ui
+        .take_signals()
+        .into_iter()
+        .filter(|signal| signal.trigger == SignalTrigger::Enter)
+        .collect();
+    assert_eq!(entered.len(), 1, "one enter: {entered:?}");
+    assert!(matches!(entered[0].source, SignalSource::Hover { pointer: PointerId::Touch(3) }));
+
+    // Touch end: the pointer despawns; leave fires from the snapshot.
+    ui.world_mut()
+        .resource_mut::<Messages<WindowEvent>>()
+        .write(WindowEvent::TouchInput(TouchInput {
+            phase: TouchPhase::Ended,
+            position: at,
+            window,
+            id: 3,
+            force: None,
+        }));
+    // The pointer-input plugin reads the WindowEvent; bevy_picking's
+    // deactivation system reads `TouchInput` messages directly (winit
+    // writes those; the harness mirrors it).
+    ui.world_mut()
+        .resource_mut::<Messages<TouchInput>>()
+        .write(TouchInput {
+            phase: TouchPhase::Ended,
+            position: at,
+            window,
+            id: 3,
+            force: None,
+        });
+
+    // The despawn (commands) and the hover-map reset each take a frame.
+    let leaves = ui
+        .update_collecting_signals(4)
+        .into_iter()
+        .filter(|signal| signal.trigger == SignalTrigger::Leave)
+        .collect::<Vec<_>>();
+    assert_eq!(leaves.len(), 1, "one leave: {leaves:?}");
+    assert_eq!(leaves[0].target, entered[0].target);
 }

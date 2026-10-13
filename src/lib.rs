@@ -350,4 +350,12 @@ impl Plugin for BevyMarkupPlugin {
             );
         focus::plugin(app);
     }
+
+    fn finish(&self, app: &mut App) {
+        // In `finish`, after every plugin's `build`: an app that adds
+        // Bevy's `DirectionalNavigationPlugin` itself (anywhere in its own
+        // build) is detected here, so the auto-add doesn't hit Bevy's
+        // duplicate-plugin error.
+        focus::add_navigation_plugin(app);
+    }
 }
