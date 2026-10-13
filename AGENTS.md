@@ -520,7 +520,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   change or bundle (re)load, outline marker added or removed; restyle on
   stylesheet swap or (re)load (a failed sheet updates unstyled once, when it
   resolves), a stylesheet's `border-image` image loading (a `url()` behind a
-  `var()` loads too — the sheet's `--` declaration carries the URL tokens),
+  `var()` loads too — the sheet's `--` declaration carries the URL tokens;
+  an inline `style="border-image: url(…)"` does NOT load — the URL has no
+  base to resolve against, a documented limit),
   a context `var()` change (the sheet's tracked `var()` names, computed at
   load, plus the inline `style` attributes' names the last build
   collected — unknown properties' refs (`pointer-events`,
