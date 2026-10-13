@@ -551,19 +551,32 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
     use fluent_syntax::ast::InlineExpression;
     use fluent_syntax::ast::PatternElement;
     let mut cache = MarkdownCache::default();
+    // Ids seen so far, across sources: the bundle keeps the FIRST
+    // occurrence of a duplicate id — a cacheable later one must not
+    // shadow it (the bundle serves the first pattern; the cache held
+    // the second).
+    let mut seen: std::collections::HashSet<String> = Default::default();
     for source in sources {
         // Re-parsed here: Fluent's own `FluentResource` keeps its AST
-        // private. A message fluent rejected isn't in this resource either.
-        let Ok(resource) = fluent_syntax::parser::parse(source.as_str()) else {
-            continue;
+        // private, but exposes the (partial) entries — a resource with a
+        // syntax error used to be skipped whole (every message in it
+        // converted per frame, and the duplicate-id rule broke).
+        let resource = match fluent::FluentResource::try_new(source.clone()) {
+            Ok(resource) => resource,
+            Err((resource, _errors)) => resource,
         };
-        for entry in resource.body {
+        for entry in resource.entries() {
             let fluent_syntax::ast::Entry::Message(message) = entry else {
                 continue;
             };
             let Some(id) = message.id.name.split('.').next().map(str::to_owned) else {
                 continue;
             };
+            if !seen.insert(id.clone()) {
+                // The bundle keeps the first occurrence; so does the cache
+                // (a cacheable later duplicate must not shadow it).
+                continue;
+            }
             let Some(pattern) = &message.value else {
                 continue;
             };
@@ -848,13 +861,32 @@ mod tests {
                 "{source:?} should not cache"
             );
         }
-        // A duplicate id keeps the first message's pattern.
+        // A duplicate id keeps the first message's pattern — even when
+        // the first is NOT cacheable (the bundle serves the first
+        // pattern; a cacheable second one used to shadow it).
         let cache = markdown_cache(&[
             "dup = First { $x } one\n".to_owned(),
             "dup = Second { $x } two\n".to_owned(),
         ]);
         let entry = cache.messages.get("dup").expect("dup cached");
         assert!(entry.html.contains("First"), "{:?}", entry.html);
+        let cache = markdown_cache(&[
+            "dup = First { $n ->\n   *[other] { $n }\n}\n".to_owned(),
+            "dup = Second { $x } two\n".to_owned(),
+        ]);
+        assert!(
+            cache.messages.get("dup").is_none(),
+            "the uncacheable first must not be shadowed by the second"
+        );
+        // A resource with any syntax error still caches its good
+        // messages (the bundle keeps the partial AST too).
+        let cache = markdown_cache(&[
+            "!!! junk line\nok = fine { $n }\n".to_owned(),
+        ]);
+        assert!(
+            cache.messages.contains_key("ok"),
+            "the junk line hid the resource's messages"
+        );
     }
 
     /// Cached substitution never shows double-escaped text: the values
