@@ -92,6 +92,11 @@ enum Update {
 pub(crate) struct RebuildState {
     built: bool,
     pending: Option<Update>,
+    /// A style-side change is outstanding: observed but not yet applied by
+    /// an executed update. Unlike `pending` it survives being merged into
+    /// a later `Build`, so the consumer can tell a content-only build from
+    /// one that carries style changes (and must not reuse cached specs).
+    style_pending: bool,
     /// The context's `--` values' hash as of the last update: `Frame`'s
     /// `vars_changed` compares against it. Only restyled builds record it
     /// (a `Wait` keeps the old hash, so the change outlives the wait).
@@ -104,6 +109,18 @@ impl RebuildState {
     /// font-size — `Val::Rem`s re-resolve on the next restyle).
     pub(crate) fn queue_restyle(&mut self) {
         self.pending = Some(Update::Restyle);
+        self.style_pending = true;
+    }
+
+    /// Whether a style-side change is outstanding (see the field).
+    pub(crate) fn style_pending(&self) -> bool {
+        self.style_pending
+    }
+
+    /// The executed update applied the styles: cached specs may be reused
+    /// again once a fresh render arrives.
+    pub(crate) fn style_pending_applied(&mut self) {
+        self.style_pending = false;
     }
 
     pub fn decide(&mut self, frame: Frame) -> Decision {
@@ -114,6 +131,10 @@ impl RebuildState {
             || frame.state_changed
             || frame.images_changed
             || frame.vars_changed;
+        // The bit is consumed by the consumer when the update runs, not
+        // here: a style change seen during a `Wait` must still be visible
+        // in the build that finally runs for it.
+        self.style_pending |= style;
         let change = if frame.content_changed {
             Some(Update::Build)
         } else if style {
@@ -258,6 +279,45 @@ mod tests {
         // The wait kept the (style-kind) change: it applies as a restyle,
         // from the sheet that just became ready.
         assert_eq!(decision, Decision::Restyle(Source::Own));
+    }
+
+    /// A style change seen during a `Wait` marks the build that finally
+    /// resolves it, even when that frame's own signals are content-only:
+    /// the reuse gate must not serve cached specs styled by the previous
+    /// sheet. The consumer clears the bit when the update runs.
+    #[test]
+    fn style_change_during_a_wait_marks_the_resolving_build() {
+        let mut state = built();
+        let wait = state.decide(Frame {
+            own: Some(Phase::Loading),
+            document_ready: true,
+            own_changed: true,
+            content_changed: true,
+            ..Frame::default()
+        });
+        assert_eq!(wait, Decision::Wait);
+        assert!(state.style_pending());
+
+        // The sheet resolved; this frame only the content changed.
+        let decision = state.decide(Frame {
+            own: Some(Phase::Ready),
+            document_ready: true,
+            content_changed: true,
+            ..Frame::default()
+        });
+        assert!(matches!(decision, Decision::Build(_)));
+        assert!(state.style_pending());
+        state.style_pending_applied();
+        assert!(!state.style_pending());
+
+        // Consumed: the next content-only build may reuse again.
+        let decision = state.decide(Frame {
+            document_ready: true,
+            content_changed: true,
+            ..Frame::default()
+        });
+        assert!(matches!(decision, Decision::Build(_)));
+        assert!(!state.style_pending());
     }
 
     /// Style signals restyle a built UI; structure signals rebuild it; both

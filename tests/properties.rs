@@ -665,16 +665,22 @@ fn nine_slice_manifest_maps_each_side(
 }
 
 /// ADR 0021: a build that reused its clean skeleton equals a build without
-/// one. Two long-lived UIs get the same context-op sequence; the second
-/// drops its skeleton before every change, so every build there is fresh.
+/// one. Two long-lived UIs get the same op sequence; the second drops its
+/// skeleton before every change, so every build there is fresh. The ops
+/// cover the shapes reuse got wrong: walk-through-tag siblings of dynamic
+/// content, stylesheet swaps in the same frame as a content change, the
+/// debug outline freezing the skeleton, and all-dirty changes that trip
+/// the adaptive gate and then retry it.
 #[proptest(cases = 16)]
 fn skeleton_reuse_matches_a_fresh_build(
-    #[strategy(proptest::collection::vec(0..2u8, 1..8))] ops: Vec<u8>,
+    #[strategy(proptest::collection::vec(0..5u8, 1..12))] ops: Vec<u8>,
 ) {
     let page = r#"
 <h1>Report {{ a }}</h1>
 <div class="panel">
   <p class="static">Unchanged prose.</p>
+  <span class="tag">Static tag</span>
+  <b>Static bold</b>
   <p class="dynamic">Value: {{ b }}</p>
   <p>See <a href="/p/{{ a }}">the page</a> now.</p>
 </div>
@@ -682,58 +688,82 @@ fn skeleton_reuse_matches_a_fresh_build(
 <p class="row">Row {{ i }}: {{ b }}</p>
 {% endfor %}
 "#;
-    let sheet = r#"
+    let sheet_a = r#"
 html { color: #ffffff; font-size: 20px; flex-direction: column }
 .panel { padding: 8px }
 "#;
-    let files = [("page.html", page), ("style.css", sheet)];
-    let mut reused = TestUi::new(
-        "prop-skeleton-reused",
-        &files,
-    )
-    .stylesheet("style.css")
-    .spawn(
-        "page.html",
-        TemplateContext::new().with("a", &1).with("b", &"x"),
-        Node::default(),
-    );
-    let mut fresh = TestUi::new(
-        "prop-skeleton-fresh",
-        &files,
-    )
-    .stylesheet("style.css")
-    .spawn(
-        "page.html",
-        TemplateContext::new().with("a", &1).with("b", &"x"),
-        Node::default(),
-    );
+    let sheet_b = r#"
+html { color: #ffff88; font-size: 24px; flex-direction: column }
+.panel { padding: 3px }
+"#;
+    let files = [
+        ("page.html", page),
+        ("a.css", sheet_a),
+        ("b.css", sheet_b),
+    ];
+    let mut reused = TestUi::new("prop-skeleton-reused", &files)
+        .stylesheet("a.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("a", &1).with("b", &"x"),
+            Node::default(),
+        );
+    let mut fresh = TestUi::new("prop-skeleton-fresh", &files)
+        .stylesheet("a.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("a", &1).with("b", &"x"),
+            Node::default(),
+        );
     reused.settle();
     fresh.settle();
     prop_assert_eq!(reused.dump(), fresh.dump());
 
-    // Every op changes its key's value (a no-op render rebuilds nothing —
-    // covered elsewhere).
-    let (mut a, mut b) = (1u32, "x");
+    // Every op changes something (a no-op render rebuilds nothing —
+    // covered elsewhere). Ops 2 and 5 swap the stylesheet: 2 alone (a pure
+    // restyle), 5 in the same frame as a content change — the theme-button
+    // case reuse got wrong.
+    let (mut a, mut b): (u32, &str) = (1, "x");
+    let (mut sheet_b, mut outlined) = (false, false);
     for op in ops {
-        let (key, value) = match op {
-            0 => {
+        match op {
+            0 => a = if a == 1 { 2 } else { 1 },
+            1 => b = if b == "x" { "y" } else { "x" },
+            2 => sheet_b = !sheet_b,
+            3 => outlined = !outlined,
+            4 => {
                 a = if a == 1 { 2 } else { 1 };
-                ("a", a.to_string())
+                b = if b == "x" { "y" } else { "x" };
             }
             _ => {
-                b = if b == "x" { "y" } else { "x" };
-                ("b", b.to_owned())
+                sheet_b = !sheet_b;
+                a = if a == 1 { 2 } else { 1 };
             }
-        };
-        for ui in [&mut reused, &mut fresh] {
-            // The comparator rebuilds without a skeleton: the next build
-            // there collects everything from scratch.
+        }
+        for (ui, keep_skeleton) in [(&mut reused, true), (&mut fresh, false)] {
             let root = ui.root();
-            ui.world_mut().entity_mut(root).remove::<Skeleton>();
-            ui.world_mut()
-                .get_mut::<TemplateContext>(root)
+            if !keep_skeleton {
+                // The comparator rebuilds without a skeleton: the next
+                // build there collects everything from scratch.
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            }
+            let handle: Handle<Stylesheet> = if sheet_b {
+                ui.load("b.css")
+            } else {
+                ui.load("a.css")
+            };
+            let mut entity = ui.world_mut().entity_mut(root);
+            entity.insert(HtmlStylesheet(handle));
+            if outlined {
+                entity.insert(HtmlDebugOutline);
+            } else {
+                entity.remove::<HtmlDebugOutline>();
+            }
+            entity
+                .get_mut::<TemplateContext>()
                 .unwrap()
-                .insert(key, &value);
+                .insert("a", &a);
+            entity.get_mut::<TemplateContext>().unwrap().insert("b", &b);
         }
         reused.settle();
         fresh.settle();

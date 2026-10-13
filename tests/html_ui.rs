@@ -3588,3 +3588,426 @@ padded { padding: 10px } p#padded { padding: 10px } img.stretch { width: 100%; h
         );
     }
 }
+
+/// ADR 0021 regression tests: a build that reuses its clean skeleton must
+/// equal a build without one. Each test drives one long-lived `reused` UI
+/// and a `fresh` comparator that drops its skeleton before every change,
+/// so every build there collects from scratch.
+mod skeleton_reuse {
+    use super::*;
+    use bevy_markup::Skeleton;
+
+    fn spawn_two(
+        name: &'static str,
+        files: &[(&str, &str)],
+        context: &TemplateContext,
+    ) -> (TestUi, TestUi) {
+        let reused = TestUi::new(&format!("{name}-reused"), files)
+            .stylesheet("a.css")
+            .spawn("page.html", context.clone(), Node::default());
+        let fresh = TestUi::new(&format!("{name}-fresh"), files)
+            .stylesheet("a.css")
+            .spawn("page.html", context.clone(), Node::default());
+        (reused, fresh)
+    }
+
+    /// Applies `op` to both UIs (the comparator drops its skeleton first,
+    /// so its build is fresh), settles both, and compares the dumps.
+    /// Both UIs are settled when it returns.
+    fn assert_same_after(
+        reused: &mut TestUi,
+        fresh: &mut TestUi,
+        op: impl Fn(&mut TestUi, bool),
+    ) {
+        reused.settle();
+        fresh.settle();
+        op(reused, true);
+        op(fresh, false);
+        assert_eq!(
+            reused.settle().dump(),
+            fresh.settle().dump(),
+            "the reused UI diverged from a fresh build"
+        );
+    }
+
+    fn set_context(ui: &mut TestUi, key: &'static str, value: &str) {
+        let root = ui.root();
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert(key, &value);
+    }
+
+    /// Changing the dynamic content must not drop the unchanged
+    /// walk-through-tag siblings around it (`span`/`b` in a container
+    /// produce no spec of their own; returning early after a failed reuse
+    /// lookup lost them).
+    #[test]
+    fn reused_walkthrough_siblings_keep_their_content() {
+        let files = [
+            (
+                "page.html",
+                r#"<div class="panel"><p class="static">Static</p><span>Inline tag</span><b>Bold tag</b><p>Value: {{ n }}</p></div>"#,
+            ),
+            ("a.css", "html { color: #ffffff; font-size: 20px }"),
+        ];
+        let (mut reused, mut fresh) =
+            spawn_two("walkthrough", &files, &TemplateContext::new().with("n", &1));
+        assert_same_after(&mut reused, &mut fresh, |ui, keep| {
+            let root = ui.root();
+            if !keep {
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            }
+            set_context(ui, "n", "2");
+        });
+        let dump = reused.dump();
+        assert!(
+            dump.contains("\"Inline tag\" default 20px #ffffff")
+                && dump.contains("\"Bold tag\" default 20px #ffffff"),
+            "walk-through-tag content vanished:\n{dump}"
+        );
+    }
+
+    /// A stylesheet swap in the same frame as a content change (the
+    /// theme-button case) must restyle the unchanged subtrees too: the
+    /// cached specs were built from the previous sheet.
+    #[test]
+    fn stylesheet_swap_with_a_content_change_restyles_reused_subtrees() {
+        let files = [
+            ("page.html", "<p class=\"static\">Static</p><p>Value: {{ n }}</p>"),
+            ("a.css", "html { color: #ffffff } .static { color: #ff0000 }"),
+            ("b.css", "html { color: #ffffff } .static { color: #00ff00 }"),
+        ];
+        let (mut reused, mut fresh) =
+            spawn_two("swap", &files, &TemplateContext::new().with("n", &1));
+        let b_sheet = reused.load::<Stylesheet>("b.css");
+        let b_sheet_fresh = fresh.load::<Stylesheet>("b.css");
+        assert_same_after(&mut reused, &mut fresh, move |ui, keep| {
+            let root = ui.root();
+            if !keep {
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            }
+            ui.world_mut()
+                .entity_mut(root)
+                .insert(HtmlStylesheet(if keep {
+                    b_sheet.clone()
+                } else {
+                    b_sheet_fresh.clone()
+                }));
+            set_context(ui, "n", "2");
+        });
+        let dump = reused.dump();
+        assert!(
+            dump.contains("\"Static\" default 16px #00ff00"),
+            "the static paragraph kept the previous sheet's color:\n{dump}"
+        );
+    }
+
+    /// A change that arrives while the replacement sheet is loading is
+    /// merged into the build that resolves it (a failed sheet emits no
+    /// event): that build looks content-only, but the styles changed —
+    /// no reuse. The ready override (blue) is replaced by a failing
+    /// sheet; the default sheet (red) must take over.
+    #[test]
+    fn change_while_a_sheet_loads_restyles_when_it_fails() {
+        let files = [
+            ("page.html", "<p class=\"static\">Static</p><p>Value: {{ n }}</p>"),
+            ("a.css", "html { color: #ffffff } .static { color: #ff0000 }"),
+            ("b.css", "html { color: #ffffff } .static { color: #0000ff }"),
+        ];
+        let mut reused = TestUi::new("failed-sheet-reused", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new().with("n", &1), Node::default());
+        let b_sheet = reused.load::<Stylesheet>("b.css");
+        let reused_root = reused.root();
+        reused
+            .world_mut()
+            .entity_mut(reused_root)
+            .insert(HtmlStylesheet(b_sheet));
+        reused.settle();
+        assert!(
+            reused.dump().contains("#0000ff"),
+            "the override should style the paragraph blue:\n{}",
+            reused.dump()
+        );
+        let mut fresh = TestUi::new("failed-sheet-fresh", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new().with("n", &1), Node::default());
+        let b_sheet = fresh.load::<Stylesheet>("b.css");
+        let fresh_root = fresh.root();
+        fresh
+            .world_mut()
+            .entity_mut(fresh_root)
+            .insert(HtmlStylesheet(b_sheet));
+        fresh.settle();
+
+        // The swap plus a change arrive while the sheet loads (a `Wait` —
+        // the render lands that frame); the sheet then fails without an
+        // event, and a further change (the sheet untouched — re-requesting
+        // it would flip it to `Loading` for a frame) is the build that
+        // resolves the merge.
+        for (ui, keep) in [(&mut reused, true), (&mut fresh, false)] {
+            let root = ui.root();
+            if !keep {
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            }
+            let missing: Handle<Stylesheet> = ui.load("missing.css");
+            ui.world_mut()
+                .entity_mut(root)
+                .insert(HtmlStylesheet(missing));
+            set_context(ui, "n", "2");
+        }
+        reused.settle();
+        fresh.settle();
+        set_context(&mut reused, "n", "3");
+        set_context(&mut fresh, "n", "3");
+        assert_eq!(
+            reused.settle().dump(),
+            fresh.settle().dump(),
+            "the failed sheet's update reused the stale styles"
+        );
+        assert!(
+            reused.dump().contains("\"Static\" default 16px #ff0000"),
+            "the static paragraph should fall back to the default sheet:\n{}",
+            reused.dump()
+        );
+    }
+
+    /// A render that changed while the debug outline froze the skeleton
+    /// (or while a `Wait` swallowed the build) must not leave the
+    /// skeleton's document older than its specs: the next reuse would
+    /// pair against the wrong document.
+    #[test]
+    fn render_change_during_outline_frames_stays_in_step() {
+        let files = [(
+            "page.html",
+            "<p>{{ x }}</p><p class=\"static\">Static</p><p>{{ y }}</p>",
+        )];
+        let sheet = "html { color: #ffffff }";
+        let files = [("page.html", files[0].1), ("a.css", sheet)];
+        let (mut reused, mut fresh) = spawn_two(
+            "outline-freeze",
+            &files,
+            &TemplateContext::new().with("x", &"a").with("y", &"b"),
+        );
+        reused.settle();
+        fresh.settle();
+
+        // The render changes while the outline is on (the skeleton is
+        // frozen at `x = a`), the outline goes with NO content change (the
+        // specs are replaced from the `x = b` render; the stored document
+        // must follow), and a change back to `x = a` reuses: paired
+        // against the stale document, `x` looks clean and the cached
+        // spec's `b` would stick.
+        let toggle_outline = |ui: &mut TestUi, outlined: bool, strip: bool| {
+            let root = ui.root();
+            if strip {
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            }
+            let mut entity = ui.world_mut().entity_mut(root);
+            if outlined {
+                entity.insert(HtmlDebugOutline);
+            } else {
+                entity.remove::<HtmlDebugOutline>();
+            }
+        };
+        for (ui, keep) in [(&mut reused, true), (&mut fresh, false)] {
+            toggle_outline(ui, true, !keep);
+            set_context(ui, "x", "b");
+        }
+        reused.settle();
+        fresh.settle();
+        assert_eq!(reused.dump(), fresh.dump());
+        for (ui, keep) in [(&mut reused, true), (&mut fresh, false)] {
+            toggle_outline(ui, false, !keep);
+        }
+        reused.settle();
+        fresh.settle();
+        assert_eq!(
+            reused.dump(),
+            fresh.dump(),
+            "the skeleton fell out of step with its document"
+        );
+        set_context(&mut reused, "x", "a");
+        set_context(&mut fresh, "x", "a");
+        set_context(&mut reused, "y", "d");
+        set_context(&mut fresh, "y", "d");
+        reused.settle();
+        fresh.settle();
+        assert_eq!(
+            reused.dump(),
+            fresh.dump(),
+            "the retried pairing paired against the wrong document"
+        );
+        assert!(
+            reused.dump().contains("\"a\" default 16px #ffffff")
+                && reused.dump().contains("\"d\" default 16px #ffffff"),
+            "wrong text after the outline came off:\n{}",
+            reused.dump()
+        );
+    }
+
+    /// After builds the adaptive gate skipped (reuse scored useless), the
+    /// skeleton must still describe the entities: a gate-skipped build
+    /// updates them from fresh specs, so its specs must replace the
+    /// cached ones. The sequence: enough one-key changes to switch the
+    /// gate off, a change the skipped builds apply (`t = 5`), a restyle
+    /// (re-styles the entities from the current document), then a change
+    /// back (`t = 0`) whose subtree pairs clean against a stale document
+    /// and would keep the stale content.
+    #[test]
+    fn gate_skipped_builds_stay_sound() {
+        let rows = (0..9)
+            .map(|i| format!("<p>Row {i}: {{{{ v }}}}</p>"))
+            .collect::<String>();
+        let page = format!("<p class=\"t\">T: {{{{ t }}}}</p>{rows}");
+        let files = [
+            ("page.html", page.as_str()),
+            ("a.css", "html { color: #ffffff }"),
+            ("a2.css", "html { color: #ffffff }"),
+        ];
+        let (mut reused, mut fresh) = spawn_two(
+            "gate",
+            &files,
+            &TemplateContext::new().with("v", &0).with("t", &0),
+        );
+        reused.settle();
+        fresh.settle();
+
+        let toggle = |ui: &mut TestUi, keep: bool, v: u32| {
+            let root = ui.root();
+            if !keep {
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            }
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("v", &v);
+        };
+        // One-key changes: the first retry scores useless (1 of 10
+        // subtrees), the gate switches off for the next 2^strike builds.
+        for step in 1..=33u32 {
+            let v = step % 2;
+            toggle(&mut reused, true, v);
+            toggle(&mut fresh, false, v);
+            reused.settle();
+            fresh.settle();
+            assert_eq!(reused.dump(), fresh.dump(), "toggle {step}");
+        }
+
+        // Applied by a gate-skipped build, then a restyle, then back.
+        for (ui, keep) in [(&mut reused, true), (&mut fresh, false)] {
+            let root = ui.root();
+            if !keep {
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            }
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("t", &5);
+        }
+        reused.settle();
+        fresh.settle();
+        assert_eq!(reused.dump(), fresh.dump());
+        let a2 = reused.load::<Stylesheet>("a2.css");
+        reused
+            .world_mut()
+            .resource_mut::<DefaultStylesheet>()
+            .0 = Some(a2);
+        let a2 = fresh.load::<Stylesheet>("a2.css");
+        fresh
+            .world_mut()
+            .resource_mut::<DefaultStylesheet>()
+            .0 = Some(a2);
+        reused.settle();
+        fresh.settle();
+        assert_eq!(reused.dump(), fresh.dump());
+
+        toggle(&mut reused, true, 1);
+        toggle(&mut fresh, false, 1);
+        {
+            let root = reused.root();
+            reused
+                .world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("t", &0);
+        }
+        {
+            let root = fresh.root();
+            fresh
+                .world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("t", &0);
+        }
+        reused.settle();
+        fresh.settle();
+        assert_eq!(
+            reused.dump(),
+            fresh.dump(),
+            "the retried pairing served a skeleton the gate-skipped builds left stale"
+        );
+        assert!(
+            reused.dump().contains("\"T: 0\" default 16px #ffffff"),
+            "the t row kept its stale content:\n{}",
+            reused.dump()
+        );
+    }
+
+    /// `:hover` keeps working inside a reused subtree: the skip refreshes
+    /// the subtree's `DomNode` handles, which the state walk keys on.
+    #[test]
+    fn hover_applies_inside_reused_subtrees() {
+        let files = [
+            (
+                "page.html",
+                // The loop shifts every later node's index between builds:
+                // a stale handle then no longer keys the state walk.
+                "<p>{% for i in range(end=n) %}<b>r</b>{% endfor %}</p><div class=\"panel\"><p class=\"x\">Hover me</p></div>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff; font-size: 20px } .x:hover { color: #ff0000 }",
+            ),
+        ];
+        let (mut reused, _fresh) = spawn_two(
+            "hover",
+            &files,
+            &TemplateContext::new().with("n", &1),
+        );
+        reused.settle();
+
+        // Content changes around the clean panel: its subtree reuses.
+        // `n` is a number: it bounds a Tera `range`.
+        for n in 2..=4u32 {
+            let root = reused.root();
+            reused
+                .world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("n", &n);
+            reused.settle();
+        }
+
+        let hovered = reused
+            .world_mut()
+            .query::<(Entity, &bevy_markup::html::HtmlElement)>()
+            .iter(reused.world_mut())
+            .find(|(_, element)| element.classes.iter().any(|class| class == "x"))
+            .expect("the hoverable element")
+            .0;
+        reused
+            .world_mut()
+            .entity_mut(hovered)
+            .insert(bevy_markup::signals::PseudoState {
+                hovered: true,
+                ..default()
+            });
+        let dump = reused.settle().dump();
+        assert!(
+            dump.contains("\"Hover me\" default 20px #ff0000"),
+            ":hover was lost in the reused subtree:\n{dump}"
+        );
+    }
+}

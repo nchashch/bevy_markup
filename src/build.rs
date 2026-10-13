@@ -871,7 +871,7 @@ pub(crate) fn build_html_ui(
 
     // First pass: the decision per UI. Nested UIs need the whole set before
     // anything acts (see the suppression below).
-    let mut decisions: Vec<(Entity, Decision, Frame)> = Vec::new();
+    let mut decisions: Vec<(Entity, Decision, Frame, bool)> = Vec::new();
     for (entity, rendered, localized, own_sheet, outline, _ui, used_images, mut rebuild) in
         &mut views
     {
@@ -929,7 +929,7 @@ pub(crate) fn build_html_ui(
         if !matches!(decision, Decision::Wait | Decision::Skip) {
             rebuild.vars = vars_hash;
         }
-        decisions.push((entity, decision, frame));
+        decisions.push((entity, decision, frame, rebuild.style_pending()));
     }
     // Deepest UIs first: a nested `HtmlUi`'s commands are queued before an
     // ancestor's, so an ancestor update that despawns the element holding it
@@ -937,17 +937,20 @@ pub(crate) fn build_html_ui(
     let depth = |entity: Entity| parents.iter_ancestors(entity).count();
     decisions.sort_by_key(|(entity, ..)| std::cmp::Reverse(depth(*entity)));
 
-    for (entity, decision, frame) in decisions {
+    for (entity, decision, _frame, style_pending) in decisions {
         let (source, restyle) = match decision {
             Decision::Wait | Decision::Skip => continue,
             Decision::Build(source) => (source, false),
             Decision::Restyle(source) => (source, true),
         };
-        let Ok((_, rendered, localized, own_sheet, outline, ui, _used_images, _rebuild)) =
-            views.get(entity)
+        let Ok((_, rendered, localized, own_sheet, outline, ui, _used_images, mut rebuild)) =
+            views.get_mut(entity)
         else {
             continue;
         };
+        // This update applies the styles: cached specs are current again
+        // after it (the same consume point `pending` already uses).
+        rebuild.style_pending_applied();
         let css = match source {
             Source::Own => own_sheet.as_ref().and_then(|own| sheets.get(&own.0)),
             Source::Default => default_sheet.0.as_ref().and_then(|d| sheets.get(d)),
@@ -1017,20 +1020,20 @@ pub(crate) fn build_html_ui(
         // ADR 0021: pair the fresh document with the previous build's when
         // only the template's rendered content changed; unchanged subtrees
         // reuse their items, so the cascade and run construction skip
-        // them. Style-side changes (state, `var()`s, fonts, images) or a
-        // localization change rebuild fully — the reused items' styles and
-        // translations would be stale.
+        // them. Style-side changes rebuild fully — the reused items' styles
+        // would be stale. `style_pending` covers every kind: a stylesheet
+        // swap or reload, its images, state, `var()`s, fonts — including a
+        // change that arrived while a needed sheet loaded and was merged
+        // into this build's pending update.
         // A localization change doesn't block reuse: only translated
         // elements depend on it, and those are excluded from the pairing
         // (their items come from per-build fragments).
         const SKELETON: bool = true;
-        let skeleton_eligible = SKELETON && matches!(decision, Decision::Build(_))
+        let skeleton_eligible = SKELETON
+            && matches!(decision, Decision::Build(_))
             && outline.is_none()
             && rendered.is_changed()
-            && !frame.state_changed
-            && !frame.vars_changed
-            && !frame.fonts_changed
-            && !frame.images_changed;
+            && !style_pending;
         let (previous_useful, previous_since_try, previous_strike, had_skeleton) = skeletons
             .get(entity)
             .map_or((true, 0, 0, false), |skeleton| {
@@ -1241,23 +1244,23 @@ pub(crate) fn build_html_ui(
             &dom_nodes,
             Some(&pairing),
         );
-        // ADR 0021: this build's items (and, when the document changed, a
-        // re-parse of it) become the next build's skeleton — the reuse
-        // cache. Its document and items must always correspond, so a
-        // restyle that kept the document updates the items in place. When
-        // the reuse walk was skipped as not worth it, only the retry
-        // counter ticks: the stale skeleton stays sound (its document
-        // matches its items) and no per-frame data move happens. Outline
-        // and failed documents leave it frozen.
+        // ADR 0021: this build's items become the next build's skeleton —
+        // the reuse cache. Three things must always correspond: the
+        // skeleton's document, its specs, and the entities (which a build
+        // that updated them from fresh specs has moved — a full rebuild or
+        // restyle, or a gate-skipped one). So every build without a
+        // pairing walk replaces the cached specs, and the stored document
+        // is the render those specs were collected from — re-parsed when
+        // the stored one no longer matches it (a render that changed while
+        // a `Wait` swallowed the build, or while the outline froze the
+        // skeleton, would otherwise pair against the wrong document).
+        // Outline and failed documents leave it frozen.
         if outline.is_none() {
-            let document = match &*rendered {
-                RenderedHtml::Ready(document)
-                    if pass.is_some() || (rendered.is_changed() && !skeleton_eligible) =>
-                {
-                    HtmlDocument::parse(document.source().to_owned()).ok()
-                }
+            let current_source: Option<String> = match &*rendered {
+                RenderedHtml::Ready(document) => Some(document.source().to_owned()),
                 _ => None,
             };
+            let parse = |source: String| HtmlDocument::parse(source).ok();
             match pass.as_ref() {
                 Some(pass) => {
                     let total = spec_count(&specs);
@@ -1266,6 +1269,7 @@ pub(crate) fn build_html_ui(
                     // (or the first) restores the short cadence.
                     let strike = if useful { 0 } else { previous_strike + 1 };
                     let table = spec_table(&specs);
+                    let document = current_source.and_then(|source| parse(source));
                     commands.entity(entity).insert(Skeleton {
                         document,
                         specs,
@@ -1276,6 +1280,8 @@ pub(crate) fn build_html_ui(
                     });
                 }
                 None if !had_skeleton => {
+                    let document =
+                        current_source.and_then(|source| parse(source));
                     let table = spec_table(&specs);
                     commands.entity(entity).insert(Skeleton {
                         document,
@@ -1286,43 +1292,41 @@ pub(crate) fn build_html_ui(
                         strike: 0,
                     });
                 }
-                None if !skeleton_eligible => {
-                    // A full rebuild or restyle ran: the fresh specs are the
-                    // next skeleton; the document only changes with the
-                    // render.
-                    let (useful, since_try) = (previous_useful, previous_since_try);
-                    let keep_document = document.is_none();
+                None => {
+                    // A full rebuild or restyle ran (the pairing was off),
+                    // or the adaptive gate skipped the walk: the entities
+                    // were updated from the fresh specs either way. The
+                    // retry counter ticks only for a gate-skipped build.
+                    let tick = u32::from(skeleton_eligible);
+                    let since_try = previous_since_try + tick;
                     let table = spec_table(&specs);
                     commands.queue(move |world: &mut World| {
-                        match world.get_mut::<Skeleton>(entity) {
-                            Some(mut skeleton) => {
-                                skeleton.specs = specs;
-                                skeleton.table = table;
-                                if !keep_document {
-                                    skeleton.document = document;
-                                }
-                            }
-                            None => {
-                                world.entity_mut(entity).insert(Skeleton {
-                                    document,
-                                    specs,
-                                    table,
-                                    useful,
-                                    since_try,
-                                    strike: previous_strike,
-                                });
-                            }
+                        let Some(mut skeleton) = world.get_mut::<Skeleton>(entity) else {
+                            // No skeleton yet: store the fresh specs as the
+                            // first one.
+                            let document = current_source.and_then(|source| parse(source));
+                            world.entity_mut(entity).insert(Skeleton {
+                                document,
+                                specs,
+                                table,
+                                useful: previous_useful,
+                                since_try,
+                                strike: previous_strike,
+                            });
+                            return;
+                        };
+                        skeleton.specs = specs;
+                        skeleton.table = table;
+                        let unchanged = match (&skeleton.document, &current_source) {
+                            (Some(old), Some(new)) => old.source() == new.as_str(),
+                            (None, None) => true,
+                            _ => false,
+                        };
+                        if !unchanged {
+                            skeleton.document =
+                                current_source.and_then(|source| parse(source));
                         }
-                    });
-                }
-                None => {
-                    // Eligible but skipped (the adaptive gate): tick the
-                    // retry counter; every 16th build tries again.
-                    let since_try = previous_since_try + 1;
-                    commands.queue(move |world: &mut World| {
-                        if let Some(mut skeleton) = world.get_mut::<Skeleton>(entity) {
-                            skeleton.since_try = since_try;
-                        }
+                        skeleton.since_try = since_try;
                     });
                 }
             }
@@ -2388,6 +2392,12 @@ fn update_children(
                                     put(&mut entity, Some(DomNode(handle)));
                                 });
                         }
+                        // The skip leaves the descendants' `DomNode`s at
+                        // the handles they were spawned with; the state
+                        // walk keys `:hover`/`:active` by the current
+                        // document's handles, so refresh every level (the
+                        // spec's handles were remapped up front).
+                        refresh_cached_handles(commands, child, spec, tree);
                     }
                     (spec, _) => {
                         spawned |= update_spec(
@@ -2428,6 +2438,64 @@ fn update_children(
         commands.entity(parent).replace_children(&desired);
     }
     spawned
+}
+
+/// Refreshes a reused (skipped) subtree's `DomNode`s below its root. The
+/// entities keep the handles they were spawned with, but the state walk
+/// (`:hover`/`:active`) keys on the *current* document's handles; the
+/// spec's handles were already remapped (see `remap_spec_handles`), so
+/// they are written through positionally — the subtree was spawned from
+/// this spec tree and its content is unchanged. App-nested `HtmlUi` roots
+/// are absent from the spec and keep their own state; a mismatching child
+/// count bails (the next full visit repairs it).
+fn refresh_cached_handles(
+    commands: &mut Commands,
+    entity: Entity,
+    spec: &NodeSpec,
+    tree: &Tree,
+) {
+    let Ok((children, .., nested_ui)) = tree.get(entity) else {
+        return;
+    };
+    if nested_ui {
+        return;
+    }
+    let Some(children) = children else {
+        return;
+    };
+    let entities: Vec<Entity> = children.iter().collect();
+    if let Some(text) = &spec.text {
+        // A text block's children are its spans, in order; only link spans
+        // carry a `DomNode`.
+        if entities.len() != text.spans.len() {
+            return;
+        }
+        for (&child, span) in entities.iter().zip(&text.spans) {
+            let Some(link) = &span.link else {
+                continue;
+            };
+            let handle = link.handle;
+            commands
+                .entity(child)
+                .queue(move |mut entity: EntityWorldMut| {
+                    put(&mut entity, Some(DomNode(handle)));
+                });
+        }
+        return;
+    }
+    if entities.len() != spec.children.len() {
+        return;
+    }
+    for (&child, child_spec) in entities.iter().zip(&spec.children) {
+        if let Some(handle) = child_spec.spec().handle {
+            commands
+                .entity(child)
+                .queue(move |mut entity: EntityWorldMut| {
+                    put(&mut entity, Some(DomNode(handle)));
+                });
+        }
+        refresh_cached_handles(commands, child, child_spec.spec(), tree);
+    }
 }
 
 /// Updates `entity` (matched by [`same_identity`]) to `spec` in place: the
@@ -3214,14 +3282,18 @@ fn tag_equal(old: &tl::HTMLTag, fresh: &tl::HTMLTag) -> bool {
 
 /// The spec at `path`: the first index addresses a top-level spec, each
 /// following index a container's child.
-/// How many specs the tree holds (containers count themselves plus their
-/// children; a reused spec counts once).
+/// How much collection work the tree represents: a fresh spec counts
+/// itself plus its children; a reused (cached) subtree counts once — its
+/// nodes were neither cascaded nor re-collected.
 fn spec_count(specs: &[SpecNode]) -> usize {
     specs
         .iter()
-        .map(|node| match &node.spec().children {
-            children if children.is_empty() => 1,
-            children => 1 + spec_count(children),
+        .map(|node| match node {
+            SpecNode::Cached(_) => 1,
+            SpecNode::Fresh(spec) => match &spec.children {
+                children if children.is_empty() => 1,
+                children => 1 + spec_count(children),
+            },
         })
         .sum()
 }
@@ -3253,16 +3325,19 @@ fn spec_table_walk(
 impl SkeletonPass<'_> {
     /// The cached spec of the paired old node. The handles inside it point
     /// into the previous document; the build remaps them up front (see
-    /// `remap_spec_handles`), so the `Arc` is handed on as is.
-    fn reuse(&self, old: tl::NodeHandle, items: &mut Vec<Item>) {
+    /// `remap_spec_handles`), so the `Arc` is handed on as is. Returns
+    /// `false` when nothing was reused (the node produced no spec) and the
+    /// caller must collect normally.
+    fn reuse(&self, old: tl::NodeHandle, items: &mut Vec<Item>) -> bool {
         let Some(path) = self.table.get(&old) else {
-            return;
+            return false;
         };
         let Some(spec) = spec_rc_at(self.specs, path) else {
-            return;
+            return false;
         };
         self.reused.set(self.reused.get() + 1);
         items.push(Item::Cached(Arc::clone(spec)));
+        true
     }
 }
 
@@ -3380,14 +3455,16 @@ fn collect_node(
     };
     // ADR 0021: an unchanged subtree reuses the previous build's item
     // verbatim (handles remapped), skipping the cascade and the run
-    // construction. Only whole clean subtrees reuse; a node whose cache
-    // entry is missing (walk-through tags, raw text, translations) falls
-    // through to the normal collection.
+    // construction. Only whole clean subtrees whose root produced a spec
+    // reuse; a node whose cache entry is missing (walk-through tags like
+    // `span`/`body` whose content makes anonymous items, raw text,
+    // translations) falls through to the normal collection — returning
+    // here would drop the subtree's content entirely.
     if let Some(skeleton) = ctx.skeleton
         && let Some(&old) = skeleton.pairing.get(&handle)
         && skeleton.clean.contains(&old)
+        && skeleton.reuse(old, items)
     {
-        skeleton.reuse(old, items);
         return;
     }
 
