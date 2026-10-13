@@ -1592,6 +1592,14 @@ fn contains_var(tokens: &TokenList) -> bool {
 /// one.
 const VAR_BUDGET: usize = 64 * 1024;
 
+/// How deep one `var()` resolution may chain (`--v1` referencing
+/// `--v0`, transitively). The memoized substitution bounds repeat work
+/// and output size, but a plain linear chain recurses once per link —
+/// deeper than this, the name is unresolvable (the declaration is
+/// dropped), like a cycle. Well past any authored CSS; pathological
+/// sheets must not abort the render thread.
+const MAX_VAR_DEPTH: usize = 64;
+
 /// One declaration's `var()` substitution: each custom property is
 /// resolved at most once (memoized), a name in the current chain is
 /// unresolvable (a cycle is invalid at computed-value time), and the
@@ -1618,6 +1626,11 @@ impl<'a> Substitution<'a> {
         }
         if self.resolving.contains(name) {
             // A cycle: invalid at computed-value time.
+            return None;
+        }
+        if self.resolving.len() >= MAX_VAR_DEPTH {
+            // Deeper than any authored chain: unresolvable (memoized, so
+            // the rest of the chain fails fast instead of overflowing).
             return None;
         }
         let value = if let Some(value) = (self.context)(name) {
@@ -3873,6 +3886,30 @@ mod tests {
             "the pathological sheets took {:?}",
             start.elapsed()
         );
+    }
+
+    /// A plain linear chain (`--v1: var(--v0)`, 1000 links) recursed
+    /// once per link and overflowed a task-pool stack (an abort, not a
+    /// panic). Deeper than [`MAX_VAR_DEPTH`], the name is unresolvable
+    /// and the declaration drops — the same surface as an over-budget
+    /// sheet. A chain within the cap still resolves.
+    #[test]
+    fn var_chain_depth_is_capped() {
+        // Deep: drops instead of overflowing.
+        let mut sheet = String::from("--v0: 7px; ");
+        for i in 1..1000 {
+            sheet.push_str(&format!("--v{i}: var(--v{}); ", i - 1));
+        }
+        sheet.push_str("width: var(--v999)");
+        assert_eq!(declared(&sheet).layout.width, None);
+
+        // Within the cap: resolves through the chain.
+        let mut sheet = String::from("--v0: 7px; ");
+        for i in 1..20 {
+            sheet.push_str(&format!("--v{i}: var(--v{}); ", i - 1));
+        }
+        sheet.push_str("width: var(--v19)");
+        assert_eq!(declared(&sheet).layout.width, Some(Val::Px(7.0)));
     }
 
     /// `var()` resolves in properties lightningcss has no typed form for
