@@ -86,6 +86,33 @@ impl From<ScaleModeDescriptor> for SliceScaleMode {
 #[derive(Default, TypePath)]
 pub(crate) struct NineSliceLoader;
 
+/// Whether the manifest's values would make Bevy's slicer divide by zero,
+/// flip corners, or draw outside the image: the loader rejects these, and
+/// the unit test calls this predicate, so a deleted check fails the test.
+/// A 1x1 transparent PNG (base64-decoded) for the loader test.
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49,
+    0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
+    0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44,
+    0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D,
+    0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
+    0x60, 0x82,
+];
+
+fn desc_would_break_the_slicer(desc: &NineSliceDescriptor) -> bool {
+    let finite_positive = |value: f32| value.is_finite() && value > 0.0;
+    let bad_scale = |mode: &ScaleModeDescriptor| match mode {
+        ScaleModeDescriptor::Tile(factor) => !finite_positive(*factor),
+        ScaleModeDescriptor::Stretch => false,
+    };
+    [desc.border.left, desc.border.right, desc.border.top, desc.border.bottom]
+        .iter()
+        .any(|inset| !inset.is_finite() || *inset < 0.0)
+        || bad_scale(&desc.sides)
+        || bad_scale(&desc.center)
+        || !finite_positive(desc.max_corner_scale)
+}
+
 impl AssetLoader for NineSliceLoader {
     type Asset = NineSlice;
     type Settings = ();
@@ -105,18 +132,7 @@ impl AssetLoader for NineSliceLoader {
         // `target / 0 = inf` repeats; a negative scale flips corners) and
         // insets negative values draw outside the image: reject them at
         // load instead of drawing garbage.
-        let finite_positive = |value: f32| value.is_finite() && value > 0.0;
-        let bad_scale = |mode: &ScaleModeDescriptor| match mode {
-            ScaleModeDescriptor::Tile(factor) => !finite_positive(*factor),
-            ScaleModeDescriptor::Stretch => false,
-        };
-        if [desc.border.left, desc.border.right, desc.border.top, desc.border.bottom]
-            .iter()
-            .any(|inset| !inset.is_finite() || *inset < 0.0)
-            || bad_scale(&desc.sides)
-            || bad_scale(&desc.center)
-            || !finite_positive(desc.max_corner_scale)
-        {
+        if desc_would_break_the_slicer(&desc) {
             return Err("invalid slice manifest: insets must be finite and \
                 >= 0, tile factors and max_corner_scale finite and > 0"
                 .into());
@@ -346,36 +362,68 @@ mod tests {
     /// The loader rejects manifests whose values would make Bevy's slicer
     /// divide by zero (a 0/NaN tile factor), flip corners (a negative
     /// scale), or draw outside the image (a negative inset): a load
-    /// error, not silent garbage.
+    /// error, not silent garbage. Loads through a real server from a
+    /// temp file, so a deleted or weakened check fails this test.
     #[test]
     fn manifests_validate_values() {
-        let valid = |ron: &str| {
-            let desc: NineSliceDescriptor = parse(ron).unwrap();
-            let finite_positive = |value: f32| value.is_finite() && value > 0.0;
-            let bad_scale = |mode: &ScaleModeDescriptor| match mode {
-                ScaleModeDescriptor::Tile(factor) => !finite_positive(*factor),
-                ScaleModeDescriptor::Stretch => false,
-            };
-            [desc.border.left, desc.border.right, desc.border.top, desc.border.bottom]
-                .iter()
-                .any(|inset| !inset.is_finite() || *inset < 0.0)
-                || bad_scale(&desc.sides)
-                || bad_scale(&desc.center)
-                || !finite_positive(desc.max_corner_scale)
+        use bevy::app::{App, ScheduleRunnerPlugin};
+        use bevy::asset::{AssetPlugin, AssetServer, LoadState, UnapprovedPathMode};
+        use bevy::MinimalPlugins;
+
+        let load = |ron: &str| {
+            let dir = std::env::temp_dir().join(format!(
+                "bevy_markup_slices_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("test.slice.ron"), ron).unwrap();
+            // A 1x1 PNG so a good manifest's image dependency resolves and
+            // only the manifest's own validation can fail it.
+            std::fs::write(dir.join("frame.png"), PNG_1X1).unwrap();
+            let mut app = App::new();
+            app.add_plugins((
+                MinimalPlugins,
+                AssetPlugin {
+                    file_path: dir.to_string_lossy().into_owned().into(),
+                    ..default()
+                },
+            ));
+            app.init_asset::<NineSlice>();
+            app.init_asset::<Image>();
+            app.register_asset_loader(NineSliceLoader);
+            let handle = app
+                .world()
+                .resource::<AssetServer>()
+                .load::<NineSlice>("test.slice.ron");
+            for _ in 0..4 {
+                app.update();
+            }
+            let state = app
+                .world()
+                .resource::<AssetServer>()
+                .get_load_state(handle.id())
+                .unwrap();
+            std::fs::remove_dir_all(&dir).ok();
+            state
         };
-        assert!(!valid(
-            r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1))"#
-        ));
-        assert!(!valid(
-            r#"(image: "frame.png", border: (left: 0, right: 0, top: 0, bottom: 0), sides: Tile(2.0), center: Tile(2.0))"#
-        ));
         for bad in [
             r#"(image: "frame.png", border: (left: -1, right: 1, top: 1, bottom: 1))"#,
             r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), sides: Tile(0.0))"#,
             r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), center: Tile(-2.0))"#,
             r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), max_corner_scale: 0.0)"#,
         ] {
-            assert!(valid(bad), "{bad} must be rejected");
+            assert!(matches!(load(bad), LoadState::Failed(_)), "{bad} must be rejected");
         }
+        // And a good manifest (with the image present) still loads.
+        assert!(
+            matches!(
+                load(r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), sides: Tile(2.0), center: Tile(2.0))"#),
+                LoadState::Loaded
+            ),
+            "a good manifest loads"
+        );
     }
 }
