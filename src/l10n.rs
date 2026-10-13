@@ -466,6 +466,62 @@ fn substitute(entry: &MarkdownEntry, text: &str) -> Option<String> {
 /// bundle's own choice). Messages whose conversion leaves a marker in a
 /// Markdown link destination don't cache: CommonMark rejects control
 /// characters there, so the link is lost.
+/// Whether a marker sits where CommonMark won't render it: inside a
+/// link destination (`[docs](…)` — control characters are rejected
+/// there, the link is lost) or inside an angle bracket (an autolink or
+/// HTML tag context). Escaped (`\(`) brackets are text.
+fn marker_in_live_position(html: &str) -> bool {
+    let bytes = html.as_bytes();
+    let mut scan = 0;
+    while scan < bytes.len() {
+        match bytes[scan] {
+            b'\\' => scan += 2,
+            b'<' => {
+                let end = html[scan..].find('>').map_or(html.len(), |at| scan + at);
+                if html[scan..end].contains('\u{2}') {
+                    return true;
+                }
+                scan = end + 1;
+            }
+            // A bracket pulldown escaped (the autolink/HTML form failed):
+            // a marker flush against it is in the same broken position.
+            b'&' => {
+                if html[scan..].starts_with("&lt;\u{2}") || html[scan..].starts_with("\u{3}&gt;") {
+                    return true;
+                }
+                scan += 1;
+            }
+            b']' if bytes.get(scan + 1) == Some(&b'(') => {
+                let mut depth = 1;
+                let mut cursor = scan + 2;
+                while cursor < bytes.len() {
+                    match bytes[cursor] {
+                        b'\\' => cursor += 2,
+                        b'(' => {
+                            depth += 1;
+                            cursor += 1;
+                        }
+                        b')' => {
+                            depth -= 1;
+                            cursor += 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => cursor += 1,
+                    }
+                }
+                if html[scan + 2..cursor.min(html.len())].contains('\u{2}') {
+                    return true;
+                }
+                scan = cursor;
+            }
+            _ => scan += 1,
+        }
+    }
+    false
+}
+
 fn markdown_cache(sources: &[String]) -> MarkdownCache {
     use fluent_syntax::ast::Expression;
     use fluent_syntax::ast::InlineExpression;
@@ -531,10 +587,11 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
             }
             if cached {
                 let html = md::to_html(&html);
-                if html.contains("](\u{2}") {
-                    // A marker in a Markdown link destination: CommonMark
-                    // rejects control characters there and the link is
-                    // lost — convert per value instead.
+                if marker_in_live_position(&html) {
+                    // A marker inside a link destination or an angle
+                    // bracket: CommonMark rejects control characters
+                    // there (the link is lost) or the bracket makes it
+                    // an HTML tag — convert per value instead.
                     continue;
                 }
                 cache
@@ -754,6 +811,12 @@ mod tests {
             "term = Use { -brand } now",
             "reference = See { other } now",
             "link = See [the docs]({ $url }) now",
+            // The destination forms the `](` check missed: a marker
+            // deeper inside, with a space, in angle brackets, or in a
+            // bare autolink.
+            "tail = [docs](https://x.y/{ $p })",
+            "spaced = [docs]( { $url } )",
+            "angle = <{ $url }>",
         ];
         for source in cases {
             assert!(
