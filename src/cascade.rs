@@ -835,6 +835,20 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
             .iter()
             .chain(&rule.declarations.important_declarations);
         for declaration in declarations {
+            // A `url()` behind a `var()`: the frame declaration carries
+            // the reference, the URL lives in the sheet's own `--`
+            // declaration's tokens — load both sides.
+            if let Property::Custom(custom) = declaration {
+                for token in &custom.value.0 {
+                    if let TokenOrValue::Url(url) = token {
+                        let url = url.url.to_string();
+                        if !urls.contains(&url) {
+                            urls.push(url);
+                        }
+                    }
+                }
+                continue;
+            }
             let image = match declaration {
                 Property::BorderImage(border_image, _) => &border_image.source,
                 Property::BorderImageSource(image) => image,
@@ -1028,31 +1042,54 @@ impl Selector {
     }
 
     /// Matches `compounds[..index]` against `ancestors` (nearest first).
+    /// Memoized by (compound index, ancestor offset): a `.b .a ×n p`
+    /// selector against deep `.a` ancestors retried every combination
+    /// (hundreds of ms per element); with the failure memo it is linear.
     fn matches_rest(&self, index: usize, ancestors: &[Ancestor]) -> bool {
+        let mut failed = HashSet::new();
+        self.matches_from(index, ancestors, 0, &mut failed)
+    }
+
+    /// [`matches_rest`](Self::matches_rest) from `offset` (the absolute
+    /// ancestor position), recording failed states in `failed`.
+    fn matches_from(
+        &self,
+        index: usize,
+        ancestors: &[Ancestor],
+        offset: usize,
+        failed: &mut HashSet<(usize, usize)>,
+    ) -> bool {
         if index == 0 {
             return true;
         }
+        if failed.contains(&(index, offset)) {
+            return false;
+        }
         let combinator = self.combinators[index - 1];
         let compound = &self.compounds[index - 1];
-        match combinator {
-            Combinator::Child => {
-                let Some(parent) = ancestors.first() else {
-                    return false;
-                };
+        let matched = match combinator {
+            Combinator::Child => ancestors.get(offset).is_some_and(|parent| {
                 compound.matches(&parent.element, parent.pseudo)
-                    && self.matches_rest(index - 1, &ancestors[1..])
-            }
+                    && self.matches_from(index - 1, ancestors, offset + 1, failed)
+            }),
             Combinator::Descendant => {
-                for (i, ancestor) in ancestors.iter().enumerate() {
+                let mut any = false;
+                for i in offset..ancestors.len() {
+                    let ancestor = &ancestors[i];
                     if compound.matches(&ancestor.element, ancestor.pseudo)
-                        && self.matches_rest(index - 1, &ancestors[i + 1..])
+                        && self.matches_from(index - 1, ancestors, i + 1, failed)
                     {
-                        return true;
+                        any = true;
+                        break;
                     }
                 }
-                false
+                any
             }
+        };
+        if !matched {
+            failed.insert((index, offset));
         }
+        matched
     }
 }
 
@@ -1376,6 +1413,12 @@ impl ElementStyle {
     /// the declaration was a calc() — records the expression instead (the
     /// property's field keeps its placeholder until the layout pass).
     fn set_calc(&mut self, prop: CalcProp, value: Option<Val>, exprs: Vec<CalcExpr>) {
+        if value.is_none() && exprs.is_empty() {
+            // An unsupported value (`fit-content`, …): the declaration is
+            // invalid and dropped — the earlier declaration's value (and
+            // its calc) stand.
+            return;
+        }
         self.calc.retain(|(p, _)| p != &prop);
         match exprs.into_iter().next() {
             Some(expr) => match expr.collapse() {
@@ -1771,14 +1814,27 @@ fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
             style.layout.grid_column = [None, None];
         }
         "position" => style.layout.position = None,
-        "top" => style.set_calc(CalcProp::Top, None, Vec::new()),
-        "right" => style.set_calc(CalcProp::Right, None, Vec::new()),
-        "bottom" => style.set_calc(CalcProp::Bottom, None, Vec::new()),
-        "left" => style.set_calc(CalcProp::Left, None, Vec::new()),
+        "top" => {
+            style.layout.inset[0] = None;
+            style.calc.retain(|(p, _)| p != &CalcProp::Top);
+        }
+        "right" => {
+            style.layout.inset[1] = None;
+            style.calc.retain(|(p, _)| p != &CalcProp::Right);
+        }
+        "bottom" => {
+            style.layout.inset[2] = None;
+            style.calc.retain(|(p, _)| p != &CalcProp::Bottom);
+        }
+        "left" => {
+            style.layout.inset[3] = None;
+            style.calc.retain(|(p, _)| p != &CalcProp::Left);
+        }
         "inset" => {
-            for side in [CalcProp::Top, CalcProp::Right, CalcProp::Bottom, CalcProp::Left] {
-                style.set_calc(side, None, Vec::new());
-            }
+            style.layout.inset = [None; 4];
+            style
+                .calc
+                .retain(|(p, _)| !matches!(p, CalcProp::Top | CalcProp::Right | CalcProp::Bottom | CalcProp::Left));
         }
         "transition" => style.transitions.clear(),
         _ => {}
@@ -1857,28 +1913,84 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             debug!("html css: border-image-width/-outset unsupported (corners draw at image size)");
         }
         Property::BorderWidth(width) => {
-            style.border_width =
-                [&width.top, &width.right, &width.bottom, &width.left].map(side_width);
+            let sides = [&width.top, &width.right, &width.bottom, &width.left].map(side_width);
+            // An unsupported value on one side drops the declaration.
+            if sides.iter().all(Option::is_some) {
+                style.border_width = sides;
+            }
         }
-        Property::BorderTopWidth(width) => style.border_width[0] = side_width(width),
-        Property::BorderRightWidth(width) => style.border_width[1] = side_width(width),
-        Property::BorderBottomWidth(width) => style.border_width[2] = side_width(width),
-        Property::BorderLeftWidth(width) => style.border_width[3] = side_width(width),
+        Property::BorderTopWidth(width) => {
+            if let Some(width) = side_width(width) {
+                style.border_width[0] = Some(width);
+            }
+        }
+        Property::BorderRightWidth(width) => {
+            if let Some(width) = side_width(width) {
+                style.border_width[1] = Some(width);
+            }
+        }
+        Property::BorderBottomWidth(width) => {
+            if let Some(width) = side_width(width) {
+                style.border_width[2] = Some(width);
+            }
+        }
+        Property::BorderLeftWidth(width) => {
+            if let Some(width) = side_width(width) {
+                style.border_width[3] = Some(width);
+            }
+        }
         Property::Padding(padding) => {
-            style.padding =
+            let sides =
                 [&padding.top, &padding.right, &padding.bottom, &padding.left].map(length_px);
+            if sides.iter().all(Option::is_some) {
+                style.padding = sides;
+            }
         }
-        Property::PaddingTop(value) => style.padding[0] = length_px(value),
-        Property::PaddingRight(value) => style.padding[1] = length_px(value),
-        Property::PaddingBottom(value) => style.padding[2] = length_px(value),
-        Property::PaddingLeft(value) => style.padding[3] = length_px(value),
-        Property::RowGap(gap) => style.row_gap = gap_px(gap),
-        Property::ColumnGap(gap) => style.layout.column_gap = gap_px(gap),
+        Property::PaddingTop(value) => {
+            if let Some(value) = length_px(value) {
+                style.padding[0] = Some(value);
+            }
+        }
+        Property::PaddingRight(value) => {
+            if let Some(value) = length_px(value) {
+                style.padding[1] = Some(value);
+            }
+        }
+        Property::PaddingBottom(value) => {
+            if let Some(value) = length_px(value) {
+                style.padding[2] = Some(value);
+            }
+        }
+        Property::PaddingLeft(value) => {
+            if let Some(value) = length_px(value) {
+                style.padding[3] = Some(value);
+            }
+        }
+        Property::RowGap(gap) => {
+            // An unsupported value (`%` gap) drops the declaration: the
+            // earlier value stands.
+            if let Some(gap) = gap_px(gap) {
+                style.row_gap = Some(gap);
+            }
+        }
+        Property::ColumnGap(gap) => {
+            if let Some(gap) = gap_px(gap) {
+                style.layout.column_gap = Some(gap);
+            }
+        }
         Property::Gap(gap) => {
-            style.row_gap = gap_px(&gap.row);
-            style.layout.column_gap = gap_px(&gap.column);
+            if let Some(row) = gap_px(&gap.row) {
+                style.row_gap = Some(row);
+            }
+            if let Some(column) = gap_px(&gap.column) {
+                style.layout.column_gap = Some(column);
+            }
         }
-        Property::Display(value) => style.layout.display = display(value),
+        Property::Display(value) => {
+            if let Some(display) = display(value) {
+                style.layout.display = Some(display);
+            }
+        }
         Property::Visibility(visibility) => {
             // `subtree-hide` semantics: `hidden` maps to Bevy's propagating
             // `Visibility::Hidden`; `collapse` (table-specific) is skipped.
@@ -1936,11 +2048,25 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             style.set_calc(CalcProp::FlexBasis, value, exprs);
         }
         Property::JustifyContent(value, _) => {
-            style.layout.justify_content = justify_content(value);
+            if let Some(value) = justify_content(value) {
+                style.layout.justify_content = Some(value);
+            }
         }
-        Property::AlignItems(value, _) => style.layout.align_items = align_items(value),
-        Property::AlignContent(value, _) => style.layout.align_content = align_content(value),
-        Property::AlignSelf(value, _) => style.layout.align_self = align_self(value),
+        Property::AlignItems(value, _) => {
+            if let Some(value) = align_items(value) {
+                style.layout.align_items = Some(value);
+            }
+        }
+        Property::AlignContent(value, _) => {
+            if let Some(value) = align_content(value) {
+                style.layout.align_content = Some(value);
+            }
+        }
+        Property::AlignSelf(value, _) => {
+            if let Some(value) = align_self(value) {
+                style.layout.align_self = Some(value);
+            }
+        }
         Property::Width(size) => {
             let mut exprs = Vec::new();
             let value = size_val(size, &mut exprs);
@@ -2009,35 +2135,51 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 css_size::BoxSizing::BorderBox => BoxSizing::BorderBox,
             });
         }
-        Property::JustifyItems(value) => style.layout.justify_items = justify_items(value),
-        Property::JustifySelf(value) => style.layout.justify_self = justify_self(value),
+        Property::JustifyItems(value) => {
+            if let Some(value) = justify_items(value) {
+                style.layout.justify_items = Some(value);
+            }
+        }
+        Property::JustifySelf(value) => {
+            if let Some(value) = justify_self(value) {
+                style.layout.justify_self = Some(value);
+            }
+        }
         Property::GridTemplateRows(rows) => {
             let (tracks, names) = track_sizing(rows, Axis::Row);
-            style.layout.grid_template_rows = tracks;
-            // A nameless later declaration takes the earlier rule's row
-            // names back.
-            let table = style
-                .layout
-                .grid_names
-                .get_or_insert_with(GridNames::default);
-            table.rows = names.map(|names| names.rows).unwrap_or_default();
+            // One unsupported track drops the declaration: the earlier
+            // track list (and names) stand.
+            if let Some(tracks) = tracks {
+                style.layout.grid_template_rows = Some(tracks);
+                // A nameless later declaration takes the earlier rule's
+                // row names back.
+                let table = style
+                    .layout
+                    .grid_names
+                    .get_or_insert_with(GridNames::default);
+                table.rows = names.map(|names| names.rows).unwrap_or_default();
+            }
         }
         Property::GridTemplateColumns(columns) => {
             let (tracks, names) = track_sizing(columns, Axis::Column);
-            style.layout.grid_template_columns = tracks;
-            // A nameless later declaration takes the earlier rule's
-            // column names back.
-            let table = style
-                .layout
-                .grid_names
-                .get_or_insert_with(GridNames::default);
-            table.columns = names.map(|names| names.columns).unwrap_or_default();
+            if let Some(tracks) = tracks {
+                style.layout.grid_template_columns = Some(tracks);
+                let table = style
+                    .layout
+                    .grid_names
+                    .get_or_insert_with(GridNames::default);
+                table.columns = names.map(|names| names.columns).unwrap_or_default();
+            }
         }
         Property::GridTemplate(template) => {
             let (rows, row_lines) = track_sizing(&template.rows, Axis::Row);
             let (columns, column_lines) = track_sizing(&template.columns, Axis::Column);
-            style.layout.grid_template_rows = rows;
-            style.layout.grid_template_columns = columns;
+            // One unsupported track drops the declaration.
+            let (Some(rows), Some(columns)) = (rows, columns) else {
+                return;
+            };
+            style.layout.grid_template_rows = Some(rows);
+            style.layout.grid_template_columns = Some(columns);
             // The shorthand resets the whole name table: an earlier
             // rule's names don't survive a new `grid-template`.
             style.layout.grid_names = Some(GridNames::default());
@@ -2054,18 +2196,33 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 names.implied_columns = areas.implied_columns;
             }
         }
-        Property::GridAutoRows(tracks) => style.layout.grid_auto_rows = track_size_list(tracks),
+        Property::GridAutoRows(tracks) => {
+            if let Some(tracks) = track_size_list(tracks) {
+                style.layout.grid_auto_rows = Some(tracks);
+            }
+        }
         Property::GridAutoColumns(tracks) => {
-            style.layout.grid_auto_columns = track_size_list(tracks);
+            if let Some(tracks) = track_size_list(tracks) {
+                style.layout.grid_auto_columns = Some(tracks);
+            }
         }
         Property::GridAutoFlow(flow) => style.layout.grid_auto_flow = Some(grid_auto_flow(*flow)),
         Property::Grid(grid) => {
             let (rows, row_names) = track_sizing(&grid.rows, Axis::Row);
             let (columns, column_names) = track_sizing(&grid.columns, Axis::Column);
-            style.layout.grid_template_rows = rows;
-            style.layout.grid_template_columns = columns;
-            style.layout.grid_auto_rows = track_size_list(&grid.auto_rows);
-            style.layout.grid_auto_columns = track_size_list(&grid.auto_columns);
+            // One unsupported track drops the declaration.
+            let (Some(rows), Some(columns)) = (rows, columns) else {
+                return;
+            };
+            let auto_rows = track_size_list(&grid.auto_rows);
+            let auto_columns = track_size_list(&grid.auto_columns);
+            if auto_rows.is_none() || auto_columns.is_none() {
+                return;
+            }
+            style.layout.grid_template_rows = Some(rows);
+            style.layout.grid_template_columns = Some(columns);
+            style.layout.grid_auto_rows = auto_rows;
+            style.layout.grid_auto_columns = auto_columns;
             style.layout.grid_auto_flow = Some(grid_auto_flow(grid.auto_flow));
             // The shorthand resets the name table; an earlier rule's
             // names don't survive a new `grid`.
@@ -2457,8 +2614,9 @@ fn justify_self(value: &css_align::JustifySelf) -> Option<JustifySelf> {
 }
 
 /// `grid-template-rows`/`-columns`: `none` (no explicit tracks) or a track
-/// list; line names are ignored (placements can't refer to them). One
-/// unsupported track drops the whole declaration, as an invalid value would.
+/// list; the `[name]` line names register on the container's name table
+/// (placements resolve against them). One unsupported track drops the
+/// whole declaration, as an invalid value would.
 fn track_sizing(
     sizing: &TrackSizing,
     axis: Axis,
@@ -2781,7 +2939,8 @@ fn auto_val(value: &LengthPercentageOrAuto, sink: &mut Vec<CalcExpr>) -> Option<
 }
 
 /// Absolute lengths, viewport units and `%` (of the parent, as in CSS);
-/// font-relative units and `calc()` are unsupported.
+/// font-relative units are leaves and `calc()` flattens into the crate's
+/// expression tree (mixed-unit sums resolve at layout time).
 /// Converts lightningcss's `Calc` AST into the crate's expression tree,
 /// through `leaf` for the value leaves. `None` for anything unsupported
 /// (round()/mod()/abs()/… — logged).
@@ -3374,6 +3533,20 @@ mod tests {
     /// nothing when the panel isn't an ancestor.
     #[test]
     fn descendant_combinator_matches_at_any_depth() {
+        // A deep chain of non-matching candidates: the descendant
+        // backtracking retried every combination and took ~600 ms per
+        // element; the failure memo makes it linear.
+        let start = std::time::Instant::now();
+        let deep = selector(".b .a .a .a .a .a .a p");
+        let ancestors: Vec<Ancestor> = (0..40)
+            .map(|_| ancestor("div", &["a"]))
+            .collect();
+        assert!(!deep.matches(&element("p", None, &[]), Pseudo::default(), &ancestors));
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(100),
+            "the combinator matching took {:?}",
+            start.elapsed()
+        );
         let selector = selector(".panel p");
         let ancestors = vec![ancestor("div", &["panel"]), ancestor("section", &["page"])];
         assert!(
@@ -3757,6 +3930,35 @@ mod tests {
         assert_eq!(node.grid_template_rows, base.grid_template_rows);
     }
 
+    /// An unsupported value drops the declaration: the earlier rule's
+    /// value (and its calc) stand, instead of being erased.
+    #[test]
+    fn unsupported_values_dont_erase_earlier_values() {
+        let get = |rules: &str, classes: &[&str]| {
+            HtmlStyles::from_sheet(&owned_sheet(rules)).get(
+                &element("p", None, classes),
+                Pseudo::default(),
+                &[],
+            )
+        };
+        // An unsupported track invalidates the whole declaration.
+        let style = get(
+            "p { grid-template-columns: 100px 1fr } p.x { grid-template-columns: fit-content(2em) 1fr }",
+            &["x"],
+        );
+        assert_eq!(
+            style.layout.grid_template_columns.as_ref().map(|t| t.len()),
+            Some(2)
+        );
+        let style = get("p { row-gap: 8px } p { row-gap: 5% }", &[]);
+        assert_eq!(style.row_gap, Some(8.0));
+        let style = get("p { width: calc(50% - 10px) } p { width: fit-content }", &[]);
+        assert!(style.calc.iter().any(|(prop, _)| *prop == CalcProp::Width));
+        // Control: without the invalid value the later declaration wins.
+        let style = get("p { width: 10px } p { width: 20px }", &[]);
+        assert_eq!(style.layout.width, Some(Val::Px(20.0)));
+    }
+
     /// `initial`/`inherit`/`unset`/`revert` return the field to its
     /// initial value instead of being ignored (the earlier rule's value
     /// used to show through). `inherit` resolves to the initial value
@@ -4111,7 +4313,7 @@ mod tests {
         assert_eq!(
             columns("[a] 1fr [b]"),
             Some(vec![GridTrack::fr(1.0)]),
-            "names ignored"
+            "the tracks map; the names register on the table"
         );
         // Font-relative tracks map to taffy's `Em`/`Rem` sizing functions.
         assert_eq!(
@@ -4499,6 +4701,13 @@ mod tests {
             r#"p { border-image-source: url("b.png") } div { border-image: url("c.png") 4 }"#,
         );
         assert_eq!(image_urls(&sheet), ["b.png", "c.png"]);
+        // A url() behind a var(): the sheet's `--` declaration carries the
+        // URL — it is loaded even though the frame declaration only
+        // references the name.
+        let sheet = owned_sheet(
+            r#"p { --frame: url("a.png"); border-image: var(--frame) 4 }"#,
+        );
+        assert_eq!(image_urls(&sheet), ["a.png"]);
     }
 
     /// `position` and the insets: shorthand and longhands, `static` kept as
