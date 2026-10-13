@@ -373,7 +373,7 @@ html-ui border=16,16,16,16 padding=10,20,10,20 slice=frame.png 4,4,4,4 stretch
   p.framed border=6,8,6,8 bg=#102030 slice=frame.png 6,8,6,8 tile
     -
       "Framed" serif 20px #ffffff
-  div.panel border=12,12,12,12 padding=4,4,4,4 gap=7 bg=#333333 slice=frame.png 2,3,4,5 stretch
+  div.panel border=12,12,12,12 padding=4,4,4,4 gap=7 col-gap=7 bg=#333333 slice=frame.png 2,3,4,5 stretch
     p
       "One" serif 20px #ffffff
     p
@@ -2363,7 +2363,7 @@ html-ui
       "second" default 16px #ffffff
   p.markdown
     "frame.png" img 32x24
-  div
+  div focus on=Click:buy
     -
       "Buy" default 16px #ffffff
 "#,
