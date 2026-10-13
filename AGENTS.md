@@ -1181,6 +1181,9 @@ edited to match later code; a new ADR supersedes them.
 Bugs found by the automated testing above — or by any other means — are
 filed in `docs/agents/bugs/` as `bug_NNNN.md`, numbered sequentially in
 discovery order, with an `INDEX.md` title/metadata page linking all reports.
+Whole-crate review sessions are filed in `docs/agents/reviews/` as
+`YYYY-MM-DD.md`, one report per session; a finding there gets its own
+`bug_NNNN.md` when its fix lands.
 File one for every real defect a fuzzer, property test, vector, or manual
 investigation uncovers, *at minimum when the fix lands* (don't let the
 analysis live only in commit messages or chat logs).

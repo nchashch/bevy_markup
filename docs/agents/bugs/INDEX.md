@@ -3,6 +3,11 @@
 Upstream defects (in dependencies and tools) are also tracked in
 [UPSTREAM.md](UPSTREAM.md) until they're reported and fixed upstream.
 
+Whole-crate review sessions are filed in [reviews/](../reviews/) as one
+report per date; the latest is [2026-10-13](../reviews/2026-10-13.md)
+(80 open findings, stable IDs `R01`–`R80`). A finding gets its own
+`bug_NNNN.md` here when its fix lands.
+
 The crate was called `p23` until 2026-10-05 and is now `bevy_markup`; the
 reports keep the name, paths and commands as they were at the time
 (`p23::fuzz` is now `bevy_markup::fuzz`, `P23_*` variables are
@@ -152,5 +157,24 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   plus the uncommitted `:hover`/`:active` work; fixed with it in `d079b08`.
 - **Harness:** the demo crashed at startup (no input); traced with
   `--features bevy/debug` and `bevy_markup=debug` rebuild-decision logs, then
-  pinned by the vector `restyle_with_nested_uis_keeps_them`.
+  pinned by the vector `restyle_with_nested_uis_keeps_them`).
 - **Discovery agent:** model `zai/glm-5.3-flash:high`.
+
+## Discovery session metadata: code review 2026-10-13 (reviews/2026-10-13.md)
+
+- **Date:** 2026-10-13; same machine (`anne`, kernel `7.2.8-arch1-2`).
+- **Repository state:** `bevy_markup` at `b224619` ("Bounded headless
+  example runs; …"), clean tree on `main`.
+- **Method:** six parallel review slices (build/skeleton reuse,
+  cascade/fonts, interaction, templates/Markdown/Fluent/loaders,
+  core wiring/rebuild, examples/scripts/CI) reading against AGENTS.md and
+  the ADRs, each free to run throwaway probes in scratch copies; the
+  integrator re-read the highest-impact claims directly. Evidence levels
+  per finding: [probe] reproduced, [code] verified by reading,
+  [traced] path traced without execution.
+- **Fix status:** a fix session later that day (six per-slice git
+  worktrees, branches `fix/<slice>`) was cut off by a provider rate limit
+  before any fix landed; the branches hold only partial, uncommitted agent
+  edits. All 80 findings are **open**.
+- **Discovery agent:** model `anthropic/claude-opus-5-5:high` with six
+  `reviewer` subagents.
