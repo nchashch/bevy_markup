@@ -24,9 +24,11 @@
 //!   specificity; the rule applies while the element's
 //!   [`PseudoState`](crate::signals::PseudoState) has the bit set, which the
 //!   library maintains from picking — a change restyles in place). Matched
-//!   against each element's tag, `id` and `class` attributes. Combinators,
-//!   attribute selectors and other pseudo-classes are skipped (logged at
-//!   `debug`).
+//!   against each element's tag, `id` and `class` attributes, and against
+//!   the ancestor chain: descendant (`A B`) and child (`A > B`)
+//!   combinators, with the ancestors' own pseudo-classes. Attribute
+//!   selectors, sibling combinators and other pseudo-classes are skipped
+//!   (logged at `debug`).
 //! - inherited: `color`, `font-family`, `font-size`, `font-weight`,
 //!   `font-style`, `pointer-events` (`none` → `Pickable::IGNORE` on the
 //!   element and, by inheritance, its descendants; `auto` turns it back on)
@@ -125,7 +127,10 @@
 //!   Containers are flex columns unless `flex-direction` (or `display:
 //!   block`) says otherwise — `display: flex` alone keeps the column — and
 //!   neither containers nor blocks shrink by default (`flex-shrink: 0`).
-//!   Font-relative lengths (`em`, `rem`) are skipped here.
+//!   Font-relative lengths (`em`, `rem`) work in sizes, margins and
+//!   insets (`em` against the node's own cascade font-size, `rem` against
+//!   the root rule's); `calc()` too (single-unit expressions resolve at
+//!   style time, mixed units at layout).
 //! - grid: `grid-template-rows`/`-columns` (`none` or track lists: lengths,
 //!   `%`, viewport units, `fr`, `auto`, `min-content`, `max-content`,
 //!   `minmax()`, `fit-content()`, `repeat()` with a count, `auto-fill` or
@@ -158,9 +163,11 @@
 //!   whatever a later stylesheet or document stops declaring goes back to
 //!   the app's value.
 //!
-//! `font-family` uses the first name registered in
-//! [`FontFamilies`](crate::fonts::FontFamilies) (generic keywords via
-//! [`FontFamilies::set_generic`](crate::fonts::FontFamilies::set_generic)); a
+//! `font-family` resolves every registered name in the list, in order,
+//! against [`FontFamilies`](crate::fonts::FontFamilies), and composes
+//! Bevy's per-glyph fallback list over them (ADR 0015); generic keywords
+//! map via
+//! [`FontFamilies::set_generic`](crate::fonts::FontFamilies::set_generic). A
 //! list with no registered name means Bevy's default font (like a browser's
 //! default font), not the inherited family. `font-size`:
 //! `px`, `em`/`%` (of the inherited size), `rem` (of the root size), keywords
@@ -202,6 +209,9 @@ pub struct Stylesheet {
     pub(crate) sheet: StyleSheet<'static>,
     /// URLs as written, parallel to `images`.
     pub(crate) image_urls: Vec<String>,
+    /// The `var()` names the sheet (transitively, through its own `--`
+    /// declarations) reads from the context — computed once at load.
+    pub(crate) var_names: Vec<String>,
     #[dependency]
     pub(crate) images: Vec<Handle<Image>>,
 }
@@ -271,6 +281,7 @@ impl AssetLoader for StylesheetLoader {
             images.push(load_context.load(path));
         }
         Ok(Stylesheet {
+            var_names: crate::cascade::var_names(&sheet),
             sheet: sheet.into_owned(),
             image_urls,
             images,

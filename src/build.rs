@@ -17,7 +17,7 @@ use bevy::ui_widgets::TextInput;
 use crate::cascade::{
     self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, GridNames,
     HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue, TransitionDecl,
-    TransitionProp, node_field_mut, var_names,
+    TransitionProp, node_field_mut,
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
@@ -410,19 +410,18 @@ pub(crate) struct ActiveTransition {
     pub easing: EasingFunction,
 }
 
-/// The hash of the context's values for the sheet's `var()` names: the
-/// seed input that invalidates collection fingerprints when a variable
-/// changes, and the `Frame`'s `vars_changed` signal.
-fn context_vars_hash(
-    sheet: Option<&Stylesheet>,
-    context: Option<&TemplateContext>,
-) -> u64 {
+/// The hash of the context's values for the sheet's `var()` names (as
+/// collected transitively at load): the seed input that invalidates
+/// collection fingerprints when a variable changes, and the `Frame`'s
+/// `vars_changed` signal.
+fn context_vars_hash(sheet: Option<&Stylesheet>, context: Option<&TemplateContext>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for name in sheet.map(|sheet| var_names(sheet.sheet())).unwrap_or_default() {
+    let no_names: &[String] = &[];
+    for name in sheet.map(|sheet| &sheet.var_names[..]).unwrap_or(no_names) {
         name.hash(&mut hasher);
         context
-            .and_then(|context| context.get(&name))
+            .and_then(|context| context.get(name))
             .and_then(css_value)
             .hash(&mut hasher);
     }
@@ -886,9 +885,7 @@ pub(crate) fn build_html_ui(
             default_sheet.0.as_ref().map(phase),
         );
         let names_sheet = match (own_phase, default_phase) {
-            (Some(Phase::Ready), _) => {
-                own_sheet.as_ref().and_then(|own| sheets.get(&own.0))
-            }
+            (Some(Phase::Ready), _) => own_sheet.as_ref().and_then(|own| sheets.get(&own.0)),
             (Some(Phase::Loading), _) => None,
             (Some(Phase::Failed) | None, Some(Phase::Ready)) => default_sheet
                 .0

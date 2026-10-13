@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -18,6 +19,7 @@ use lightningcss::properties::border_image::{
     BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
 };
 use lightningcss::properties::custom::CustomPropertyName;
+use lightningcss::properties::custom::Token;
 use lightningcss::properties::custom::{TokenList, TokenOrValue};
 use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
 use lightningcss::properties::flex as css_flex;
@@ -153,7 +155,9 @@ impl GridNames {
             Axis::Column => &self.columns,
         };
         // The registrations per name are pairs (the 1-based line and its
-        // negative spelling): partition by sign, then pick the occurrence.
+        // negative spelling), in document order: the negative spellings
+        // grow with the lines, so `-k from the end` is the `k`th entry
+        // counted backwards.
         let occurrences = lines.get(name)?;
         let (positive, negative): (Vec<i16>, Vec<i16>) =
             occurrences.iter().partition(|line| **line > 0);
@@ -161,7 +165,13 @@ impl GridNames {
         let line = if index > 0 {
             positive.get(index as usize - 1)
         } else {
-            negative.get((negative.len() as i32 + index as i32 - 1).max(0) as usize)
+            let position = negative.len() as i32 + index;
+            if position < 0 {
+                // More from the end than there are occurrences: no such
+                // line (auto placement).
+                return None;
+            }
+            negative.get(position as usize)
         };
         Some(GridLineDecl::Line(*line?))
     }
@@ -661,16 +671,30 @@ impl LayoutDecl {
         );
         put(&mut node.overflow.x, &base.overflow.x, &self.overflow[0]);
         put(&mut node.overflow.y, &base.overflow.y, &self.overflow[1]);
-        // `apply_to` sets the position and insets only for `relative`/`absolute`.
+        // `apply_to` sets the position and insets for every non-`static`
+        // position (`fixed` resolves against the viewport through the
+        // `FixedNode` component, but the insets and the position type are
+        // the node's).
         if matches!(
             self.position,
-            Some(CssPosition::Absolute | CssPosition::Relative)
+            Some(CssPosition::Absolute | CssPosition::Relative | CssPosition::Fixed)
         ) {
             node.position_type = base.position_type;
             put(&mut node.top, &base.top, &self.inset[0]);
             put(&mut node.right, &base.right, &self.inset[1]);
             put(&mut node.bottom, &base.bottom, &self.inset[2]);
             put(&mut node.left, &base.left, &self.inset[3]);
+        }
+        // `grid-template-areas` implies `auto` tracks when the template
+        // fields are undeclared (apply_to writes them); a later sheet
+        // without the areas must take them back.
+        if let Some(names) = &self.grid_names {
+            if self.grid_template_rows.is_none() && names.implied_rows > 0 {
+                node.grid_template_rows = base.grid_template_rows.clone();
+            }
+            if self.grid_template_columns.is_none() && names.implied_columns > 0 {
+                node.grid_template_columns = base.grid_template_columns.clone();
+            }
         }
     }
 }
@@ -811,6 +835,20 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
             .iter()
             .chain(&rule.declarations.important_declarations);
         for declaration in declarations {
+            // A `url()` behind a `var()`: the frame declaration carries
+            // the reference, the URL lives in the sheet's own `--`
+            // declaration's tokens — load both sides.
+            if let Property::Custom(custom) = declaration {
+                for token in &custom.value.0 {
+                    if let TokenOrValue::Url(url) = token {
+                        let url = url.url.to_string();
+                        if !urls.contains(&url) {
+                            urls.push(url);
+                        }
+                    }
+                }
+                continue;
+            }
             let image = match declaration {
                 Property::BorderImage(border_image, _) => &border_image.source,
                 Property::BorderImageSource(image) => image,
@@ -826,13 +864,17 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
     urls
 }
 
-/// Every `var()` name the sheet's supported declarations reference, sorted:
-/// the names whose context values a change restyles
-/// (`Frame::vars_changed`). Only top-level style rules (what the cascade
-/// reads), only `Property::Unparsed` values (the only `var()` the resolver
-/// handles).
+/// Every `var()` name the sheet's supported declarations reference,
+/// sorted: the names whose context values a change restyles
+/// (`Frame::vars_changed`). Transitively: a `--a: var(--brand)`
+/// declaration contributes `--brand` when `--a` is itself referenced.
+/// A name a sheet-level `--` declaration references but nothing reads is
+/// not tracked. Computed once at load (cached on `Stylesheet`).
 pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
     let mut names = BTreeSet::new();
+    // The sheet's `--` declarations: name → the `var()` names their
+    // values reference (joined into the set by the fixpoint below).
+    let mut declarations: Vec<(String, Vec<String>)> = Vec::new();
     for rule in sheet.rules.0.iter() {
         let CssRule::Style(rule) = rule else {
             continue;
@@ -843,9 +885,39 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
             .iter()
             .chain(&rule.declarations.important_declarations)
         {
-            if let Property::Unparsed(unparsed) = declaration {
-                collect_var_names(&unparsed.value, &mut names);
+            match declaration {
+                Property::Unparsed(unparsed) => {
+                    collect_var_names(&unparsed.value, &mut names);
+                }
+                Property::Custom(custom) => {
+                    let name = match &custom.name {
+                        CustomPropertyName::Custom(dashed) => dashed.0.as_ref().to_owned(),
+                        CustomPropertyName::Unknown(_) => continue,
+                    };
+                    let mut refs = BTreeSet::new();
+                    collect_var_names(&custom.value, &mut refs);
+                    if !refs.is_empty() {
+                        declarations.push((name, refs.into_iter().collect()));
+                    }
+                }
+                _ => {}
             }
+        }
+    }
+    // The fixpoint: a referenced `--` name's own references join the set.
+    loop {
+        let mut grew = false;
+        for (name, refs) in &declarations {
+            if names.contains(name) {
+                for r in refs {
+                    if names.insert(r.clone()) {
+                        grew = true;
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
         }
     }
     names.into_iter().collect()
@@ -970,31 +1042,54 @@ impl Selector {
     }
 
     /// Matches `compounds[..index]` against `ancestors` (nearest first).
+    /// Memoized by (compound index, ancestor offset): a `.b .a ×n p`
+    /// selector against deep `.a` ancestors retried every combination
+    /// (hundreds of ms per element); with the failure memo it is linear.
     fn matches_rest(&self, index: usize, ancestors: &[Ancestor]) -> bool {
+        let mut failed = HashSet::new();
+        self.matches_from(index, ancestors, 0, &mut failed)
+    }
+
+    /// [`matches_rest`](Self::matches_rest) from `offset` (the absolute
+    /// ancestor position), recording failed states in `failed`.
+    fn matches_from(
+        &self,
+        index: usize,
+        ancestors: &[Ancestor],
+        offset: usize,
+        failed: &mut HashSet<(usize, usize)>,
+    ) -> bool {
         if index == 0 {
             return true;
         }
+        if failed.contains(&(index, offset)) {
+            return false;
+        }
         let combinator = self.combinators[index - 1];
         let compound = &self.compounds[index - 1];
-        match combinator {
-            Combinator::Child => {
-                let Some(parent) = ancestors.first() else {
-                    return false;
-                };
+        let matched = match combinator {
+            Combinator::Child => ancestors.get(offset).is_some_and(|parent| {
                 compound.matches(&parent.element, parent.pseudo)
-                    && self.matches_rest(index - 1, &ancestors[1..])
-            }
+                    && self.matches_from(index - 1, ancestors, offset + 1, failed)
+            }),
             Combinator::Descendant => {
-                for (i, ancestor) in ancestors.iter().enumerate() {
+                let mut any = false;
+                for i in offset..ancestors.len() {
+                    let ancestor = &ancestors[i];
                     if compound.matches(&ancestor.element, ancestor.pseudo)
-                        && self.matches_rest(index - 1, &ancestors[i + 1..])
+                        && self.matches_from(index - 1, ancestors, i + 1, failed)
                     {
-                        return true;
+                        any = true;
+                        break;
                     }
                 }
-                false
+                any
             }
+        };
+        if !matched {
+            failed.insert((index, offset));
         }
+        matched
     }
 }
 
@@ -1062,7 +1157,15 @@ impl Compound {
             }
             rest = &body[end..];
         }
-        if tag.is_none() && ids.is_empty() && classes.is_empty() && selector != "*" {
+        // A bare pseudo-class list (`*:hover` prints as `:hover`,
+        // `:focus-visible` alone) matches any element in that state — the
+        // standard focus-ring rule.
+        if tag.is_none()
+            && ids.is_empty()
+            && classes.is_empty()
+            && selector != "*"
+            && pseudo == Pseudo::default()
+        {
             return None;
         }
         Some(Self {
@@ -1310,6 +1413,12 @@ impl ElementStyle {
     /// the declaration was a calc() — records the expression instead (the
     /// property's field keeps its placeholder until the layout pass).
     fn set_calc(&mut self, prop: CalcProp, value: Option<Val>, exprs: Vec<CalcExpr>) {
+        if value.is_none() && exprs.is_empty() {
+            // An unsupported value (`fit-content`, …): the declaration is
+            // invalid and dropped — the earlier declaration's value (and
+            // its calc) stand.
+            return;
+        }
         self.calc.retain(|(p, _)| p != &prop);
         match exprs.into_iter().next() {
             Some(expr) => match expr.collapse() {
@@ -1410,35 +1519,60 @@ fn apply_resolved(
     variables: &HashMap<String, TokenList<'static>>,
     context: Option<&dyn Fn(&str) -> Option<String>>,
 ) {
-    let Property::Unparsed(unparsed) = declaration else {
-        apply(style, declaration);
-        return;
-    };
-    // Fast path: most values have no `var()` at all.
-    if !contains_var(&unparsed.value) {
-        apply(style, declaration);
+    // `initial`/`inherit`/`unset`/`revert` arrive as unparsed bare
+    // keywords: the field returns to its initial value (the cascade has
+    // no parent computed style, so `inherit`/`unset` on inherited
+    // properties resolve to it too — documented deviation).
+    if let Property::Unparsed(unparsed) = declaration
+        && unparsed.value.0.len() == 1
+        && let TokenOrValue::Token(token) = &unparsed.value.0[0]
+        && matches!(token, Token::Ident(ident)
+            if matches!(ident.as_ref().to_ascii_lowercase().as_str(),
+                "initial" | "inherit" | "unset" | "revert"))
+    {
+        apply_keyword(style, &unparsed.property_id);
         return;
     }
-    let resolved = match substitute(
-        &unparsed.value,
-        variables,
-        &context.unwrap_or(&|_| None),
-        0,
-    ) {
-        Some(text) => match Property::parse_string(
-            unparsed.property_id.clone(),
-            &text,
-            ParserOptions::default(),
-        ) {
-            Ok(property) => property.into_owned(),
-            Err(_) => {
-                debug!("html css: `var()` substitution produced an invalid value: {text:?}");
+    // The tokens to substitute: an unparsed value, or an unknown/custom
+    // property's raw tokens (`pointer-events` has no typed form in
+    // lightningcss and arrives as a custom property).
+    let (reparse, tokens) = match declaration {
+        Property::Unparsed(unparsed) => {
+            if !contains_var(&unparsed.value) {
+                apply(style, declaration);
                 return;
             }
-        },
-        None => return,
+            (Some(unparsed.property_id.clone()), &unparsed.value)
+        }
+        Property::Custom(custom) => {
+            if !contains_var(&custom.value) {
+                apply(style, declaration);
+                return;
+            }
+            (Some(PropertyId::Custom(custom.name.clone())), &custom.value)
+        }
+        _ => {
+            apply(style, declaration);
+            return;
+        }
     };
-    apply(style, &resolved);
+    let mut substitution = Substitution {
+        variables,
+        context: &context.unwrap_or(&|_| None),
+        resolved: HashMap::new(),
+        resolving: HashSet::new(),
+        budget: VAR_BUDGET,
+    };
+    let Some(text) = substitution.substitute(tokens) else {
+        debug!("html css: `var()` substitution failed");
+        return;
+    };
+    match Property::parse_string(reparse.unwrap(), &text, ParserOptions::default()) {
+        Ok(property) => apply(style, &property.into_owned()),
+        Err(_) => {
+            debug!("html css: `var()` substitution produced an invalid value: {text:?}");
+        }
+    }
 }
 
 /// Whether any `var()` appears in the tokens (function arguments included).
@@ -1450,60 +1584,261 @@ fn contains_var(tokens: &TokenList) -> bool {
     })
 }
 
-/// The tokens' CSS text, with every `var()` replaced: the context's value
-/// (interpolated as written), else a custom property's tokens (its own
-/// `var()`s resolved, `depth` bounding recursion), else the reference's
-/// fallback, else `None` (unresolvable).
-fn substitute(
-    tokens: &TokenList,
-    variables: &HashMap<String, TokenList<'static>>,
-    context: &dyn Fn(&str) -> Option<String>,
-    depth: usize,
-) -> Option<String> {
-    if depth > 32 {
-        return None;
-    }
-    let mut out = String::new();
-    for token in &tokens.0 {
-        let piece = match token {
-            TokenOrValue::Var(variable) => {
-                let name = variable.name.ident.as_ref();
-                match context(name).or_else(|| {
-                    variables
-                        .get(name)
-                        .and_then(|value| substitute(value, variables, context, depth + 1))
-                }) {
-                    Some(value) => value,
-                    None => match &variable.fallback {
-                        Some(fallback) => substitute(fallback, variables, context, depth + 1)?,
-                        None => return None,
-                    },
-                }
-            }
-            TokenOrValue::Function(function) => {
-                let arguments = substitute(&function.arguments, variables, context, depth + 1)?;
-                format!("{}({arguments})", function.name.as_ref())
-            }
-            TokenOrValue::Token(token) => token.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Color(color) => color.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Url(url) => url.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Length(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Angle(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Time(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::Resolution(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::DashedIdent(name) => name.to_css_string(PrinterOptions::default()).ok()?,
-            TokenOrValue::AnimationName(name) => name.to_css_string(PrinterOptions::default()).ok()?,
-            // `UnresolvedColor` and `env()` serialize only crate-internally:
-            // a `var()` among their components can't be resolved here, so
-            // the declaration is dropped (as an unresolvable one is).
-            TokenOrValue::UnresolvedColor(_) | TokenOrValue::Env(_) => return None,
-        };
-        if !out.is_empty() {
-            out.push(' ');
+/// The total substitution output one declaration may produce: a `var()`
+/// graph can be exponential (a doubling reference chain), and the budget
+/// bounds it. Beyond it the declaration is dropped, like an unresolvable
+/// one.
+const VAR_BUDGET: usize = 64 * 1024;
+
+/// One declaration's `var()` substitution: each custom property is
+/// resolved at most once (memoized), a name in the current chain is
+/// unresolvable (a cycle is invalid at computed-value time), and the
+/// output is budget-capped. Linear in the sheet, where the naive
+/// depth-bounded recursion was exponential.
+struct Substitution<'a> {
+    variables: &'a HashMap<String, TokenList<'static>>,
+    context: &'a dyn Fn(&str) -> Option<String>,
+    /// Resolved values by name; `None` = unresolvable (memoized). Keys
+    /// are owned: the names borrow the tokens being substituted.
+    resolved: HashMap<String, Option<String>>,
+    /// Names on the current resolution chain: re-entering one fails.
+    resolving: HashSet<String>,
+    budget: usize,
+}
+
+impl<'a> Substitution<'a> {
+    /// The value for one `var()` reference: the context first, then the
+    /// sheet's custom properties (resolved once, cycles fail), then —
+    /// handled by the caller — the reference's fallback.
+    fn var(&mut self, name: &str) -> Option<String> {
+        if let Some(value) = self.resolved.get(name) {
+            return value.clone();
         }
-        out.push_str(piece.trim());
+        if self.resolving.contains(name) {
+            // A cycle: invalid at computed-value time.
+            return None;
+        }
+        let value = if let Some(value) = (self.context)(name) {
+            Some(value)
+        } else {
+            self.resolving.insert(name.to_owned());
+            let value = self
+                .variables
+                .get(name)
+                .and_then(|tokens| self.substitute(tokens));
+            self.resolving.remove(name);
+            value
+        };
+        // Memoize even the failures: a name that doesn't resolve stays
+        // unresolvable for this declaration.
+        self.resolved.insert(name.to_owned(), value.clone());
+        value
     }
-    Some(out)
+
+    /// The tokens' CSS text with every `var()` replaced, else `None`
+    /// (unresolvable or over budget).
+    fn substitute(&mut self, tokens: &TokenList) -> Option<String> {
+        let mut out = String::new();
+        for token in &tokens.0 {
+            let piece = match token {
+                TokenOrValue::Var(variable) => {
+                    let name = variable.name.ident.as_ref();
+                    match self.var(name) {
+                        Some(value) => value,
+                        None => match &variable.fallback {
+                            Some(fallback) => self.substitute(fallback)?,
+                            None => return None,
+                        },
+                    }
+                }
+                TokenOrValue::Function(function) => {
+                    let arguments = self.substitute(&function.arguments)?;
+                    format!("{}({arguments})", function.name.as_ref())
+                }
+                TokenOrValue::Token(token) => token.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Color(color) => color.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Url(url) => url.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Length(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Angle(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Time(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Resolution(value) => {
+                    value.to_css_string(PrinterOptions::default()).ok()?
+                }
+                TokenOrValue::DashedIdent(name) => {
+                    name.to_css_string(PrinterOptions::default()).ok()?
+                }
+                TokenOrValue::AnimationName(name) => {
+                    name.to_css_string(PrinterOptions::default()).ok()?
+                }
+                // `UnresolvedColor` and `env()` serialize only
+                // crate-internally: a `var()` among their components can't
+                // be resolved here, so the declaration is dropped (as an
+                // unresolvable one is).
+                TokenOrValue::UnresolvedColor(_) | TokenOrValue::Env(_) => return None,
+            };
+            self.budget = self.budget.checked_sub(piece.len())?;
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(piece.trim());
+        }
+        Some(out)
+    }
+}
+
+/// `initial`/`inherit`/`unset`/`revert` for one property: its field(s)
+/// return to the initial value (the `ElementStyle` default — the build's
+/// defaults). `inherit` and `unset`-on-inherited also resolve here: the
+/// cascade keeps no parent computed style to inherit from (a documented
+/// deviation; the earlier rule's value no longer shows through either
+/// way). Unknown properties are ignored.
+fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
+    // Matched by name: `PropertyId`'s variants carry vendor prefixes for
+    // some properties and not others; the names are stable.
+    match id.name() {
+        "color" => style.color = None,
+        "background-color" => style.background = None,
+        "opacity" => style.opacity = None,
+        "z-index" => style.z_index = None,
+        "font-family" => style.font_family = None,
+        "font-size" => style.font_size = None,
+        "font-weight" => style.bold = None,
+        "font-style" => style.italic = None,
+        "text-decoration" | "text-decoration-line" => style.text_decoration = None,
+        "text-decoration-color" => {
+            if let Some(decoration) = &mut style.text_decoration {
+                decoration.color = None;
+            }
+        }
+        "outline" => style.outline = OutlineDecl::default(),
+        "outline-width" => style.outline.width = None,
+        "outline-color" => style.outline.color = None,
+        "outline-style" => style.outline.visible = None,
+        "outline-offset" => style.outline.offset = None,
+        "border-image" | "border-image-source" | "border-image-slice" | "border-image-repeat" => {
+            style.border_image = None;
+        }
+        "border-width" => style.border_width = [None; 4],
+        "border-top-width" => style.border_width[0] = None,
+        "border-right-width" => style.border_width[1] = None,
+        "border-bottom-width" => style.border_width[2] = None,
+        "border-left-width" => style.border_width[3] = None,
+        "border-color" => style.border_color = [None; 4],
+        "border-top-color" => style.border_color[0] = None,
+        "border-right-color" => style.border_color[1] = None,
+        "border-bottom-color" => style.border_color[2] = None,
+        "border-left-color" => style.border_color[3] = None,
+        "border-radius" | "border-top-left-radius" | "border-top-right-radius"
+        | "border-bottom-right-radius" | "border-bottom-left-radius" => {
+            style.layout.border_radius = [None; 4];
+        }
+        "padding" => style.padding = [None; 4],
+        "padding-top" => style.padding[0] = None,
+        "padding-right" => style.padding[1] = None,
+        "padding-bottom" => style.padding[2] = None,
+        "padding-left" => style.padding[3] = None,
+        "row-gap" => style.row_gap = None,
+        "column-gap" => style.layout.column_gap = None,
+        "gap" => {
+            style.row_gap = None;
+            style.layout.column_gap = None;
+        }
+        "display" => style.layout.display = None,
+        "visibility" => style.layout.visibility = None,
+        "flex-direction" => style.layout.flex_direction = None,
+        "flex-wrap" => style.layout.flex_wrap = None,
+        "flex-flow" => {
+            style.layout.flex_direction = None;
+            style.layout.flex_wrap = None;
+        }
+        "flex-grow" => style.layout.flex_grow = None,
+        "flex-shrink" => style.layout.flex_shrink = None,
+        "flex-basis" => style.layout.flex_basis = None,
+        "flex" => {
+            style.layout.flex_grow = None;
+            style.layout.flex_shrink = None;
+            style.layout.flex_basis = None;
+        }
+        "overflow" => style.layout.overflow = [None, None],
+        "overflow-x" => style.layout.overflow[0] = None,
+        "overflow-y" => style.layout.overflow[1] = None,
+        "justify-content" => style.layout.justify_content = None,
+        "align-items" => style.layout.align_items = None,
+        "align-content" => style.layout.align_content = None,
+        "align-self" => style.layout.align_self = None,
+        "justify-items" => style.layout.justify_items = None,
+        "justify-self" => style.layout.justify_self = None,
+        "width" => style.layout.width = None,
+        "height" => style.layout.height = None,
+        "min-width" => style.layout.min_width = None,
+        "min-height" => style.layout.min_height = None,
+        "max-width" => style.layout.max_width = None,
+        "max-height" => style.layout.max_height = None,
+        "margin" => style.layout.margin = [None; 4],
+        "margin-top" => style.layout.margin[0] = None,
+        "margin-right" => style.layout.margin[1] = None,
+        "margin-bottom" => style.layout.margin[2] = None,
+        "margin-left" => style.layout.margin[3] = None,
+        "box-sizing" => style.layout.box_sizing = None,
+        "grid-template-rows" => style.layout.grid_template_rows = None,
+        "grid-template-columns" => style.layout.grid_template_columns = None,
+        "grid-template" => {
+            style.layout.grid_template_rows = None;
+            style.layout.grid_template_columns = None;
+            style.layout.grid_names = None;
+        }
+        "grid-auto-rows" => style.layout.grid_auto_rows = None,
+        "grid-auto-columns" => style.layout.grid_auto_columns = None,
+        "grid-auto-flow" => style.layout.grid_auto_flow = None,
+        "grid" => {
+            style.layout.grid_template_rows = None;
+            style.layout.grid_template_columns = None;
+            style.layout.grid_auto_rows = None;
+            style.layout.grid_auto_columns = None;
+            style.layout.grid_auto_flow = None;
+            style.layout.grid_names = None;
+        }
+        "grid-template-areas" => {
+            // The names table also carries the track names; dropping the
+            // areas takes the whole table.
+            style.layout.grid_names = None;
+        }
+        "grid-row" => style.layout.grid_row = [None, None],
+        "grid-row-start" => style.layout.grid_row[0] = None,
+        "grid-row-end" => style.layout.grid_row[1] = None,
+        "grid-column" => style.layout.grid_column = [None, None],
+        "grid-column-start" => style.layout.grid_column[0] = None,
+        "grid-column-end" => style.layout.grid_column[1] = None,
+        "grid-area" => {
+            style.layout.grid_row = [None, None];
+            style.layout.grid_column = [None, None];
+        }
+        "position" => style.layout.position = None,
+        "top" => {
+            style.layout.inset[0] = None;
+            style.calc.retain(|(p, _)| p != &CalcProp::Top);
+        }
+        "right" => {
+            style.layout.inset[1] = None;
+            style.calc.retain(|(p, _)| p != &CalcProp::Right);
+        }
+        "bottom" => {
+            style.layout.inset[2] = None;
+            style.calc.retain(|(p, _)| p != &CalcProp::Bottom);
+        }
+        "left" => {
+            style.layout.inset[3] = None;
+            style.calc.retain(|(p, _)| p != &CalcProp::Left);
+        }
+        "inset" => {
+            style.layout.inset = [None; 4];
+            style
+                .calc
+                .retain(|(p, _)| !matches!(p, CalcProp::Top | CalcProp::Right | CalcProp::Bottom | CalcProp::Left));
+        }
+        "transition" => style.transitions.clear(),
+        _ => {}
+    }
 }
 
 fn apply(style: &mut ElementStyle, declaration: &Property) {
@@ -1578,28 +1913,84 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             debug!("html css: border-image-width/-outset unsupported (corners draw at image size)");
         }
         Property::BorderWidth(width) => {
-            style.border_width =
-                [&width.top, &width.right, &width.bottom, &width.left].map(side_width);
+            let sides = [&width.top, &width.right, &width.bottom, &width.left].map(side_width);
+            // An unsupported value on one side drops the declaration.
+            if sides.iter().all(Option::is_some) {
+                style.border_width = sides;
+            }
         }
-        Property::BorderTopWidth(width) => style.border_width[0] = side_width(width),
-        Property::BorderRightWidth(width) => style.border_width[1] = side_width(width),
-        Property::BorderBottomWidth(width) => style.border_width[2] = side_width(width),
-        Property::BorderLeftWidth(width) => style.border_width[3] = side_width(width),
+        Property::BorderTopWidth(width) => {
+            if let Some(width) = side_width(width) {
+                style.border_width[0] = Some(width);
+            }
+        }
+        Property::BorderRightWidth(width) => {
+            if let Some(width) = side_width(width) {
+                style.border_width[1] = Some(width);
+            }
+        }
+        Property::BorderBottomWidth(width) => {
+            if let Some(width) = side_width(width) {
+                style.border_width[2] = Some(width);
+            }
+        }
+        Property::BorderLeftWidth(width) => {
+            if let Some(width) = side_width(width) {
+                style.border_width[3] = Some(width);
+            }
+        }
         Property::Padding(padding) => {
-            style.padding =
+            let sides =
                 [&padding.top, &padding.right, &padding.bottom, &padding.left].map(length_px);
+            if sides.iter().all(Option::is_some) {
+                style.padding = sides;
+            }
         }
-        Property::PaddingTop(value) => style.padding[0] = length_px(value),
-        Property::PaddingRight(value) => style.padding[1] = length_px(value),
-        Property::PaddingBottom(value) => style.padding[2] = length_px(value),
-        Property::PaddingLeft(value) => style.padding[3] = length_px(value),
-        Property::RowGap(gap) => style.row_gap = gap_px(gap),
-        Property::ColumnGap(gap) => style.layout.column_gap = gap_px(gap),
+        Property::PaddingTop(value) => {
+            if let Some(value) = length_px(value) {
+                style.padding[0] = Some(value);
+            }
+        }
+        Property::PaddingRight(value) => {
+            if let Some(value) = length_px(value) {
+                style.padding[1] = Some(value);
+            }
+        }
+        Property::PaddingBottom(value) => {
+            if let Some(value) = length_px(value) {
+                style.padding[2] = Some(value);
+            }
+        }
+        Property::PaddingLeft(value) => {
+            if let Some(value) = length_px(value) {
+                style.padding[3] = Some(value);
+            }
+        }
+        Property::RowGap(gap) => {
+            // An unsupported value (`%` gap) drops the declaration: the
+            // earlier value stands.
+            if let Some(gap) = gap_px(gap) {
+                style.row_gap = Some(gap);
+            }
+        }
+        Property::ColumnGap(gap) => {
+            if let Some(gap) = gap_px(gap) {
+                style.layout.column_gap = Some(gap);
+            }
+        }
         Property::Gap(gap) => {
-            style.row_gap = gap_px(&gap.row);
-            style.layout.column_gap = gap_px(&gap.column);
+            if let Some(row) = gap_px(&gap.row) {
+                style.row_gap = Some(row);
+            }
+            if let Some(column) = gap_px(&gap.column) {
+                style.layout.column_gap = Some(column);
+            }
         }
-        Property::Display(value) => style.layout.display = display(value),
+        Property::Display(value) => {
+            if let Some(display) = display(value) {
+                style.layout.display = Some(display);
+            }
+        }
         Property::Visibility(visibility) => {
             // `subtree-hide` semantics: `hidden` maps to Bevy's propagating
             // `Visibility::Hidden`; `collapse` (table-specific) is skipped.
@@ -1657,11 +2048,25 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             style.set_calc(CalcProp::FlexBasis, value, exprs);
         }
         Property::JustifyContent(value, _) => {
-            style.layout.justify_content = justify_content(value);
+            if let Some(value) = justify_content(value) {
+                style.layout.justify_content = Some(value);
+            }
         }
-        Property::AlignItems(value, _) => style.layout.align_items = align_items(value),
-        Property::AlignContent(value, _) => style.layout.align_content = align_content(value),
-        Property::AlignSelf(value, _) => style.layout.align_self = align_self(value),
+        Property::AlignItems(value, _) => {
+            if let Some(value) = align_items(value) {
+                style.layout.align_items = Some(value);
+            }
+        }
+        Property::AlignContent(value, _) => {
+            if let Some(value) = align_content(value) {
+                style.layout.align_content = Some(value);
+            }
+        }
+        Property::AlignSelf(value, _) => {
+            if let Some(value) = align_self(value) {
+                style.layout.align_self = Some(value);
+            }
+        }
         Property::Width(size) => {
             let mut exprs = Vec::new();
             let value = size_val(size, &mut exprs);
@@ -1730,39 +2135,55 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 css_size::BoxSizing::BorderBox => BoxSizing::BorderBox,
             });
         }
-        Property::JustifyItems(value) => style.layout.justify_items = justify_items(value),
-        Property::JustifySelf(value) => style.layout.justify_self = justify_self(value),
+        Property::JustifyItems(value) => {
+            if let Some(value) = justify_items(value) {
+                style.layout.justify_items = Some(value);
+            }
+        }
+        Property::JustifySelf(value) => {
+            if let Some(value) = justify_self(value) {
+                style.layout.justify_self = Some(value);
+            }
+        }
         Property::GridTemplateRows(rows) => {
             let (tracks, names) = track_sizing(rows, Axis::Row);
-            style.layout.grid_template_rows = tracks;
-            if let Some(names) = names {
+            // One unsupported track drops the declaration: the earlier
+            // track list (and names) stand.
+            if let Some(tracks) = tracks {
+                style.layout.grid_template_rows = Some(tracks);
+                // A nameless later declaration takes the earlier rule's
+                // row names back.
                 let table = style
                     .layout
                     .grid_names
                     .get_or_insert_with(GridNames::default);
-                table.rows = names.rows;
+                table.rows = names.map(|names| names.rows).unwrap_or_default();
             }
         }
         Property::GridTemplateColumns(columns) => {
             let (tracks, names) = track_sizing(columns, Axis::Column);
-            style.layout.grid_template_columns = tracks;
-            if let Some(names) = names {
+            if let Some(tracks) = tracks {
+                style.layout.grid_template_columns = Some(tracks);
                 let table = style
                     .layout
                     .grid_names
                     .get_or_insert_with(GridNames::default);
-                table.columns = names.columns;
+                table.columns = names.map(|names| names.columns).unwrap_or_default();
             }
         }
         Property::GridTemplate(template) => {
             let (rows, row_lines) = track_sizing(&template.rows, Axis::Row);
             let (columns, column_lines) = track_sizing(&template.columns, Axis::Column);
-            style.layout.grid_template_rows = rows;
-            style.layout.grid_template_columns = columns;
-            let names = style
-                .layout
-                .grid_names
-                .get_or_insert_with(GridNames::default);
+            // One unsupported track drops the declaration.
+            let (Some(rows), Some(columns)) = (rows, columns) else {
+                return;
+            };
+            style.layout.grid_template_rows = Some(rows);
+            style.layout.grid_template_columns = Some(columns);
+            // The shorthand resets the whole name table: an earlier
+            // rule's names don't survive a new `grid-template`.
+            style.layout.grid_names = Some(GridNames::default());
+            let names = style.layout.grid_names.as_mut().unwrap();
             if let Some(lines) = row_lines {
                 names.rows = lines.rows;
             }
@@ -1775,24 +2196,39 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 names.implied_columns = areas.implied_columns;
             }
         }
-        Property::GridAutoRows(tracks) => style.layout.grid_auto_rows = track_size_list(tracks),
+        Property::GridAutoRows(tracks) => {
+            if let Some(tracks) = track_size_list(tracks) {
+                style.layout.grid_auto_rows = Some(tracks);
+            }
+        }
         Property::GridAutoColumns(tracks) => {
-            style.layout.grid_auto_columns = track_size_list(tracks);
+            if let Some(tracks) = track_size_list(tracks) {
+                style.layout.grid_auto_columns = Some(tracks);
+            }
         }
         Property::GridAutoFlow(flow) => style.layout.grid_auto_flow = Some(grid_auto_flow(*flow)),
         Property::Grid(grid) => {
             let (rows, row_names) = track_sizing(&grid.rows, Axis::Row);
             let (columns, column_names) = track_sizing(&grid.columns, Axis::Column);
-            style.layout.grid_template_rows = rows;
-            style.layout.grid_template_columns = columns;
-            style.layout.grid_auto_rows = track_size_list(&grid.auto_rows);
-            style.layout.grid_auto_columns = track_size_list(&grid.auto_columns);
+            // One unsupported track drops the declaration.
+            let (Some(rows), Some(columns)) = (rows, columns) else {
+                return;
+            };
+            let auto_rows = track_size_list(&grid.auto_rows);
+            let auto_columns = track_size_list(&grid.auto_columns);
+            if auto_rows.is_none() || auto_columns.is_none() {
+                return;
+            }
+            style.layout.grid_template_rows = Some(rows);
+            style.layout.grid_template_columns = Some(columns);
+            style.layout.grid_auto_rows = auto_rows;
+            style.layout.grid_auto_columns = auto_columns;
             style.layout.grid_auto_flow = Some(grid_auto_flow(grid.auto_flow));
+            // The shorthand resets the name table; an earlier rule's
+            // names don't survive a new `grid`.
+            style.layout.grid_names = Some(GridNames::default());
+            let names = style.layout.grid_names.as_mut().unwrap();
             if let Some(areas) = parse_areas(&grid.areas) {
-                let names = style
-                    .layout
-                    .grid_names
-                    .get_or_insert_with(GridNames::default);
                 names.areas = areas.areas;
                 names.implied_rows = areas.implied_rows;
                 names.implied_columns = areas.implied_columns;
@@ -1813,14 +2249,20 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             }
         }
         Property::GridTemplateAreas(areas) => {
+            // A later declaration replaces the areas and the tracks they
+            // implied; `none` (or an unparsable matrix) takes them back.
+            let names = style
+                .layout
+                .grid_names
+                .get_or_insert_with(GridNames::default);
             if let Some(areas) = parse_areas(areas) {
-                let names = style
-                    .layout
-                    .grid_names
-                    .get_or_insert_with(GridNames::default);
                 names.areas = areas.areas;
                 names.implied_rows = areas.implied_rows;
                 names.implied_columns = areas.implied_columns;
+            } else {
+                names.areas.clear();
+                names.implied_rows = 0;
+                names.implied_columns = 0;
             }
         }
         Property::GridRowStart(line) => style.layout.grid_row[0] = grid_line(line),
@@ -2172,8 +2614,9 @@ fn justify_self(value: &css_align::JustifySelf) -> Option<JustifySelf> {
 }
 
 /// `grid-template-rows`/`-columns`: `none` (no explicit tracks) or a track
-/// list; line names are ignored (placements can't refer to them). One
-/// unsupported track drops the whole declaration, as an invalid value would.
+/// list; the `[name]` line names register on the container's name table
+/// (placements resolve against them). One unsupported track drops the
+/// whole declaration, as an invalid value would.
 fn track_sizing(
     sizing: &TrackSizing,
     axis: Axis,
@@ -2220,10 +2663,14 @@ fn track_sizing(
                         RepeatCount::Number(n) => *n as usize,
                         _ => 1,
                     };
-                    // The repeat's internal boundaries, once per repetition.
+                    // The repeat's internal boundaries, once per
+                    // repetition. The end boundary of repetition k is the
+                    // SAME line as repetition k+1's start (adjacent
+                    // repetitions merge): registering it every repetition
+                    // puts both names on that line.
                     for repetition in 0..count {
                         for (j, boundary) in repeat.line_names.iter().enumerate() {
-                            if j < tracks {
+                            if j <= tracks {
                                 register(line + repetition * tracks + j, boundary, map);
                             }
                         }
@@ -2236,10 +2683,43 @@ fn track_sizing(
             register(line, std::slice::from_ref(name), map);
         }
     } else if has_names {
-        debug!(
-            "html css: grid line names in auto-fill/auto-fit repeats don't resolve \
-             (the repeat count is layout-dependent)"
-        );
+        // An auto-fill/auto-fit repeat's count is layout-dependent: the
+        // names around it keep what is knowable — boundaries before the
+        // first repeat resolve as positive lines, the list's final
+        // boundary (the grid's last line) resolves from the end. Names
+        // inside or after (before the last line) stay unresolved.
+        let first_repeat = list
+            .items
+            .iter()
+            .position(|item| !matches!(item, TrackListItem::TrackSize(_)));
+        let mut line = 0usize;
+        for (index, item) in list.items.iter().enumerate() {
+            // Boundary `index` precedes item `index`: boundaries up to and
+            // including the first repeat's own start are knowable (their
+            // line doesn't depend on the repeat count); everything after
+            // the repeat starts is not.
+            let before_or_at_first_repeat =
+                first_repeat.is_none_or(|first| index <= first);
+            for name in &list.line_names[index] {
+                if before_or_at_first_repeat {
+                    // Positive spelling only: the negative spelling
+                    // depends on the (layout-dependent) total line count.
+                    let entries = map.entry(name.0.to_string()).or_default();
+                    entries.push((line + 1) as i16);
+                }
+            }
+            match item {
+                TrackListItem::TrackSize(_) => line += 1,
+                TrackListItem::TrackRepeat(repeat) => {
+                    line += repeat.track_sizes.len();
+                }
+            }
+        }
+        let last = list.items.len();
+        for name in &list.line_names[last] {
+            let entries = map.entry(name.0.to_string()).or_default();
+            entries.push(-1);
+        }
     }
     let tracks: Option<Vec<RepeatedGridTrack>> = list
         .items
@@ -2459,7 +2939,8 @@ fn auto_val(value: &LengthPercentageOrAuto, sink: &mut Vec<CalcExpr>) -> Option<
 }
 
 /// Absolute lengths, viewport units and `%` (of the parent, as in CSS);
-/// font-relative units and `calc()` are unsupported.
+/// font-relative units are leaves and `calc()` flattens into the crate's
+/// expression tree (mixed-unit sums resolve at layout time).
 /// Converts lightningcss's `Calc` AST into the crate's expression tree,
 /// through `leaf` for the value leaves. `None` for anything unsupported
 /// (round()/mod()/abs()/… — logged).
@@ -3052,6 +3533,20 @@ mod tests {
     /// nothing when the panel isn't an ancestor.
     #[test]
     fn descendant_combinator_matches_at_any_depth() {
+        // A deep chain of non-matching candidates: the descendant
+        // backtracking retried every combination and took ~600 ms per
+        // element; the failure memo makes it linear.
+        let start = std::time::Instant::now();
+        let deep = selector(".b .a .a .a .a .a .a p");
+        let ancestors: Vec<Ancestor> = (0..40)
+            .map(|_| ancestor("div", &["a"]))
+            .collect();
+        assert!(!deep.matches(&element("p", None, &[]), Pseudo::default(), &ancestors));
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(100),
+            "the combinator matching took {:?}",
+            start.elapsed()
+        );
         let selector = selector(".panel p");
         let ancestors = vec![ancestor("div", &["panel"]), ancestor("section", &["page"])];
         assert!(
@@ -3239,6 +3734,78 @@ mod tests {
         assert_eq!(child.layout.grid_column[0], Some(GridLineDecl::Auto));
     }
 
+    /// Negative named-line occurrences count from the end: `-1 a` is the
+    /// last `a` line (its negative spelling), and going further back than
+    /// there are occurrences leaves the placement auto (the old code
+    /// clamped to the first).
+    #[test]
+    fn negative_named_lines_count_from_the_end() {
+        let style = declared(
+            "display: grid; grid-template-columns: [a] 1fr [a] 1fr [a] 1fr [b]",
+        );
+        let grid = style.layout.grid_names.as_ref();
+        let resolve = |placement: &str| {
+            let mut child = declared(&format!("grid-column: {placement}"));
+            child.layout.resolve_names(grid);
+            child.layout.grid_column[0].clone()
+        };
+        // `-1 a` = the last `a` (line 3 of 4 = `-2`), `-2 a` = line 2
+        // (`-3`), `-3 a` = line 1 (`-4`), and `-4 a` doesn't exist.
+        assert_eq!(resolve("-1 a"), Some(GridLineDecl::Line(-2)));
+        assert_eq!(resolve("-2 a"), Some(GridLineDecl::Line(-3)));
+        assert_eq!(resolve("-3 a"), Some(GridLineDecl::Line(-4)));
+        assert_eq!(resolve("-4 a"), Some(GridLineDecl::Auto));
+    }
+
+    /// A name at the end of a `repeat()` registers (the end boundary
+    /// exists after the last repetition), and the names around an
+    /// `auto-fill` repeat keep their knowable spellings: before the
+    /// repeat as positive lines, the final boundary from the end.
+    #[test]
+    fn repeat_names_register() {
+        let style = declared(
+            "display: grid; grid-template-columns: repeat(2, [a] 1fr [b]) [c]",
+        );
+        let names = style.layout.grid_names.expect("line names");
+        // One track per repetition: `a`@1, then the merged boundary
+        // (`b` and `a` on the same line), then `b` and the trailing `c`.
+        assert_eq!(names.columns["a"], &[1, -3, 2, -2]);
+        assert_eq!(names.columns["b"], &[2, -2, 3, -1]);
+        assert_eq!(names.columns["c"], &[3, -1]);
+
+        let style = declared(
+            "display: grid; grid-template-columns: [full-start] repeat(auto-fill, 100px) [full-end]",
+        );
+        let names = style.layout.grid_names.expect("line names");
+        assert_eq!(names.columns["full-start"], &[1]);
+        assert_eq!(names.columns["full-end"], &[-1]);
+    }
+
+    /// A later grid declaration takes the earlier rule's names back: a
+    /// nameless `grid-template-rows` clears the row names, `none` clears
+    /// the areas, and the `grid-template`/`grid` shorthands reset the
+    /// whole table.
+    #[test]
+    fn later_grid_declarations_reset_names() {
+        let style = declared(
+            "display: grid; grid-template-rows: [a] 1fr; grid-template-rows: 1fr",
+        );
+        assert_eq!(
+            style.layout.grid_names.map(|names| names.rows.is_empty()),
+            Some(true)
+        );
+        let style = declared(
+            "display: grid; grid-template-areas: \"x y\"; grid-template-areas: none",
+        );
+        let names = style.layout.grid_names.expect("table");
+        assert!(names.areas.is_empty() && names.implied_rows == 0);
+        let style = declared(
+            "display: grid; grid-template-areas: \"x y\"; grid-template: 1fr / 1fr",
+        );
+        let names = style.layout.grid_names.expect("table");
+        assert!(names.areas.is_empty() && names.rows.is_empty() && names.columns.is_empty());
+    }
+
     /// `grid-area: name` places on the area's whole region (all four
     /// sides, side-aware).
     #[test]
@@ -3277,6 +3844,172 @@ mod tests {
         HtmlStyles::from_sheet(&sheet)
             .with_context(&context)
             .get(&element("p", None, &[]), Pseudo::default(), &[])
+    }
+
+    /// A `var()` graph can be exponential: a self-reference with two
+    /// fallbacks recursed ~2³² times, and a doubling reference chain
+    /// doubled the output per level (20 levels ≈ 1.5 s). Resolution is
+    /// memoized per declaration with cycle detection and a budget, so
+    /// both terminate fast; the declaration is dropped when unresolvable
+    /// or over budget.
+    #[test]
+    fn var_substitution_terminates_on_pathological_sheets() {
+        let start = std::time::Instant::now();
+        // A self-reference with fallbacks (the depth-bounded recursion
+        // never finished this).
+        let _ = declared("p { --a: var(--a, 1px) var(--a, 1px); width: var(--a) }");
+        // A doubling chain whose output would exceed the budget.
+        let mut sheet = String::from("--v0: 1px; ");
+        for i in 1..24 {
+            sheet.push_str(&format!("--v{i}: var(--v{}) var(--v{}); ", i - 1, i - 1));
+        }
+        sheet.push_str("width: var(--v23)");
+        let _ = declared(&sheet);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "the pathological sheets took {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// `var()` resolves in properties lightningcss has no typed form for
+    /// (`pointer-events`, `outline-offset`): they arrive as custom
+    /// properties, whose raw tokens are substituted like any other value.
+    #[test]
+    fn var_resolves_in_unknown_properties() {
+        let style = declared("--pe: none; pointer-events: var(--pe)");
+        assert_eq!(style.pointer_events, Some(false));
+        let style = declared("--offset: 2px; outline-offset: var(--offset)");
+        assert_eq!(style.outline.offset, Some(2.0));
+        let style = declared_with_context(
+            "pointer-events: var(--pe)",
+            &[("--pe", "auto")],
+        );
+        assert_eq!(style.pointer_events, Some(true));
+    }
+
+    /// `var_names` follows references through the sheet's own `--`
+    /// declarations: `--a: var(--brand)` contributes `--brand` when `--a`
+    /// is referenced (a template change to `--brand` must restyle), and
+    /// an unreferenced declaration contributes nothing.
+    #[test]
+    fn var_names_are_transitive() {
+        assert_eq!(
+            var_names(&owned_sheet(
+                "p { --a: var(--brand); color: var(--a) } div { --unused: var(--other) }"
+            )),
+            ["--a", "--brand"]
+        );
+        assert_eq!(var_names(&owned_sheet("p { color: var(--brand) }")), ["--brand"]);
+    }
+
+    /// `restore_from` undoes everything `apply_to` writes: a `fixed`
+    /// position (the insets and the position type are the node's; the
+    /// old code restored only `absolute`/`relative`) and the `auto`
+    /// tracks implied by `grid-template-areas` (written when the
+    /// template fields are undeclared).
+    #[test]
+    fn restore_from_undoes_fixed_and_implied_tracks() {
+        let mut names = GridNames::default();
+        names.implied_rows = 2;
+        let layout = LayoutDecl {
+            position: Some(CssPosition::Fixed),
+            inset: [Some(Val::Px(10.0)), None, None, None],
+            grid_names: Some(names),
+            ..LayoutDecl::default()
+        };
+        let base = Node::default();
+        let mut node = base.clone();
+        layout.apply_to(&mut node);
+        assert_eq!(node.position_type, PositionType::Absolute);
+        assert_eq!(node.top, Val::Px(10.0));
+        assert_eq!(node.grid_template_rows.len(), 2);
+        layout.restore_from(&base, &mut node);
+        assert_eq!(node.position_type, base.position_type);
+        assert_eq!(node.top, base.top);
+        assert_eq!(node.grid_template_rows, base.grid_template_rows);
+    }
+
+    /// An unsupported value drops the declaration: the earlier rule's
+    /// value (and its calc) stand, instead of being erased.
+    #[test]
+    fn unsupported_values_dont_erase_earlier_values() {
+        let get = |rules: &str, classes: &[&str]| {
+            HtmlStyles::from_sheet(&owned_sheet(rules)).get(
+                &element("p", None, classes),
+                Pseudo::default(),
+                &[],
+            )
+        };
+        // An unsupported track invalidates the whole declaration.
+        let style = get(
+            "p { grid-template-columns: 100px 1fr } p.x { grid-template-columns: fit-content(2em) 1fr }",
+            &["x"],
+        );
+        assert_eq!(
+            style.layout.grid_template_columns.as_ref().map(|t| t.len()),
+            Some(2)
+        );
+        let style = get("p { row-gap: 8px } p { row-gap: 5% }", &[]);
+        assert_eq!(style.row_gap, Some(8.0));
+        let style = get("p { width: calc(50% - 10px) } p { width: fit-content }", &[]);
+        assert!(style.calc.iter().any(|(prop, _)| *prop == CalcProp::Width));
+        // Control: without the invalid value the later declaration wins.
+        let style = get("p { width: 10px } p { width: 20px }", &[]);
+        assert_eq!(style.layout.width, Some(Val::Px(20.0)));
+    }
+
+    /// `initial`/`inherit`/`unset`/`revert` return the field to its
+    /// initial value instead of being ignored (the earlier rule's value
+    /// used to show through). `inherit` resolves to the initial value
+    /// too: the cascade keeps no parent computed style (documented).
+    #[test]
+    fn inherit_initial_unset_clear_the_field() {
+        let get = |rules: &str| {
+            HtmlStyles::from_sheet(&owned_sheet(rules))
+                .get(&element("p", None, &[]), Pseudo::default(), &[])
+        };
+        assert_eq!(get("p { color: #ff0000 } p { color: initial }").color, None);
+        assert_eq!(get("p { color: #ff0000 } p { color: inherit }").color, None);
+        assert_eq!(get("p { color: #ff0000 } p { color: unset }").color, None);
+        // A layout keyword: the field clears.
+        assert_eq!(
+            get("p { width: 200px } p { width: initial }").layout.width,
+            None
+        );
+        // Control: without the keyword the later value still wins.
+        assert_eq!(
+            get("p { color: #ff0000 } p { color: #0000ff }").color,
+            Some(Color::srgb(0.0, 0.0, 1.0))
+        );
+    }
+
+    /// `*:hover` (lightningcss prints it back without the `*`) and a bare
+    /// `:focus-visible` match any element in that state — the focus-ring
+    /// rule's shape.
+    #[test]
+    fn pseudo_only_compounds_match_any_element() {
+        let style = |pseudo| {
+            let sheet = owned_sheet(":focus-visible { color: #ff0000 } *:hover { color: #00ff00 }");
+            HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), pseudo, &[])
+        };
+        assert_eq!(
+            style(Pseudo {
+                focus_visible: true,
+                ..default()
+            })
+            .color,
+            Some(Color::srgb(1.0, 0.0, 0.0))
+        );
+        assert_eq!(
+            style(Pseudo {
+                hover: true,
+                ..default()
+            })
+            .color,
+            Some(Color::srgb(0.0, 1.0, 0.0))
+        );
+        assert_eq!(style(Pseudo::default()).color, None);
     }
 
     /// `visibility`: `hidden`/`visible` map to the subtree-hide flag;
@@ -3580,7 +4313,7 @@ mod tests {
         assert_eq!(
             columns("[a] 1fr [b]"),
             Some(vec![GridTrack::fr(1.0)]),
-            "names ignored"
+            "the tracks map; the names register on the table"
         );
         // Font-relative tracks map to taffy's `Em`/`Rem` sizing functions.
         assert_eq!(
@@ -3968,6 +4701,13 @@ mod tests {
             r#"p { border-image-source: url("b.png") } div { border-image: url("c.png") 4 }"#,
         );
         assert_eq!(image_urls(&sheet), ["b.png", "c.png"]);
+        // A url() behind a var(): the sheet's `--` declaration carries the
+        // URL — it is loaded even though the frame declaration only
+        // references the name.
+        let sheet = owned_sheet(
+            r#"p { --frame: url("a.png"); border-image: var(--frame) 4 }"#,
+        );
+        assert_eq!(image_urls(&sheet), ["a.png"]);
     }
 
     /// `position` and the insets: shorthand and longhands, `static` kept as
