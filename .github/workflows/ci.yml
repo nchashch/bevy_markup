@@ -49,6 +49,12 @@ jobs:
       # checks never see them) and its tests are gated too.
       - name: Library with text-input
         run: cargo check --lib --features text-input
+      # The fuzz harness compiles only under the feature and plain checks
+      # never see it (bug_0105: a cascade API change broke it silently,
+      # which would have left the nightly fuzz jobs unbuildable). A check
+      # here fails fast; the full unit tests run further down.
+      - name: Library with fuzzing
+        run: cargo check --lib --features fuzzing
       - name: All targets
         run: cargo build --all-targets
       - name: Tests

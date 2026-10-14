@@ -915,6 +915,7 @@ dependencies = [
  "bevy",
  "fluent",
  "fluent-syntax",
+ "hotpath",
  "lightningcss",
  "pulldown-cmark",
  "ron",
@@ -2404,6 +2405,21 @@ dependencies = [
  "glam",
  "tinyvec",
 ]
+
+[[package]]
+name = "hotpath"
+version = "0.28.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2ee4f8d17ebe2400fa845f079acf9ede235be6472512876779af45f7890f934"
+dependencies = [
+ "hotpath-macros",
+]
+
+[[package]]
+name = "hotpath-macros"
+version = "0.28.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b90aafbaf5f6af01ee9db2888644b15995f5306e5c280aec8261feb3e5e214a"
 
 [[package]]
 name = "icu_collections"

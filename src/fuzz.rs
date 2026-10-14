@@ -154,21 +154,17 @@ pub fn cascade(css: &str) -> Result<String, String> {
         (
             vec![
                 crate::cascade::Ancestor {
-                    element: HtmlElement {
-                        tag: "section".into(),
-                        id: None,
-                        classes: vec!["page".into()],
-                        ..Default::default()
-                    },
+                    tag: "section".into(),
+                    id: None,
+                    classes: vec!["page".into()],
+                    submit: false,
                     pseudo: Pseudo::default(),
                 },
                 crate::cascade::Ancestor {
-                    element: HtmlElement {
-                        tag: "div".into(),
-                        id: None,
-                        classes: vec!["panel".into()],
-                        ..Default::default()
-                    },
+                    tag: "div".into(),
+                    id: None,
+                    classes: vec!["panel".into()],
+                    submit: false,
                     pseudo: Pseudo {
                         hover: true,
                         ..Default::default()
@@ -179,12 +175,10 @@ pub fn cascade(css: &str) -> Result<String, String> {
         ),
         (
             vec![crate::cascade::Ancestor {
-                element: HtmlElement {
-                    tag: "ul".into(),
-                    id: None,
-                    classes: vec![],
-                    ..Default::default()
-                },
+                tag: "ul".into(),
+                id: None,
+                classes: vec![],
+                submit: false,
                 pseudo: Pseudo::default(),
             }],
             Pseudo {

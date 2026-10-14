@@ -6,10 +6,11 @@ Upstream defects (in dependencies and tools) are also tracked in
 Whole-crate review sessions are filed in
 [reviews/](../reviews/) as numbered reports: [review_0001](../reviews/review_0001.md)
 (80 findings, `R01`–`R80`), [review_0002](../reviews/review_0002.md)
-(their verdicts + new defects `F01`–`F43`), and
+(their verdicts + new defects `F01`–`F43`),
 [review_0003](../reviews/review_0003.md) (the fix session's audit + new
-defects `G01`–`G44`). A finding gets its own `bug_NNNN.md` here when
-its fix lands.
+defects `G01`–`G44`) and [review_0004](../reviews/review_0004.md) (the
+G fix session's audit + new defects `H01`–`H10`). A finding gets its
+own `bug_NNNN.md` here when its fix lands.
 
 The crate was called `p23` until 2026-10-05 and is now `bevy_markup`; the
 reports keep the name, paths and commands as they were at the time
@@ -130,6 +131,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0102](bug_0102.md) | The ancestor chain was cloned per child; inline nesting was uncapped and quadratic | `src/build.rs` (Ancestor, run_walk) | medium | fixed (`944e8fa`) | review_0003 (G05+G06) |
 | [bug_0103](bug_0103.md) | Code inside a `{% raw %}` block rendered as brace garbage | `src/md.rs` (rewrite) | medium | fixed (`bde26f8`) | review_0003 (G07) |
 | [bug_0104](bug_0104.md) | A skipped custom URL shifted the stylesheet's image pairing | `src/style.rs` | medium | fixed (`bc01dc5`) | review_0003 (G09) |
+| [bug_0105](bug_0105.md) | The `fuzzing` feature stopped compiling after the `Ancestor` rework | `src/fuzz.rs` | low | fixed | manual fuzz sweep |
 
 ## Discovery session metadata: bug_0001–0005
 
