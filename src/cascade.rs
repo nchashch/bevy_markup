@@ -2498,23 +2498,40 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::GridColumnEnd(line) => style.layout.grid_column[1] = grid_line(line).or(style.layout.grid_column[1].take()),
         Property::GridRow(row) => {
             let sides = [grid_line(&row.start), grid_line(&row.end)];
-            for (side, value) in sides.into_iter().enumerate() {
-                style.layout.grid_row[side] = value.or(style.layout.grid_row[side].take());
+            // A shorthand applies only if EVERY side parses (`span x` is
+            // unsupported): a per-side `.or(take)` half-applied —
+            // `2 / 3` then `span x / 5` gave [2, 5], neither rule's
+            // value (review_0003 G33).
+            if let Some(sides) = sides.into_iter().collect::<Option<Vec<_>>>() {
+                for (side, value) in sides.into_iter().enumerate() {
+                    style.layout.grid_row[side] = Some(value);
+                }
             }
         }
         Property::GridColumn(column) => {
             let sides = [grid_line(&column.start), grid_line(&column.end)];
-            for (side, value) in sides.into_iter().enumerate() {
-                style.layout.grid_column[side] =
-                    value.or(style.layout.grid_column[side].take());
+            if let Some(sides) = sides.into_iter().collect::<Option<Vec<_>>>() {
+                for (side, value) in sides.into_iter().enumerate() {
+                    style.layout.grid_column[side] = Some(value);
+                }
             }
         }
         Property::GridArea(area) => {
-            let sides =
-                [grid_line(&area.row_start), grid_line(&area.row_end), grid_line(&area.column_start), grid_line(&area.column_end)];
-            for (side, value) in sides.into_iter().enumerate() {
-                let target = if side < 2 { &mut style.layout.grid_row } else { &mut style.layout.grid_column };
-                target[side % 2] = value.or(target[side % 2].take());
+            let sides = [
+                grid_line(&area.row_start),
+                grid_line(&area.row_end),
+                grid_line(&area.column_start),
+                grid_line(&area.column_end),
+            ];
+            if let Some(sides) = sides.into_iter().collect::<Option<Vec<_>>>() {
+                for (side, value) in sides.into_iter().enumerate() {
+                    let target = if side < 2 {
+                        &mut style.layout.grid_row
+                    } else {
+                        &mut style.layout.grid_column
+                    };
+                    target[side % 2] = Some(value);
+                }
             }
         }
         Property::Position(position) => {
@@ -2573,8 +2590,10 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::BorderBottomColor(color) => style.border_color[2] = to_color(color),
         Property::BorderLeftColor(color) => style.border_color[3] = to_color(color),
         Property::BorderRadius(radius, _) => {
-            // An unsupported corner drops the declaration: the earlier
-            // corners keep their values.
+            // An unsupported corner drops the whole declaration (the
+            // earlier corners keep their values); a per-side `.or(take)`
+            // half-applied — `8px` then `calc(10% + 2px) 4px` gave
+            // [8, 4, 8, 4], neither rule's value (review_0003 G33).
             let corners = [
                 &radius.top_left,
                 &radius.top_right,
@@ -2582,9 +2601,10 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 &radius.bottom_left,
             ]
             .map(corner_radius);
-            for (corner, value) in corners.into_iter().enumerate() {
-                style.layout.border_radius[corner] =
-                    value.or(style.layout.border_radius[corner].take());
+            if let Some(corners) = corners.into_iter().collect::<Option<Vec<_>>>() {
+                for (corner, value) in corners.into_iter().enumerate() {
+                    style.layout.border_radius[corner] = Some(value);
+                }
             }
         }
         // An unsupported value drops the declaration: the earlier
@@ -4417,6 +4437,43 @@ mod tests {
             elapsed < std::time::Duration::from_secs(2),
             "grid-name registration is quadratic again: {elapsed:?}"
         );
+    }
+
+    /// A shorthand whose value has an unsupported side drops the whole
+    /// declaration (the earlier rule's values stand): the per-side
+    /// `.or(take)` half-applied — `grid-column: 2 / 3` then `span x / 5`
+    /// gave [2, 5], `border-radius: 8px` then `calc(10% + 2px) 4px`
+    /// gave [8, 4, 8, 4] — neither rule's value (review_0003 G33).
+    #[test]
+    fn unsupported_shorthand_sides_drop_the_whole_declaration() {
+        let get = |rules: &str| {
+            HtmlStyles::from_sheet(&owned_sheet(rules))
+                .get(&element("p", None, &[]), Pseudo::default(), &[])
+        };
+        let style = get(
+            "p { display: grid; grid-column: 2 / 3 } p { display: grid; grid-column: span x / 5 }",
+        );
+        assert_eq!(style.layout.grid_column[0], Some(GridLineDecl::Line(2)));
+        assert_eq!(style.layout.grid_column[1], Some(GridLineDecl::Line(3)));
+
+        let style = get(concat!(
+            "p { display: grid; grid-area: 1 / 2 / 3 / 4 } ",
+            "p { display: grid; grid-area: span x / 7 / 8 / 9 }",
+        ));
+        assert_eq!(style.layout.grid_row[0], Some(GridLineDecl::Line(1)));
+        assert_eq!(style.layout.grid_row[1], Some(GridLineDecl::Line(3)));
+        assert_eq!(style.layout.grid_column[0], Some(GridLineDecl::Line(2)));
+        assert_eq!(style.layout.grid_column[1], Some(GridLineDecl::Line(4)));
+
+        let style =
+            get("p { border-radius: 8px } p { border-radius: calc(10% + 2px) 4px }");
+        assert_eq!(style.layout.border_radius[0], Some((Val::Px(8.0), Val::Px(8.0))));
+        assert_eq!(style.layout.border_radius[1], Some((Val::Px(8.0), Val::Px(8.0))));
+        assert_eq!(style.layout.border_radius[2], Some((Val::Px(8.0), Val::Px(8.0))));
+        assert_eq!(style.layout.border_radius[3], Some((Val::Px(8.0), Val::Px(8.0))));
+        // A supported shorthand still applies.
+        let style = get("p { border-radius: 8px } p { border-radius: 4px 6px }");
+        assert_eq!(style.layout.border_radius[1], Some((Val::Px(6.0), Val::Px(6.0))));
     }
 
     /// Deep: drops instead of overflowing.
