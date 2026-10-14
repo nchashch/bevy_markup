@@ -205,6 +205,8 @@
 //! all sides. Box properties from the root rule (see above) are applied to
 //! the `HtmlUi` node and restored when a later stylesheet drops them.
 
+use bevy::platform::collections::HashMap;
+
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
 use lightningcss::stylesheet::{ParserOptions, StyleSheet};
@@ -216,13 +218,16 @@ use lightningcss::traits::IntoOwned;
 #[derive(Asset, TypePath)]
 pub struct Stylesheet {
     pub(crate) sheet: StyleSheet<'static>,
-    /// URLs as written, parallel to `images`.
-    pub(crate) image_urls: Vec<String>,
     /// The `var()` names the sheet (transitively, through its own `--`
     /// declarations) reads from the context — computed once at load.
     pub(crate) var_names: Vec<String>,
+    /// Every loadable image URL the sheet refers to (its `border-image`
+    /// urls and the file ones in its `--` declarations) with the loaded
+    /// handle. A map, not parallel vectors: skipped URLs (schemed ones
+    /// like `data:`, unresolvable paths) used to shift the indices and
+    /// pair the wrong handles (review_0003 G09).
     #[dependency]
-    pub(crate) images: Vec<Handle<Image>>,
+    pub(crate) images: HashMap<String, Handle<Image>>,
 }
 
 impl Stylesheet {
@@ -231,14 +236,14 @@ impl Stylesheet {
         &self.sheet
     }
 
-    /// The image a `url(...)` in this sheet refers to.
+    /// The image a `url(...)` in this sheet refers to (`None`: the URL
+    /// was skipped at load — a scheme or an unresolvable path).
     pub(crate) fn image(&self, url: &str) -> Option<&Handle<Image>> {
-        let index = self.image_urls.iter().position(|u| u == url)?;
-        self.images.get(index)
+        self.images.get(url)
     }
 
-    pub(crate) fn images(&self) -> &[Handle<Image>] {
-        &self.images
+    pub(crate) fn images(&self) -> impl Iterator<Item = &Handle<Image>> {
+        self.images.values()
     }
 }
 
@@ -295,12 +300,10 @@ impl AssetLoader for StylesheetLoader {
         // those are skipped, not the whole sheet.
         let border_urls = crate::cascade::image_urls(&sheet);
         let custom_urls = crate::cascade::custom_image_urls(&sheet);
-        let mut image_urls = border_urls.clone();
-        image_urls.extend(custom_urls.iter().cloned());
-        let mut images = Vec::with_capacity(image_urls.len());
+        let mut images = HashMap::with_capacity(border_urls.len() + custom_urls.len());
         for url in &border_urls {
             let path = load_context.path().resolve_embed_str(url)?;
-            images.push(load_context.load(path));
+            images.insert(url.clone(), load_context.load(path));
         }
         for url in &custom_urls {
             // Anything with a scheme (`data:`, `https:` — Bevy's asset
@@ -313,17 +316,88 @@ impl AssetLoader for StylesheetLoader {
             let Ok(path) = load_context.path().resolve_embed_str(url) else {
                 continue;
             };
-            images.push(load_context.load(path));
+            images.insert(url.clone(), load_context.load(path));
         }
         Ok(Stylesheet {
             var_names: crate::cascade::var_names(&sheet),
             sheet: sheet.into_owned(),
-            image_urls,
             images,
         })
     }
 
     fn extensions(&self) -> &[&str] {
         &["css"]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `data:` URL between two file URLs must not shift the url →
+    /// handle pairing: the loader skipped unresolvable/schemed custom
+    /// URLs while `image_urls` kept them, and `image()` paired by index —
+    /// `--b`'s consumer got `c.png`'s handle and `--c` got none
+    /// (review_0003 G09). The map keeps only the loadable URLs.
+    #[test]
+    fn skipped_custom_urls_do_not_shift_the_pairing() {
+        use bevy::app::{App, ScheduleRunnerPlugin};
+        use bevy::asset::{AssetPlugin, AssetServer, LoadState};
+        use bevy::MinimalPlugins;
+
+        let dir = std::env::temp_dir().join(format!(
+            "bevy_markup_urls_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("urls.css"),
+            r#"html { border-image: url("frame.png") 4; --a: url("data:image/svg+xml,<svg/>"); --b: url("b.png"); --c: url("c.png") }"#,
+        )
+        .unwrap();
+        // A 1x1 PNG (the nine-slice loader test's fixture).
+        for name in ["frame.png", "b.png", "c.png"] {
+            std::fs::write(dir.join(name), crate::nine_slice::png_1x1()).unwrap();
+        }
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin {
+                file_path: dir.to_string_lossy().into_owned().into(),
+                ..default()
+            },
+        ));
+        app.init_asset::<Stylesheet>();
+        app.init_asset::<Image>();
+        app.register_asset_loader(StylesheetLoader);
+        let handle = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<Stylesheet>("urls.css");
+        for _ in 0..4 {
+            app.update();
+        }
+        let state = app
+            .world()
+            .resource::<AssetServer>()
+            .get_load_state(handle.id())
+            .unwrap();
+        assert!(matches!(state, LoadState::Loaded), "{state:?}");
+
+        let sheet = app
+            .world()
+            .resource::<Assets<Stylesheet>>()
+            .get(&handle)
+            .unwrap();
+        let border = sheet.image("frame.png").expect("the border image");
+        let b = sheet.image("b.png").expect("b.png paired");
+        let c = sheet.image("c.png").expect("c.png paired");
+        assert_ne!(border.id(), b.id(), "the handles must not drift");
+        assert_ne!(b.id(), c.id());
+        assert!(sheet.image("data:image/svg+xml,<svg/>").is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

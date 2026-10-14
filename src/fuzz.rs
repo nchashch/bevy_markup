@@ -80,17 +80,16 @@ pub fn cascade(css: &str) -> Result<String, String> {
 
     let parsed = StyleSheet::parse(css, ParserOptions::default()).map_err(|err| err.to_string())?;
     let sheet = parsed.into_owned();
-    let urls = image_urls(&sheet);
-    let mut custom_urls = custom_image_urls(&sheet);
+    // The load-time scans: untrusted CSS, must not panic or hang. The
+    // url → handle map mirrors the loader's (skipped URLs get no entry).
+    let mut images = bevy::platform::collections::HashMap::new();
     let mut assets = Assets::<Image>::default();
-    let mut handles: Vec<_> = (0..urls.len()).map(|_| assets.add(fake_frame())).collect();
-    handles.extend((0..custom_urls.len()).map(|_| assets.add(fake_frame())));
-    custom_urls.extend(urls);
+    for url in custom_image_urls(&sheet).into_iter().chain(image_urls(&sheet)) {
+        images.insert(url, assets.add(fake_frame()));
+    }
     let stylesheet = Stylesheet {
-        // The load-time scans: untrusted CSS, must not panic or hang.
         var_names: var_names(&sheet),
-        image_urls: custom_urls,
-        images: handles,
+        images,
         sheet,
     };
 

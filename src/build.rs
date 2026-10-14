@@ -865,9 +865,7 @@ pub(crate) fn build_html_ui(
     let refreshed = |handle: &Handle<Stylesheet>| {
         reloaded_sheets.contains(&handle.id())
             || sheets.get(handle).is_some_and(|css| {
-                css.images()
-                    .iter()
-                    .any(|image| loaded_images.contains(&image.id()))
+                css.images().any(|image| loaded_images.contains(&image.id()))
             })
     };
     let default_changed =
