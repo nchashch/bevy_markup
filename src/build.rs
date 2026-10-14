@@ -981,7 +981,7 @@ pub(crate) fn build_html_ui(
         let lookup = |name: &str| context.and_then(|context| context.get(name)).and_then(css_value);
         let styles = match css {
             Some(css) => {
-                HtmlStyles::from_sheet(css.sheet(), &css.var_names).with_context(&lookup)
+                HtmlStyles::from_sheet(css.sheet()).with_context(&lookup)
             }
             None => HtmlStyles::default().with_context(&lookup),
         };
