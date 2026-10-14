@@ -18,7 +18,7 @@ export HFUZZ_BUILD_ARGS='--manifest-path honggfuzz/Cargo.toml --config target.x8
 # Build first (unbounded: a cold build can exceed the run budget); the
 # timeout then bounds only the run. `timeout` exits 124 when the budget
 # elapses — that is a normal, successful end for a fuzz campaign.
-cargo +nightly hfuzz build "$target"
+cargo +nightly hfuzz build --bin "$target"
 set +e
 timeout "$duration" cargo +nightly hfuzz run "$target"
 status=$?
