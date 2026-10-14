@@ -2889,8 +2889,13 @@ fn track_sizing(
             let entries = map.entry(name.0.to_string()).or_default();
             // A merged repeat boundary is one line: the same name on it
             // registers once (a duplicate occurrence made `3 a` resolve
-            // to the first occurrence instead of the third).
-            if entries.contains(&lower) {
+            // to the first occurrence instead of the third). Lines
+            // register in increasing order, so a duplicate is the last
+            // pair — `contains` scanned every entry per registration,
+            // which was quadratic in the name count (a
+            // repeat(1000, [a0 … a999]) took seconds per element style,
+            // review_0003 G28).
+            if entries.len() >= 2 && entries[entries.len() - 2] == lower {
                 continue;
             }
             entries.push(lower);
@@ -4362,6 +4367,30 @@ mod tests {
     /// reference from a shallower depth still resolves, so the result
     /// does not depend on reference order (G34).
     #[test]
+    /// A name-heavy `repeat()` is linear in the registrations (G28: the
+    /// duplicate check scanned every entry per registration — a
+    /// repeat(1000, [a0 … a999]) took seconds per element style). The
+    /// bound leaves ~10x headroom while failing the quadratic by 2x+.
+    #[test]
+    fn name_heavy_repeats_stay_linear() {
+        use std::time::Instant;
+        let names = (0..1000)
+            .map(|i| format!("a{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        // The registration runs per element style, not at sheet parse.
+        // (`declared` wraps its argument in `p { … }` itself.)
+        let sheet =
+            format!("display: grid; grid-template-columns: repeat(1000, [{names}] 1px)");
+        let t = Instant::now();
+        let _ = declared(&sheet).layout.grid_names;
+        let elapsed = t.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "grid-name registration is quadratic again: {elapsed:?}"
+        );
+    }
+
     /// Deep: drops instead of overflowing.
     #[test]
     fn var_chain_depth_is_capped() {
