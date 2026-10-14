@@ -2607,7 +2607,6 @@ html-ui
 "#,
     );
     // `maxlength` maps to the widget's `max_characters` (ADR 0023).
-    let root = ui.root();
     let world = ui.world_mut();
     let field = world
         .query::<(Entity, &bevy::ui_widgets::TextInput)>()
@@ -4972,11 +4971,6 @@ html-ui
     );
 }
 
-/// Template includes and FTL resource paths may not escape the asset root
-/// with `../` paths (bug_0069): the include fails its resolution without
-/// reading the outside file, and a manifest naming an outside resource
-/// fails its bundle load.
-#[test]
 /// A `url()` inside a `--` declaration can be anything (a data URI, a
 /// scheme): an unresolvable one is skipped at load instead of failing the
 /// whole stylesheet (a `data:image/svg+xml` value in a custom property is
@@ -5001,6 +4995,11 @@ html-ui
     );
 }
 
+/// Template includes and FTL resource paths may not escape the asset root
+/// with `../` paths (bug_0069): the include fails its resolution without
+/// reading the outside file, and a manifest naming an outside resource
+/// fails its bundle load.
+#[test]
 fn unapproved_paths_fail_their_loads() {
     static RUN: AtomicUsize = AtomicUsize::new(0);
     let unique = |suffix: &str| {

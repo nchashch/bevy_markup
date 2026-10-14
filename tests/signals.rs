@@ -447,9 +447,6 @@ fn the_deepest_bound_element_wins_the_click() {
     assert_eq!(signals[0].name, "outer");
 }
 
-/// `enter`/`leave` count for a whole element subtree (like CSS `:hover`),
-/// and each bound element on the way enters and leaves.
-#[test]
 /// An app-nested `HtmlUi` root beside pipeline children: a kept subtree's
 /// `:hover` keeps working across a build that shifts the document indices
 /// (an insertion). The stale refresh used to give up when the entity count
@@ -478,7 +475,7 @@ fn hover_survives_a_rebuild_around_a_nested_ui_root() {
     reused.world_mut().add_observer(
         |built: On<HtmlUiBuilt>,
          mut commands: Commands,
-         mut elements: HtmlElements,
+         elements: HtmlElements,
          templates: Res<NestedSlot>| {
             let Some(wrap) = elements.by_id(built.entity, "wrap") else {
                 return;
@@ -525,6 +522,9 @@ fn hover_survives_a_rebuild_around_a_nested_ui_root() {
     assert!(pseudo(fresh.world_mut(), ftarget).hovered, "fresh hovered");
 }
 
+/// `enter`/`leave` count for a whole element subtree (like CSS `:hover`),
+/// and each bound element on the way enters and leaves.
+#[test]
 fn enter_and_leave_track_the_hovered_subtree() {
     let page = r#"<div id="parent" data-on-enter="enter-parent" data-on-leave="leave-parent">
         <div id="child" data-on-enter="enter-child" data-on-leave="leave-child"
@@ -1323,7 +1323,7 @@ fn activation_on_submit_button_submits() {
 
     // A pointer click on the submit button also submits, reporting the
     // pointer as the source.
-    let (go, at) = {
+    let (_, at) = {
         let root = ui.root();
         let world = ui.world_mut();
         center(world, root, "go")

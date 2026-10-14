@@ -746,9 +746,9 @@ html { color: #ffff88; font-size: 24px; flex-direction: column }
     let (mut a, mut b): (u32, &str) = (1, "x");
     let (mut sheet_b, mut outlined, mut hovered) = (false, false, false);
     for op in ops {
-        let (mut prev_a, mut prev_b) = (a, b.clone());
-        let mut prev_sheet_b = sheet_b;
-        let mut prev_outlined = outlined;
+        let (prev_a, prev_b) = (a, b);
+        let prev_sheet_b = sheet_b;
+        let prev_outlined = outlined;
         match op {
             0 => a = if a == 1 { 2 } else { 1 },
             1 => b = if b == "x" { "y" } else { "x" },

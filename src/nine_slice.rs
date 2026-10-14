@@ -367,8 +367,7 @@ mod tests {
     /// temp file, so a deleted or weakened check fails this test.
     #[test]
     fn manifests_validate_values() {
-        use bevy::app::{App, ScheduleRunnerPlugin};
-        use bevy::asset::{AssetPlugin, AssetServer, LoadState, UnapprovedPathMode};
+        use bevy::asset::{AssetPlugin, AssetServer, LoadState};
         use bevy::MinimalPlugins;
 
         let load = |ron: &str| {
@@ -399,14 +398,16 @@ mod tests {
                 .world()
                 .resource::<AssetServer>()
                 .load::<NineSlice>("test.slice.ron");
-            for _ in 0..4 {
-                app.update();
-            }
-            let state = app
-                .world()
-                .resource::<AssetServer>()
-                .get_load_state(handle.id())
-                .unwrap();
+            // The load runs on the IO pool: update until the state
+            // settles (a fixed frame count raced under load).
+            let server = app.world().resource::<AssetServer>().clone();
+            let state = (0..1000)
+                .map(|_| {
+                    app.update();
+                    server.get_load_state(handle.id()).unwrap()
+                })
+                .find(|state| matches!(state, LoadState::Loaded | LoadState::Failed(_)))
+                .expect("the load never settled");
             std::fs::remove_dir_all(&dir).ok();
             state
         };

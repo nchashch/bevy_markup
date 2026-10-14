@@ -942,7 +942,6 @@ mod tests {
     fn code_span_args_escape_once_per_value() {
         // A select makes the message uncacheable: the per-value path.
         let source = "cmd =\n    { $os ->\n       *[other] Run `{ $cmd }` now\n    }\n";
-        let json = serde_json::json!({ "cmd": "a & b", "os": "linux" }).to_string();
         assert!(
             markdown_cache(&[source.to_owned()]).messages.is_empty(),
             "the select must make it uncacheable"
