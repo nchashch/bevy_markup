@@ -1578,7 +1578,27 @@ fn apply_resolved(
     // `initial`/`inherit`/`unset`/`revert` arrive as unparsed bare
     // keywords: the field returns to its initial value (the cascade has
     // no parent computed style, so `inherit`/`unset` on inherited
-    // properties resolve to it too — documented deviation).
+    // properties resolve to it too — documented deviation). Unknown
+    // properties (`pointer-events`, `outline-offset`) arrive as a Custom
+    // with an Unknown name: a bare keyword there takes the same path, or
+    // it fell through to substitution and F38's keep-earlier rule kept
+    // the old value (review_0003 G32).
+    let custom_keyword = if let Property::Custom(custom) = declaration
+        && matches!(&custom.name, CustomPropertyName::Unknown(_))
+        && custom.value.0.len() == 1
+        && let TokenOrValue::Token(token) = &custom.value.0[0]
+        && matches!(token, Token::Ident(ident)
+            if matches!(ident.as_ref().to_ascii_lowercase().as_str(),
+                "initial" | "inherit" | "unset" | "revert"))
+    {
+        Some(PropertyId::Custom(custom.name.clone()))
+    } else {
+        None
+    };
+    if custom_keyword.is_some() {
+        apply_keyword(style, custom_keyword.as_ref().unwrap());
+        return;
+    }
     if let Property::Unparsed(unparsed) = declaration
         && unparsed.value.0.len() == 1
         && let TokenOrValue::Token(token) = &unparsed.value.0[0]
@@ -1902,6 +1922,7 @@ fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
         "outline-color" => style.outline.color = None,
         "outline-style" => style.outline.visible = None,
         "outline-offset" => style.outline.offset = None,
+        "pointer-events" => style.pointer_events = None,
         "border-image" | "border-image-source" | "border-image-slice" | "border-image-repeat" => {
             style.border_image = None;
         }
@@ -4587,6 +4608,21 @@ mod tests {
         assert_eq!(style.layout.border_radius[0], None);
         assert_eq!(style.layout.border_radius[1], Some((Val::Px(8.0), Val::Px(8.0))));
         assert_eq!(style.layout.border_radius[3], Some((Val::Px(8.0), Val::Px(8.0))));
+
+        // An unknown property's keyword resets too (G32: they arrived as
+        // a Custom with an Unknown name and fell through to the
+        // substitution, where F38's keep-earlier rule kept the old
+        // value).
+        let style = get("p { pointer-events: none } p { pointer-events: initial }");
+        assert_eq!(style.pointer_events, None, "pointer-events resets");
+        let style = get("p { outline-offset: 2px } p { outline-offset: initial }");
+        assert_eq!(style.outline.offset, None, "outline-offset resets");
+        // A keyword after the reset keeps working (the keep-earlier rule
+        // must not resurrect the old value).
+        let style = get(
+            "p { pointer-events: none } p { pointer-events: initial } p { pointer-events: none }",
+        );
+        assert_eq!(style.pointer_events, Some(false));
     }
 
     /// `*:hover` (lightningcss prints it back without the `*`) and a bare
