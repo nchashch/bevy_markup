@@ -951,27 +951,6 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// The `var(--name)` names a raw `style` attribute references: a cheap
-/// scan of the decoded text (the names feed the frame's vars hash — an
-/// inline style is rebuilt with the element, so the exact nested-fallback
-/// resolution of `var_names` isn't needed).
-pub(crate) fn raw_var_names(text: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut rest = text;
-    while let Some(at) = rest.find("var(") {
-        rest = &rest[at + 4..];
-        let trimmed = rest.trim_start();
-        if let Some(name) = trimmed.strip_prefix("--") {
-            let end = name
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
-                .unwrap_or(name.len());
-            if end > 0 {
-                names.push(format!("--{}", &name[..end]));
-            }
-        }
-    }
-    names
-}
 
 /// The `var()` names a token list references, function arguments included.
 fn collect_var_names(tokens: &TokenList, names: &mut BTreeSet<String>) {
@@ -1282,6 +1261,30 @@ impl Compound {
 /// every rule.
 #[derive(Debug)]
 pub(crate) struct InlineStyle(DeclarationBlock<'static>);
+
+impl InlineStyle {
+    /// The `var(--name)` names the declarations reference, from
+    /// lightningcss's *parsed* tokens: the raw text scan missed
+    /// non-ASCII names (`--café`) and escapes (review_0003 G30).
+    pub(crate) fn var_names(&self) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        let block = &self.0;
+        for declaration in block
+            .declarations
+            .iter()
+            .chain(&block.important_declarations)
+        {
+            match declaration {
+                Property::Unparsed(unparsed) => {
+                    collect_var_names(&unparsed.value, &mut names)
+                }
+                Property::Custom(custom) => collect_var_names(&custom.value, &mut names),
+                _ => {}
+            }
+        }
+        names
+    }
+}
 
 /// `tag`'s `style` attribute, if it has declarations.
 pub(crate) fn inline_style(tag: &tl::HTMLTag) -> Option<InlineStyle> {

@@ -4013,11 +4013,9 @@ fn collect_node(
             continue;
         };
         let inline = cascade::inline_style(tag);
-        if let Some(Some(style_attribute)) = tag.attributes().get("style")
-            && style_attribute.as_utf8_str().contains("var(")
-        {
-            let text = decode_entities(&style_attribute.as_utf8_str());
-            for name in cascade::raw_var_names(&text) {
+        if let Some(inline) = &inline {
+            // The parsed tokens' names (non-ASCII and escapes included).
+            for name in inline.var_names() {
                 ctx.inline_vars.borrow_mut().insert(name);
             }
         }
@@ -4197,6 +4195,12 @@ fn collect_node(
                             depth + 1,
                         );
                     }
+                    // The fragment's inline-var names feed the parent's
+                    // accumulator (review_0003 G30).
+                    let fragment_names = fragment.inline_vars.borrow().clone();
+                    for name in fragment_names {
+                        ctx.inline_vars.borrow_mut().insert(name);
+                    }
                 });
                 if !translated {
                     // Reversed: the leftmost child pops first.
@@ -4321,6 +4325,13 @@ fn push_content_runs(
             runs,
             Rc::new(chain[..].to_vec()),
         );
+        // The fragment's inline-var names feed the parent's accumulator
+        // (review_0003 G30): translations rebuild only when a tracked
+        // change fires, so an untracked change never restyled them.
+        let fragment_names = fragment.inline_vars.borrow().clone();
+        for name in fragment_names {
+            ctx.inline_vars.borrow_mut().insert(name);
+        }
     });
     if !translated {
         run_walk(
@@ -4389,6 +4400,14 @@ fn run_walk<'a>(
                 // The element, computed once: `element` consumes a named
                 // overlay's entry (each usable once), so all uses share it.
                 let element = ctx.element(tag);
+                // Run-level inline styles' var() names count too (G30:
+                // only block-level ones were tracked — an inline span
+                // with `style="color: var(--brand)"` kept the old color).
+                if let Some(inline) = cascade::inline_style(tag) {
+                    for name in inline.var_names() {
+                        ctx.inline_vars.borrow_mut().insert(name);
+                    }
+                }
                 // This element becomes the nearest ancestor for its content.
                 let child_chain = if depth < MAX_DOM_DEPTH {
                     let owned = element.clone();
@@ -4477,6 +4496,14 @@ fn run_walk<'a>(
                         runs,
                         child_chain.clone(),
                     );
+                    // The fragment's inline-var names feed the parent's
+                    // accumulator: translations rebuild only when a tracked
+                    // change fires, so an untracked change never restyled
+                    // them (review_0003 G30).
+                    let fragment_names = fragment.inline_vars.borrow().clone();
+                    for name in fragment_names {
+                        ctx.inline_vars.borrow_mut().insert(name);
+                    }
                 });
                 if !translated {
                     let children: Vec<tl::NodeHandle> =

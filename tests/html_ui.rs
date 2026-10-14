@@ -3415,40 +3415,94 @@ html-ui
     );
 }
 
-/// An unknown property's `var()` (`pointer-events`, `outline-offset`) is
-/// tracked too: `var_names` used to skip the property entirely, so a
-/// context change never restyled.
+/// F14's tracking gaps (review_0003 G30): a run-level inline style (an
+/// `<span>` inside a block), a translation's markup, and a non-ASCII
+/// variable name all restyle on a context change — the text scan missed
+/// all three.
 #[test]
-fn unknown_property_var_change_restyles() {
-    let mut ui = TestUi::new(
-        "unknown-var",
-        &[("page.html", "<p>x</p>"), ("a.css", "p { pointer-events: var(--pe) }")],
-    )
-    .stylesheet("a.css")
-    .spawn(
-        "page.html",
-        TemplateContext::new().with("--pe", &"auto"),
-        Node::default(),
-    );
+fn inline_var_tracking_gaps_restyle() {
+    let get = |page: &str| {
+        TestUi::new("inline-gaps", &[("page.html", page), ("style.css", "html { color: #ffffff }")])
+            .stylesheet("style.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new().with("--brand", &"#ff0000"),
+                Node::default(),
+            )
+    };
+    // A run-level inline style inside a block.
+    let mut ui = get(r#"<p>Hello <span style="color: var(--brand)">x</span></p>"#);
     ui.settle().assert_dump(
         r#"
 html-ui
   p
-    "x" default 16px #ffffff
+    "Hello " default 16px #ffffff
+    "x" default 16px #ff0000
 "#,
     );
     let root = ui.root();
     ui.world_mut()
         .get_mut::<TemplateContext>(root)
         .unwrap()
-        .insert("--pe", &"none");
+        .insert("--brand", &"#00ff00");
     ui.settle().assert_dump(
         r#"
 html-ui
-  p pick=none
-    "x" default 16px #ffffff
+  p
+    "Hello " default 16px #ffffff
+    "x" default 16px #00ff00
 "#,
     );
+    // A non-ASCII variable name.
+    let mut ui = get(r#"<p style="color: var(--café)">x</p>"#);
+    ui.settle();
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--café", &"#00ff00");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "x" default 16px #00ff00
+"#,
+    );
+}
+
+/// A translation's inline styles are tracked too (G30: the fragment's
+/// names were discarded, so a context change never restyled the
+/// translated element's inline spans).
+#[test]
+fn translation_inline_var_change_restyles() {
+    let files = [
+        (
+            "page.html",
+            r#"<p data-l10n-id="hi">fallback</p>"#,
+        ),
+        (
+            "style.css",
+            "html { color: #ffffff }",
+        ),
+        (
+            "locales/en-US/main.ftl.ron",
+            r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+        ),
+        ("locales/en-US/ui.ftl", "hi = Hi <b style=\"color: var(--brand)\">you</b>"),
+    ];
+    let mut ui = TestUi::new("translation-inline-var", &files)
+        .stylesheet("style.css")
+        .locale("locales/en-US/main.ftl.ron")
+        .spawn("page.html", TemplateContext::new().with("--brand", &"#ff0000"), Node::default());
+    ui.settle();
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--brand", &"#00ff00");
+    ui.settle();
+    let dump = ui.dump();
+    assert!(dump.contains("#00ff00"), "the translated inline restyled: {dump}");
 }
 
 /// `<a href>` links: the link's runs become a picked span entity that
