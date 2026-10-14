@@ -94,7 +94,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
         sheet,
     };
 
-    let styles = HtmlStyles::from_sheet(&stylesheet.sheet);
+    let styles = HtmlStyles::from_sheet(&stylesheet.sheet, &stylesheet.var_names);
     let fonts = FontFamilies::default();
     let root = root_style(&styles, &fonts, &assets, None, &element_tag("html"), None);
     let styler = Styler {
