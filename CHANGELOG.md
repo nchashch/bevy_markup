@@ -17,9 +17,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   to map onto" premise was wrong — bevy_text 0.20 has the field).
 
 ### Changed
-- **Breaking:** only a `<button type="submit">` submits its `<form
-  data-on-submit>`. Any other primary click inside a form (a `type="button"`
-  button, a link, a bound wrapper) emitted the form's `Submit` signal too —
+- **Breaking:** only a `<button type="submit">` (or a `type`-less
+  `<button>`, which counts as `submit` too) submits its `<form
+  data-on-submit>`. Any other primary click inside a form (an explicit
+  `type="button"` button, a link, a bound wrapper) emitted the form's
+  `Submit` signal too —
   the forms example's Clear button swapped in the receipt. A bound wrapper
   *around* the submit button submits exactly once (the button counts as
   bound for `click`, so the deepest-bound-element rule gives it the
@@ -37,6 +39,16 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   first build (Bevy's default 20 px vs the CSS default 16 px).
 
 ### Fixed
+- **Context `var()` changes in an inline `style` attribute never
+  triggered a restyle.** `--brand: red` in `TemplateContext`, then
+  changed to `blue`, left `style="color: var(--brand)"` showing the old
+  color: the sheet's tracked `var()` names didn't include the names an
+  inline `style` attribute referenced. Those names are collected from the
+  last build's inline styles too.
+- **A `grid-template-columns`/`-rows` track list with a huge `repeat()`
+  count (e.g. `repeat(4000000000, auto)`) could overflow and panic in
+  debug builds.** The repeat count and the computed track/area counts are
+  now bounds-checked; an out-of-range count drops the declaration.
 - **A context change could drop unchanged siblings of the changing
   subtree.** A reused (skeleton-cached, ADR 0021) subtree whose root tag
   produced no node of its own (`span`, `b`, `<img>` in a container,

@@ -86,10 +86,6 @@ impl From<ScaleModeDescriptor> for SliceScaleMode {
 #[derive(Default, TypePath)]
 pub(crate) struct NineSliceLoader;
 
-/// Whether the manifest's values would make Bevy's slicer divide by zero,
-/// flip corners, or draw outside the image: the loader rejects these, and
-/// the unit test calls this predicate, so a deleted check fails the test.
-/// A 1x1 transparent PNG (base64-decoded) for the loader test.
 /// The 1x1 transparent PNG the loader tests use as a resolvable image.
 #[cfg(test)]
 pub(crate) fn png_1x1() -> &'static [u8] {
@@ -106,6 +102,9 @@ pub(crate) const PNG_1X1: &[u8] = &[
     0x60, 0x82,
 ];
 
+/// Whether the manifest's values would make Bevy's slicer divide by zero,
+/// flip corners, or draw outside the image: the loader rejects these, and
+/// the unit test calls this predicate, so a deleted check fails the test.
 fn desc_would_break_the_slicer(desc: &NineSliceDescriptor) -> bool {
     let finite_positive = |value: f32| value.is_finite() && value > 0.0;
     let bad_scale = |mode: &ScaleModeDescriptor| match mode {

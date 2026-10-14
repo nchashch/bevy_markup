@@ -209,7 +209,10 @@ rewrites `LocalizedText` whenever the render changes, which disabled reuse
 on every localized frame; the gate is redundant with the walk's
 translation exclusion and was removed. An adaptive gate turns the pairing
 walk off after a useless pass (an all-dirty workload, e.g. `rebuilding`)
-and retries every 16th build; when skipped, only the retry counter ticks —
+and retries every 16th build (backing off ×2 per useless retry, capped
+at 256); when skipped, the skeleton's specs and document are replaced
+alongside the fresh entities (a gate-skipped build updates the
+entities, so the old skeleton would be stale) —
 no per-frame data move.
 
 `item_spec`/`block_spec` take `&Item` now (the skeleton keeps the build's

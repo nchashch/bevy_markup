@@ -887,7 +887,7 @@ pub(crate) fn build_html_ui(
     }
 
     // First pass: the decision per UI. Nested UIs need the whole set before
-    // anything acts (see the suppression below).
+    // anything acts.
     let mut decisions: Vec<(Entity, Decision, Frame, bool)> = Vec::new();
     for (entity, rendered, localized, own_sheet, outline, _ui, used_images, mut rebuild) in
         &mut views
@@ -3489,9 +3489,10 @@ pub struct Skeleton {
     useful: bool,
     /// Builds since the last reuse attempt, for the retry cadence.
     since_try: u32,
-    /// Consecutive useless retries: the retry interval backs off (16, 64,
-    /// 256 builds) so a permanently all-dirty workload pays almost nothing
-    /// while one that becomes reusable is still found.
+    /// Consecutive useless retries: the retry interval doubles per strike
+    /// (16, then 32, 64, 128, capped at 256 with `min(4)`) so a
+    /// permanently all-dirty workload pays almost nothing while one that
+    /// becomes reusable is still found.
     strike: u8,
 }
 

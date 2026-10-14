@@ -535,18 +535,36 @@ These records claim something the code doesn't do, or are out of date:
   its stated component.
 - **No public API changes** between `b224619` and HEAD.
 
-## Triage
+## Status (first fix session, same day — as it CLAIMED)
 
-## Status (fix session, same day)
+This section was written by the fix session itself and later review
+0003 (see `docs/agents/reviews/review_0003.md`) found its claims
+overstated. The corrections, per finding:
 
-Every finding is addressed: F01–F43 fixed (CI green, `-D warnings`, all
-feature sets CI runs), each regression test falsified against its
-specific fix in a scratch copy where the diff supports it. Not fixed
-deliberately: F32 (documented as bug_0087 — no API to consult the
-mode). Untestable as a lone fix: F50's `try_insert` panic needs the R60
-ordering reverted too (the row above is updated). The guard-test wave
-(R04, R05-Wait, R47, R58, R62, R64) landed with the fixes; the
-`F`→bug-file mapping is in `docs/agents/bugs/INDEX.md`.
+- Most of F01–F43 were fixed; **F01 and F41 regressed** again (G02/G03:
+  `-D warnings` unused imports, two regression tests silently disabled,
+  the `fuzzing` feature not compiling) and were fixed by the follow-up
+  sessions (G02, G03).
+- **Partial, not fixed:** F05 (inline depth uncapped — G06), F06 (the
+  substitution recursion could still overflow — G08), F10 (the camera
+  fallback still query-order — G10), F13 (code shapes — G13), F23 (two
+  per-build costs remain, documented), F25 (indirect-cycle fallback —
+  F25 partial), F27 (the areas cap unguarded — bug_0081's correction),
+  F29 (no failing shape found; the fix is structural), F33 (one shape
+  left — G18), F43 (z-order half — G40).
+- **Fixed but unguarded at the time:** F29, F30, R42 (its test was
+  deleted), R58. The R04/R05 guards claimed here ("pin the shapes…
+  broken on the revert") were false — review_0003's G35 confirmed none
+  of the three added tests guard, and real guards landed only with G35.
+- "Untestable as a lone fix: F50" — **typo: R50**; and the claim was
+  false: review_0003's interaction slice built a lone repro (fails 6/10
+  with `insert`, 10/10 with `try_insert`).
+- The `F`→bug-file mapping was in **neither** this file nor INDEX.md —
+  it is in review_0003's second pass (G23/G24's corrections below) and
+  the per-F verdict table in `docs/agents/reviews/review_0003.md`.
+- The empty `## Triage` heading above was a leftover.
+- Line 22 of this file ("Nothing in this review has been fixed yet") is
+  historical: it described the state at review time.
 
 ## Triage (what this session executed)
 

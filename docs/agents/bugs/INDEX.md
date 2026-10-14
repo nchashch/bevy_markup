@@ -3,10 +3,13 @@
 Upstream defects (in dependencies and tools) are also tracked in
 [UPSTREAM.md](UPSTREAM.md) until they're reported and fixed upstream.
 
-Whole-crate review sessions are filed in [reviews/](../reviews/) as one
-report per date; the latest is [review_0001](../reviews/review_0001.md)
-(80 open findings, stable IDs `R01`–`R80`). A finding gets its own
-`bug_NNNN.md` here when its fix lands.
+Whole-crate review sessions are filed in
+[reviews/](../reviews/) as numbered reports: [review_0001](../reviews/review_0001.md)
+(80 findings, `R01`–`R80`), [review_0002](../reviews/review_0002.md)
+(their verdicts + new defects `F01`–`F43`), and
+[review_0003](../reviews/review_0003.md) (the fix session's audit + new
+defects `G01`–`G44`). A finding gets its own `bug_NNNN.md` here when
+its fix lands.
 
 The crate was called `p23` until 2026-10-05 and is now `bevy_markup`; the
 reports keep the name, paths and commands as they were at the time
@@ -103,6 +106,30 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0078](bug_0078.md) | `HtmlWorldAnchor` ignored `UiScale` and the viewport's origin | `src/anchor.rs` (`place_world_anchored`) | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R56, R57) |
 | [bug_0079](bug_0079.md) | An app adding `DirectionalNavigationPlugin` after `BevyMarkupPlugin` panicked | `src/focus.rs`/`src/lib.rs` | medium | fixed (`cd21ffd`) | code review 2026-10-13 (R59) |
 | [bug_0080](bug_0080.md) | Focus moved by a signal handler showed its state a frame late | `src/lib.rs`, `src/focus.rs` | low | fixed (`cd21ffd`) | code review 2026-10-13 (R60) |
+| [bug_0081](bug_0081.md) | Pathological track counts panicked in debug builds; the areas cap is unguarded (TODO) | `src/cascade.rs` (track parsing, areas) | low | fixed (`d723f6a`) | follow-up review (F27) |
+| [bug_0082](bug_0082.md) | `type` values were compared case-sensitively; the Submit half untested | `src/build.rs` (input mapping) | low | fixed (`ae27fc3`) | follow-up review (F28) |
+| [bug_0083](bug_0083.md) | The stale refresh gave up when a reused subtree held an app-nested root | `src/build.rs` (`refresh_cached_handles`) | low | fixed (`700d047`); no failing shape found | follow-up review (F29) |
+| [bug_0084](bug_0084.md) | A Junk message in an FTL resource skipped the whole Markdown cache | `src/l10n.rs` (`markdown_cache`) | low | fixed (`73ae77f`) | follow-up review (F31) |
+| [bug_0085](bug_0085.md) | A grid name on a merged repeat boundary registered twice | `src/cascade.rs` (`GridNames`) | low | fixed (`8512b7a`); the dedupe was quadratic (G28) | follow-up review (F39) |
+| [bug_0086](bug_0086.md) | The per-value Markdown path double-escaped string args | `src/l10n.rs` | low | fixed (`15b4255`); that fix injected markup (bug_0088) | follow-up review (F40) |
+| [bug_0087](bug_0087.md) | The unapproved-path check ignores `unapproved_path_mode`; open, documented (the 'no API' premise is false) | `src/template.rs`, `src/l10n.rs` | low | open — documented deviation | follow-up review (F32) |
+| [bug_0088](bug_0088.md) | Fluent string args injected raw HTML on the Markdown per-value path | `src/l10n.rs` | high | fixed (`754f910`) | review_0003 (G01) |
+| [bug_0089](bug_0089.md) | CI failed: -D warnings errors; two regression tests silently disabled | tests/, `src/` | high | fixed (`aa12dd6`) | review_0003 (G02) |
+| [bug_0090](bug_0090.md) | --features fuzzing didn't compile | `src/fuzz.rs` | high | fixed (`ef16397`) | review_0003 (G03) |
+| [bug_0091](bug_0091.md) | Crafted markers panicked inject_class | `src/md.rs` | medium | fixed (`5969530`) | review_0003 (G04) |
+| [bug_0092](bug_0092.md) | A few KB of CSS aborted the app (var()/paren recursion) | `src/cascade.rs` | high | fixed (`6343345`) | review_0003 (G08) |
+| [bug_0093](bug_0093.md) | The template scanner's code protection disagreed with pulldown | `src/template.rs` | medium | fixed (`2e14ba8`) | review_0003 (G13) |
+| [bug_0094](bug_0094.md) | The template scanners were quadratic on load | `src/template.rs`, `src/md.rs` | medium | fixed (`63c6c49`) | review_0003 (G14) |
+| [bug_0095](bug_0095.md) | resolve_calc took &mut through Mut<Node> unconditionally; no failing guard shape | `src/build.rs` | medium | fixed (`100dd03`) | review_0003 (G15) |
+| [bug_0096](bug_0096.md) | libFuzzer hangs could never be reported (no -timeout) | `scripts/fuzz-libfuzzer.sh` | low | fixed (`6a732bf`) | review_0003 (G21) |
+| [bug_0097](bug_0097.md) | A theme swap while the outline was shown kept the old theme | `src/build.rs` (skeleton gate) | medium | fixed (`16bef4a`) | review_0003 (G26) |
+| [bug_0098](bug_0098.md) | A reuse build forced two full restyles per content change | `src/build.rs` (inline_vars) | medium | fixed (`0ed28a1`) | review_0003 (G27) |
+| [bug_0099](bug_0099.md) | Grid-name registration was quadratic in the name count | `src/cascade.rs` | medium | fixed (`a0547c8`) | review_0003 (G28) |
+| [bug_0100](bug_0100.md) | Consumed custom declarations were substituted per element | `src/cascade.rs` | medium | fixed (`36fb457`) | review_0003 (G29) |
+| [bug_0101](bug_0101.md) | F14's inline-var tracking missed runs, translations, non-ASCII names | `src/build.rs`, `src/cascade.rs` | medium | fixed (`2183260`) | review_0003 (G30) |
+| [bug_0102](bug_0102.md) | The ancestor chain was cloned per child; inline nesting was uncapped and quadratic | `src/build.rs` (Ancestor, run_walk) | medium | fixed (`944e8fa`) | review_0003 (G05+G06) |
+| [bug_0103](bug_0103.md) | Code inside a `{% raw %}` block rendered as brace garbage | `src/md.rs` (rewrite) | medium | fixed (`bde26f8`) | review_0003 (G07) |
+| [bug_0104](bug_0104.md) | A skipped custom URL shifted the stylesheet's image pairing | `src/style.rs` | medium | fixed (`bc01dc5`) | review_0003 (G09) |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -235,14 +262,29 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   R76–R80 (stale docs, fixed by the doc edits).
 - **Discovery agent:** model `anthropic/claude-opus-5-5:high` with six
   `reviewer` subagents.
-- **Fix session for this review** (`opencode-zen/glm-5.3-flash`, same day):
-  the follow-up review 2026-10-13 (`F01`–`F43`: the first session's own
-  unverified claims, regressions and gaps) was fixed end to end and
-  re-guarded. New defect reports from that wave: bug_0081 (F27),
-  bug_0082 (F28), bug_0083 (F29), bug_0084 (F31), bug_0085 (F39),
-  bug_0086 (F40), bug_0087 (F32, open — documented deviation). The
-  remaining `F` ids map onto the bug files above (re-findings of an
-  `R` finding or its test) or are internal-only (F01 CI warnings,
-  F04/F21/F41/F42 test and CI work, F22/F23/F26 perf, F33 a test's
-  misread, F35/F36/F42 example/CI-only) — see
-  `docs/agents/reviews/review_0002.md` for the mapping.
+- **Fix sessions for the 2026-10-13 reviews** (opus reviewer; two fix
+  sessions, then review_0003's audit + a third fix wave — see
+  review_0003's Coverage/Status sections; its records corrections are
+  G23–G25):
+  - New defect reports: bug_0081 (F27), bug_0082 (F28), bug_0083 (F29),
+    bug_0084 (F31), bug_0085 (F39), bug_0086 (F40), bug_0087 (F32,
+    open — a documented deviation whose "no API" premise is FALSE, see
+    the file). review_0003's G-series fixes are filed as bug_0088–
+    bug_0104 (G01–G04, G08, G13–G15, G21, G26–G30, then G05+G06, G07,
+    G09 as bug_0102–bug_0104).
+  - **The F→fix mapping** (authoritative; review_0002's Status claimed a
+    mapping existed here — it didn't):
+    - Re-findings of an R finding or its test: F04→R01 (bug_0031/0036),
+      F05→R12 (bug_0040), F07→R55 (bug_0077), F08→R34 (bug_0058),
+      F09→R49 (bug_0071), F12→R44 (bug_0067), F13→R44 (bug_0067),
+      F14→R39 (bug_0063), F15→R27 (bug_0052), F16→R56 (bug_0078),
+      F17→R63 (review_0002), F19→ADR 0022/0023, F20→R27 (bug_0052),
+      F25→R27 (bug_0052), F28→R08 (bug_0037), F38→R27 (bug_0052),
+      F39→R36 (bug_0060), F40→R35 (bug_0059), F42→R67 (bug_0069 n/a,
+      test-only), F43→R69 (review_0002).
+    - Internal-only (no bug file): F01/F02 (CI blockers), F03/F06 (part
+      of the depth-cap work), F10/F11/F13/F22/F23/F26/F27/F29/F30/F31/
+      F33/F34/F35/F36/F37/F38/F39 (fixed in the F-wave commits, each
+      named in its subject), F04/F21/F41/F42 (test/CI work), F18/F19
+      (bug_0079 class / ADR 0023), F24 (build.rs), G-series →
+      review_0003.

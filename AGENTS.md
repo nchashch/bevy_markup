@@ -55,8 +55,10 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 
 Re-exported crates (their types appear in the API): `tera`, `tl` (the
 `astral-tl` fork, bug_0019 / UPSTREAM.md U11),
-`fluent`, `lightningcss`. Cargo feature `system_fonts` enables Bevy's
-`system_font_discovery`.
+`fluent`, `lightningcss`. Cargo features: `system_fonts` (Bevy's
+`system_font_discovery`), `text-input` (the editable-text widget),
+`hot-reload` (the file watcher), `fuzzing` (the fuzz harness), and
+`dev-tools` (the examples' QA surface).
 
 ## Layout
 
@@ -445,7 +447,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   see what definitions attached; kept elements never re-run them.
   An undefined name warns once per name. User content nested deeper than
   `MAX_DOM_DEPTH` (100) is dropped with a one-time warning (the walks
-  recurse per level; such subtrees also never pair for reuse). Shape compares
+  are iterative; such subtrees also never pair for reuse). Shape compares
   only what the spec owns: a frame is the
   `CssFrame` marker spawned with its `ImageNode` (an app `ImageNode` is app
   state, bug_0018), nested `HtmlUi` children are skipped (bug_0017).
@@ -574,7 +576,11 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   declarations (sheet-level, last wins; substituted transitively, memoized
   with cycle detection and a 64 KiB budget per declaration — an unresolvable,
   cyclic or over-budget reference drops just that declaration), then the
-  reference's fallback;
+  reference's fallback; reference depth is capped (`MAX_VAR_DEPTH` = 64)
+  and so is the whole substitution's recursion (`MAX_SUBSTITUTE_DEPTH` =
+  256, counting into fallback and function-argument expansion too) —
+  without both caps a chain of fallback-bearing `var()`s can double its
+  output at every level and abort the process (bug_0092);
   `transition` (the shorthand) animates a restyled color's change
   (`color`/`background-color`/`border-color`), driven by an
   `advance_transitions` system after `Build`.
@@ -601,7 +607,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   by taffy): track lists (`grid-template-*`, `grid-template`, `grid`;
   lengths/%/viewport units, `fr`, `auto`, `min-`/`max-content`, `minmax()`,
   `fit-content()`, `repeat()` incl. `auto-fill`/`auto-fit`; one unsupported
-  track drops the whole declaration — an earlier rule's tracks stand),
+  track drops the whole declaration — an earlier rule's tracks stand; a
+  `repeat()` count and the computed track/area totals are capped
+  (`MAX_GRID_TRACKS` = 1000) against overflow on pathological counts like
+  `repeat(4000000000, auto)` — bug_0081),
   `grid-auto-rows`/`-columns`/`-flow`, and line/`span` placement
   (`grid-row`/`-column` + longhands, `grid-area`; `GridLineDecl` pairs →
   `GridPlacement`) by number or by name: named lines (the `[name]`s in the
@@ -1268,7 +1277,8 @@ Bugs found by the automated testing above — or by any other means — are
 filed in `docs/agents/bugs/` as `bug_NNNN.md`, numbered sequentially in
 discovery order, with an `INDEX.md` title/metadata page linking all reports.
 Whole-crate review sessions are filed in `docs/agents/reviews/` as
-`YYYY-MM-DD.md`, one report per session; a finding there gets its own
+`review_NNNN.md` (one report per session; see
+`docs/agents/reviews/`), a finding there gets its own
 `bug_NNNN.md` when its fix lands.
 File one for every real defect a fuzzer, property test, vector, or manual
 investigation uncovers, *at minimum when the fix lands* (don't let the
