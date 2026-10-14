@@ -212,9 +212,43 @@ fn convert(source: &str, tera: bool) -> String {
         pending: VecDeque::new(),
     };
     let events: Vec<Event<'_>> = marked.collect();
+    let events = decode_code_entities(events);
     let events = if tera { rewrite(events) } else { events };
     pulldown_cmark::html::push_html(&mut html, &mut events.into_iter());
     inject_class(&html)
+}
+
+/// Decodes the five entities in code spans and code blocks, once: code
+/// content is the one place pulldown doesn't resolve character
+/// references (`&amp;` stays in the event text), so a value escaped by
+/// `parse_args` was escaped a second time by `push_html` there and a
+/// code span showed `&amp;` for `&`. Text events need no decode:
+/// pulldown decodes references into them, and `push_html` re-escapes —
+/// which is also what keeps an escaped value's `<` text instead of
+/// markup (review_0003 G01). The build decodes the result once more, so
+/// a pattern's own documented `&lt;` still shows as `<`.
+fn decode_code_entities(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
+    let mut code_block = false;
+    events
+        .into_iter()
+        .map(|event| match event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                code_block = true;
+                event
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                code_block = false;
+                event
+            }
+            Event::Code(code) => Event::Code(
+                crate::template::decode_entities(&code).into(),
+            ),
+            Event::Text(text) if code_block => {
+                Event::Text(crate::template::decode_entities(&text).into())
+            }
+            event => event,
+        })
+        .collect()
 }
 
 /// An event stream that emits [`MARKER`] before every constructed start

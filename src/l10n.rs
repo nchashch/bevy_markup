@@ -334,19 +334,22 @@ fn resolve_all(
                             // The cache is an accelerator: a text that
                             // doesn't split (an argument swallowing a
                             // literal part) falls back to converting the
-                            // formatted text directly — with the values
-                            // raw (pulldown escapes the conversion;
-                            // escaping first double-escaped code spans).
+                            // formatted text directly. The values were
+                            // escaped by `parse_args`: pulldown decodes
+                            // the entities and push_html escapes them
+                            // back, so a value's `<` stays text — raw
+                            // values injected markup there (an arg's
+                            // `<a … data-on-click>` became a real
+                            // element, review_0003 G01).
                             text.map(|text| {
                                 substitute(entry, &text).unwrap_or_else(|| {
-                                    md::to_html(&translate_raw(bundle, &id, args.as_deref()).unwrap_or(text))
+                                    md::to_html(&translate(bundle, &id, args.as_deref()).unwrap_or(text))
                                 })
                             })
                         }
                         None if markdown.is_some() => text.map(|_| {
                             md::to_html(
-                                &translate_raw(bundle, &id, args.as_deref())
-                                    .unwrap_or_default(),
+                                &translate(bundle, &id, args.as_deref()).unwrap_or_default(),
                             )
                         }),
                         None => text,
@@ -370,30 +373,13 @@ where
     R: Borrow<FluentResource>,
     M: MemoizerKind,
 {
-    translate_with(bundle, id, args_json, false)
-}
-
-/// `raw`: string arguments keep their characters (no HTML escaping).
-/// The Markdown per-value path needs them raw — pulldown escapes the
-/// conversion itself; escaping first double-escaped code spans (a value
-/// in a code span displayed `&amp;` for `&`).
-pub(crate) fn translate_raw<R, M>(
-    bundle: &FluentBundle<R, M>,
-    id: &str,
-    args_json: Option<&str>,
-) -> Result<String, String>
-where
-    R: Borrow<FluentResource>,
-    M: MemoizerKind,
-{
-    translate_with(bundle, id, args_json, true)
+    translate_with(bundle, id, args_json)
 }
 
 fn translate_with<R, M>(
     bundle: &FluentBundle<R, M>,
     id: &str,
     args_json: Option<&str>,
-    raw: bool,
 ) -> Result<String, String>
 where
     R: Borrow<FluentResource>,
@@ -407,7 +393,7 @@ where
         .ok_or_else(|| format!("message `{id}` has no value"))?;
 
     let args = args_json
-        .map(|json| parse_args(json, raw).map_err(|err| format!("`{id}` data-l10n-args: {err}")))
+        .map(|json| parse_args(json).map_err(|err| format!("`{id}` data-l10n-args: {err}")))
         .transpose()?;
 
     let mut errors = Vec::new();
@@ -680,7 +666,7 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
 }
 
 #[allow(clippy::needless_continue)]
-fn parse_args(json: &str, raw: bool) -> Result<FluentArgs<'static>, String> {
+fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
     let serde_json::Value::Object(map) =
         serde_json::from_str(json).map_err(|err| err.to_string())?
     else {
@@ -693,15 +679,12 @@ fn parse_args(json: &str, raw: bool) -> Result<FluentArgs<'static>, String> {
                 Some(number) => args.set(key, number),
                 None => return Err(format!("`{key}`: number out of range")),
             },
-            // Translations are parsed as markup; keep values as text
-            // (escaped once, decoded once by the build — unless the
-            // Markdown conversion escapes them itself).
+            // Translations are parsed as markup: escape the value, so
+            // its characters are text. The Markdown per-value path
+            // decodes the conversion's second escape (to_html_value);
+            // raw values injected markup there (review_0003 G01).
             serde_json::Value::String(string) => {
-                if raw {
-                    args.set(key, string);
-                } else {
-                    args.set(key, escape_html(&string));
-                }
+                args.set(key, escape_html(&string));
             }
             serde_json::Value::Bool(flag) => args.set(key, flag.to_string()),
             _ => {
@@ -936,7 +919,7 @@ mod tests {
     }
 
     /// The per-value path (a message the cache can't take) keeps an `&`
-    /// an `&` in a code span: the values are raw, pulldown escapes the
+    /// an `&` in a code span: `to_html_value` decodes the conversion's
     /// conversion — the cached and per-value outputs agree.
     #[test]
     fn code_span_args_escape_once_per_value() {
@@ -947,9 +930,10 @@ mod tests {
             "the select must make it uncacheable"
         );
         // The production per-value output (resolve_all's fallback): the
-        // `&` in the code span is escaped once (the values are raw;
-        // pulldown escapes the conversion — escaping first showed
-        // `&amp;` for `&`).
+        // `&` in the code span is escaped once (parse_args escapes the
+        // value and pulldown escapes the conversion; `to_html_value`
+        // decodes that second escape — raw values injected markup,
+        // review_0003 G01).
         let dom = crate::template::HtmlDocument::parse(
             r#"<p data-l10n-id="cmd" data-l10n-args='{"cmd":"a & b","os":"linux"}'></p>"#.to_owned(),
         )
@@ -963,6 +947,44 @@ mod tests {
         assert!(html.contains("<code>a &amp; b</code>"), "{html}");
         assert!(!html.contains("&amp;amp;"), "double-escaped: {html}");
     }
+
+/// String arguments cannot inject markup on the per-value path: a
+/// crafted value stayed raw through `translate_raw` and pulldown passed
+/// its HTML through, so a player name could forge a clickable element
+/// carrying `data-on-*` bindings (review_0003 G01). Both shapes that
+/// reach the per-value path are pinned: a selector, and an ambiguous
+/// split falling out of `substitute`.
+#[test]
+fn string_args_cannot_inject_markup_on_the_per_value_path() {
+    let run = |source: &str, page: &str| {
+        let dom = crate::template::HtmlDocument::parse(page.to_owned()).unwrap();
+        let resource =
+            std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
+        let mut concurrent =
+            fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
+        concurrent.add_resource(resource).unwrap();
+        let localized = resolve_all(
+            dom.dom(),
+            &concurrent,
+            Some(&markdown_cache(&[source.to_owned()])),
+        );
+        localized.values().next().unwrap().as_ref().unwrap().clone()
+    };
+    // A selector is uncacheable: per value.
+    let html = run(
+        "found = { $n ->\n    [one] { $who } found one\n   *[other] { $who } found { $n }\n}\n",
+        r#"<p data-l10n-id="found" data-l10n-args='{"n": 2, "who": "<a href=x data-on-click=delete-save>Continue</a>"}'></p>"#,
+    );
+    assert!(!html.contains("<a "), "injected: {html}");
+    assert!(html.contains("&lt;a href"), "escaped: {html}");
+    // An ambiguous split falls out of `substitute`: per value.
+    let html = run(
+        "pair = { $a } and { $b }\n",
+        r#"<p data-l10n-id="pair" data-l10n-args='{"a": "<b class=\"evil\">T</b> and", "b": "z"}'></p>"#,
+    );
+    assert!(!html.contains("<b "), "injected: {html}");
+    assert!(html.contains("&lt;b"), "escaped: {html}");
+}
 
     /// Cached substitution never shows double-escaped text: the values
     /// were escaped once by `parse_args`; a second escape in `substitute`
