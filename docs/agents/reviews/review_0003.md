@@ -137,7 +137,7 @@ cited in commits and bug files do not fail when their fix is reverted.
 **G23 · high (misleading) · review_0002's Status and INDEX's paragraph are false** [probe]/[code]
 - "CI green, `-D warnings`" — G02/G03. "each regression test falsified" — F29, F30, F33, R42, R58, bug_0085 fail to. "Every finding addressed" — F05, F06, F10, F13, F25, F27 partial.
 - "F50" means R50, whose "untestable alone" claim is false. The "F→bug mapping" is in neither file (each points at the other); 25 F ids are unmapped, F42 is listed twice, F33 is miscalled "a test's misread". An empty `## Triage` heading; review_0002:22 still says "Nothing … fixed yet".
-- Commit `1e3d37a`'s message claims the R04/R05 tests "pin the shapes … broken on the revert". The session's own transcript shows the R04 revert probe was not the R04 fix and passed, and the R05 revert patch never applied. Those guards are **unverified** (this review's build slice died before checking). The same commit says the grid-names test runs in CI; it doesn't (R64 row).
+- Commit `1e3d37a`'s message claims the R04/R05 tests "pin the shapes … broken on the revert". The session's own transcript shows the R04 revert probe was not the R04 fix and passed, and the R05 revert patch never applied. The second pass confirmed none of them guards R04 or R05 (G35). The same commit says the grid-names test runs in CI; it doesn't (R64 row).
 
 **G24 · medium · bug_0081–0087 are wrong or thin** [probe]/[code]
 - Discovery agent `opencode-zen/glm-5.3-flash` and commit `b224619` are wrong: the F findings came from the opus review at `a07a12a`.
