@@ -3112,9 +3112,31 @@ pub(crate) fn resolve_calc(
             let Some(value) = expr.resolve(&basis, prop.horizontal()) else {
                 continue;
             };
-            let field = node_field_mut(&mut node, *prop);
-            if *field != Val::Px(value) {
-                *field = Val::Px(value);
+            let value = Val::Px(value);
+            // Compare through the immutable deref first: taking `&mut`
+            // through a `Mut<Node>` marks it changed even for an equal
+            // write, and bevy_ui re-upserts every changed node into
+            // taffy — every element using `calc()` dirtied layout every
+            // frame (review_0003 G15).
+            let unchanged = match prop {
+                CalcProp::Width => node.width == value,
+                CalcProp::Height => node.height == value,
+                CalcProp::MinWidth => node.min_width == value,
+                CalcProp::MinHeight => node.min_height == value,
+                CalcProp::MaxWidth => node.max_width == value,
+                CalcProp::MaxHeight => node.max_height == value,
+                CalcProp::FlexBasis => node.flex_basis == value,
+                CalcProp::MarginTop => node.margin.top == value,
+                CalcProp::MarginRight => node.margin.right == value,
+                CalcProp::MarginBottom => node.margin.bottom == value,
+                CalcProp::MarginLeft => node.margin.left == value,
+                CalcProp::Left => node.left == value,
+                CalcProp::Top => node.top == value,
+                CalcProp::Right => node.right == value,
+                CalcProp::Bottom => node.bottom == value,
+            };
+            if !unchanged {
+                *node_field_mut(&mut node, *prop) = value;
             }
         }
     }
