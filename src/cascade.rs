@@ -1862,7 +1862,11 @@ fn calc_props(name: &str) -> &'static [CalcProp] {
         "max-width" => &[MaxWidth],
         "max-height" => &[MaxHeight],
         "flex-basis" | "flex" => &[FlexBasis],
-        "margin" | "inset" => &[MarginTop, MarginRight, MarginBottom, MarginLeft, Left, Top, Right, Bottom],
+        // The shorthands own their own sides only: mapping both shorthands
+        // to all eight made `margin: initial` drop `left: calc(…)`'s
+        // entry and `inset: initial` drop the margins' (review_0003 G31).
+        "margin" => &[MarginTop, MarginRight, MarginBottom, MarginLeft],
+        "inset" => &[Left, Top, Right, Bottom],
         "margin-top" => &[MarginTop],
         "margin-right" => &[MarginRight],
         "margin-bottom" => &[MarginBottom],
@@ -4558,6 +4562,23 @@ mod tests {
                 | CalcProp::MarginBottom
                 | CalcProp::MarginLeft
         )));
+        // A shorthand's keyword owns its own sides only (G31: mapping
+        // both `margin` and `inset` to all eight dropped the other
+        // property's calc entries).
+        let style = get("p { left: calc(50% - 10px) } p { margin: initial }");
+        assert_eq!(
+            style.calc.iter().find(|(p, _)| *p == CalcProp::Left).map(|(_, c)| c.clone()),
+            Some(CalcExpr::Sum(
+                Box::new(CalcExpr::Val(Val::Percent(50.0))),
+                Box::new(CalcExpr::Val(Val::Px(-10.0)))
+            )),
+            "left's calc survives margin: initial"
+        );
+        let style = get("p { margin: calc(1em + 2px) } p { inset: initial }");
+        assert!(
+            style.calc.iter().any(|(p, _)| matches!(p, CalcProp::MarginTop)),
+            "the margin calc survives inset: initial"
+        );
 
         // A per-corner keyword resets its corner only.
         let style = get(concat!(
