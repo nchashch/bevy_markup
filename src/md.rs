@@ -332,6 +332,30 @@ impl<'a> Iterator for Marked<'a> {
     }
 }
 
+/// Adjusts the raw-block depth for the Tera `raw`/`endraw` tags in
+/// `text` (any `{% … %}` whose body is `raw`/`endraw`; Tera scans raw
+/// content textually, so a tag inside a code fence still ends the
+/// block). Returns the depth BEFORE the tags.
+fn raw_depth_before(text: &str, raw: &mut usize) -> usize {
+    let before = *raw;
+    for (tera, part) in tera_runs(text) {
+        if !tera {
+            continue;
+        }
+        let body = part
+            .trim_start_matches("{%")
+            .trim_start_matches("{%-")
+            .trim_end_matches("%}")
+            .trim_matches(['-', ' ']);
+        if body == "raw" {
+            *raw += 1;
+        } else if body == "endraw" {
+            *raw = raw.saturating_sub(1);
+        }
+    }
+    before
+}
+
 /// The Tera syntax runs of `text`: `(tera, text)` pairs in order — every
 /// `{{ … }}`, `{% … %}` and `{# … #}` (quoted strings inside a tag skip
 /// their own closing pair). `tera` also swallows a trailing unclosed tag
@@ -403,6 +427,11 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
 
     let mut out = Vec::with_capacity(events.len());
     let mut code_block = false;
+    // Inside a `{% raw %}` block: Tera passes its content through
+    // verbatim, so code there must NOT be Tera-literalized — the escape
+    // braces would pass through raw and display as `{{ "{" }}` garbage
+    // (review_0003 G07).
+    let mut raw = 0usize;
     let mut index = 0;
     while index < events.len() {
         match &events[index] {
@@ -433,7 +462,10 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
                     }
                     let ends = cursor < events.len();
                     if pure && ends && tera_runs(&whole).iter().all(|(tera, _)| *tera) {
-                        out.push(Event::Html(CowStr::Boxed(whole.into_boxed_str())));
+                        // The paragraph's Tera tags pass through verbatim;
+                        // their raw tags still count (Tera scans them).
+                        raw_depth_before(&whole, &mut raw);
+                                out.push(Event::Html(CowStr::Boxed(whole.into_boxed_str())));
                         index = cursor + 1;
                         continue;
                     }
@@ -452,13 +484,46 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
                 index += 1;
             }
             // Inline code: literal, escaped by `push_html` — and
-            // Tera-literal: Tera never sees an original opener in it.
+            // Tera-literal: Tera never sees an original opener in it —
+            // unless a raw block wraps it: Tera scans raw content
+            // textually (its raw ends even inside a code fence), so the
+            // verbatim content's own raw tags still count.
             Event::Code(code) => {
-                out.push(Event::Code(tera_literal(code)));
+                let was_raw = raw > 0;
+                if was_raw {
+                    raw_depth_before(code, &mut raw);
+                    out.push(Event::Code(code.clone()));
+                } else {
+                    out.push(Event::Code(tera_literal(code)));
+                }
                 index += 1;
             }
             Event::Text(text) if code_block => {
-                out.push(Event::Text(tera_literal(text)));
+                let was_raw = raw > 0;
+                    if was_raw {
+                    raw_depth_before(text, &mut raw);
+                    out.push(Event::Text(text.clone()));
+                } else {
+                    out.push(Event::Text(tera_literal(text)));
+                }
+                index += 1;
+            }
+            // Text outside code: the raw tags in it count (Tera sees
+            // them); the runs pass through as before.
+            Event::Text(text) | Event::Html(text)
+                if text.contains("raw") && text.contains("%}") =>
+            {
+                eprintln!("DBG count arm text={text:?} raw_before={raw}");
+                raw_depth_before(text, &mut raw);
+                let was_raw = raw > 0;
+                for (tera, part) in tera_runs(text) {
+                    if tera {
+                        out.push(Event::Html(CowStr::Boxed(part.to_owned().into_boxed_str())));
+                    } else {
+                        out.push(Event::Text(CowStr::Boxed(part.to_owned().into_boxed_str())));
+                    }
+                }
+                let _ = was_raw;
                 index += 1;
             }
             Event::Text(text) => {
@@ -934,6 +999,17 @@ fn crafted_markers_cannot_panic_inject_class() {
 
         let html = render("text `{% raw %}` tail\n", "{}");
         assert!(html.contains("<code>{% raw %}</code>"), "{html}");
+
+        // Inside a raw block Tera passes content through verbatim: the
+        // code is NOT Tera-literalized (the escape braces would show as
+        // `{{ "{" }}` garbage — review_0003 G07); Tera's raw ends even
+        // inside a code fence (its scan is textual), so the code after
+        // the endraw is literalized again.
+        let html = render("{% raw %}\n\n```\n{{ x }}\n```\n\n{% endraw %}\n\n`{{ x }}`\n", r#"{"x":"VALUE"}"#);
+        assert!(html.contains("<code>{{ x }}</code>"), "{html}");
+        assert!(!html.contains("{{ \"\""), "{html}");
+        assert!(!html.contains("VALUE"), "{html}");
+        assert_eq!(html.matches("{{ x }}").count(), 2, "{html}");
 
         // Prose Tera still executes; only code is literal.
         let html = render("hello {{ name }}, code `{{ name }}`\n", r#"{"name":"Ada"}"#);
