@@ -74,7 +74,7 @@ cited in commits and bug files do not fail when their fix is reverted.
 | R58 | pointer half **still unguarded** | [probe] | Hard-coding the old `(0,0)` mouse source passes the new assertion; `position == at` would guard it. |
 | R60 | fixed, guarded | [probe] | Shuffle-dependent (fails 7/10 on revert). |
 | R62 | guard is a source-text grep | [code] | `forms_clear_targets_are_id_attributes` checks `signup.html` text, not that Clear clears (AGENTS.md test rules). |
-| R64 | fixed, guarded | — | The example test fails on revert (fix session's probe; CI runs `cargo test --example grid-names`? see G03). |
+| R64 | fixed, guarded locally, **never run in CI** | [code] | The example test fails on revert, but ci.yml:66 runs only `cargo test --example hot-reload`; `1e3d37a`'s "runs in CI via the example-test job" is false. |
 | R79 | **partial** | [code] | lib.rs fixed; AGENTS.md:58 still lists only `system_fonts`. |
 | R80 | fixed | [code] | |
 
@@ -141,7 +141,7 @@ cited in commits and bug files do not fail when their fix is reverted.
 **G23 · high (misleading) · review_0002's Status and INDEX's paragraph are false** [probe]/[code]
 - "CI green, `-D warnings`" — G02/G03. "each regression test falsified" — F29, F30, F33, R42, R58, bug_0085 fail to. "Every finding addressed" — F05, F06, F10, F13, F25, F27 partial.
 - "F50" means R50, whose "untestable alone" claim is false. The "F→bug mapping" is in neither file (each points at the other); 25 F ids are unmapped, F42 is listed twice, F33 is miscalled "a test's misread". An empty `## Triage` heading; review_0002:22 still says "Nothing … fixed yet".
-- Commit `1e3d37a`'s message claims the R04/R05 tests "pin the shapes … broken on the revert". The session's own transcript shows the R04 revert probe was not the R04 fix and passed, and the R05 revert patch never applied. Those guards are **unverified** (this review's build slice died before checking).
+- Commit `1e3d37a`'s message claims the R04/R05 tests "pin the shapes … broken on the revert". The session's own transcript shows the R04 revert probe was not the R04 fix and passed, and the R05 revert patch never applied. Those guards are **unverified** (this review's build slice died before checking). The same commit says the grid-names test runs in CI; it doesn't (R64 row).
 
 **G24 · medium · bug_0081–0087 are wrong or thin** [probe]/[code]
 - Discovery agent `opencode-zen/glm-5.3-flash` and commit `b224619` are wrong: the F findings came from the opus review at `a07a12a`.
