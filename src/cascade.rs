@@ -1262,6 +1262,10 @@ pub(crate) struct InlineStyle(DeclarationBlock<'static>);
 pub(crate) fn inline_style(tag: &tl::HTMLTag) -> Option<InlineStyle> {
     let text =
         crate::template::decode_entities(&tag.attributes().get("style").flatten()?.as_utf8_str());
+    if nesting_over_limit(&text, MAX_CSS_NESTING) {
+        debug!("html css: style attribute nests too deeply: {text:?}");
+        return None;
+    }
     match StyleAttribute::parse(&text, ParserOptions::default()) {
         Ok(attribute) => {
             let block = attribute.declarations.into_owned();
@@ -1633,11 +1637,17 @@ fn apply_resolved(
         resolving: HashSet::new(),
         budget: VAR_BUDGET,
         cycle: false,
+        depth: 0,
+        depth_failure: false,
     };
     let Some(text) = substitution.substitute(tokens) else {
         debug!("html css: `var()` substitution failed");
         return;
     };
+    if nesting_over_limit(&text, MAX_CSS_NESTING) {
+        debug!("html css: substituted value nests too deeply: {text:?}");
+        return;
+    }
     match Property::parse_string(reparse.unwrap(), &text, ParserOptions::default()) {
         Ok(property) => apply(style, &property.into_owned()),
         Err(_) => {
@@ -1668,6 +1678,41 @@ const VAR_BUDGET: usize = 64 * 1024;
 /// dropped), like a cycle. Well past any authored CSS; pathological
 /// sheets must not abort the render thread.
 const MAX_VAR_DEPTH: usize = 64;
+/// The nesting pre-scan's bound (see `nesting_over_limit`): far beyond
+/// any authored CSS, but a few thousand parens are rejected before
+/// lightningcss's own unbounded parser sees them.
+const MAX_CSS_NESTING: usize = 32;
+
+/// Whether `text` nests parentheses (functions included) deeper than
+/// `limit`: lightningcss's parser recurses per parenthesis with no
+/// bound, so a few KB of `((((` abort the app at parse time — sheet
+/// sources, `style=` attributes and substituted `var()` values are
+/// scanned before it (review_0003 G08). Parens in string literals count
+/// too: a rejected text is dropped (the sheet fails, the attribute or
+/// declaration is dropped), which is the same outcome as unparseable.
+pub(crate) fn nesting_over_limit(text: &str, limit: usize) -> bool {
+    let mut depth = 0usize;
+    for byte in text.bytes() {
+        match byte {
+            b'(' => {
+                depth += 1;
+                if depth > limit {
+                    return true;
+                }
+            }
+            b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
+}
+/// The total recursion bound of one declaration's `var()` substitution
+/// (`substitute` → function arguments / fallbacks → `var`): every level
+/// of nesting is a stack frame, and content can nest ~500 levels per
+/// declaration × `MAX_VAR_DEPTH` var links — a few KB of CSS aborted
+/// the process (review_0003 G08). 256 frames is far beyond any authored
+/// value; past it the declaration is dropped.
+const MAX_SUBSTITUTE_DEPTH: usize = 256;
 
 /// One declaration's `var()` substitution: each custom property is
 /// resolved at most once (memoized), a name in the current chain is
@@ -1688,6 +1733,12 @@ struct Substitution<'a> {
     /// (CSS Variables 1 §2.3) — the enclosing `var()` skips its
     /// fallback instead of applying it.
     cycle: bool,
+    /// Recursion depth of `substitute`, against `MAX_SUBSTITUTE_DEPTH`.
+    depth: usize,
+    /// A failure was caused by the depth cap (not by the value): such a
+    /// failure is not memoized, so a reference reached from a shallower
+    /// depth can still resolve (results don't depend on reference order).
+    depth_failure: bool,
 }
 
 impl<'a> Substitution<'a> {
@@ -1704,8 +1755,11 @@ impl<'a> Substitution<'a> {
             return None;
         }
         if self.resolving.len() >= MAX_VAR_DEPTH {
-            // Deeper than any authored chain: unresolvable (memoized, so
-            // the rest of the chain fails fast instead of overflowing).
+            // Deeper than any authored chain: unresolvable. Not memoized
+            // (a depth-caused failure): a sibling reference reached from
+            // a shallower depth must still resolve, so the result does
+            // not depend on reference order.
+            self.depth_failure = true;
             return None;
         }
         let value = if let Some(value) = (self.context)(name) {
@@ -1720,14 +1774,30 @@ impl<'a> Substitution<'a> {
             value
         };
         // Memoize even the failures: a name that doesn't resolve stays
-        // unresolvable for this declaration.
-        self.resolved.insert(name.to_owned(), value.clone());
+        // unresolvable for this declaration — except a failure caused by
+        // the depth caps (a retry from a shallower depth can resolve).
+        if value.is_some() || !self.depth_failure {
+            self.resolved.insert(name.to_owned(), value.clone());
+        }
         value
     }
 
     /// The tokens' CSS text with every `var()` replaced, else `None`
-    /// (unresolvable or over budget).
+    /// (unresolvable, over budget, or past the recursion bound). All
+    /// recursion (function arguments, fallbacks, chained `var()`)
+    /// funnels through here, so one counter bounds the stack.
     fn substitute(&mut self, tokens: &TokenList) -> Option<String> {
+        if self.depth >= MAX_SUBSTITUTE_DEPTH {
+            self.depth_failure = true;
+            return None;
+        }
+        self.depth += 1;
+        let result = self.substitute_inner(tokens);
+        self.depth -= 1;
+        result
+    }
+
+    fn substitute_inner(&mut self, tokens: &TokenList) -> Option<String> {
         let mut out = String::new();
         for token in &tokens.0 {
             let piece = match token {
@@ -4169,6 +4239,130 @@ mod tests {
         assert_eq!(style.layout.width, Some(Val::Px(10.0)));
     }
 
+    /// A `var()` chain whose every link nests functions: the substitution
+    /// recursion is bounded (G08's 64 × ~500-frame shape aborted the
+    /// process). On a 2 MiB thread the unbounded recursion would abort;
+    /// with the bound the declaration is dropped. Within the bound,
+    /// values still resolve.
+    #[test]
+    fn var_function_nesting_is_capped() {
+        // 64 var links × 50 nested functions each: without the bound the
+        // chain runs thousands of frames deep (a 2 MiB thread aborts).
+        let mut sheet = String::from("--v0: 1px; ");
+        for i in 1..64 {
+            sheet.push_str(&format!(
+                "--v{i}: {}var(--v{}){} ; ",
+                "f(".repeat(50),
+                i - 1,
+                ")".repeat(50)
+            ));
+        }
+        sheet.push_str("width: var(--v63)");
+        // The probe runs on a 2 MiB thread (cargo test's default is
+        // larger): a stack overflow aborts the whole process, so the
+        // join's Err (or the abort) is the falsification signal.
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn({
+                let sheet = sheet.clone();
+                move || {
+                    let style = declared(&sheet);
+                    assert_eq!(style.layout.width, None, "the over-bound chain drops");
+                }
+            })
+            .expect("spawn");
+        handle.join().expect("no stack overflow");
+
+        // A long plain chain still resolves through the cap (the
+        // substitute depth of 20 links ≈ 22, far under the bound).
+        let mut sheet = String::from("--v0: 1px; ");
+        for i in 1..20 {
+            sheet.push_str(&format!("--v{i}: var(--v{}); ", i - 1));
+        }
+        sheet.push_str("width: var(--v19)");
+        // 4 links × 7 `calc()` nests: the substituted value stays within
+        // the authored nesting bound (28 ≤ 32) and the recursion within
+        // the substitution bound.
+        let mut s2 = String::from("--w0: 1px; ");
+        for i in 1..=4 {
+            s2.push_str(&format!(
+                "--w{i}: {}var(--w{}){} ; ",
+                "calc(".repeat(7),
+                i - 1,
+                ")".repeat(7)
+            ));
+        }
+        s2.push_str("width: var(--w4)");
+        assert_eq!(declared(&s2).layout.width, Some(Val::Px(1.0)));
+        assert_eq!(declared(&sheet).layout.width, Some(Val::Px(1.0)));
+    }
+
+    /// A reference that failed the depth cap is not memoized: a sibling
+    /// reference from a shallower depth still resolves, so the result
+    /// does not depend on reference order (G34). The chain ends in
+    /// `--x`/`--y` so that a reference reached at the var-depth limit
+    /// fails inside the chain, while the same names resolve from the top.
+    #[test]
+    fn depth_cap_failures_are_not_memoized() {
+        let mut sheet = String::from("--v1: var(--x); --x: var(--y); --y: 1px; ");
+        for i in 2..64 {
+            sheet.push_str(&format!("--v{i}: var(--v{}); ", i - 1));
+        }
+        // `--v63`'s chain is 66 var()s deep: `--x`/`--y` are past the var
+        // depth cap within it and the fallback applies; reached directly,
+        // they resolve.
+        let first = declared(&format!("{sheet}margin: var(--v63, 2px) var(--x)"));
+        let second = declared(&format!("{sheet}margin: var(--x) var(--v63, 2px)"));
+        let px = |v: f32| Some(Val::Px(v));
+        assert_eq!(
+            first.layout.margin,
+            [px(2.0), px(1.0), px(2.0), px(1.0)],
+            "the chain fails at depth, the fallback applies, --x still resolves"
+        );
+        // Reversed, the chain's `--x` is already memoized as resolved, so
+        // `--v63` resolves too. Without the fix the first chain's depth
+        // failure was memoized and this order dropped the declaration.
+        assert_eq!(second.layout.margin, [px(1.0); 4]);
+    }
+
+    /// Untrusted CSS text that nests parentheses (functions included)
+    /// deeper than any authored value is rejected before lightningcss's
+    /// own unbounded parser runs (G08's load-time abort): an inline
+    /// `style=` attribute is dropped, and the substitution of a context
+    /// value into a declaration cannot produce an unparseable value.
+    #[test]
+    fn pathological_nesting_is_rejected_before_the_parser() {
+        let deep = |count: usize| "(".repeat(count) + "1px" + &")".repeat(count);
+        assert!(nesting_over_limit(&deep(40), MAX_CSS_NESTING));
+        assert!(!nesting_over_limit(&deep(10), MAX_CSS_NESTING));
+        // Unbalanced closing parens don't trip the scan.
+        assert!(!nesting_over_limit("))))) width: 1px", MAX_CSS_NESTING));
+
+        // The inline path drops the attribute instead of crashing.
+        let html = format!(r#"<p style="width: {}">x</p>"#, deep(400));
+        let dom = tl::parse(&html, tl::ParserOptions::default()).unwrap();
+        let tag = dom
+            .children()
+            .iter()
+            .find_map(|handle| handle.get(dom.parser()).and_then(|node| node.as_tag()))
+            .expect("the <p>");
+        assert!(inline_style(tag).is_none(), "the deep attribute is dropped");
+
+        // A context value's parens are scanned where its substitution is
+        // re-parsed: the declaration drops.
+        assert_eq!(
+            declared_with_context("width: calc(var(--w) - 10px)", &[("--w", &deep(400))])
+                .layout
+                .width,
+            None,
+        );
+    }
+
+    /// A reference that failed the depth cap is not memoized: a sibling
+    /// reference from a shallower depth still resolves, so the result
+    /// does not depend on reference order (G34).
+    #[test]
+    /// Deep: drops instead of overflowing.
     #[test]
     fn var_chain_depth_is_capped() {
         // Deep: drops instead of overflowing.
@@ -5256,4 +5450,15 @@ mod tests {
         // `ex`/`ch` have no Bevy counterpart.
         assert_eq!(layout("width: 3ch").width, None);
     }
+
+    #[test]
+    fn tmp_probe() {
+        eprintln!("PROBE plain: {:?}", declared("width: var(--missing, 1px)").layout.width);
+        eprintln!("PROBE fn-d1: {:?}", declared("width: var(--missing, f(1px))").layout.width);
+        eprintln!("PROBE fn-var: {:?}", declared("--f0: f(1px); width: var(--f0)").layout.width);
+        eprintln!("PROBE fn-direct: {:?}", declared("width: f(1px)").layout.width);
+    }
+
 }
+
+
