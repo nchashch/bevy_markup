@@ -3474,6 +3474,16 @@ pub struct Skeleton {
     strike: u8,
 }
 
+impl Skeleton {
+    /// The source the skeleton's specs were built from. Exposed for the
+    /// skeleton-reuse guards (a gate-skipped build must have replaced the
+    /// skeleton, document included); not covered by semver.
+    #[doc(hidden)]
+    pub fn document_source(&self) -> Option<&str> {
+        self.document.as_ref().map(|document| document.source())
+    }
+}
+
 /// The per-build pairing state: where the fresh DOM meets the previous
 /// one, and which old subtrees are unchanged.
 struct SkeletonPass<'a> {

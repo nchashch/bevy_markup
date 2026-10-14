@@ -750,6 +750,59 @@ fn reuse_with_inline_vars_forces_no_extra_restyles() {
     assert_eq!(reused.dump(), fresh.dump());
 }
 
+/// A render change that lands while the build waits for a stylesheet is
+/// not lost across a *reuse* (R05's Wait variant, bug_0034): two
+/// elements change twice during the wait; the build that finally runs
+/// must carry the latest values, exactly like a fresh twin — the revert
+/// kept the first change's document and dropped the second.
+#[test]
+fn wait_swallows_two_changes_then_reuses_currently() {
+    let files = [
+        ("page.html", r#"<p>{{ p }}</p><p>{{ q }}</p>"#),
+        ("late.css", "html { color: #ffffff }"),
+        ("style.css", "html { color: #ffffff }"),
+    ];
+    let spawn = |name: &str| {
+        TestUi::new(name, &files)
+            .stylesheet("style.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new().with("p", &"a").with("q", &"b"),
+                Node::default(),
+            )
+    };
+    let mut reused = spawn("wait-reuse-reused");
+    let mut fresh = spawn("wait-reuse-fresh");
+    reused.settle();
+    fresh.settle();
+    // Swap to a stylesheet that has not loaded yet (a Wait), and change
+    // both values while it loads.
+    let late = reused.load::<Stylesheet>("late.css");
+    reused.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(late);
+    let late2 = fresh.load::<Stylesheet>("late.css");
+    fresh.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(late2);
+    for ui in [&mut reused, &mut fresh] {
+        let root = ui.root();
+        let mut context = ui.world_mut().get_mut::<TemplateContext>(root).unwrap();
+        context.insert("p", &"b");
+        context.insert("q", &"a");
+    }
+    reused.update(1);
+    fresh.update(1);
+    // A second change while still waiting.
+    for ui in [&mut reused, &mut fresh] {
+        let root = ui.root();
+        let mut context = ui.world_mut().get_mut::<TemplateContext>(root).unwrap();
+        context.insert("p", &"a");
+        context.insert("q", &"c");
+    }
+    reused.settle();
+    fresh.settle();
+    assert!(reused.dump().contains("\"a\""), "{}", reused.dump());
+    assert!(reused.dump().contains("\"c\""), "{}", reused.dump());
+    assert_eq!(reused.dump(), fresh.dump());
+}
+
 /// A style change that lands while the debug outline is shown is not
 /// lost: outline builds leave the skeleton frozen, and consuming the
 /// pending-style bit there let the outline-removal build reuse the
@@ -4465,6 +4518,93 @@ padded { padding: 10px } p#padded { padding: 10px } img.stretch { width: 100%; h
 mod skeleton_reuse {
     use super::*;
     use bevy_markup::Skeleton;
+
+/// A retry after many gate-skipped builds serves the CURRENT content
+/// (R04, bug_0033): a gate-skipped build updates its entities from
+/// fresh specs and replaces the skeleton alongside — the comparator's
+/// skeleton is stripped every step so its build is always fresh. On the
+/// R04 revert the skeleton kept the first step's specs while the doc
+/// advanced, and the retry's clean match served the stale spec's text.
+#[test]
+fn gate_retry_after_all_dirty_builds_stays_current() {
+    let rows = (0..9)
+        .map(|i| format!("<p>Row {i}: {{{{ v }}}}</p>"))
+        .collect::<String>();
+    let page = format!(r#"<p class="t">T: {{{{ b }}}}</p>{rows}"#);
+    let (mut reused, mut fresh) = spawn_two(
+        "gate-retry",
+        &[("page.html", page.as_str()), ("a.css", "html { color: #ffffff }")],
+        &TemplateContext::new().with("v", &0u32).with("b", &0u32),
+    );
+    reused.settle();
+    fresh.settle();
+
+    let toggle = |ui: &mut TestUi, keep: bool, v: u32| {
+        let root = ui.root();
+        if !keep {
+            ui.world_mut().entity_mut(root).remove::<Skeleton>();
+        }
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("v", &v);
+    };
+    // One-key changes: all nine rows are dirty every step, the pairing
+    // scores useless and the gate skips (backing off 16, 32 … builds).
+    // 32 steps: the pairing retries at step ~17 (v=1) and then skips —
+    // the final render (v=0) differs from the last retry's, so the
+    // structural assert below can't pass by parity.
+    for step in 1..=32u32 {
+        let v = step % 2;
+        toggle(&mut reused, true, v);
+        toggle(&mut fresh, false, v);
+        reused.settle();
+        fresh.settle();
+        assert_eq!(reused.dump(), fresh.dump(), "toggle {step}");
+    }
+
+    // The structural half of the guard: after the gate-skipped builds
+    // the skeleton must have been replaced wholesale — its document is
+    // the CURRENT render (R04's revert ticked the counter only and left
+    // the skeleton at the first step's state, and the retry's clean
+    // match then served the stale spec's text).
+    let root = reused.root();
+    let skeleton_source = reused
+        .world_mut()
+        .get::<Skeleton>(root)
+        .and_then(|skeleton| skeleton.document_source().map(str::to_owned));
+    let current_source = reused
+        .world_mut()
+        .get::<bevy_markup::prelude::RenderedHtml>(root)
+        .map(|rendered| match &*rendered {
+            bevy_markup::prelude::RenderedHtml::Ready(document) => {
+                document.source().to_owned()
+            }
+            _ => String::new(),
+        });
+    assert_eq!(
+        skeleton_source.as_deref(),
+        current_source.as_deref(),
+        "the skeleton's document is the current render"
+    );
+
+    // The visible half: the b change (which can land on a retry) shows
+    // the current text.
+    toggle(&mut reused, true, 0);
+    toggle(&mut fresh, false, 0);
+    for ui in [&mut reused, &mut fresh] {
+        let root = ui.root();
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("b", &1);
+    }
+    reused.settle();
+    fresh.settle();
+    assert_eq!(reused.dump(), fresh.dump());
+    assert!(reused.dump().contains("T: 1"), "{}", reused.dump());
+}
+
 
     fn spawn_two(
         name: &'static str,
