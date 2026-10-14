@@ -341,7 +341,7 @@ mod tests {
     /// (review_0003 G09). The map keeps only the loadable URLs.
     #[test]
     fn skipped_custom_urls_do_not_shift_the_pairing() {
-        use bevy::app::{App, ScheduleRunnerPlugin};
+        use bevy::app::App;
         use bevy::asset::{AssetPlugin, AssetServer, LoadState};
         use bevy::MinimalPlugins;
 
