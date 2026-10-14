@@ -13,14 +13,10 @@ Nothing in this review is fixed yet.
 
 ## Coverage — read this first
 
-Three of the seven slices were killed by a provider rate limit before
-reporting: **build/reuse** (`build.rs`, `rebuild.rs`), **cascade**
-(`cascade.rs`, `style.rs`, `fonts.rs`) and **examples/CI**. What survived
-of them: the examples/CI slice's command logs (used below), and one
-build-slice probe showing the F04 property now reuses (`reused=4 of 9`
-specs per build). No guard checks were run for F14, F15, F20, F23, F24,
-F25 (beyond the records slice's probe), F26, F38, F39, R04 and R05. **Re-run
-those three slices** before trusting the fixes there.
+Three of the seven slices (build/reuse, cascade, examples/CI) were killed
+by a provider rate limit in the first pass and re-run the same day; their
+results are in **Second pass** below (verdicts there supersede the first
+pass's rows for the same id). Every slice has now reported.
 
 Evidence levels as before: **[probe]** run in a scratch copy (output
 quoted), **[code]** exact lines read at HEAD, **[traced]** path followed,
@@ -155,7 +151,7 @@ cited in commits and bug files do not fail when their fix is reverted.
 ## Refuted or unconfirmed
 
 - **lightningcss `calc()` exponential parse** (security slice, [traced]): not reproduced. Release-build parse of `p{width:` + `calc(`×20 + `1px` + `)`×20 + `}` takes 2.5 µs; nested parentheses to depth 18 ~2 µs. The deep-paren stack overflow (20 000 levels) was not run.
-- **`world` example panics** in the examples slice's bounded run (`ResMut<Assets<Mesh>>` missing): the run mode wasn't recorded; under `--no-render` it is F36's documented limit.
+- **`world` example panics** (`ResMut<Assets<Mesh>>` missing): confirmed to be `--no-render` only, F36's documented limit; `--offscreen` exits 0. AGENTS.md's harness paragraph doesn't mention the exception.
 
 ## Checked and fine
 
@@ -170,8 +166,96 @@ cited in commits and bug files do not fail when their fix is reverted.
 
 ## Triage
 
-1. **CI:** G02, G03 (and make R47's test wait for the load).
-2. **Security:** G01, then G04, G08, G14.
-3. **Re-run the three lost slices** (build/reuse incl. the R04/R05 guards, cascade, examples/CI).
-4. **Regressions:** G05, G07, G09, G10.
+1. **CI:** G02, G03 (and make R47's and F26's timing tests deterministic).
+2. **Security / DoS:** G01, then G04, G08 (now aborts by probe), G14, G28, G29.
+3. **Reuse correctness:** G26, G27; add real R04/R05 guards (G35).
+4. **Regressions:** G05, G07, G09, G10, G30, G31.
 5. **Records:** G23–G25 — correct them in the same change as each fix; claim a guard only after reverting exactly that fix and watching the test fail.
+
+## Second pass (re-run slices: build/reuse, cascade, examples/CI)
+
+### Verdicts
+
+| ID | verdict | evidence | note |
+|---|---|---|---|
+| R04 | fixed, **not guarded** | [probe] | The R04 hunk of `0ede9b6` (gate-skipped builds replace the skeleton's specs and document) reverted alone: `gate_skipped_builds_with_a_stale_skeleton_stay_fresh`, `gate_skipped_builds_stay_sound`, `reuse_keeps_a_bare_span_when_a_sibling_changes` and the `skeleton_reuse_matches_a_fresh_build` proptest all pass. A hand repro (`<p>B: {{b}}</p>` + 9 rows, toggle, cycle `b`) fails at step 34 (`"B: x"` vs `"B: y"`). The "stale skeleton" test can't fail: every row is translated and `pair_node` excludes translated elements, so nothing is ever reusable. |
+| R05 (Wait) | fixed, **not guarded** by the new test | [probe] | The R05 hunk (`unchanged` source compare, build.rs:1349) reverted: `render_change_during_a_wait_carries_the_new_content` and the proptest pass; review_0001's two-element Wait repro and the older outline test fail. The new test has one `<p>` and stops at the build ending the wait. |
+| `reuse_keeps_a_bare_span…` | guards nothing | [probe] | Passes with the R04, R05 and `collect_node` fallthrough reverts; its doc comment ("On the R04 revert the span's content vanished") is false. `reused_walkthrough_siblings_keep_their_content` is the real guard. |
+| proptest `skeleton_reuse…` | guards neither R04 nor R05 | [probe] | ≤24 ops, a retry needs ≥17 gate-skipped builds; sheets are preloaded, so it never Waits. |
+| F06 | partial, guarded | [probe] | Depth check removed: `var_chain_depth_is_capped` aborts. **G08 confirmed** [probe]: 64 links × 10 nested `f(` (~3 KB CSS) overflows a 2 MiB thread and aborts the process; 1 link × 500 nested overflows inside lightningcss's own parse at load. |
+| F09 | fixed, guarded | [probe] | |
+| F11 | fixed, guarded | [probe] | G09 stands. |
+| F14 | **partial**, guarded, **regression** | [probe] | Both halves fail on revert. Gaps: G30; regression: G27. |
+| F15 | fixed, guarded, **regression** | [probe] | G31. |
+| F17 | fixed, unguarded | [code] | Bounded runs can't tell the old guard from the new. |
+| F19 | fixed, guard partial | [probe] | Reverting only the spawn-time `max_characters` write passes (a later `update_spec` sets it); the attribute-change path has no test. `" 12"` and `"12abc"` are rejected; HTML's rules accept them (low). |
+| F20 | **partial**, guarded | [probe] | Consumed chains are still fully substituted and the `consumed` scan is quadratic (G29). |
+| F21 | fixed | [probe] | A generator-only change passes, untracked vectors and real changes fail. |
+| F23 | **partial** | [probe]+[code] | The refresh guard is sound: a clean subtree is contiguous in tl's pre-order arena and pairs with identical shape, so if its root doesn't move nothing below does (probed with grandchild `:hover` and a link after insertions in an earlier sibling). Not done: every non-pass build still clones the source (build.rs:1288) and every gate-skipped content build re-parses; the new comment's "needs a borrow in the closure" reason is wrong (build.rs:1055 already reads the skeleton). |
+| F24 | fixed, unguarded (admitted) | [code] | |
+| F26 | fixed, **not guarded**, flaky | [probe] | With the fixpoint loop restored the test passes: its chain converges in one pass. The reversed chain (20 000 links) takes 120 s with the loop vs 17 ms. Its 50 ms limit failed 11/48 under parallel load. |
+| F27 | fixed (64-bit), track cap guarded | [probe] | 32-bit: G38. |
+| F28 | field half guarded | [probe] | |
+| F34 | fixed, guarded | [probe] | Template revert fails two content_lint tests. |
+| F35 | fixed | [probe] | Reverting the gate rewrites style.css. |
+| F36 | documented limit, confirmed | [probe] | See Refuted/unconfirmed. |
+| F38 | fixed, partly guarded, **2 regressions** | [probe] | Six asserted sites fail on revert; grid longhands, `grid-row`, `grid-area` and radius longhands reverted together pass. Regressions G32, G33. |
+| F39 | fixed, guarded, **regression** | [probe] | G28. |
+| F41 | regressed (G03) + **partial, unguarded** | [probe] | With G03 patched, `cascade_harness_is_safe_on_adversarial_css` passes with both F41 halves reverted; its "deep chain" has two links. |
+| F42 | fixed (hot-reload) | [probe] | |
+| F43 | **partial**, unguarded | [probe] | Visibility half works; z-order half ignores `z-index` (G40); `b345b93` detached `step_linear`'s attribute and doc (G41). |
+| R26 | record accurate | [code] | Nuance: `box_of` looks images up by URL text, so an inline `url()` matching a sheet URL draws. |
+
+**CI** (ci.yml's exact env, rustc 1.98.1): `check --lib`, `check --lib --features text-input`, gated examples check, `test --example hot-reload`, `doc` exit 0; `build --all-targets`, `test`, `test --features text-input` exit 101 (G02); `test --lib --features fuzzing` 101 (G03). GitHub stops at the third step, so **no test runs in CI**. Nothing else fails: without `-D warnings`, `cargo test` passes 289 (+1 ignored), `--features text-input` 294. Golden `--no-run` is clean. G03 also fails the nightly **coverage** job (coverage.py exits on the first failing layer) and cache.yml's `fuzz` build (the cache is never saved). Bounded example runs (`--no-render`/`--offscreen --exit-after 300`, injected keys) exit 0 for all 16 except `world --no-render` (F36).
+
+### New findings
+
+**G26 · medium · An outline frame consumes a pending style change; the frozen skeleton then serves the old sheet's styles** — pre-existing (`0ede9b6`) [probe]
+- `rebuild.style_pending_applied()` runs for outline builds too (build.rs:969), which leave the skeleton frozen (:1287).
+- **Repro:** `a.css .s{color:#ff0000}`, `b.css .s{color:#0000ff}`, page `<p class="s">Static</p><p>{{ x }}</p>`; add `HtmlDebugOutline`, switch to b, then in one frame remove the outline and set `x=2`: reused `"Static" #ff0000`, fresh `#0000ff` (7/7).
+- **Fix:** don't consume `style_pending` on outline builds, or drop the `Skeleton` when one applies a style change.
+
+**G27 · medium (perf) · Reuse builds force two extra full restyles when any inline `var()` exists** — regression from `f4a1152` [probe]
+- Cached subtrees skip `collect_node` before the inline-var scan (build.rs:3935 vs :3969), the name set shrinks, `rebuild.vars = 0` (:1213) forces a restyle whose full set differs again.
+- **Repro:** `<div style="color: var(--c)"><p>…</p>×3</div><p>{{ n }}</p>`, change `n`: `built +1 restyled +2` (stripped skeleton: `+1 / +0`). Reuse now costs more than no reuse, plus two spurious `HtmlUiRestyled`.
+- **Fix:** store each spec's inline names and add them on reuse; recompute the hash instead of zeroing it.
+
+**G28 · medium (DoS) · F39's duplicate check is quadratic** — regression from `8512b7a` [probe] — `entries.contains` (cascade.rs:2823) per registration: `repeat(1000, [a0 … a999] 1px)` (4.9 KB) takes 3.0 s per element style vs 156 ms reverted. Lines register in order: compare only the last entry.
+
+**G29 · medium (perf) · Consumed custom declarations are still substituted, and the `consumed` scan is quadratic** — `1de2033` [probe] — cascade.rs:1616 `consumed.iter().any(..)` per declaration; a consumed 20 000-link chain takes 3.45 s per element (1.56 s before F20; unconsumed 0.6 ms). A custom declaration's substituted value is always discarded: return before substituting every `CustomPropertyName::Custom` and drop the parameter (also simplifies G03's fix).
+
+**G30 · medium · F14 tracks only block-level inline styles** [probe] — runs (build.rs:4340/4351) aren't scanned, translation fragments discard their set (:3418, on the false premise that translations rebuild every frame), and `raw_var_names` stops at non-ASCII or `\` (`--café` → `--caf`). `<p>Hello <span style="color: var(--brand)">x</span></p>` and FTL `<b style="color: var(--c)">` keep the old colour after a context change. Take names from lightningcss's tokens and merge fragment sets.
+
+**G31 · medium · `margin`/`inset` keywords drop the other property's `calc()`** — regression from `f909c8c` [probe] — cascade.rs:1803 maps both to all eight `CalcProp`s: `p { left: calc(50% - 10px) } p { margin: initial }` loses `left` entirely.
+
+**G32 · low · CSS-wide keywords on `pointer-events`/`outline-offset` do nothing** — regression from `2073ed9` [probe] — they arrive as `Custom(Unknown)`, so the keyword branch (cascade.rs:1586) never matches and F38's keep-earlier rule keeps the old value: `pointer-events: none` then `initial` stays `pick=none`. The `"outline-offset"` arm of `apply_keyword` is dead.
+
+**G33 · low · Shorthands with one unsupported side half-apply** — `2073ed9` [probe] — `grid-column: 2 / 3` then `span x / 5` → `[2, 5]`; `grid-area` and `border-radius` alike. `padding`/`border-width` drop the whole declaration (the documented rule).
+
+**G34 · low · The `var()` depth cap makes results order-dependent** — `9dec0b9` [probe] — a name failed at depth 63 is memoized as `None`: `margin: 2px var(--x)` → `[2,1,2,1]` but `margin: var(--v62, 2px) var(--x)` drops the declaration. Don't memoize depth failures.
+
+**G35 · medium (records/tests) · R04 and R05 have no guard in the suite** [probe] — see the verdicts; the three tests `1e3d37a` added guard nothing and their comments are false. Commit the two hand repros as tests.
+
+**G36 · low · Invalid `<input type>` values build no field** — pre-existing (`bbd0959`) [code] — `type=""`/`type="txet"` build nothing; HTML's invalid-value default is text (the input side of G16).
+
+**G37 · low · F26 and R47 timing/settling tests are flaky** [probe] — `var_names_closure_is_linear` (50 ms) failed 11/48 and `manifests_validate_values` repeatedly under load. Build the failing shape (reversed chain) and assert structure, not wall time; poll the load state.
+
+**G38 · low · `total_lines` can wrap on 32-bit** [traced] — `tracks * count` in `usize` (cascade.rs:2929): on wasm32, `repeat(1431655766, [a] 1px 1px 1px)` wraps under the cap. Use checked arithmetic.
+
+**G39 · low · Doc comments detached again** [code] — `f909c8c` (`calc_props` between `apply_keyword`'s doc and fn), `d723f6a` (`MAX_GRID_TRACKS`/`track_sizing`), `bad8820` (deleted a test's doc), `b345b93` (G41). Same insertion pattern as G02.
+
+**G40 · low · The examples' linear-mode "topmost modal" ignores `z-index`** — `b345b93` [probe] — examples/shared/input.rs:209-213 uses `.ok()?` on `GlobalZIndex` (usually absent), so every modal ties and the last iterated wins. Use `map_or(0)` per component as focus.rs's `active_modal` does; exclude `HtmlNoFocus`; filter hidden roots when no modal is open (pre-existing).
+
+**G41 · low · `step_linear` lost its `#[allow(clippy::too_many_arguments)]` and doc** — `b345b93` [probe] — `fn z_order` was inserted between them (input.rs:204-216).
+
+**G42 · low · Menu: Esc in the Reset dialog sends focus to Volume, not Reset** — pre-existing [probe] — `close_dialog_on_escape` (examples/menu/main.rs:341) relies on focus repair, which falls back to the menu's autofocus. Set focus to Reset as `answer_dialog` does.
+
+**G43 · low · honggfuzz/test-fuzz scripts exit 0 after finding crashes** — pre-existing [code] — both map `timeout`'s 124 to success, and neither fuzzer stops on a crash. Fail when `*.fuzz` / `crashes/` is non-empty.
+
+**G44 · low · Smaller example/CI gaps** [code] — content_lint's forms contexts have no `"`/`\` values (R66 unguarded); AGENTS.md:164/:170 promise Language buttons grid-names and combinators don't have; nightly.yml's `coverage` (:189) and `fuzz-drivers` (:316) save their own caches against cache.yml's consumer rule; markdown/main.rs:92 and inline/main.rs:118 hard-code the reported input; demo's PageUp/PageDown have no gamepad mirror.
+
+### Checked and fine (second pass)
+
+- Positional pairing needs equal child counts below the top level; the cascade's only combinators (descendant, child) can't make a clean subtree's inherited style or F09's `submit` flag stale; comments keep arena offsets aligned; `remap_spec_handles`'s `Arc::get_mut` holds; Failed/Pending renders don't leave a reusable stale skeleton.
+- var() resolution order matches AGENTS.md (memo → cycle/depth → context → sheet → fallback); the F25 cycle flag doesn't leak; `raw_var_names` and the selector parser don't panic on Unicode/escapes; substitution budget amplification is linear (1000 × 32 KB in 28 ms); the style-cache key folds a full 64-bit SipHash per ancestor.
+- Examples: no double handling; every gamepad mirror and `:focus-visible` rule present; no letter hotkeys in inputs/forms; workflow toolchain pins agree; golden mirrors ci.yml's flags.
