@@ -1008,7 +1008,16 @@ pub(crate) struct Pseudo {
 /// state (for pseudo-classes in a compound selector), nearest first.
 #[derive(Clone, Debug)]
 pub(crate) struct Ancestor {
-    pub element: HtmlElement,
+    /// The tag/id/classes a compound selector reads. The dataset is
+    /// deliberately absent: selectors never read it, and carrying it made
+    /// each ancestor a full element clone (the per-child chain copies
+    /// blew memory up on attribute-heavy pages — review_0003 G05).
+    pub tag: String,
+    pub id: Option<String>,
+    pub classes: Vec<String>,
+    /// Whether this element is a form with a non-empty submit hook (the
+    /// build's submit-button check reads it).
+    pub submit: bool,
     pub pseudo: Pseudo,
 }
 
@@ -1119,14 +1128,14 @@ impl Selector {
         let compound = &self.compounds[index - 1];
         let matched = match combinator {
             Combinator::Child => ancestors.get(offset).is_some_and(|parent| {
-                compound.matches(&parent.element, parent.pseudo)
+                compound.matches_ancestor(parent)
                     && self.matches_from(index - 1, ancestors, offset + 1, failed)
             }),
             Combinator::Descendant => {
                 let mut any = false;
                 for i in offset..ancestors.len() {
                     let ancestor = &ancestors[i];
-                    if compound.matches(&ancestor.element, ancestor.pseudo)
+                    if compound.matches_ancestor(ancestor)
                         && self.matches_from(index - 1, ancestors, i + 1, failed)
                     {
                         any = true;
@@ -1249,6 +1258,22 @@ impl Compound {
             && self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
             && self.ids.iter().all(|id| element.id.as_ref() == Some(id))
             && self.classes.iter().all(|class| element.has_class(class))
+    }
+
+    /// [`matches`](Self::matches) against a slimmed ancestor: the same
+    /// fields (tag, id, classes, pseudo) — the slim ancestor drops the
+    /// dataset, which selectors never read.
+    fn matches_ancestor(&self, ancestor: &Ancestor) -> bool {
+        (!self.pseudo.hover || ancestor.pseudo.hover)
+            && (!self.pseudo.active || ancestor.pseudo.active)
+            && (!self.pseudo.focus || ancestor.pseudo.focus)
+            && (!self.pseudo.focus_visible || ancestor.pseudo.focus_visible)
+            && self.tag.as_ref().is_none_or(|tag| *tag == ancestor.tag)
+            && self.ids.iter().all(|id| ancestor.id.as_ref() == Some(id))
+            && self
+                .classes
+                .iter()
+                .all(|class| ancestor.classes.iter().any(|own| own == class))
     }
 }
 
@@ -1388,9 +1413,9 @@ impl<'a> HtmlStyles<'a> {
             ancestors.iter().fold(0u64, |mut hash, ancestor| {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                ancestor.element.tag.hash(&mut hasher);
-                ancestor.element.id.hash(&mut hasher);
-                ancestor.element.classes.hash(&mut hasher);
+                ancestor.tag.hash(&mut hasher);
+                ancestor.id.hash(&mut hasher);
+                ancestor.classes.hash(&mut hasher);
                 ancestor.pseudo.hash(&mut hasher);
                 hash = hash.wrapping_mul(31).wrapping_add(hasher.finish());
                 hash
@@ -3820,7 +3845,10 @@ mod tests {
 
     fn ancestor(tag: &str, classes: &[&str]) -> Ancestor {
         Ancestor {
-            element: element(tag, None, classes),
+            tag: tag.to_owned(),
+            id: None,
+            classes: classes.iter().map(|c| c.to_string()).collect(),
+            submit: false,
             pseudo: Pseudo::default(),
         }
     }
@@ -3910,7 +3938,10 @@ mod tests {
     fn pseudo_classes_work_on_ancestors() {
         let selector = selector(".panel:hover p");
         let hovered = Ancestor {
-            element: element("div", None, &["panel"]),
+            tag: "div".to_owned(),
+            id: None,
+            classes: vec!["panel".to_owned()],
+            submit: false,
             pseudo: Pseudo {
                 hover: true,
                 ..Pseudo::default()

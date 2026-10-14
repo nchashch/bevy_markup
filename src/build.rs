@@ -1,6 +1,7 @@
 //! Rendered + localized DOM → styled Bevy UI children of the `HtmlUi` entity.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use bevy::asset::{AssetEvent, AssetPath, LoadState};
@@ -3830,7 +3831,7 @@ fn collect_items(
     };
     let mut items = Vec::new();
     for handle in dom.children() {
-        collect_node(&ctx, *handle, &root, &mut items, &[], grid, 0);
+        collect_node(&ctx, *handle, &root, &mut items, Rc::new(Vec::new()), grid, 0);
     }
     (items, ctx.inline_vars.borrow().iter().cloned().collect())
 }
@@ -3840,7 +3841,7 @@ fn collect_node(
     handle: tl::NodeHandle,
     inherited: &Style,
     items: &mut Vec<Item>,
-    chain: &[Ancestor],
+    chain: Rc<Vec<Ancestor>>,
     grid: Option<&GridNames>,
     depth: usize,
 ) {
@@ -3863,7 +3864,7 @@ fn collect_node(
         Node {
             handle: tl::NodeHandle,
             inherited: Style,
-            chain: Vec<Ancestor>,
+            chain: Rc<Vec<Ancestor>>,
             grid: Option<GridNames>,
             depth: usize,
         },
@@ -3872,7 +3873,7 @@ fn collect_node(
     let mut stack = vec![Task::Node {
         handle,
         inherited: inherited.clone(),
-        chain: chain.to_vec(),
+        chain: Rc::new(chain.to_vec()),
         grid: grid.cloned(),
         depth,
     }];
@@ -3930,7 +3931,7 @@ fn collect_node(
                     &inherited,
                     RunExtras::default(),
                     &mut runs,
-                    &chain,
+                    chain.clone(),
                 );
                 let runs = collapse_runs(runs);
                 if !runs.is_empty() {
@@ -4000,14 +4001,21 @@ fn collect_node(
         }
         // This element becomes the nearest ancestor for everything inside it.
         let own = Ancestor {
-            element: element.clone(),
+            tag: element.tag.clone(),
+            id: element.id.clone(),
+            classes: element.classes.clone(),
+            submit: element.tag == "form" && element.data("on-submit").is_some(),
             pseudo: state,
         };
+        // The child chain is shared with every child task (an Rc clone is
+        // O(1); a per-child Vec copy made attribute-heavy pages cost
+        // O(children x depth) memory, review_0003 G05). `own`'s fields
+        // are pulled out first, so the Vec is built only for containers.
         let child_chain = {
             let mut child_chain = Vec::with_capacity(chain.len() + 1);
             child_chain.push(own);
             child_chain.extend(chain.iter().cloned());
-            child_chain
+            Rc::new(child_chain)
         };
         // The `<html>` element is what the root style was computed from:
         // re-applying it would square its `opacity`.
@@ -4091,7 +4099,7 @@ fn collect_node(
                 &inherited,
                 RunExtras::default(),
                 &mut runs,
-                &child_chain,
+                child_chain.clone(),
             );
             if !runs.is_empty() {
                 items.push(Item::Block(Block {
@@ -4162,7 +4170,7 @@ fn collect_node(
                             *node,
                             &style,
                             items,
-                            &child_chain,
+                            child_chain.clone(),
                             grid_of_own.as_ref(),
                             depth + 1,
                         );
@@ -4201,10 +4209,7 @@ fn collect_node(
                 .is_none_or(|kind| kind.eq_ignore_ascii_case("submit"))
             && chain
                 .iter()
-                .any(|ancestor| {
-                    ancestor.element.tag == "form"
-                        && ancestor.element.data("on-submit").is_some()
-                });
+                .any(|ancestor| ancestor.submit);
         let mut runs = Vec::new();
         push_content_runs(
             ctx,
@@ -4213,7 +4218,7 @@ fn collect_node(
             &style,
             RunExtras::default(),
             &mut runs,
-            &child_chain,
+            child_chain.clone(),
         );
         items.push(Item::Block(Block {
             kind,
@@ -4283,10 +4288,17 @@ fn push_content_runs(
     style: &Style,
     extras: RunExtras,
     runs: &mut Vec<Run>,
-    chain: &[Ancestor],
+    chain: Rc<Vec<Ancestor>>,
 ) {
     let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
-        run_walk(fragment, nodes.iter().copied(), style, &extras, runs, chain);
+        run_walk(
+            fragment,
+            nodes.iter().copied(),
+            style,
+            &extras,
+            runs,
+            Rc::new(chain[..].to_vec()),
+        );
     });
     if !translated {
         run_walk(
@@ -4311,16 +4323,22 @@ fn run_walk<'a>(
     style: &Style,
     extras: &RunExtras,
     runs: &mut Vec<Run>,
-    chain: &[Ancestor],
+    chain: Rc<Vec<Ancestor>>,
 ) {
-    let mut stack: Vec<(tl::NodeHandle, Style, RunExtras, Vec<Ancestor>)> = roots
+    // The chain is shared (an Rc clone is O(1)); the depth caps how deep
+    // the chain grows — inline nesting used to be uncapped, and every
+    // level cloned the whole chain plus hashed it for the style cache
+    // (20k nested `<b>` cost ~4×10⁸ ancestor copies, review_0003 G06).
+    // Past MAX_DOM_DEPTH the text is kept, the ancestor contribution
+    // stops — the same rule as the block walk.
+    let mut stack: Vec<(tl::NodeHandle, Style, RunExtras, Rc<Vec<Ancestor>>, usize)> = roots
         .into_iter()
-        .map(|handle| (handle, style.clone(), extras.clone(), chain.to_vec()))
+        .map(|handle| (handle, style.clone(), extras.clone(), chain.clone(), 0))
         .collect();
     // Reversed: the last entry pops first, so the first root (and, in the
     // tag arm, the leftmost child) is visited first.
     stack.reverse();
-    while let Some((handle, style, extras, chain)) = stack.pop() {
+    while let Some((handle, style, extras, chain, depth)) = stack.pop() {
         match handle.get(ctx.parser) {
             Some(tl::Node::Raw(text)) => {
                 let text = decode_entities(&text.as_utf8_str());
@@ -4350,14 +4368,25 @@ fn run_walk<'a>(
                 // overlay's entry (each usable once), so all uses share it.
                 let element = ctx.element(tag);
                 // This element becomes the nearest ancestor for its content.
-                let child_chain = {
+                let child_chain = if depth < MAX_DOM_DEPTH {
+                    let owned = element.clone();
                     let mut child_chain = Vec::with_capacity(chain.len() + 1);
                     child_chain.push(Ancestor {
-                        element: element.clone().unwrap_or_default(),
+                        tag: owned.as_ref().map(|e| e.tag.clone()).unwrap_or_default(),
+                        id: owned.as_ref().and_then(|e| e.id.clone()),
+                        classes: owned
+                            .as_ref()
+                            .map(|e| e.classes.clone())
+                            .unwrap_or_default(),
+                        submit: owned
+                            .as_ref()
+                            .is_some_and(|e| e.tag == "form" && e.data("on-submit").is_some()),
                         pseudo: state,
                     });
                     child_chain.extend(chain.iter().cloned());
-                    child_chain
+                    Rc::new(child_chain)
+                } else {
+                    chain.clone()
                 };
                 if tag.name().as_utf8_str() == *"img" {
                     push_image_run(ctx, tag, &element, state, &style, extras, runs, &chain);
@@ -4424,14 +4453,20 @@ fn run_walk<'a>(
                         &style,
                         &extras,
                         runs,
-                        &child_chain,
+                        child_chain.clone(),
                     );
                 });
                 if !translated {
                     let children: Vec<tl::NodeHandle> =
                         tag.children().top().iter().copied().collect();
                     for child in children.into_iter().rev() {
-                        stack.push((child, style.clone(), extras.clone(), child_chain.clone()));
+                        stack.push((
+                            child,
+                            style.clone(),
+                            extras.clone(),
+                            child_chain.clone(),
+                            depth + 1,
+                        ));
                     }
                 }
             }
@@ -4446,7 +4481,7 @@ fn push_runs(
     style: &Style,
     extras: RunExtras,
     runs: &mut Vec<Run>,
-    chain: &[Ancestor],
+    chain: Rc<Vec<Ancestor>>,
 ) {
     run_walk(ctx, std::iter::once(handle), style, &extras, runs, chain);
 }

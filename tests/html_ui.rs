@@ -3285,6 +3285,69 @@ fn deep_inline_nesting_is_capped() {
     assert!(dump.contains('y'), "the run content vanished:\n{dump}");
 }
 
+/// Deep inline nesting is *capped*: past MAX_DOM_DEPTH the chain stops
+/// growing (the text survives), so the per-element ancestor work stays
+/// linear — 20 000 nested `<b>` used to cost ~4×10⁸ ancestor copies
+/// (review_0003 G06; the run must finish in bounded time).
+#[test]
+fn deep_inline_nesting_chain_is_bounded() {
+    let deep = format!(
+        "<p>x{}y{}</p>",
+        "<b>".repeat(20_000),
+        "</b>".repeat(20_000)
+    );
+    let mut ui = TestUi::new(
+        "deep-inline-chain",
+        &[("page.html", "{{ deep | safe }}")],
+    )
+    .spawn("page.html", TemplateContext::new().with("deep", &deep), Node::default());
+    let start = std::time::Instant::now();
+    ui.settle();
+    let elapsed = start.elapsed();
+    let dump = ui.dump();
+    assert!(dump.contains("\"x"), "the run content vanished:\n{dump}");
+    assert!(dump.contains('y'), "the run content vanished:\n{dump}");
+    // The old unbounded walk: ~4×10⁸ ancestor copies per build.
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "deep inline nesting is quadratic again: {elapsed:?}"
+    );
+}
+
+/// An attribute-heavy page's memory stays bounded: the ancestor chain is
+/// shared (Rc) and its ancestors carry only the selector fields — a
+/// 10 000-attribute element with 10 000 children used to hold ~10⁸ map
+/// entries (review_0003 G05). The chain is shared, so the page builds
+/// in bounded time.
+#[test]
+fn attribute_heavy_pages_stay_bounded() {
+    let mut page = String::from("<div");
+    for i in 0..10_000 {
+        page.push_str(&format!(" data-a{i}=\"{i}\""));
+    }
+    page.push('>');
+    page.push_str("<s></s>&nbsp;".repeat(10_000).as_str());
+    page.push_str("</div>");
+    let mut ui = TestUi::new(
+        "attr-heavy",
+        &[("page.html", "{{ page | safe }}")],
+    )
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("page", &page),
+        Node::default(),
+    );
+    let start = std::time::Instant::now();
+    ui.settle();
+    let elapsed = start.elapsed();
+    let dump = ui.dump();
+    assert!(dump.contains("div"), "the div vanished:\n{}", &dump[..80.min(dump.len())]);
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "attribute-heavy pages are quadratic again: {elapsed:?}"
+    );
+}
+
 /// The outline renderer walks the whole document; 3000 levels used to
 /// overflow it (it is depth-bounded like the build walks now).
 #[test]
