@@ -69,7 +69,9 @@ fn next_fence_line(rest: &str, limit: usize) -> Option<usize> {
             return None;
         }
         let line_start = cursor;
-        let line_end = rest[cursor..].find('\n').map_or(limit, |at| cursor + at);
+        // Bounded by `limit`: past it, the statement's own line(s) — not
+        // ours to fence-scan.
+        let line_end = rest[cursor..limit].find('\n').map_or(limit, |at| cursor + at);
         let line = &rest[line_start..line_end.min(limit)];
         let trimmed = line.trim_start_matches(' ');
         let indent = line.len() - trimmed.len();
@@ -80,7 +82,7 @@ fn next_fence_line(rest: &str, limit: usize) -> Option<usize> {
     }
 }
 
-fn separate_statements(source: &str) -> String {
+pub(crate) fn separate_statements(source: &str) -> String {
     if !source.contains("{%") && !source.contains("{#") {
         return source.to_owned();
     }
@@ -88,7 +90,33 @@ fn separate_statements(source: &str) -> String {
     let mut rest = source;
     let mut fence: Option<String> = None;
     let mut at_line_start = true;
+    // Cached in absolute coordinates (`rest` is always a suffix of
+    // `source`): the two statement openers, and the newlines bounding the
+    // current line. Re-finding an opener, or re-scanning the line for
+    // its newline, per statement is what made this loop quadratic — a
+    // 1 MB single line of inline statements re-scanned up to a megabyte
+    // backward and forward per statement (review_0003 G14). A cached
+    // position is valid until the cursor passes it; a `None` stays
+    // `None` (the needle is absent from every suffix too).
+    let mut if_at = rest.find("{%");
+    let mut comment_at = rest.find("{#");
+    // The first newline at or after the cursor — the current line's end,
+    // without re-scanning the line. The line's start is cached per line
+    // (a backward scan runs once per line, not once per statement).
+    let mut next_newline: Option<usize> = rest.find('\n');
+    let mut line_start_cache: Option<usize> = None;
+    let mut line_dirty = true;
     while !rest.is_empty() {
+        let base = source.len() - rest.len();
+        if if_at.is_some_and(|at| at < base) {
+            if_at = rest.find("{%").map(|at| base + at);
+        }
+        if comment_at.is_some_and(|at| at < base) {
+            comment_at = rest.find("{#").map(|at| base + at);
+        }
+        if next_newline.is_some_and(|at| at < base) {
+            next_newline = rest.find('\n').map(|at| base + at);
+        }
         // Fenced code blocks, at a line start: an opener carries an info
         // string (or is a bare ``` fence), a closer matches the open
         // marker and has nothing but whitespace after it. The check runs
@@ -123,8 +151,8 @@ fn separate_statements(source: &str) -> String {
         }
         // The earliest statement opener (a `{#` before a `{%` is a
         // comment, not the tail of a `{%`).
-        let if_start = rest.find("{%");
-        let comment_start = rest.find("{#");
+        let if_start = if_at.map(|at| at - base);
+        let comment_start = comment_at.map(|at| at - base);
         let start = match (if_start, comment_start) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -168,16 +196,33 @@ fn separate_statements(source: &str) -> String {
             out.push_str(&rest[..span_end]);
             rest = &rest[span_end..];
             at_line_start = false;
+            // A span can span lines: the line-start cache is stale.
+            line_dirty = true;
             continue;
         }
         // Own line: whitespace-only before the statement and after its
         // closer (on the same line). Inline statements stay where they
         // are.
-        let line_start = rest[..start].rfind('\n').map_or(0, |at| at + 1);
-        let line_end = rest[start..]
-            .find('\n')
-            .map_or(rest.len(), |at| start + at + 1);
-        let before = &rest[line_start..start];
+        let line_start_rel = if !line_dirty && line_start_cache.is_some_and(|at| at >= base) {
+            line_start_cache.unwrap() - base
+        } else if next_newline.is_none_or(|at| at - base >= start) {
+            // No newline between the cursor and the statement: the line
+            // starts at the cursor.
+            line_start_cache = Some(base);
+            line_dirty = false;
+            0
+        } else {
+            // The exact line start: a backward scan, once per line.
+            let rel = rest[..start].rfind('\n').map_or(0, |at| at + 1);
+            line_start_cache = Some(base + rel);
+            line_dirty = false;
+            rel
+        };
+        // The own-line branch only fires when there is no newline before
+        // the statement on this line, so the first newline after the
+        // cursor is the line's end.
+        let line_end = next_newline.map_or(rest.len(), |at| at - base + 1);
+        let before = &rest[line_start_rel..start];
         // A multi-line statement's closer is past this line's newline.
         let after = if end < line_end { &rest[end..line_end] } else { "" };
         if before.trim().is_empty() && after.trim().is_empty() {
@@ -191,6 +236,9 @@ fn separate_statements(source: &str) -> String {
             out.push_str(&rest[..end]);
             rest = &rest[end..];
             at_line_start = false;
+            // The statement can span lines: the cached line start is
+            // stale.
+            line_dirty = true;
         }
     }
     out

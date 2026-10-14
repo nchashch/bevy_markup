@@ -99,7 +99,7 @@ impl HtmlDocument {
         let parser = dom.parser();
         let mut out = String::new();
         for handle in dom.children() {
-            write_node(&mut out, parser, &localized.0, *handle, 0);
+            write_node(&mut out, parser, &localized.0, *handle);
         }
         out
     }
@@ -136,14 +136,15 @@ fn write_node(
     parser: &tl::Parser,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
     handle: tl::NodeHandle,
-    depth: usize,
 ) {
-    let mut stack = vec![(handle, depth)];
-    while let Some((handle, depth)) = stack.pop() {
+    // The indent is carried per stack entry (a child's is its parent's
+    // plus two spaces): "  ".repeat(depth) per node recomputed the
+    // prefix over and over.
+    let mut stack = vec![(handle, String::new())];
+    while let Some((handle, indent)) = stack.pop() {
         let Some(node) = handle.get(parser) else {
             continue;
         };
-        let indent = "  ".repeat(depth);
         match node {
             tl::Node::Tag(tag) => {
                 let _ = write!(out, "{indent}{}", tag.name().as_utf8_str());
@@ -158,7 +159,7 @@ fn write_node(
                     }
                 }
                 out.push('\n');
-                let child_indent = "  ".repeat(depth + 1);
+                let child_indent = format!("{indent}  ");
                 match localized.get(&handle) {
                     Some(Ok(text)) => {
                         let _ = writeln!(out, "{child_indent}l10n {text:?}");
@@ -171,7 +172,7 @@ fn write_node(
                         let children: Vec<tl::NodeHandle> =
                             tag.children().top().iter().copied().collect();
                         for child in children.into_iter().rev() {
-                            stack.push((child, depth + 1));
+                            stack.push((child, child_indent.clone()));
                         }
                     }
                 }
@@ -259,7 +260,34 @@ pub(crate) fn resolve_references(
     // code sample showing `{% include %}` syntax isn't a reference.
     let mut fence: Option<String> = None;
     let mut at_line_start = true;
+    // The four stop positions, cached in absolute coordinates: `rest` is
+    // always a suffix of `source`, and re-finding a needle that was
+    // already located (or one that never occurs) is what made this loop
+    // quadratic — 40k `{{ x }}` lines scanned 320 KB twenty times over
+    // (review_0003 G14). A cached position is valid until the cursor
+    // passes it; a `None` stays `None` (the needle is absent from every
+    // suffix too).
+    let mut tag_at = rest.find("{%").map(|at| at);
+    let mut expression_at = rest.find("{{");
+    let mut comment_at = rest.find("{#");
+    let mut code_at = if is_markdown { rest.find('`') } else { None };
     while !rest.is_empty() {
+        let base = source.len() - rest.len();
+        let refresh = |cached: &mut Option<usize>, needle: &str| {
+            if cached.is_some_and(|at| at < base) {
+                *cached = rest.find(needle).map(|at| base + at);
+            }
+        };
+        refresh(&mut tag_at, "{%");
+        refresh(&mut expression_at, "{{");
+        refresh(&mut comment_at, "{#");
+        if is_markdown {
+            refresh(&mut code_at, "`");
+        }
+        let tag_start = tag_at.map(|at| at - base);
+        let expression_start = expression_at.map(|at| at - base);
+        let comment_start = comment_at.map(|at| at - base);
+        let code_start = code_at.map(|at| at - base);
         if is_markdown && at_line_start {
             let trimmed = rest.trim_start_matches(' ');
             let indent = rest.len() - trimmed.len();
@@ -291,10 +319,6 @@ pub(crate) fn resolve_references(
         // commented out, not references), or a Tera tag/expression —
         // copied as a unit (its quoted strings can contain `{#`, `{%` or
         // `{{`), with a reference tag resolved and a raw block verbatim.
-        let tag_start = rest.find("{%");
-        let expression_start = rest.find("{{");
-        let comment_start = rest.find("{#");
-        let code_start = if is_markdown { rest.find('`') } else { None };
         let start = [tag_start, expression_start, comment_start, code_start]
             .into_iter()
             .flatten()
@@ -515,6 +539,41 @@ async fn load_template(
 
 #[cfg(test)]
 mod tests {
+/// The scanners are linear (review_0003 G14: they used to re-find each
+/// stop needle, or re-scan the line, per statement — a 320 KB template
+/// cost seconds to load). The bounds leave ~10x headroom over the fixed
+/// cost while failing the old quadratic behavior by 10-50x.
+#[test]
+fn scanners_stay_linear_on_pathological_input() {
+    use std::time::Instant;
+    let bound = std::time::Duration::from_secs(2);
+
+    let big_expr = "{{ x }}\n".repeat(40_000);
+    let t = Instant::now();
+    let path = AssetPath::from("p.md");
+    let _ = resolve_references(&path, &big_expr);
+    let elapsed = t.elapsed();
+    assert!(elapsed < bound, "resolve_references is quadratic again: {elapsed:?}");
+
+    let big_code = "`c`\n".repeat(40_000);
+    let t = Instant::now();
+    let _ = resolve_references(&path, &big_code);
+    let elapsed = t.elapsed();
+    assert!(elapsed < bound, "resolve_references is quadratic again: {elapsed:?}");
+
+    let big_own = "{% if a %}x{% endif %}\n".repeat(40_000);
+    let t = Instant::now();
+    let _ = md::separate_statements(&big_own);
+    let elapsed = t.elapsed();
+    assert!(elapsed < bound, "separate_statements is quadratic again: {elapsed:?}");
+
+    let big_inline = "{% if a %}x{% endif %} ".repeat(40_000);
+    let t = Instant::now();
+    let _ = md::separate_statements(&big_inline);
+    let elapsed = t.elapsed();
+    assert!(elapsed < bound, "separate_statements is quadratic again: {elapsed:?}");
+}
+
     use super::*;
     use proptest::prelude::*;
 
