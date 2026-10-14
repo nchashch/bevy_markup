@@ -4150,19 +4150,27 @@ mod tests {
     /// round (quadratic, seconds at load).
     #[test]
     fn var_names_closure_is_linear() {
-        let mut sheet = String::from("p { ");
-        for i in 0..20000 {
-            sheet.push_str(&format!("--v{i}: var(--v{}); ", i + 1));
+        // The chain points BACKWARD (`--v{i}` reads `--v{i-1}`): the old
+        // fixpoint loop re-scanned every declaration per round and
+        // resolved one link per round (20k rounds × 20k declarations);
+        // the worklist visits each name once. A forward chain converges
+        // in one pass even for the loop, guarding nothing. The 2 s bound
+        // leaves ~25x headroom over the worklist's cost while failing
+        // the fixpoint loop by 60x.
+        let mut sheet = String::from("p { --v0: 1px; ");
+        for i in 1..=20000 {
+            sheet.push_str(&format!("--v{i}: var(--v{}); ", i - 1));
         }
-        sheet.push_str("width: var(--v0) }");
+        sheet.push_str("width: var(--v20000) }");
         let parsed = owned_sheet(&sheet);
         let start = std::time::Instant::now();
         let names = var_names(&parsed);
         assert!(
-            start.elapsed() < std::time::Duration::from_millis(50),
+            start.elapsed() < std::time::Duration::from_secs(2),
             "the closure took {:?}",
             start.elapsed()
         );
+        assert!(names.contains(&"--v0".to_owned()));
         assert!(names.contains(&"--v19999".to_owned()));
     }
 
