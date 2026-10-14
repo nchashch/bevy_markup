@@ -675,6 +675,61 @@ fn reuse_keeps_a_bare_span_when_a_sibling_changes() {
     assert!(reused.dump().contains("\"2\""), "the span's content stayed");
 }
 
+/// A style change that lands while the debug outline is shown is not
+/// lost: outline builds leave the skeleton frozen, and consuming the
+/// pending-style bit there let the outline-removal build reuse the
+/// stale specs — the reused UI kept the old theme (review_0003 G26).
+#[test]
+fn style_change_while_outlined_applies_on_removal() {
+    let files = [
+        ("page.html", r#"<p class="s">Static</p><p>{{ x }}</p>"#),
+        ("a.css", "html { color: #ffffff } .s { color: #ff0000 }"),
+        ("b.css", "html { color: #ffffff } .s { color: #0000ff }"),
+    ];
+    let spawn = |name: &str| {
+        TestUi::new(name, &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new().with("x", &1), Node::default())
+    };
+    let mut reused = spawn("outlined-swap-reused");
+    let mut fresh = spawn("outlined-swap-fresh");
+    reused.settle();
+    fresh.settle();
+    // Show the outline, then swap the theme while it is shown.
+    let root = reused.root();
+    reused.world_mut().entity_mut(root).insert(bevy_markup::html::HtmlDebugOutline);
+    reused.update(2);
+    // The outline and the swap don't need build-count convergence; a
+    // plain settle here can outrun the (single) build it waits for.
+    reused.settle_quiet();
+    // Both UIs swap; only the outlined one exercises the stale-skeleton
+    // reuse on removal.
+    let b = reused.load::<Stylesheet>("b.css");
+    let b2 = fresh.load::<Stylesheet>("b.css");
+    reused.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b);
+    fresh.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b2);
+    reused.settle_quiet();
+    fresh.settle_quiet();
+    // Remove the outline and change the content in the same frame.
+    reused.world_mut().entity_mut(root).remove::<bevy_markup::html::HtmlDebugOutline>();
+    reused
+        .world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("x", &2);
+    let froot = fresh.root();
+    fresh
+        .world_mut()
+        .get_mut::<TemplateContext>(froot)
+        .unwrap()
+        .insert("x", &2);
+    reused.settle();
+    fresh.settle();
+    let dump = reused.dump();
+    assert!(dump.contains("#0000ff"), "the new theme applies: {dump}");
+    assert_eq!(reused.dump(), fresh.dump());
+}
+
 /// CSS variables end to end: `var(--name)` resolves the UI's
 /// `TemplateContext` first (a change re-renders and restyles), then the
 /// sheet's own `--` declarations.

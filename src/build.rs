@@ -965,7 +965,11 @@ pub(crate) fn build_html_ui(
             continue;
         };
         // This update applies the styles: cached specs are current again
-        // after it (the same consume point `pending` already uses).
+        // after it (the same consume point `pending` already uses). An
+        // outline build leaves the skeleton frozen, so the
+        // outline-removal build must not reuse its stale specs (a theme
+        // swap while the outline was shown kept the old theme,
+        // review_0003 G26) — the gate below blocks it.
         rebuild.style_pending_applied();
         let css = match source {
             Source::Own => own_sheet.as_ref().and_then(|own| sheets.get(&own.0)),
@@ -1050,6 +1054,7 @@ pub(crate) fn build_html_ui(
         let skeleton_eligible = SKELETON
             && matches!(decision, Decision::Build(_))
             && outline.is_none()
+            && !removed_outlines.contains(&entity)
             && rendered.is_changed()
             && !style_pending;
         let (previous_useful, previous_since_try, previous_strike, had_skeleton) = skeletons
