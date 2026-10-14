@@ -476,12 +476,29 @@ fn inject_class(html: &str) -> String {
             // Append inside the existing class list.
             Some(at) => {
                 let value_at = at + " class=\"".len();
-                let value_end = value_at + attrs[value_at..].find('"').unwrap_or(0);
-                format!(
-                    "{name}{before} {MARKDOWN_CLASS}\"{after_tail}",
-                    before = &attrs[..value_end],
-                    after_tail = &attrs[value_end + 1..],
-                )
+                match attrs[value_at..].find('"') {
+                    // A class-like text inside another attribute's value
+                    // with no closing `"`: leave the tag verbatim (the
+                    // old `unwrap_or(0)` sliced at `value_end + 1`,
+                    // past the end or inside a multi-byte character —
+                    // content could panic the loader: review_0003 G04;
+                    // `MARKER` is plain text nothing strips).
+                    None => {
+                        out.push('<');
+                        out.push_str(&tag.split_at(close).0);
+                        out.push('>');
+                        rest = &after[1..];
+                        continue;
+                    }
+                    Some(value_rel) => {
+                        let value_end = value_at + value_rel;
+                        format!(
+                            "{name}{before} {MARKDOWN_CLASS}\"{after_tail}",
+                            before = &attrs[..value_end],
+                            after_tail = &attrs[value_end + 1..],
+                        )
+                    }
+                }
             }
             None => format!("{name} class=\"{MARKDOWN_CLASS}\"{attrs}"),
         };
@@ -654,6 +671,28 @@ mod tests {
         );
         assert!(html.contains("<p class=\"markdown\">tail</p>"), "{html}");
     }
+
+/// Content can supply `MARKER` (plain U+0001-delimited text): a class-like
+/// run inside another attribute's value with no closing `"` used to slice
+/// past the end or inside a multi-byte character and panicked the loader
+/// (review_0003 G04). The marker is dropped and the tag stays verbatim.
+#[test]
+fn crafted_markers_cannot_panic_inject_class() {
+    let cases = [
+        "\u{1}bevy-markup\u{1}<b data-x=' class=\"\u{e9}'>x</b>",
+        "\u{1}bevy-markup\u{1}<b data-x=' class=\"'>x</b>",
+        "\u{1}bevy-markup\u{1}<b data-x=' class=\"y\">x</b>",
+    ];
+    for case in cases {
+        let html = std::panic::catch_unwind(|| to_html(case)).expect("no panic");
+        assert!(html.contains("x</b>") || html.contains("</b>"), "{case}: {html}");
+        // The unclassed tag carries no injected class.
+        assert!(
+            !html.contains("class=\"markdown markdown\""),
+            "{case}: {html}"
+        );
+    }
+}
 
     /// Entities survive: escaped text is not re-interpreted as markup
     /// (`&lt;` stays an entity for `tl`/`decode_entities`).
