@@ -587,6 +587,7 @@ impl HtmlSignalsExt for App {
 }
 
 /// Runs the registered handlers for the signals sent since the last run.
+#[hotpath::measure]
 pub(crate) fn dispatch_signals(
     world: &mut World,
     mut cursor: Local<bevy::ecs::message::MessageCursor<ElementSignal>>,
@@ -623,6 +624,7 @@ pub(crate) fn dispatch_signals(
 /// A `leave` must fire even when the element was despawned in the meantime
 /// (a rebuild under a stationary cursor), so entering snapshots the
 /// element's `leave` bindings and identity for the emit.
+#[hotpath::measure]
 pub(crate) fn hover_signals(
     hover_map: Option<Res<HoverMap>>,
     mut entered: Local<HashMap<PointerId, HashMap<Entity, Hovering>>>,
@@ -757,6 +759,7 @@ pub struct PseudoState {
 /// and the pressed entities: an element is hovered while the pointer is
 /// over it or any descendant, and active while a press started on it or a
 /// descendant (like CSS).
+#[hotpath::measure]
 pub(crate) fn update_pseudo_states(
     hover_map: Option<Res<HoverMap>>,
     interactions: Query<(Entity, &PickingInteraction)>,

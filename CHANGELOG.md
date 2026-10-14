@@ -9,6 +9,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Added
+- `hotpath`, `hotpath-alloc`, `hotpath-prometheus` and `hotpath-cloud`
+  cargo features: [hotpath](https://hotpath.rs) profiling of bevy_markup's
+  systems (template render, localization, build, cascade lookups, signals,
+  focus, anchors). Enable `bevy_markup/hotpath` and add `#[hotpath::main]`
+  to your `main` for a timing report on exit. Off by default; without the
+  features the instrumentation compiles to nothing.
 - The crate docs list every cargo feature (`text-input`, `hot-reload`,
   `fuzzing`, `dev-tools`); only `system_fonts` was documented.
 - `maxlength` on `<input type="text">` maps to the widget's

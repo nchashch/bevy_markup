@@ -345,6 +345,7 @@ type ScopeRoot = (
 );
 
 /// Gives exactly the focusable elements in scope `AutoDirectionalNavigation`.
+#[hotpath::measure]
 fn sync_navigation(
     roots_in_scope: Query<ScopeRoot, (With<HtmlUi>, Without<HtmlNoFocus>)>,
     elements: Query<(Entity, Has<AutoDirectionalNavigation>), With<Focusable>>,
@@ -379,6 +380,7 @@ fn sync_navigation(
 /// is left alone; focus on something that isn't UI — Bevy's input dispatch
 /// focuses the primary window at startup — counts as none (bug_0022). With
 /// nothing focusable in scope, focus on a markup element is cleared.
+#[hotpath::measure]
 fn repair_focus(
     mut focus: ResMut<InputFocus>,
     memory: Res<FocusMemory>,

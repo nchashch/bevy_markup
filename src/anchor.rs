@@ -84,6 +84,7 @@ type Overlay = (
 
 /// Places every [`HtmlAnchor`]ed node beside its element, or despawns it
 /// with its element.
+#[hotpath::measure]
 pub(crate) fn place_anchored(
     mut overlays: Query<Overlay>,
     elements: Query<(
@@ -278,6 +279,7 @@ type WorldOverlay = (
 
 /// Places every [`HtmlWorldAnchor`]ed root over its target, or despawns it
 /// with its target.
+#[hotpath::measure]
 pub(crate) fn place_world_anchored(
     mut overlays: Query<WorldOverlay>,
     targets: Query<(&GlobalTransform, Option<&InheritedVisibility>)>,

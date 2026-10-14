@@ -57,8 +57,13 @@ Re-exported crates (their types appear in the API): `tera`, `tl` (the
 `astral-tl` fork, bug_0019 / UPSTREAM.md U11),
 `fluent`, `lightningcss`. Cargo features: `system_fonts` (Bevy's
 `system_font_discovery`), `text-input` (the editable-text widget),
-`hot-reload` (the file watcher), `fuzzing` (the fuzz harness), and
-`dev-tools` (the examples' QA surface).
+`hot-reload` (the file watcher), `fuzzing` (the fuzz harness),
+`dev-tools` (the examples' QA surface), and `hotpath` / `hotpath-alloc` /
+`hotpath-prometheus` / `hotpath-cloud` (hotpath profiling: `#[hotpath::measure]`
+on the pipeline systems and hot internals, `#[hotpath::main]` on every
+example's `main`, no-ops without the feature; regression policy in
+`hotpath/policy.toml`; `cargo run --example demo --features hotpath --
+--no-render --exit-after 300` prints a report).
 
 ## Layout
 

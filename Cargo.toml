@@ -39,6 +39,15 @@ text-input = ["bevy/bevy_ui_widgets", "bevy/keyboard"]
 # to `LoadedWithDependencies`/`Modified`). Inert otherwise; the library
 # itself never needs it.
 hot-reload = ["bevy/file_watcher"]
+# Profiling with hotpath (https://hotpath.rs): the pipeline's systems and
+# hot internals are instrumented; every macro is a no-op (and the crate
+# compiles nothing) unless `hotpath` is on. `cargo run --example demo
+# --features hotpath` prints a report on exit; `hotpath-alloc` adds
+# per-function allocations. Never in `default`.
+hotpath = ["hotpath/hotpath"]
+hotpath-alloc = ["hotpath/hotpath-alloc"]
+hotpath-prometheus = ["hotpath/hotpath-prometheus"]
+hotpath-cloud = ["hotpath/hotpath-cloud"]
 
 [dependencies]
 # Only what the library's code uses; the app picks rendering, windowing,
@@ -76,6 +85,9 @@ pulldown-cmark = { version = "0.13.3", default-features = false, features = ["ht
 # pre-convert at bundle load. fluent doesn't re-export it; same version as
 # fluent's, patched below.
 fluent-syntax = "0.11.1"
+# Profiling instrumentation (the `hotpath*` features). Inert without them:
+# no profiling code, no dependencies, macros expand to the plain function.
+hotpath = "0.28"
 # Only for the `fuzzing` harness: `Image::new_fill` needs wgpu texture types,
 # which bevy_image does not re-export.
 wgpu-types = { version = "30.0.1", optional = true }

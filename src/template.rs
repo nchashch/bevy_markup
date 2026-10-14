@@ -295,6 +295,7 @@ fn tera_raw_end(source: &str, after: usize) -> Option<usize> {
     None
 }
 
+#[hotpath::measure]
 pub(crate) fn resolve_references(
     path: &AssetPath<'static>,
     source: &str,
@@ -598,6 +599,7 @@ impl AssetLoader for MarkdownTemplateLoader {
 /// on Markdown too (Tera's default list is `.html`/`.htm`/`.xml` only):
 /// without it, `{{ value }}` in a `.md` template would inject raw text into
 /// the HTML.
+#[hotpath::measure]
 async fn load_template(
     reader: &mut dyn Reader,
     _settings: &(),

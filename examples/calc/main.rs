@@ -20,6 +20,7 @@ use input::{Hotkeys, SettingStep};
 #[path = "../shared/harness.rs"]
 mod harness;
 
+#[hotpath::main]
 fn main() {
     harness::run(
         harness::ExampleWindow {

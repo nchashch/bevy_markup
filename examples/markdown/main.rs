@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 
+#[hotpath::main]
 fn main() {
     harness::run(
         harness::ExampleWindow {

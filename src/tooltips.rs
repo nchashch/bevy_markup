@@ -86,6 +86,7 @@ fn tooltip_of(element: &HtmlElement) -> Option<(TemplateContext, AnchorPlacement
 /// (the nearest one per hovered node), keeps open ones up to date, and
 /// despawns the rest.
 #[allow(clippy::too_many_arguments)]
+#[hotpath::measure]
 pub(crate) fn show_tooltips(
     config: Option<Res<HtmlTooltips>>,
     hover_map: Option<Res<HoverMap>>,

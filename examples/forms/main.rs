@@ -24,6 +24,7 @@ mod input;
 #[path = "../shared/harness.rs"]
 mod harness;
 
+#[hotpath::main]
 fn main() {
     harness::run(
         harness::ExampleWindow {

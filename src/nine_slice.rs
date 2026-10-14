@@ -167,6 +167,7 @@ impl AssetLoader for NineSliceLoader {
 
 /// Applies a style to frames that were just added/changed, or whose style just
 /// (re)loaded.
+#[hotpath::measure]
 pub(crate) fn apply_nine_slices(
     mut commands: Commands,
     mut events: MessageReader<AssetEvent<NineSlice>>,

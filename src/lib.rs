@@ -205,6 +205,12 @@
 //!   semver): internal glue for the fuzz targets in `fuzz/`.
 //! - `dev-tools`: QA only — serves the examples over localhost BRP + MCP so
 //!   agents can playtest them. Never enabled in a shipped build.
+//! - `hotpath`, `hotpath-alloc`, `hotpath-prometheus`, `hotpath-cloud`:
+//!   [hotpath](https://hotpath.rs) profiling of the pipeline's systems
+//!   (render, localize, build, cascade lookups, signals, …). Enable `hotpath`
+//!   on `bevy_markup` *and* put `#[hotpath::main]` on your app's `main` to
+//!   get a report on exit; `hotpath-alloc` adds per-function allocations.
+//!   Without the features the instrumentation compiles to nothing.
 
 use bevy::prelude::*;
 use bevy::ui::UiSystems;

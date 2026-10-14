@@ -538,6 +538,7 @@ impl Styler<'_> {
     /// `element`'s computed style: its declared values (with its `style`
     /// attribute, `inline`) over `inherited`. `pseudo` is the element's
     /// interaction state (`:hover`/`:active`).
+    #[hotpath::measure(impl_type = "Styler")]
     pub(crate) fn style_of(
         &self,
         element: &HtmlElement,
@@ -803,6 +804,7 @@ pub(crate) struct BuildAssets<'w> {
     rem_size: Res<'w, RemSize>,
 }
 
+#[hotpath::measure]
 pub(crate) fn build_html_ui(
     mut commands: Commands,
     mut sheet_events: MessageReader<AssetEvent<Stylesheet>>,
@@ -1682,6 +1684,7 @@ fn transition_color(
 /// style system would have written).
 ///
 /// [`Build`]: HtmlUiSystems::Build
+#[hotpath::measure]
 pub(crate) fn advance_transitions(
     time: Res<Time>,
     mut animated: Query<(
@@ -2459,6 +2462,7 @@ fn same_identity(spec: &NodeSpec, entity: Entity, tree: &Tree) -> bool {
 /// children to process instead of recursing); a level's finalization
 /// (despawn the stale, put the kept ones in order) runs after all the
 /// deeper levels matched, deepest first.
+#[hotpath::measure]
 fn update_children(
     commands: &mut Commands,
     parent: Entity,
@@ -2650,6 +2654,7 @@ fn update_children(
 /// this spec tree and its content is unchanged. App-nested `HtmlUi` roots
 /// are absent from the spec and keep their own state; a mismatching child
 /// count bails (the next full visit repairs it).
+#[hotpath::measure]
 fn refresh_cached_handles(
     commands: &mut Commands,
     entity: Entity,
@@ -3040,6 +3045,7 @@ fn update_spec<'a>(
 /// concrete pixels into the node's fields (the values keep their
 /// placeholders until the first resolution; later builds overwrite the
 /// fresh spec's placeholder each frame until the values are unchanged).
+#[hotpath::measure]
 pub(crate) fn resolve_calc(
     mut sized: Query<(Entity, Option<&ChildOf>, &mut Node, &CalcSized)>,
     boxes: Query<&ComputedNode>,
@@ -3202,6 +3208,7 @@ fn put_marker<C: Component + Default>(entity: &mut EntityWorldMut, set: bool) {
 /// sibling roots too, as Bevy sorts roots by `GlobalZIndex` then `ZIndex`)
 /// and `pointer-events: none` as components. What it no longer declares goes
 /// back to the app's value ([`CssRoot`]).
+#[hotpath::measure]
 fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool, root_size: f32) {
     let state = entity.take::<CssRoot>();
     let Some(current) = entity.get::<Node>().cloned() else {
@@ -3522,6 +3529,7 @@ struct SkeletonPass<'a> {
 /// Pairs the two documents' trees and records which old subtrees are
 /// unchanged (tag, attributes, own text, recursively — translations are
 /// excluded: their content is re-parsed per build).
+#[hotpath::measure]
 fn pair_trees_into(
     old: &tl::VDom,
     fresh: &tl::VDom,
@@ -3832,6 +3840,7 @@ fn warn_overdepth() {
     }
 }
 
+#[hotpath::measure]
 fn collect_items(
     dom: &tl::VDom,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
@@ -4598,6 +4607,7 @@ fn push_image_run(
 /// `width: 100%` of an image-sized container is the CSS cyclic case: it
 /// converges when the container's width comes from elsewhere — a fixed
 /// root or a sibling — and may thrash otherwise).
+#[hotpath::measure]
 pub(crate) fn size_images(
     mut images: Query<(
         &ChildOf,
