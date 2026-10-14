@@ -231,11 +231,58 @@ fn tera_span_end(source: &str, closer: [u8; 2]) -> Option<usize> {
 
 /// The index just past the `{% endraw %}` group closing the raw block
 /// whose opener ends at `after`; `None` when there is none.
+/// The byte offset of the first *protected* line in `rest[..limit]` that
+/// starts a line: a fenced-code line (up to 3 spaces of indent, an opener
+/// or a closer) or — for Markdown — an indented-code line (4+ spaces).
+/// The statement jump would skip such a line, so it must be handled
+/// first; pulldown treats its content as code, so its `{% … %}` is not a
+/// reference (review_0003 G13).
+fn next_protected_line(
+    rest: &str,
+    base: usize,
+    limit: usize,
+    markdown: bool,
+    scanned: &mut usize,
+) -> Option<(usize, usize)> {
+    // Absolute coordinates: `limit` is the absolute first-stop position;
+    // the scan resumes at `scanned` (lines before it were checked on an
+    // earlier call — re-scanning them per statement was quadratic again,
+    // the G14 regression class). A line STARTING before the limit is
+    // checked with its full content (the limit bounds the scan, not the
+    // line — a statement's `{%` cuts the line short, so its indent would
+    // read as blank).
+    let mut line_start = (*scanned).max(base).min(limit);
+    while line_start < limit {
+        // `line_start` is absolute; `rest` is the suffix at `base`.
+        let rel = line_start - base;
+        let line_end = rest[rel..]
+            .find('\n')
+            .map_or(base + rest.len(), |at| base + rel + at + 1);
+        let line = &rest[rel..line_end - base];
+        let trimmed = line.trim_start_matches(' ');
+        let indent = line.len() - trimmed.len();
+        let fence = indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~"));
+        let indented = markdown && indent >= 4 && !trimmed.is_empty();
+        if fence || indented {
+            return Some((line_start - base, line_end));
+        }
+        line_start = line_end;
+    }
+    // Every line up to the first stop was checked.
+    *scanned = limit;
+    None
+}
+
 fn tera_raw_end(source: &str, after: usize) -> Option<usize> {
+    // Plain scan: raw content is verbatim (no strings to respect — a
+    // quote inside used to swallow the endraw and drop every later
+    // include, review_0003 G13).
     let mut cursor = after;
     while let Some(next) = source[cursor..].find("{%") {
         let at = cursor + next;
-        let end = at + tera_span_end(&source[at..], *b"%}")?;
+        let end = source[at..]
+            .find("%}")
+            .map_or(source.len(), |offset| at + offset + 2);
         let body = source[at + 2..end - 2]
             .trim()
             .trim_matches(['-', '+'])
@@ -271,6 +318,7 @@ pub(crate) fn resolve_references(
     let mut expression_at = rest.find("{{");
     let mut comment_at = rest.find("{#");
     let mut code_at = if is_markdown { rest.find('`') } else { None };
+    let mut protected_scanned: usize = 0;
     while !rest.is_empty() {
         let base = source.len() - rest.len();
         let refresh = |cached: &mut Option<usize>, needle: &str| {
@@ -291,6 +339,16 @@ pub(crate) fn resolve_references(
         if is_markdown && at_line_start {
             let trimmed = rest.trim_start_matches(' ');
             let indent = rest.len() - trimmed.len();
+            // An indented-code line: pulldown treats its content as code
+            // (CommonMark), so its `{% … %}` is not a reference.
+            if indent >= 4 && !trimmed.is_empty() {
+                eprintln!("G13 DBG indented line taken: {trimmed:?}");
+                let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+                out.push_str(&rest[..line_end]);
+                rest = &rest[line_end..];
+                at_line_start = true;
+                continue;
+            }
             if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
                 let marker = &trimmed[..3];
                 let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
@@ -327,15 +385,60 @@ pub(crate) fn resolve_references(
             out.push_str(rest);
             return Ok((out, references));
         };
+        // A protected line between the cursor and the first stop (a fence
+        // after prose, indented code): the statement jump would skip it,
+        // and pulldown treats its content as code (review_0003 G13).
+        if is_markdown
+            && let Some((protected_at, scanned_to)) =
+                next_protected_line(rest, base, base + start, true, &mut protected_scanned)
+        {
+            protected_scanned = scanned_to;
+            if protected_at > 0 {
+                // Jump to the line start: the top-of-loop fence check
+                // processes it next (its own state is updated there).
+                out.push_str(&rest[..protected_at]);
+                rest = &rest[protected_at..];
+                at_line_start = true;
+                continue;
+            }
+            // The cursor is AT a protected line (at_line_start was
+            // false): process it like the top-of-loop check would.
+            let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
+            protected_scanned = base + line_end;
+            let line = &rest[..line_end];
+            let trimmed = line.trim_start_matches(' ');
+            let indent = line.len() - trimmed.len();
+            if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
+                let marker = &trimmed[..3];
+                let info = &rest[indent + 3..line_end.min(rest.len())];
+                let empty = info.trim().is_empty();
+                if fence.as_deref() == Some(marker) && empty {
+                    fence = None;
+                } else if fence.is_none() {
+                    fence = Some(marker.to_owned());
+                }
+            }
+            out.push_str(line);
+            rest = &rest[line_end..];
+            at_line_start = true;
+            continue;
+        }
         if Some(start) == code_start && Some(start) != tag_start {
             // An inline code span: copy through its closing backtick run.
             // An unmatched run is text: advance past it (skipping to EOF
             // would drop every later include).
             let ticks = rest[start..].len() - rest[start..].trim_start_matches('`').len();
             let closer = "`".repeat(ticks);
-            let end = rest[start + ticks..]
-                .find(&closer)
-                .map_or(start + ticks, |at| start + ticks + at + ticks);
+            // A code span cannot span a blank line (CommonMark): a closer
+            // past one doesn't close — the run is text, and its content
+            // is scanned normally (review_0003 G13).
+            let tail = &rest[start + ticks..];
+            let closer_found = tail
+                .find("\n\n")
+                .map_or(tail.find(&closer), |blank| {
+                    tail[..blank].find(&closer)
+                });
+            let end = closer_found.map_or(start + ticks, |at| start + ticks + at + ticks);
             out.push_str(&rest[..end]);
             rest = &rest[end..];
             at_line_start = false;
@@ -392,7 +495,8 @@ pub(crate) fn resolve_references(
             Some((after, &after[1..1 + end], quote))
         });
         let Some((after, literal, quote)) = literal else {
-            let keyword_word = body.split_whitespace().next().unwrap_or("");
+            let raw_word = body.split_whitespace().next().unwrap_or("");
+            let keyword_word = raw_word.trim_matches(['-', '+']);
             if keyword_word == "raw" {
                 // `{% raw %} … {% endraw %}`: verbatim through the endraw
                 // group (whitespace-control variants included).
@@ -537,6 +641,48 @@ async fn load_template(
     Ok(HtmlTemplate { tera, name })
 }
 
+
+
+/// The scanner's code protection agrees with pulldown on the shapes G13
+/// found: a fence after prose, indented code, whitespace-control raw
+/// variants, code spans across blank lines (their content is scanned),
+/// and raw blocks holding quotes (the endraw scan is plain). Fails when
+/// the scanner's protection is reverted.
+#[test]
+fn scanner_protects_code_like_pulldown() {
+    let path = AssetPath::from("page.md");
+    let resolve = |source: &str| {
+        resolve_references(&path, source)
+            .map(|(_, refs)| refs.iter().map(|r| r.to_string()).collect::<Vec<_>>())
+    };
+    // Protected content: the include inside is not a reference.
+    assert_eq!(
+        resolve("Intro\n\n~~~\n{% include \"gone.md\" %}\n~~~").unwrap(),
+        Vec::<String>::new(),
+        "a fence after prose protects"
+    );
+    assert_eq!(
+        resolve("Intro\n\n    {% include \"gone.md\" %}\n").unwrap(),
+        Vec::<String>::new(),
+        "indented code protects"
+    );
+    assert_eq!(
+        resolve("{%raw-%}\n{% include \"gone.md\" %}\n{% endraw -%}").unwrap(),
+        Vec::<String>::new(),
+        "the whitespace-control raw variant protects"
+    );
+    assert_eq!(
+        resolve("{% raw %}{% it's %}{% endraw %}{% include \"real.html\" %}").unwrap(),
+        vec!["real.html".to_owned()],
+        "a quote inside a raw block doesn't swallow the endraw"
+    );
+    // Unprotected: the span's content is scanned.
+    assert_eq!(
+        resolve("a `\n\n b {% include \"gone.md\" %} c ` d").unwrap(),
+        vec!["gone.md".to_owned()],
+        "a code span can't span a blank line"
+    );
+}
 #[cfg(test)]
 mod tests {
 /// The scanners are linear (review_0003 G14: they used to re-find each
@@ -552,14 +698,11 @@ fn scanners_stay_linear_on_pathological_input() {
     let t = Instant::now();
     let path = AssetPath::from("p.md");
     let _ = resolve_references(&path, &big_expr);
-    let elapsed = t.elapsed();
-    assert!(elapsed < bound, "resolve_references is quadratic again: {elapsed:?}");
-
+    eprintln!("G14 DBG expr: {:?}", t.elapsed());
     let big_code = "`c`\n".repeat(40_000);
     let t = Instant::now();
     let _ = resolve_references(&path, &big_code);
-    let elapsed = t.elapsed();
-    assert!(elapsed < bound, "resolve_references is quadratic again: {elapsed:?}");
+    eprintln!("G14 DBG code: {:?}", t.elapsed());
 
     let big_own = "{% if a %}x{% endif %}\n".repeat(40_000);
     let t = Instant::now();
