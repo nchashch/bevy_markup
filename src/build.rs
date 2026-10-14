@@ -1212,7 +1212,23 @@ pub(crate) fn build_html_ui(
                         pass.as_ref(),
                     );
                     // The fresh names weren't in the recorded hash; the
-                    // next context change must restyle.
+                    // next context change must restyle. A reuse build's
+                    // fresh set is missing the reused subtrees' names
+                    // (their scan is skipped) — assigning it would force
+                    // a spurious restyle, whose full set differs again
+                    // and forces a second one (review_0003 G27): union
+                    // with the previous set instead. A name that an edit
+                    // removed lingers until the next full rebuild resets
+                    // the set — the worst case is one harmless
+                    // over-restyle on a context change of a dead name.
+                    let inline_vars =
+                        if pass.as_ref().is_some_and(|pass| pass.reused.get() > 0) {
+                            let mut merged = inline_vars;
+                            merged.extend(rebuild.inline_vars.iter().cloned());
+                            merged
+                        } else {
+                            inline_vars
+                        };
                     if rebuild.inline_vars != inline_vars {
                         rebuild.inline_vars = inline_vars;
                         rebuild.vars = 0;

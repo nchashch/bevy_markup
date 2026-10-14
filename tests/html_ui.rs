@@ -675,6 +675,81 @@ fn reuse_keeps_a_bare_span_when_a_sibling_changes() {
     assert!(reused.dump().contains("\"2\""), "the span's content stayed");
 }
 
+/// A content change with reuse and an inline `var()` elsewhere costs no
+/// spurious restyles: a reuse build's fresh scan misses the reused
+/// subtree's inline names, and assigning that smaller set forced two
+/// full restyles per change (review_0003 G27). The union keeps the
+/// names, so one content change is one build.
+#[test]
+fn reuse_with_inline_vars_forces_no_extra_restyles() {
+    #[derive(Resource, Default, Debug)]
+    struct Events {
+        built: usize,
+        restyled: usize,
+    }
+    let files = [
+        (
+            "page.html",
+            r#"<div style="color: var(--c)"><p>one</p><p>two</p><p>three</p></div><p>{{ n }}</p>"#,
+        ),
+        ("style.css", "html { color: #ffffff }"),
+    ];
+    let spawn = |name: &str| {
+        TestUi::new(name, &files)
+            .stylesheet("style.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new().with("--c", &"#ff0000").with("n", &1),
+                Node::default(),
+            )
+    };
+    let mut reused = spawn("inline-var-reuse-reused");
+    let mut fresh = spawn("inline-var-reuse-fresh");
+    reused.settle();
+    fresh.settle();
+    reused.world_mut().init_resource::<Events>();
+    reused.world_mut().add_observer(
+        |_: On<bevy_markup::prelude::HtmlUiBuilt>, mut events: ResMut<Events>| events.built += 1,
+    );
+    reused.world_mut().add_observer(
+        |_: On<bevy_markup::prelude::HtmlUiRestyled>, mut events: ResMut<Events>| {
+            events.restyled += 1
+        },
+    );
+    // One content change: one build, at most one restyle (the reverted
+    // union produced built +1 restyled +2 per change).
+    *reused.world_mut().resource_mut::<Events>() = Events::default();
+    for ui in [&mut reused, &mut fresh] {
+        let root = ui.root();
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("n", &2);
+    }
+    reused.settle();
+    fresh.settle();
+    let events = reused.world_mut().resource::<Events>();
+    assert!(
+        events.restyled <= 1,
+        "spurious restyles: built={} restyled={}",
+        events.built,
+        events.restyled
+    );
+    assert_eq!(reused.dump(), fresh.dump());
+    // The inline var still tracks its context value across changes.
+    for ui in [&mut reused, &mut fresh] {
+        let root = ui.root();
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("--c", &"#00ff00");
+    }
+    reused.settle();
+    fresh.settle();
+    assert!(reused.dump().contains("#00ff00"), "inline var restyles");
+    assert_eq!(reused.dump(), fresh.dump());
+}
+
 /// A style change that lands while the debug outline is shown is not
 /// lost: outline builds leave the skeleton frozen, and consuming the
 /// pending-style bit there let the outline-removal build reuse the
@@ -872,7 +947,7 @@ html-ui
 fn style_changes_restyle_in_place_unless_the_shape_changes() {
     #[derive(Component)]
     struct Wired;
-    #[derive(Resource, Default)]
+    #[derive(Resource, Default, Debug)]
     struct Events {
         built: usize,
         restyled: usize,
