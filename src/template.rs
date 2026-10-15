@@ -105,18 +105,102 @@ impl HtmlDocument {
     }
 }
 
-/// `tl` leaves character references as written. Undo the ones Tera's HTML
-/// autoescaping produces, so text and attribute values read as authored.
+/// `tl` leaves character references as written. Decode the named (WHATWG's
+/// table, semicolon forms — ADR 0027) and numeric ones, so text and
+/// attribute values read as authored. One level: a decoded `&` is not
+/// re-scanned (`&amp;lt;` reads back `&lt;`); an unknown reference is kept
+/// verbatim, as in a browser.
+#[path = "entity_data.rs"]
+mod entity_data;
+
 pub(crate) fn decode_entities(text: &str) -> String {
     if !text.contains('&') {
         return text.to_owned();
     }
-    text.replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < text.len() {
+        if !text[at..].starts_with('&') {
+            let character = text[at..].chars().next().expect("at a char boundary");
+            out.push(character);
+            at += character.len_utf8();
+            continue;
+        }
+        // Numeric: decimal or hex, terminated by `;`. Invalid code points
+        // (0, surrogates, past the top) read U+FFFD, and the C1 controls
+        // read their Windows-1252 replacements (HTML §13.4's table).
+        let numeric = text[at..]
+            .strip_prefix("&#x")
+            .or_else(|| text[at..].strip_prefix("&#X"))
+            .and_then(|rest| terminated_digits(rest, 16, 1, 8, 3))
+            .or_else(|| text[at..].strip_prefix("&#").and_then(|rest| terminated_digits(rest, 10, 1, 10, 2)));
+        if let Some((consumed, code)) = numeric {
+            let code = match code {
+                0x00 => 0xFFFD,
+                0x80..=0x9F => u32::from(C1_REPLACEMENTS[(code - 0x80) as usize]),
+                code => code,
+            };
+            out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+            at += consumed;
+            continue;
+        }
+        // Named: the longest `&name;` in the table wins.
+        let limit = text.len().min(at + entity_data::MAX_REFERENCE);
+        let mut decoded = false;
+        for end in (at + 3..=limit).rev() {
+            // Byte-level: `end - 1` may land inside a multi-byte char.
+            if text.as_bytes()[end - 1] != b';' {
+                continue;
+            }
+            let name = &text[at + 1..end];
+            match entity_data::ENTITIES.binary_search_by(|(known, _)| (*known).cmp(name)) {
+                Ok(index) => {
+                    for code in entity_data::ENTITIES[index].1 {
+                        out.push(char::from_u32(*code).expect("a table code point"));
+                    }
+                    at = end;
+                    decoded = true;
+                    break;
+                }
+                // Keep going: a shorter name may still match (the
+                // longest-match rule).
+                Err(_) => continue,
+            }
+        }
+        if !decoded {
+            out.push('&');
+            at += 1;
+        }
+    }
+    out
 }
+
+/// The digits up to the reference's `;`: `(consumed including the `;`,
+/// value)`, or `None` without the terminator, past the digit bound, or
+/// non-parsing (the reference stays verbatim).
+fn terminated_digits(
+    rest: &str,
+    radix: u32,
+    min: usize,
+    max: usize,
+    prefix: usize,
+) -> Option<(usize, u32)> {
+    let digits = rest.split(';').next()?;
+    rest.get(digits.len()..)?.starts_with(';').then_some(())?;
+    (digits.len() >= min && digits.len() <= max).then_some(())?;
+    // The consumed span includes the terminator and the `&#`/`&#x`
+    // prefix (the caller's `at` still sits on the `&`).
+    Some((digits.len() + 1 + prefix, u32::from_str_radix(digits, radix).ok()?))
+}
+
+/// The C1 controls' Windows-1252 replacements, indexed from 0x80.
+#[rustfmt::skip]
+static C1_REPLACEMENTS: &[u16] = &[
+    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+    0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
+];
 
 /// Parses an attribute's JSON (`data-l10n-args`, `data-with`,
 /// `data-tooltip-args`), accepting what Tera prints for a map. The docs
@@ -847,15 +931,38 @@ fn scanners_stay_linear_on_pathological_input() {
         assert_eq!(decode_entities("&amp;quot;&amp;#39;"), "&quot;&#39;");
     }
 
-    /// References outside the five (named, numeric, malformed) and bare `&`
-    /// are left as written (documented limit), never mangled into a
-    /// partial decode such as `&amp;nbsp;` → `&nbsp;` → something else.
+    /// Known references decode (ADR 0027); unknown, unterminated, or
+    /// non-semicolon legacy ones stay verbatim, as in a browser; and the
+    /// one-level rule keeps a partial decode from re-decoding
+    /// (`&amp;nbsp;` reads `&nbsp;`, not the space).
     #[test]
-    fn other_references_are_left_alone() {
-        for text in [
-            "&nbsp;", "&#169;", "&#x3C;", "&copy;", "a & b", "&lt", "&;", "&#39",
+    fn other_references_decode_or_stay_verbatim() {
+        for (text, expected) in [
+            ("&nbsp;", "\u{a0}"),
+            ("&#169;", "©"),
+            ("&#x3C;", "<"),
+            ("&copy;", "©"),
+            ("&NotEqualTilde;", "\u{2242}\u{338}"), // two code points
+            ("a & b", "a & b"),
+            // The legacy non-`;` aliases are unsupported (the table holds
+            // the semicolon forms only).
+            ("&lt", "&lt"),
+            ("&nbsp", "&nbsp"),
+            ("&;", "&;"),
+            // Unterminated numerics stay verbatim.
+            ("&#39", "&#39"),
+            // Invalid code points read U+FFFD (0, surrogates, past the top).
+            ("&#0;", "\u{FFFD}"),
+            ("&#xD800;", "\u{FFFD}"),
+            ("&#x110000;", "\u{FFFD}"),
+            // The C1 controls read their Windows-1252 replacements
+            // (0x97 = U+2014, 0x92 = U+2019).
+            ("&#151;", "\u{2014}"),
+            ("&#146;", "\u{2019}"),
+            // One level: a decoded `&` is not re-scanned.
+            ("&amp;lt;", "&lt;"),
         ] {
-            assert_eq!(decode_entities(text), text);
+            assert_eq!(decode_entities(text), expected);
         }
     }
 

@@ -6478,3 +6478,25 @@ html-ui
 "#,
     );
 }
+
+/// ADR 0027's entity decoding through the real pipeline: named, numeric,
+/// the one-level rule and an unknown reference.
+#[test]
+fn entities_decode_through_the_pipeline() {
+    let mut ui = TestUi::new(
+        "entities",
+        &[(
+            "page.html",
+            "<p>A &mdash; B &amp;lt; C &#169; &#x2603; &nbsp; &notareal; end</p>",
+        )],
+    );
+    let mut ui = ui
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let dump = ui.dump();
+    assert!(
+        dump.contains("\"A — B &lt; C © ☃ \\u{a0} &notareal; end\""),
+        "decoded: {dump}"
+    );
+}
