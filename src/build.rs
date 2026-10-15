@@ -1413,16 +1413,17 @@ pub(crate) fn build_html_ui(
                     // content-pairing utility (a scoped pseudo restyle
                     // reuses most of the page; a sheet-driven one reuses
                     // nothing by design) — a restyle pass preserves the
-                    // content path's adaptive state instead of striking.
+                    // content path's adaptive state (useful *and* strike)
+                    // instead of striking.
                     let content_build = matches!(decision, Decision::Build(_));
-                    let useful = content_build
-                        && pass.reused.get() > 0
+                    let content_useful = pass.reused.get() > 0
                         && pass.reused.get() * 2 >= total;
+                    let useful = if content_build { content_useful } else { previous_useful };
                     // A useless retry backs the next one off; a useful one
                     // (or the first) restores the short cadence.
                     let strike = if !content_build {
                         previous_strike
-                    } else if useful {
+                    } else if content_useful {
                         0
                     } else {
                         previous_strike + 1
@@ -3705,6 +3706,15 @@ impl Skeleton {
     #[doc(hidden)]
     pub fn document_source(&self) -> Option<&str> {
         self.document.as_ref().map(|document| document.source())
+    }
+
+    /// The adaptive-retry state as `(useful, strike)`: a restyle pass must
+    /// preserve it (a full-page restyle's zero reuse says nothing about
+    /// content-pairing utility — ADR 0029). Exposed for the guards; not
+    /// covered by semver.
+    #[doc(hidden)]
+    pub fn pairing_health(&self) -> (bool, u8) {
+        (self.useful, self.strike)
     }
 }
 

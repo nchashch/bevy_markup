@@ -20,6 +20,7 @@ use bevy::asset::AssetEvent;
 use bevy::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use bevy_markup::prelude::*;
+use bevy_markup::Skeleton;
 
 // ---------------------------------------------------------------------------
 // Vectors
@@ -6038,4 +6039,365 @@ fn update_without_finish_drives_the_focus_systems() {
     })
     .expect("HtmlFocus's navigator validated without finish()");
     app.update();
+}
+
+// ADR 0029: scoped interaction restyles. Every scoped restyle must equal
+// a fresh build of the same state; the twins below force the reference
+// with a content bump (a content build carrying a style change reuses
+// nothing — the pre-scoping path).
+
+/// The shared setup: a page whose `{{ n }}`/`data-bump` lets the twin
+/// force a full rebuild without changing the dump.
+fn scoped_flip_pair(
+    name: &str,
+    page: &str,
+    css: &str,
+    context: TemplateContext,
+) -> (TestUi, TestUi) {
+    let mut target = TestUi::new(name, &[("page.html", page), ("style.css", css)])
+        .stylesheet("style.css")
+        .spawn("page.html", context.clone(), Node::default());
+    target.settle();
+    let mut fresh = TestUi::new(
+        &format!("{name}-fresh"),
+        &[("page.html", page), ("style.css", css)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", context, Node::default());
+    fresh.settle();
+    (target, fresh)
+}
+
+fn bump_target(ui: &mut TestUi, step: u32) {
+    let root = ui.root();
+    let world = ui.world_mut();
+    world.get_mut::<TemplateContext>(root).unwrap().insert("n", &step);
+    ui.settle();
+}
+
+/// A flip on an element no pseudo-referencing selector could match
+/// restyles nothing: the flip re-collects the element (it is on the flip's
+/// path), its fresh style equals the cached one, and the dump is
+/// unchanged.
+#[test]
+fn flip_on_an_unreactive_element_changes_nothing() {
+    let page = r#"<div data-bump="{{ n }}"><p id="plain">Text</p></div>"#;
+    let mut ui = TestUi::new(
+        "scoped-unreactive",
+        &[("page.html", page), ("style.css", "p { color: #ffffff }")],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new().with("n", &0), Node::default());
+    ui.settle();
+    let before = ui.dump();
+    let root = ui.root();
+    let plain = element_by_id(ui.world_mut(), root, "plain");
+    ui.world_mut().entity_mut(plain).insert(PseudoState {
+        hovered: true,
+        ..default()
+    });
+    ui.settle();
+    assert_eq!(ui.dump(), before, "an unreactive flip restyles nothing");
+}
+
+/// A `var()` change is a full-page restyle under the scoping: every row
+/// recolors, matching a fresh build (the vars' consumers are unknown, so
+/// nothing reuses — but the result must be right).
+#[test]
+fn var_change_restyles_everything_under_scoping() {
+    let page = r#"<div class="hot" id="hot"><p>hot</p></div>
+        {% for i in rows %}<div class="row" data-bump="{{ n }}"><p style="color: var(--c)">row {{ i }}</p></div>{% endfor %}"#;
+    let css = "html { --c: #ff0000 } .hot:hover { color: #00ff00 }";
+    let context = || TemplateContext::new().with("--c", &"#ff0000").with("rows", &[0, 1, 2]).with("n", &0);
+    let (mut target, mut fresh) = scoped_flip_pair("scoped-var", page, css, context());
+    let before = target.dump();
+
+    // The var change on the target, the same change plus a bump on the
+    // fresh twin (which forces its full rebuild).
+    let root = target.root();
+    target
+        .world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--c", &"#00ff00");
+    target.settle();
+    let root = fresh.root();
+    fresh
+        .world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("--c", &"#00ff00");
+    bump_target(&mut fresh, 1);
+    assert!(before.contains("#ff0000"), "the rows started red");
+    assert!(target.dump().contains("#00ff00"), "the var recolored the rows");
+    assert_eq!(target.dump(), fresh.dump(), "the var restyle matches fresh");
+}
+
+/// A flip and a content change in one frame: the content build carries
+/// the style change and reuses nothing (style_pending), and the dump
+/// matches a fresh twin — the flipped element's state survives the
+/// re-render (the flip's handle numbering moved with the new document).
+#[test]
+fn flip_and_content_change_in_one_frame() {
+    let page = r#"<div class="hot" id="hot"><p>hot {{ n }}</p></div>
+        <p>plain {{ n }}</p>"#;
+    let css = ".hot:hover { color: #00ff00 }";
+    let (mut target, mut fresh) =
+        scoped_flip_pair("scoped-flip-content", page, css, TemplateContext::new().with("n", &0));
+    let hot = {
+        let root = target.root();
+        element_by_id(target.world_mut(), root, "hot")
+    };
+    // The flip and the content change land in the same frame.
+    let root = target.root();
+    target.world_mut().entity_mut(hot).insert(PseudoState {
+        hovered: true,
+        ..default()
+    });
+    target
+        .world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &1);
+    target.settle();
+    // The twin: the same flip, then the same content change (its own
+    // flip lands first, scoped; the bump then forces the full rebuild).
+    let fhot = {
+        let froot = fresh.root();
+        element_by_id(fresh.world_mut(), froot, "hot")
+    };
+    fresh.world_mut().entity_mut(fhot).insert(PseudoState {
+        hovered: true,
+        ..default()
+    });
+    fresh.settle();
+    bump_target(&mut fresh, 1);
+    assert!(target.dump().contains("\"hot 1\" default 16px #00ff00"), "{})", target.dump());
+    assert_eq!(target.dump(), fresh.dump(), "the held flip matches fresh");
+}
+
+/// Focus restyles are scoped too: `:focus-visible` marks the focused
+/// element in place, moving focus moves the mark, and clearing focus
+/// restores the start — each step matching a fresh twin.
+#[test]
+fn focus_restyles_scoped() {
+    let page = r#"<div id="a" tabindex="0"><p>A</p></div>
+        <div id="b" tabindex="0"><p>B</p></div>"#;
+    let css = "div:focus-visible { background-color: #111111 }";
+    let (mut target, mut fresh) =
+        scoped_flip_pair("scoped-focus", page, css, TemplateContext::new());
+    let start = target.dump();
+    let mark = |ui: &mut TestUi, id: &str| {
+        let root = ui.root();
+        let entity = element_by_id(ui.world_mut(), root, id);
+        ui.world_mut()
+            .resource_mut::<bevy::input_focus::InputFocus>()
+            .set(entity, bevy::input_focus::FocusCause::Navigated);
+        ui.world_mut()
+            .resource_mut::<bevy::input_focus::InputFocusVisible>()
+            .0 = true;
+        ui.settle();
+    };
+    mark(&mut target, "a");
+    mark(&mut fresh, "a");
+    let marked = target.dump();
+    assert!(marked.contains("div#a focus bg=#111111"), "a marked: {marked}");
+    assert_eq!(marked, fresh.dump(), "the focus restyle matches fresh");
+    mark(&mut target, "b");
+    mark(&mut fresh, "b");
+    let after = target.dump();
+    assert_eq!(after, fresh.dump(), "the moved focus matches fresh");
+    assert!(
+        after.contains("div#a focus") && !after.contains("div#a focus bg"),
+        "a unmarked: {after}"
+    );
+    assert!(after.contains("div#b focus bg=#111111"), "b marked: {after}");
+    // Hiding the focus mark restores the start (clearing focus itself
+    // would only trigger the repair system: headless, nothing took it
+    // back, so focus is restored to a focusable immediately).
+    for ui in [&mut target, &mut fresh] {
+        ui.world_mut()
+            .resource_mut::<bevy::input_focus::InputFocusVisible>()
+            .0 = false;
+        ui.settle();
+    }
+    assert_eq!(target.dump(), start, "the hidden mark restored the start");
+    assert_eq!(target.dump(), fresh.dump());
+}
+
+/// A flip on a *link span* (the run inside a block): the block's
+/// reactivity covers its runs' inline elements, so the span's color
+/// restyles without the block's own state moving.
+#[test]
+fn link_span_flip_restyles_its_block() {
+    use bevy::ecs::system::RunSystemOnce;
+    let page = r#"<p data-bump="{{ n }}">See <a href="https://example.test" id="link">the link</a> now</p>"#;
+    let css = "a:hover { color: #ff0000 }";
+    let (mut target, mut fresh) =
+        scoped_flip_pair("scoped-link", page, css, TemplateContext::new().with("n", &0));
+    let flip_span = |ui: &mut TestUi, hovered: bool| {
+        // The link's span, via `HtmlElements::by_tag` (the links example's
+        // own discovery path).
+        use bevy::ecs::system::RunSystemOnce;
+        let root = ui.root();
+        let span = ui
+            .world_mut()
+            .run_system_once(
+                move |elements: HtmlElements| {
+                    elements.by_tag(root, "a").next().expect("the link span")
+                },
+            )
+            .expect("span lookup");
+        ui.world_mut().entity_mut(span).insert(PseudoState {
+            hovered,
+            ..default()
+        });
+        ui.settle();
+    };
+    flip_span(&mut target, true);
+    // The twin: the same flip (a scoped restyle), then a content change
+    // to force the full rebuild — its fresh collection reads the state.
+    let root = fresh.root();
+    let fspan = fresh
+        .world_mut()
+        .run_system_once(
+            move |elements: HtmlElements| {
+                elements.by_tag(root, "a").next().expect("the link span")
+            },
+        )
+        .expect("span lookup");
+    fresh.world_mut().entity_mut(fspan).insert(PseudoState {
+        hovered: true,
+        ..default()
+    });
+    bump_target(&mut fresh, 1);
+    let target_dump = target.dump();
+    assert!(
+        target_dump.contains("\"the link\" default 16px #ff0000"),
+        "the link restyled: {target_dump}"
+    );
+    assert_eq!(target_dump, fresh.dump(), "the span flip matches fresh");
+}
+
+/// An ancestor-keyed rule two levels up: the flip on the padded root
+/// restyles the deep label through the chain (`.pad:hover .mid .label`).
+#[test]
+fn deep_ancestor_rule_restyles_the_chain() {
+    let page = r#"<div class="pad" id="pad">
+        <div class="mid"><p class="label" id="deep">deep</p></div>
+    </div>"#;
+    let css = ".pad { padding: 24px } .pad:hover .mid .label { color: #00ff00 }";
+    let mut ui = TestUi::new(
+        "scoped-deep",
+        &[("page.html", page), ("style.css", css)],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let before = ui.dump();
+    let root = ui.root();
+    let pad = element_by_id(ui.world_mut(), root, "pad");
+    let rect = node_rect(ui.world_mut(), pad).expect("laid out");
+    let at = Vec2::new((rect.min.x + rect.max.x) / 2.0, rect.min.y + 4.0);
+    let _ = at;
+    // Flip the pad directly (no picking needed: the state is app-writable).
+    ui.world_mut().entity_mut(pad).insert(PseudoState {
+        hovered: true,
+        ..default()
+    });
+    ui.settle();
+    let after = ui.dump();
+    assert_ne!(after, before, "the flip restyled the chain");
+    assert!(after.contains("\"deep\" default 16px #00ff00"), "{after}");
+}
+
+/// Restyles preserve the skeleton's pairing health: flips and var storms
+/// never strike the content pairing out (ADR 0029's accounting rule) —
+/// after the storm, the next content change still pairs (and the dump is
+/// right).
+#[test]
+fn restyle_storms_keep_the_pairing_healthy() {
+    let page = r#"<div class="hot" id="hot" data-bump="{{ n }}"><p>hot</p></div>
+        {% for i in rows %}<div class="row"><p>row {{ i }}</p></div>{% endfor %}"#;
+    let css = "html { --c: #ff0000 } .hot:hover { color: #00ff00 }";
+    let mut ui = TestUi::new(
+        "scoped-storm",
+        &[("page.html", page), ("style.css", css)],
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("--c", &"#ff0000").with("rows", &[0, 1, 2]).with("n", &0),
+        Node::default(),
+    );
+    ui.settle();
+    let root = ui.root();
+    let hot = element_by_id(ui.world_mut(), root, "hot");
+    // Twenty flips and two var changes: every one of them a restyle.
+    for i in 0..20 {
+        ui.world_mut().entity_mut(hot).insert(PseudoState {
+            hovered: i % 2 == 0,
+            ..default()
+        });
+        if i % 10 == 9 {
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("--c", &if i % 20 == 9 { "#00ff00" } else { "#ff0000" });
+        }
+        ui.settle_quiet();
+    }
+    let (_, strike) = ui
+        .world_mut()
+        .get::<Skeleton>(root)
+        .expect("skeleton")
+        .pairing_health();
+    assert_eq!(strike, 0, "restyles never strike the content pairing out");
+    // And a content change still pairs: the bump rebuilds cleanly.
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &7);
+    ui.settle();
+    assert!(ui.dump().contains("\"hot\""), "the content rebuilt: {}", ui.dump());
+    let (useful, strike) = ui
+        .world_mut()
+        .get::<Skeleton>(root)
+        .expect("skeleton")
+        .pairing_health();
+    assert!(useful, "the content pairing stayed useful");
+    assert_eq!(strike, 0, "the useful build reset the strikes");
+}
+
+/// A flip landing while a stylesheet loads: the Wait defers both the swap
+/// and the flip, and the build that finally runs carries both — the new
+/// sheet's style over the hovered state.
+#[test]
+fn flip_during_a_stylesheet_wait_applies_with_the_sheet() {
+    let mut ui = TestUi::new(
+        "scoped-wait",
+        &[
+            ("page.html", r#"<div class="hot" id="hot"><p>hot</p></div>"#),
+            ("a.css", "html { color: #ffffff } .hot:hover { color: #00ff00 }"),
+            ("b.css", "html { color: #ffffff } .hot { font-size: 20px } .hot:hover { color: #00ff00 }"),
+        ],
+    )
+    .stylesheet("a.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let root = ui.root();
+    let hot = element_by_id(ui.world_mut(), root, "hot");
+    // The swap (a fresh load) and the flip land in the same frame.
+    let b = ui.load::<Stylesheet>("b.css");
+    ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b);
+    ui.world_mut().entity_mut(hot).insert(PseudoState {
+        hovered: true,
+        ..default()
+    });
+    ui.settle();
+    let dump = ui.dump();
+    assert!(
+        dump.contains("\"hot\" default 20px #00ff00"),
+        "the sheet and the flip applied together: {dump}"
+    );
 }
