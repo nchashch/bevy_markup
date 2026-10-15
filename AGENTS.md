@@ -1373,6 +1373,10 @@ check its entries and drop workarounds upstream has made unnecessary.
 
 ## Limits and next steps
 
+The remaining authoring gaps and the order to close them in are the
+roadmap ADR: `docs/agents/adr/0028-modern-authoring-gaps-roadmap.md` —
+add new gap items there, not here.
+
 Known limits (each skipped/ignored value is logged at `debug`, except
 `text-align`/`line-height`/`letter-spacing`, which have no arm at all and
 are silently ignored):

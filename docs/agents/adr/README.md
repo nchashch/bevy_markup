@@ -43,5 +43,7 @@ as `[INFERENCE]`.
 | [0024](./0024-tera-block-indentation-is-not-markdown.md) | Indentation inside Tera blocks is not Markdown | Accepted |
 | [0025](./0025-html-container-indentation-is-not-markdown.md) | Indentation inside raw HTML containers is not Markdown | Accepted |
 | [0026](./0026-disable-indented-code-blocks.md) | Disable indented code blocks in Markdown (fenced code only) | Proposed |
+| [0027](./0027-text-properties-lists-overflow-entities.md) | Add the missing text properties, list numbering, scroll-if-needed and full entity decoding | Proposed |
+| [0028](./0028-modern-authoring-gaps-roadmap.md) | Modern authoring gaps: what to add next (roadmap) | Proposed |
 
 Add new records to this index in the same commit that adds the file.
