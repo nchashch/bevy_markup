@@ -9,7 +9,9 @@ Whole-crate review sessions are filed in
 (their verdicts + new defects `F01`–`F43`),
 [review_0003](../reviews/review_0003.md) (the fix session's audit + new
 defects `G01`–`G44`) and [review_0004](../reviews/review_0004.md) (the
-G fix session's audit + new defects `H01`–`H10`). A finding gets its
+G fix session's audit + new defects `H01`–`H10`), and
+[review_0005](../reviews/review_0005.md) (the ADR 0027–0029 work: new
+defects `I01`–`I15`). A finding gets its
 own `bug_NNNN.md` here when its fix lands.
 
 The crate was called `p23` until 2026-10-05 and is now `bevy_markup`; the
