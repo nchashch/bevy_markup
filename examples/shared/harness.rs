@@ -43,6 +43,10 @@ pub struct ExampleWindow {
     /// navigation, Enter / A activation); default on. Off for an example
     /// that binds those inputs itself — both bindings would act on one press.
     pub shared_input: bool,
+    /// Runs on the empty `App`, before any plugin: what must exist before
+    /// `AssetPlugin` (an extra asset source, as the testbench's in-memory
+    /// `testbench://` one). Default: nothing.
+    pub before_plugins: fn(&mut App),
 }
 
 impl Default for ExampleWindow {
@@ -51,6 +55,7 @@ impl Default for ExampleWindow {
             title: "",
             resolution: (1280, 720),
             shared_input: true,
+            before_plugins: |_| {},
         }
     }
 }
@@ -69,6 +74,7 @@ pub fn run(window: ExampleWindow, setup: impl FnOnce(&mut App)) {
     let no_render = flag("--no-render", "BEVY_MARKUP_NO_RENDER");
     let headless = no_render || flag("--offscreen", "BEVY_MARKUP_OFFSCREEN");
     let mut app = App::new();
+    (window.before_plugins)(&mut app);
     if headless && !no_render {
         // Offscreen-rendered headless: full `DefaultPlugins` minus winit —
         // `ScheduleRunnerPlugin` drives the frame loop, and every camera

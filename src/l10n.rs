@@ -750,12 +750,12 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
     cache
 }
 
-#[allow(clippy::needless_continue)]
 /// `inert`: string values are also made inert for a Markdown conversion
 /// (`inert_markdown`, the per-value path).
+#[allow(clippy::needless_continue)]
 fn parse_args(json: &str, inert: bool) -> Result<FluentArgs<'static>, String> {
-    let serde_json::Value::Object(map) =
-        serde_json::from_str(json).map_err(|err| err.to_string())?
+    let serde_json::Value::Object(map) = crate::template::parse_attribute_json(json)
+        .map_err(|err| err.to_string())?
     else {
         return Err("expected a JSON object".to_owned());
     };

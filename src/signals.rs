@@ -173,7 +173,7 @@ pub(crate) fn signal_bindings(tag: &tl::HTMLTag) -> Vec<SignalBinding> {
             payload = match attributes.get("data-with").flatten() {
                 Some(value) => {
                     let json = decode_entities(&value.as_utf8_str());
-                    match serde_json::from_str(&json) {
+                    match crate::template::parse_attribute_json(&json) {
                         Ok(payload) => payload,
                         Err(error) => {
                             debug!("html signals: invalid data-with JSON ({error}): {json:?}");

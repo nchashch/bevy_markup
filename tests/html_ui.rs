@@ -527,6 +527,52 @@ html-ui
     assert!(server.load_state(remote_bundle.id()).is_failed());
 }
 
+/// Values Tera prints with Rust escapes still localize: inside a map,
+/// Tera writes non-printable and combining characters as `\u{…}` and NUL
+/// as `\0`, which JSON rejects — a player name with a family emoji (zero-
+/// width joiners) or a decomposed accent fell back to the element's own
+/// content (bug_0128, found by the testbench). Both the cached and the
+/// per-value Markdown paths.
+#[test]
+fn tera_escaped_values_still_localize() {
+    for (index, name) in [
+        "Ada \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+        "Jose\u{301}",
+        "bell\u{7}",
+        "nul\u{0}",
+        "private \u{f73c}b",
+        "slash \\u{41} stays text",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut ui = TestUi::new(
+            &format!("tera-escapes-{index}"),
+            &[
+                (
+                    "page.html",
+                    r#"<p data-l10n-id="sel" data-l10n-args='{{ {"n": 2, "who": who} }}'>FALLBACK</p><p data-l10n-id="hi" data-l10n-args='{{ {"who": who} }}'>FALLBACK</p>"#,
+                ),
+                (
+                    "locales/en-US/main.ftl.ron",
+                    r#"(locale: "en-US", resources: ["ui.ftl"], markdown: true)"#,
+                ),
+                (
+                    "locales/en-US/ui.ftl",
+                    "sel =\n    { $n ->\n        [one] { $who } found one\n       *[other] { $who } found { $n }\n    }\nhi = Hello { $who }!\n",
+                ),
+            ],
+        )
+        .locale("locales/en-US/main.ftl.ron")
+        .spawn("page.html", TemplateContext::new().with("who", name), Node::default());
+        let dump = ui.settle().dump();
+        assert!(!dump.contains("FALLBACK"), "{name:?}: {dump}");
+        // The visible part of the name survives.
+        let visible: String = name.chars().filter(|c| c.is_alphanumeric()).take(3).collect();
+        assert!(dump.contains(&visible), "{name:?}: {dump}");
+    }
+}
+
 /// `data-l10n-args` built by Tera as a map literal is JSON with its
 /// strings escaped: a value can't add arguments (review_0003 G20 — the
 /// documented `'{"name": "{{ player }}"}'` splice let a name holding `"`

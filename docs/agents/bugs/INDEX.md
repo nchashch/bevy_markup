@@ -154,6 +154,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0125](bug_0125.md) | Example unit tests (grid-names) never ran | `Cargo.toml`, CI | low | fixed (uncommitted) | review_0003 (R64) |
 | [bug_0126](bug_0126.md) | Indented Tera block bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0024) | review_0004 (H11) |
 | [bug_0127](bug_0127.md) | Indented raw HTML container bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0025) | ADR 0024's open item |
+| [bug_0128](bug_0128.md) | Tera-printed args with emoji or combining marks fell back to the untranslated content | `src/template.rs` (+ l10n, signals, tooltips) | high | fixed (uncommitted) | testbench example (`hostile-args`) |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -323,7 +324,8 @@ settle (rebuild observed) and the resulting dump to match a reference model.
   `glm-5.3-flash`), bug_0106–bug_0111 (H02–H05, H07, H08),
   bug_0112–bug_0125 (G-series and F25/R64 findings review_0003 left
   open), bug_0126 (H11, decided by the user: dedent, ADR 0024), bug_0127 (the
-  same for HTML containers, ADR 0025); bug_0088–bug_0095 written retroactively (H06).
+  same for HTML containers, ADR 0025), bug_0128 (found by the new testbench
+  example); bug_0088–bug_0095 written retroactively (H06).
 - **Discovery and fix agent:** Claude Code session, `claude-opus-5-5`
   (same model for review and fixes). Each fix's regression test was
   checked by reverting exactly that fix and watching the test fail,

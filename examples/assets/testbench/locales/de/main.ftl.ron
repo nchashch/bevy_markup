@@ -1,0 +1,10 @@
+(
+    locale: "de",
+    resources: [
+        "shell.ftl",
+        "workload.ftl",
+    ],
+    // The localized workload exercises the Markdown paths (cached and
+    // per value); the shell's strings are plain text either way.
+    markdown: true,
+)

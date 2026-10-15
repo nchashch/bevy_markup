@@ -1,0 +1,54 @@
+{# The testbench shell: the scenario list, the controls, the live numbers
+   and the checks. The workload UIs are spawned into the stage element
+   (`is="stage"`), which the shell keeps across its own updates (it has an
+   id), so they survive the shell's re-renders. #}
+<html class="bench">
+<div class="sidebar">
+  <h1 data-l10n-id="tb-title">Testbench</h1>
+  {% for group in groups %}
+  <h2 data-l10n-id="tb-group-{{ group.id }}">{{ group.id }}</h2>
+  {% for id in group.scenarios %}
+  <div class="opt{% if id == active %} active{% endif %}" id="sc-{{ id }}" data-on-click="scenario" data-with='{{ {"id": id} }}'{% if id == active %} autofocus{% endif %}>
+    <p data-l10n-id="tb-sc-{{ id }}">{{ id }}</p>
+  </div>
+  {% endfor %}
+  {% endfor %}
+</div>
+
+<div class="panel">
+  <div class="controls">
+    <div class="button" id="size-down" tabindex="0" data-on-click="size-down"><p>−</p></div>
+    <div class="value" id="size" tabindex="0" data-setting="size">
+      <p data-l10n-id="tb-size" data-l10n-args='{{ {"size": size} }}'>Size {{ size }}</p>
+    </div>
+    <div class="button" id="size-up" tabindex="0" data-on-click="size-up"><p>+</p></div>
+    <div class="button{% if churn %} on{% endif %}" id="churn" tabindex="0" data-on-click="churn">
+      <p data-l10n-id="tb-churn" data-l10n-args='{{ {"on": churn} }}'>Churn {{ churn }}</p>
+    </div>
+    <div class="button" id="restart" tabindex="0" data-on-click="restart">
+      <p data-l10n-id="tb-restart">Restart</p>
+    </div>
+    <div class="button" id="language" tabindex="0" data-on-click="language">
+      <p data-l10n-id="tb-language">Language</p>
+    </div>
+  </div>
+
+  <p class="desc" data-l10n-id="tb-desc-{{ active }}">{{ active }}</p>
+
+  <div class="stats">
+    <p data-l10n-id="tb-stat-frame" data-l10n-args='{{ {"avg": stats.avg_ms, "max": stats.max_ms, "fps": stats.fps} }}'>{{ stats.avg_ms }} ms</p>
+    <p data-l10n-id="tb-stat-updates" data-l10n-args='{{ {"builds": stats.builds, "restyles": stats.restyles} }}'>{{ stats.builds }} / {{ stats.restyles }}</p>
+    <p data-l10n-id="tb-stat-size" data-l10n-args='{{ {"uis": stats.uis, "elements": stats.elements} }}'>{{ stats.uis }} / {{ stats.elements }}</p>
+  </div>
+
+  <div class="checks">
+    {% for check in checks %}
+    <p class="check {{ check.state }}" data-l10n-id="tb-check-{{ check.id }}" data-l10n-args='{{ {"state": check.state, "detail": check.detail} }}'>{{ check.id }}: {{ check.state }}</p>
+    {% endfor %}
+  </div>
+
+  <div class="stage{% if row %} row{% endif %}" id="stage" is="stage"></div>
+
+  <p class="hint" data-l10n-id="tb-hint">N / P or LB / RB: scenario · − / + or [ / ]: size · C / X: churn · R / Select: restart · L / Y: language</p>
+</div>
+</html>

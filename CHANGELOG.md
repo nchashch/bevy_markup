@@ -9,6 +9,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Added
+- **`testbench` example:** an interactive torture bench for performance,
+  security and correctness — generated workloads (large and churning
+  documents, restyle storms, Markdown, Fluent, many UIs, `calc()`), the
+  pathological inputs past fixes guard against, and live comparisons of a
+  churned UI with a fresh build — with pass/fail checks, and per-function
+  timing in the real frame loop under `--features hotpath`.
 - `hotpath`, `hotpath-alloc`, `hotpath-prometheus` and `hotpath-cloud`
   cargo features: [hotpath](https://hotpath.rs) profiling of bevy_markup's
   systems (template render, localization, build, cascade lookups, signals,
@@ -74,6 +80,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   the other known input types build no field.
 
 ### Fixed
+- **A player name with an emoji sequence or a combining accent lost its
+  translation:** `data-l10n-args` built by Tera (`'{{ {"name": player} }}'`
+  or `'{{ args }}'`) carries Tera's `\u{…}` escapes for such characters,
+  which aren't JSON, so the element showed its fallback. Those escapes (and
+  in `data-with` and `data-tooltip-args`) are now accepted.
 - **A stylesheet with a few KB of nested rules aborted the app** at load
   (`a { a { …` — lightningcss's parser recurses per block); deep nesting
   of any bracket kind now fails the sheet's load like unparseable CSS.

@@ -118,6 +118,69 @@ pub(crate) fn decode_entities(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
+/// Parses an attribute's JSON (`data-l10n-args`, `data-with`,
+/// `data-tooltip-args`), accepting what Tera prints for a map. The docs
+/// build these attributes with Tera map literals
+/// (`'{{ {"name": player} }}'`), and Tera prints a map's strings with
+/// Rust's `Debug` escaping: `\u{200d}` for a zero-width joiner or a
+/// combining accent, `\u{1}` for a control character, `\0` for NUL — none
+/// of them JSON. A player name with a family emoji lost its whole
+/// translation to the fallback (found by the testbench, bug_0128). Those
+/// two escapes become JSON's `\uXXXX` (surrogate pairs above U+FFFF);
+/// everything else is parsed as written.
+pub(crate) fn parse_attribute_json(text: &str) -> serde_json::Result<serde_json::Value> {
+    serde_json::from_str(&json_from_tera(text))
+}
+
+/// [`parse_attribute_json`]'s rewrite of Rust `Debug` escapes.
+fn json_from_tera(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("\\u{") && !text.contains("\\0") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'\\' {
+            match bytes.get(at + 1) {
+                Some(b'u') if bytes.get(at + 2) == Some(&b'{') => {
+                    let escape = text[at + 3..]
+                        .find('}')
+                        .and_then(|close| {
+                            let code = u32::from_str_radix(&text[at + 3..at + 3 + close], 16).ok()?;
+                            Some((char::from_u32(code)?, close))
+                        });
+                    if let Some((character, close)) = escape {
+                        let mut units = [0u16; 2];
+                        for unit in character.encode_utf16(&mut units) {
+                            out.push_str(&format!("\\u{unit:04x}"));
+                        }
+                        at += 3 + close + 1;
+                        continue;
+                    }
+                }
+                Some(b'0') => {
+                    out.push_str("\\u0000");
+                    at += 2;
+                    continue;
+                }
+                // Any other escape pair is kept whole, so an escaped
+                // backslash can't start a rewrite (`\\u{` is text).
+                Some(next) if next.is_ascii() => {
+                    out.push_str(&text[at..at + 2]);
+                    at += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        let character = text[at..].chars().next().expect("at a char boundary");
+        out.push(character);
+        at += character.len_utf8();
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// `err: source: source…` — Tera puts the useful detail in the sources.
 pub(crate) fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
     let mut message = err.to_string();
@@ -544,6 +607,19 @@ fn remote_includes_are_refused() {
     let (_, references) =
         resolve_references(&path, r#"{% include "embedded://crate/part.html" %}"#).unwrap();
     assert_eq!(references[0].to_string(), "embedded://crate/part.html");
+}
+
+/// Tera's `Debug` escapes become JSON escapes; an escaped backslash
+/// before `u{` stays text; plain JSON passes through untouched.
+#[test]
+fn attribute_json_accepts_tera_escapes() {
+    let parsed = |text: &str| parse_attribute_json(text).map(|value| value["v"].clone());
+    assert_eq!(parsed(r#"{"v": "a\u{200d}b"}"#).unwrap(), "a\u{200d}b");
+    assert_eq!(parsed(r#"{"v": "\u{1F468}"}"#).unwrap(), "\u{1F468}");
+    assert_eq!(parsed(r#"{"v": "x\0y"}"#).unwrap(), "x\0y");
+    assert_eq!(parsed(r#"{"v": "\\u{41}"}"#).unwrap(), "\\u{41}");
+    assert_eq!(parsed(r#"{"v": "\u00e9 \"q\" \n"}"#).unwrap(), "\u{e9} \"q\" \n");
+    assert!(parse_attribute_json(r#"{"v": "\u{zz}"}"#).is_err());
 }
 
 /// The scanner's code protection is pulldown's: the shapes the

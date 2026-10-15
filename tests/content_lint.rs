@@ -183,8 +183,37 @@ fn forms_contexts() -> Vec<Value> {
     ]
 }
 
-/// `examples/grid-names/main.rs`: the board's picks (nothing checked,
-/// everything checked) and the supply list.
+/// `examples/testbench/main.rs` `show_shell`: every scenario's check ids
+/// in each state, both stage layouts, churn on and off.
+fn testbench_contexts() -> Vec<Value> {
+    let groups = json!([
+        { "id": "perf", "scenarios": ["big-document", "all-dirty", "restyle-storm", "markdown", "localized", "many-uis", "calc-layout"] },
+        { "id": "security", "scenarios": ["nested-rules", "deep-dom", "var-bombs", "grid-bombs", "hostile-args", "args-injection", "remote-sources", "markdown-bombs"] },
+        { "id": "correctness", "scenarios": ["reuse-vs-fresh", "indent-vs-flat"] },
+    ]);
+    let stats = json!({ "avg_ms": "16.7", "max_ms": "33.2", "fps": "60", "builds": 60, "restyles": 0, "uis": 1, "elements": 2040 });
+    let checks = |state: &str| {
+        json!([
+            "budget", "built", "survived", "sheet-refused", "no-forged", "no-fallback", "map-literal",
+            "include-refused", "border-skipped", "twins",
+        ]
+        .iter()
+        .map(|id| json!({ "id": id, "state": state, "detail": "(12 / 0)" }))
+        .collect::<Vec<_>>())
+    };
+    ["big-document", "nested-rules", "indent-vs-flat"]
+        .iter()
+        .zip(["wait", "pass", "fail"])
+        .zip([false, false, true])
+        .map(|((active, state), row)| {
+            json!({
+                "groups": groups, "active": active, "size": 500, "churn": !row, "row": row,
+                "stats": stats, "checks": checks(state),
+            })
+        })
+        .collect()
+}
+
 /// `examples/calc/main.rs`: the steppers at their defaults, their
 /// minimum and their maximum (the calc() formulas change with them).
 fn calc_contexts() -> Vec<Value> {
@@ -201,6 +230,8 @@ fn calc_contexts() -> Vec<Value> {
     ]
 }
 
+/// `examples/grid-names/main.rs`: the board's picks (nothing checked,
+/// everything checked) and the supply list.
 fn grid_names_contexts() -> Vec<Value> {
     vec![
         json!({
@@ -473,6 +504,13 @@ const PAGES: &[Page] = &[
         contexts: grid_names_contexts,
         stylesheets: &["grid-names/style.css"],
         locales: "grid-names/locales",
+        unlocalized: None,
+    },
+    Page {
+        template: "testbench/shell.html",
+        contexts: testbench_contexts,
+        stylesheets: &["testbench/style.css"],
+        locales: "testbench/locales",
         unlocalized: None,
     },
     Page {

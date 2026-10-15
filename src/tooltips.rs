@@ -66,7 +66,7 @@ fn tooltip_of(element: &HtmlElement) -> Option<(TemplateContext, AnchorPlacement
     let key = element.data("tooltip")?;
     let args = element
         .data("tooltip-args")
-        .and_then(|json| serde_json::from_str::<Value>(json).ok())
+        .and_then(|json| crate::template::parse_attribute_json(json).ok())
         .filter(Value::is_object)
         .unwrap_or_else(|| Value::Object(Default::default()));
     let (placement, name) = match element.data("tooltip-placement") {

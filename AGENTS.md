@@ -145,6 +145,8 @@ examples/
                    into the harness's offscreen texture: real screenshots
                    without a window). Headless exists because a windowed
                    run stops ticking when its window is unfocused
+                   (`ExampleWindow::before_plugins` runs on the empty `App` — what must
+                   exist before `AssetPlugin`, e.g. the testbench's asset source)
   quickstart/      fonts, DefaultStylesheet, ActiveLocale, one HtmlUi, two `data-on-click`
                    buttons (add a coin, language) in a column, with an inline minimal `navigate` (arrows / D-pad, all four directions,
                    Enter / A; kept self-contained); Space / Y = language
@@ -241,6 +243,19 @@ examples/
                    the context and Tera `{% if submitted %}` swaps the form
                    for a receipt; "edit again" clears it; Space / Y =
                    language
+  testbench/       main.rs + scenarios.rs: an interactive torture bench (scenario list,
+                   size, churn, live frame/build numbers, pass/fail checks). Workloads are
+                   generated into an in-memory asset source (`testbench://`, a `Dir` +
+                   `MemoryAssetReader` registered through `ExampleWindow::before_plugins`,
+                   i.e. before `AssetPlugin`) and spawned as nested `HtmlUi`s in the shell's
+                   `is="stage"` element (an app node there would be reconciled away).
+                   Groups: performance (big document, all dirty, restyle storm, indented
+                   Markdown, localized rows, many UIs, calc()), security (nested rules,
+                   deep DOM, var()/grid/Markdown bombs, hostile args, args-JSON injection,
+                   remote sources), correctness (reuse vs a fresh build of the same state
+                   every 20 frames; indented vs flat Markdown). `--scenario <id> --size <n>
+                   --no-churn` pin a run; checks log `testbench: final …` on exit;
+                   `#[hotpath::measure]` on its systems + the library's for profiling
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    `is="content-slot"` viewports filled once per slot, contexts),
                    controls.rs (language/theme selection; L / Y, T / X hotkeys), consts.rs (fonts);
@@ -362,6 +377,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   inputs/          profile.html, style.css (input + focus ring), locales/{en-US,de}
   links/           report.html, style.css (a:hover/:focus-visible), locales/{en-US,de}
   forms/           signup.html, style.css, locales/{en-US,de}
+  testbench/       shell.html, style.css, locales/{en-US,de} (`markdown: true`: shell.ftl +
+                   workload.ftl, the generated workloads' messages)
   shared/          reused across examples: components.html (Tera 2 component
                    library: `ui.button`; unstyled — the including page's
                    stylesheet styles its classes), images: frame.png (256x256
@@ -783,7 +800,11 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `decode_entities`) and drops `<!DOCTYPE>`.
 - Tera 2 (not 1.x): unknown functions/filters fail at template *compile* time,
   so custom ones must be registered in the loader before `add_raw_template`.
-  Tera prints maps as `{"k": v}` (valid JSON except control characters).
+  Tera prints maps as `{"k": v}` with Rust `Debug` string escaping: valid
+  JSON except `\u{…}` (control, combining, zero-width and private-use
+  characters) and `\0`. Attribute JSON (`data-l10n-args`, `data-with`,
+  `data-tooltip-args`) goes through `template::parse_attribute_json`, which
+  rewrites those two escapes (bug_0128: an emoji name lost its translation).
 - Fluent wraps placeables in U+2068/U+2069; the bundle is shared behind an
   `Arc`, so `l10n.rs` strips them. Fluent term arguments only accept literals;
   message references share the caller's variables.

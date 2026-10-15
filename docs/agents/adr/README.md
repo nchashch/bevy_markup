@@ -42,5 +42,6 @@ as `[INFERENCE]`.
 | [0023](./0023-maxlength-maps-to-max-characters.md) | `maxlength` maps to the widget's `max_characters` | Accepted |
 | [0024](./0024-tera-block-indentation-is-not-markdown.md) | Indentation inside Tera blocks is not Markdown | Accepted |
 | [0025](./0025-html-container-indentation-is-not-markdown.md) | Indentation inside raw HTML containers is not Markdown | Accepted |
+| [0026](./0026-disable-indented-code-blocks.md) | Disable indented code blocks in Markdown (fenced code only) | Proposed |
 
 Add new records to this index in the same commit that adds the file.

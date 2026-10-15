@@ -37,6 +37,12 @@ examples bind the input (`shared/input.rs`).
 | <img src="screenshots/world.png" width="240"> | [`world`](world/) — `cargo run --example world`<br><br>Styled, localized nameplates over walking 3D units (`HtmlWorldAnchor`), with distance fade and HUD buttons over the 3D scene. |
 | <img src="screenshots/demo.png" width="240"> | [`demo`](demo/) — `cargo run --example demo`<br><br>Every feature at once: themes and languages, scrolling panels with styled scrollbars, DOM outlines, 9-slice frames, per-theme chrome — the big one, also the agent/QA playground with `--features dev-tools`. |
 
+## Testing and profiling
+
+| | Example |
+|---|---|
+| <img src="screenshots/testbench.png" width="240"> | [`testbench`](testbench/) — `cargo run --release --example testbench --features hotpath`<br><br>An interactive torture bench: performance workloads (large and churning documents, restyle storms, Markdown, Fluent, many UIs, `calc()`), security inputs that once crashed or injected, and live correctness comparisons (reuse vs a fresh build, indented vs flat Markdown), each with pass/fail checks; with `hotpath`, per-function timing in the real frame loop (`hotpath console` for the live view). |
+
 ## Shared code
 
 - `shared/input.rs` — `ExampleInputPlugin`: arrows / D-pad / left stick move
