@@ -1541,6 +1541,15 @@ impl<'a> HtmlStyles<'a> {
         let mut variables: HashMap<String, TokenList<'static>> = HashMap::default();
         for (order, rule) in sheet.rules.0.iter().enumerate() {
             let CssRule::Style(rule) = rule else {
+                // ADR 0028: an `@font-face` rule (or any other at-rule) is
+                // skipped with a note — the crate's fonts come from the
+                // `FontFamilies` resource, and a copied web stylesheet
+                // must not fail its whole load over one.
+                if matches!(rule, CssRule::FontFace(_)) {
+                    debug!(
+                        "html css: @font-face is a no-op (register the family in the                          `FontFamilies` resource instead)"
+                    );
+                }
                 continue;
             };
             // Custom properties (`--x: …`) are sheet-level here, whatever

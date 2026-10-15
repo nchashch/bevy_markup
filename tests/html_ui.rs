@@ -6623,3 +6623,35 @@ fn remote_background_images_are_refused() {
         "the remote background skipped: {dump}"
     );
 }
+
+/// ADR 0028: a copied web stylesheet's `@font-face` rules don't fail the
+/// sheet's load — the style rules apply, the face registration is the
+/// `FontFamilies` resource's job.
+#[test]
+fn font_face_rules_are_a_noop() {
+    let mut ui = TestUi::new(
+        "font-face",
+        &[
+            (
+                "page.html",
+                r#"<p class="fancy">Fancy text</p>"#,
+            ),
+            (
+                "style.css",
+                "@font-face { font-family: \"Fancy\"; src: url(fancy.woff2) } \
+                 p { color: #ff00ff } .fancy { font-family: \"Fancy\", serif }",
+            ),
+        ],
+    );
+    let mut ui = ui
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let dump = ui.dump();
+    // The sheet loaded (the color applied) and the unknown family fell
+    // back to the registered/default font without failing anything.
+    assert!(
+        dump.contains("\"Fancy text\" default 16px #ff00ff"),
+        "the sheet applied: {dump}"
+    );
+}
