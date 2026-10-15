@@ -1,0 +1,5 @@
+html { color: #ffffff }
+.none { list-style-type: none }
+li.circle { list-style-type: circle }
+li.square { list-style-type: square }
+li.num { list-style-type: decimal }

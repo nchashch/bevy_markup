@@ -6431,3 +6431,50 @@ html-ui
 "#,
     );
 }
+
+/// ADR 0027's list markers: the `li`'s marker comes from its own computed
+/// `list-style-type` (own declarations beat the inherited list's), an
+/// `ol` numbers its items, and a nested list restarts the count.
+#[test]
+fn lists_vector() {
+    let mut ui = TestUi::from_vector("lists");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  ul
+    li margin=0,0,0,12
+      "• " default 16px #ffffff
+      "one" default 16px #ffffff
+    li margin=0,0,0,12
+      "• " default 16px #ffffff
+      "two" default 16px #ffffff
+  ol
+    li margin=0,0,0,12
+      "1. " default 16px #ffffff
+      "first" default 16px #ffffff
+    li margin=0,0,0,12
+      "2. " default 16px #ffffff
+      "second" default 16px #ffffff
+    li margin=0,0,0,12
+      "3. " default 16px #ffffff
+      "third" default 16px #ffffff
+  ol
+    li margin=0,0,0,12
+      "1. " default 16px #ffffff
+      "again" default 16px #ffffff
+  ul.none
+    li margin=0,0,0,12
+      "bare" default 16px #ffffff
+  ul
+    li.circle margin=0,0,0,12
+      "◦ " default 16px #ffffff
+      "circled" default 16px #ffffff
+    li.square margin=0,0,0,12
+      "▪ " default 16px #ffffff
+      "squared" default 16px #ffffff
+    li.num margin=0,0,0,12
+      "3. " default 16px #ffffff
+      "numbered" default 16px #ffffff
+"#,
+    );
+}

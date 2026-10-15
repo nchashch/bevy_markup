@@ -63,8 +63,10 @@ pub(crate) struct Style {
     pub(crate) line_height: LineHeightSpec,
     /// `letter-spacing` (ADR 0027), resolved to pixels, inherited.
     pub(crate) letter_spacing: f32,
-    /// `list-style-type` (ADR 0027), inherited; inert outside list items.
-    pub(crate) list_style: ListStyleSpec,
+    /// `list-style-type` (ADR 0027), inherited; `None` = nothing on the
+    /// chain declared it (the tag's UA-sheet default applies at the
+    /// marker). Inert outside list items.
+    pub(crate) list_style: Option<ListStyleSpec>,
 }
 
 /// `color` with its alpha scaled by `opacity`.
@@ -239,6 +241,10 @@ struct Block {
     /// or its content — an interaction flip on it or an ancestor may
     /// change its style.
     pseudo_reactive: bool,
+    /// ADR 0027: the `li`'s marker text (its own computed
+    /// `list-style-type` with the parent's counter); `None` for non-list
+    /// blocks.
+    marker: Option<String>,
     boxed: BoxStyle,
     runs: Vec<Run>,
 }
@@ -642,7 +648,7 @@ impl Styler<'_> {
                 spec => spec,
             },
             letter_spacing,
-            list_style: declared.list_style.unwrap_or(inherited.list_style),
+            list_style: declared.list_style.or(inherited.list_style),
         }
     }
 
@@ -845,7 +851,7 @@ pub(crate) fn root_style(
         align: TextAlignSpec::Left,
         line_height: LineHeightSpec::Normal,
         letter_spacing: 0.0,
-        list_style: ListStyleSpec::Disc,
+        list_style: None,
     };
     Styler {
         styles,
@@ -1324,6 +1330,7 @@ pub(crate) fn build_html_ui(
                 // The outline's own style: `pre` with `Pseudo::default()`
                 // — no interaction state restyles it (ADR 0029).
                 pseudo_reactive: false,
+                marker: None,
             })]
         } else {
             match &*rendered {
@@ -1381,6 +1388,7 @@ pub(crate) fn build_html_ui(
                     // A failed render's error paragraph never restyles
                     // with an interaction state (ADR 0029).
                     pseudo_reactive: false,
+                    marker: None,
                     boxed: BoxStyle::default(),
                 })],
             }
@@ -1628,8 +1636,8 @@ struct NodeSpec {
 }
 
 struct TextSpec {
-    /// Before the spans, in the block's own style (the `li` bullet).
-    prefix: &'static str,
+    /// Before the spans, in the block's own style (the `li` marker).
+    prefix: String,
     font: TextFont,
     color: Color,
     no_wrap: bool,
@@ -1687,7 +1695,7 @@ impl NodeSpec {
                 align: TextAlignSpec::Left,
                 line_height: LineHeightSpec::Normal,
                 letter_spacing: 0.0,
-                list_style: ListStyleSpec::Disc,
+                list_style: None,
             },
             pseudo_reactive: false,
             background: None,
@@ -2364,10 +2372,7 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
         ..default()
     };
     let text = TextSpec {
-        prefix: match block.kind {
-            BlockKind::ListItem => "• ",
-            _ => "",
-        },
+        prefix: block.marker.clone().unwrap_or_default(),
         font: styler.text_font(&block.style),
         color: faded(block.style.color, block.style.opacity),
         no_wrap: matches!(block.kind, BlockKind::Preformatted),
@@ -2680,7 +2685,7 @@ fn spawn_attached(
     );
     if let Some(text) = &spec.text {
         entity.insert((
-            Text::new(text.prefix),
+            Text::new(text.prefix.clone()),
             text.font.clone(),
             TextColor(text.color),
         ));
@@ -3145,7 +3150,7 @@ fn update_spec<'a>(
         TextLayout::default()
     }
     .with_justify(text.justify);
-    let (prefix, color) = (text.prefix, text.color);
+    let (prefix, color) = (text.prefix.clone(), text.color);
     let font = text.font.clone();
     let line_height = text.line_height;
     let letter_spacing = text.letter_spacing;
@@ -4267,6 +4272,14 @@ fn collect_node(
             /// node re-decides reuse from its cached spec's
             /// `pseudo_reactive`.
             ancestor_flipped: bool,
+            /// ADR 0027: the node's 1-based position among its parent's
+            /// `li` children (`None` for anything that isn't an `li`):
+            /// the marker's number comes from the parent list's counter.
+            li_index: Option<usize>,
+            /// ADR 0027: the parent's tag-default list type (`ol` numbers,
+            /// `ul` uses `disc`) — the `li`'s own computed type wins when
+            /// its chain declared one.
+            list_kind: ListStyleSpec,
         },
         Complete(Box<Open>),
     }
@@ -4281,10 +4294,21 @@ fn collect_node(
         // build that reuses at all has an unchanged root base.
         inherited_changed: false,
         ancestor_flipped: false,
+        li_index: None,
+        list_kind: ListStyleSpec::Disc,
     }];
     while let Some(task) = stack.pop() {
-        let (handle, inherited, chain, grid, depth, inherited_changed, ancestor_flipped) =
-            match task {
+        let (
+            handle,
+            inherited,
+            chain,
+            grid,
+            depth,
+            inherited_changed,
+            ancestor_flipped,
+            li_index,
+            list_kind,
+        ) = match task {
                 Task::Complete(open) => {
                     let Open {
                         element,
@@ -4330,6 +4354,8 @@ fn collect_node(
                     depth,
                     inherited_changed,
                     ancestor_flipped,
+                    li_index,
+                    list_kind,
                 } => (
                     handle,
                     inherited,
@@ -4338,6 +4364,8 @@ fn collect_node(
                     depth,
                     inherited_changed,
                     ancestor_flipped,
+                    li_index,
+                    list_kind,
                 ),
             };
         if depth >= MAX_DOM_DEPTH {
@@ -4374,6 +4402,7 @@ fn collect_node(
                         submit: false,
                         style: inherited.clone(),
                         pseudo_reactive: reactive,
+                        marker: None,
                         boxed: BoxStyle::default(),
                         runs,
                     }));
@@ -4433,6 +4462,8 @@ fn collect_node(
                     depth: depth + 1,
                     inherited_changed,
                     ancestor_flipped,
+                    li_index: None,
+                    list_kind: ListStyleSpec::Disc,
                 });
             }
             continue;
@@ -4495,6 +4526,14 @@ fn collect_node(
         // it) may change on a flip.
         let own_reactive = ctx.styler.pseudo_reactive(&element, &chain);
         let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), &chain);
+        // ADR 0027: the tag's list-marker default for this element's
+        // *children*, before `element` moves into the container's `Open`
+        // (the marker reads the parent's kind, carried by the task — an
+        // `li` recomputing this from its own tag would read `disc`).
+        let child_list_kind = style.list_style.unwrap_or(match element.tag.as_str() {
+            "ol" => ListStyleSpec::Decimal,
+            _ => ListStyleSpec::Disc,
+        });
         // This element's own placement resolves against its parent's grid
         // (named lines and areas); its own template then backs its children's.
         boxed.layout.resolve_names(grid.as_ref());
@@ -4578,6 +4617,7 @@ fn collect_node(
                     submit: false,
                     style: inherited.clone(),
                     pseudo_reactive: reactive,
+                    marker: None,
                     boxed: BoxStyle::default(),
                     runs,
                 }));
@@ -4655,7 +4695,28 @@ fn collect_node(
                     // Reversed: the leftmost child pops first.
                     let children: Vec<tl::NodeHandle> =
                         tag.children().top().iter().copied().collect();
-                    for child in children.into_iter().rev() {
+                    // ADR 0027: the list's marker state (computed above:
+                    // the computed `list-style-type`, with the UA-sheet
+                    // tag default) and each `li` child's 1-based position.
+                    let mut li_count = 0usize;
+                    let indexed: Vec<_> = children
+                        .iter()
+                        .copied()
+                        .map(|child| {
+                            let child_li = matches!(
+                                child.get(ctx.parser),
+                                Some(tl::Node::Tag(tag)) if tag.name().as_utf8_str() == *"li"
+                            );
+                            let index = if child_li {
+                                li_count += 1;
+                                Some(li_count)
+                            } else {
+                                None
+                            };
+                            (child, index)
+                        })
+                        .collect();
+                    for (child, index) in indexed.into_iter().rev() {
                         stack.push(Task::Node {
                             handle: child,
                             inherited: style.clone(),
@@ -4664,6 +4725,8 @@ fn collect_node(
                             depth: depth + 1,
                             inherited_changed: children_inherited_changed,
                             ancestor_flipped: child_ancestor_flipped,
+                            li_index: index,
+                            list_kind: child_list_kind,
                         });
                     }
                 }
@@ -4694,6 +4757,20 @@ fn collect_node(
             child_chain.clone(),
             &mut reactive,
         );
+        // ADR 0027: the `li`'s marker — its own computed
+        // `list-style-type` (an own declaration beats the inherited
+        // list's; `None` falls back to the parent's tag default)
+        // numbered by the parent list's counter.
+        let marker = (kind == BlockKind::ListItem).then(|| {
+            let list_style = style.list_style.unwrap_or(list_kind);
+            match list_style {
+                ListStyleSpec::Disc => "• ".to_owned(),
+                ListStyleSpec::Circle => "◦ ".to_owned(),
+                ListStyleSpec::Square => "▪ ".to_owned(),
+                ListStyleSpec::Decimal => li_index.map_or(String::new(), |n| format!("{n}. ")),
+                ListStyleSpec::None => String::new(),
+            }
+        });
         items.push(Item::Block(Block {
             kind,
             element: Some(element),
@@ -4703,6 +4780,7 @@ fn collect_node(
             custom,
             style,
             pseudo_reactive: reactive,
+            marker,
             submit,
             boxed,
             runs: finish_runs(runs, preformatted),
