@@ -166,8 +166,11 @@ html-ui
     // was in the sheet, falls back to its intrinsic size.
     let plain = ui.load::<Stylesheet>("plain.css");
     ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(plain);
-    ui.settle_quiet();
-    ui.update(10);
+    // The swap rebuilds once the load *fails* (the missing file's error
+    // is the test's vehicle); under full-suite load the io task can
+    // starve past any fixed frame count, so wait for the rebuild like
+    // settle does everywhere else (bug_0129's flake).
+    ui.settle();
     ui.assert_dump(
         r#"
 html-ui
