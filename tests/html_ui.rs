@@ -165,7 +165,6 @@ html-ui
     // components go, the entities stay — and the image, whose CSS width
     // was in the sheet, falls back to its intrinsic size.
     let plain = ui.load::<Stylesheet>("plain.css");
-    let plain_id = plain.id();
     ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(plain);
     // The swap rebuilds once the load *fails* (the missing file's error
     // is the test's vehicle); under full-suite load the io task can
@@ -718,7 +717,6 @@ html-ui border=16,16,16,16 padding=10,10,10,10 slice=frame.png 4,4,4,4 stretch
     );
 
     let plain = ui.load::<Stylesheet>("plain.css");
-    let plain_id = plain.id();
     ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(plain);
     ui.settle().assert_dump(
         r#"
@@ -2015,7 +2013,6 @@ fn root_rule_styles_the_html_ui_entity() {
 
     // A stylesheet without root rules: everything back to the app's.
     let plain = ui.load::<Stylesheet>("plain.css");
-    let plain_id = plain.id();
     ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(plain);
     ui.settle();
     let world = ui.world_mut();
