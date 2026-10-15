@@ -10,7 +10,7 @@
 | Findings | new defects `I01`… (stable ids) |
 | Discovery agent | Claude Code session, `claude-opus-5-5` |
 
-Nothing in this review is fixed yet.
+All findings were fixed in the same day's fix session (uncommitted at writing); see **Fixes** at the end.
 
 ## Coverage — read this first
 
@@ -434,4 +434,70 @@ tests compare results, and a build that reuses nothing gets the same result.
   The mutation run (and `mutants.yml`) builds without `--features
   text-input`, so those lines are never compiled under test. Add a
   text-input pass to the mutation job.
+
+## Fixes (2026-10-15 fix session, same model)
+
+Each fix was checked against its reproduction test (red at `e1a5759`, the
+commit holding the tests, green after). Design: ADR 0030.
+
+| Finding | Bug | Fix |
+|---|---|---|
+| I01 | bug_0132 | the harness passes two element states (none; a middle child with siblings, dataset, focus-within) |
+| I02 | bug_0133 | `AnB::matches` in i64 |
+| I03 | bug_0134 | one `SiblingList` per parent (`Siblings` views + prefix hashes); `sibling_positions` counts once |
+| I04 | bug_0135 | `terminated_digits` reads at most `max + 1` digits |
+| I05 | bug_0136 | a sibling list that changes shape un-cleans its children when the sheet is sibling-dependent |
+| I06 | bug_0137 | the cache key folds in what `SelectorReads` says the sheet reads |
+| I07 | bug_0138 | one matcher (`Compound::test` over a `Subject`) in every position; `Ancestor` carries dataset + `Position` |
+| I08 | bug_0139 | `:not()` tests its argument whole; three-valued wildcarding for the reactivity record |
+| I09 | bug_0140 | `promote_auto_scroll` also runs on `Node`/`AutoScroll` changes; writes only a differing axis |
+| I10 | bug_0141 | removed; `tests/source_lint.rs` |
+| I11 | bug_0142 | `+` coefficient = 1 |
+| I12 | — | the test asserts the start, and runs without picking (bug_0148) |
+| I13 | — | `tests/selector_model.rs`, widened to every part in every position (1 000 cases clean; an ablation fails it) |
+| I14 | — | `review_0005::failed_sheet_swap_during_a_wait_updates_unstyled` |
+| I15 | — | bug_0129 header and INDEX rows corrected; bug_0130/0131 marked committed |
+| I16 | bug_0143 | removed; `library_code_writes_no_files` |
+
+Found while fixing: bug_0144 (`:nth-child(-n+3)` and spaced attribute
+values dropped their rule — the combinator scan split inside arguments),
+bug_0145 (structural pseudo-classes added no specificity), bug_0146
+(`&#+65;` decoded), bug_0147 (inline elements had no sibling list),
+bug_0148 (two flip tests' hand-inserted `PseudoState` was reset by
+picking — the sibling flip test only passed because of I07), bug_0149 (a
+style loader test flaked under load), bug_0150 (content reuse worked
+only for the document's top-level elements since ADR 0029 — a changed
+container wasn't paired, so all its children re-collected; nested
+600-row `changing` 3.61 → 2.21 ms; found by a surviving `pair_node`
+mutant). The mutation audit's dead
+`ElementState` `PartialEq` went with the I03 refactor. Still open from the
+audit: whether `children_inherited_changed`'s style comparison is
+redundant (`build.rs:2553`/`:2722` survive), the `<img>` run's
+reactivity (`build.rs:5446`), and running the mutation job with
+`--features text-input`.
+
+### Mutation run over the fixes
+
+`cargo mutants --in-diff` over the fix session's `src/` diff (unit,
+`html_ui`, `stateful`, `signals`, `selector_model`, `source_lint`): 198
+mutants at first, 25 missed. The survivors led to bug_0150 and the
+attribute half of bug_0144, and to more tests:
+- the x axis of `overflow: auto`;
+- reuse in nested and top-level sibling lists;
+- inline ancestors' position and pseudo-state;
+- `.row:not(:hover) p`;
+- `SelectorReads` per kind;
+- `css_unescape`;
+- `:not(tag)` specificity.
+
+The last run (49 re-tested): 11 missed, all behaviour-neutral:
+- `has_pseudo`/`could_match`/`matches_ignoring_pseudo` → `true` and the
+  reactivity's `+` arm (more re-collection only);
+- the redundant in-quote arms of `compound_end`/`attribute_end`;
+- `promote_auto_scroll`'s x read arm (a redundant write);
+- `terminated_digits`' `max + 1` (an over-long digit run is rejected
+  either way);
+- the `Ancestor` of an unmatched `data-l10n-name` element (`run_walk`'s
+  `None` arm: an empty-tag ancestor — only a `*`/pseudo/structural
+  compound could tell; not covered).
 

@@ -451,7 +451,11 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `full_style` in the pass gate), translated elements never reuse, and an
   all-dirty workload turns the pairing off (retried every 16th build;
   restyle passes preserve the strike counters — their reuse rate says
-  nothing about content-pairing utility). Per sibling list, an element whose `id` is unique among the old *and* new
+  nothing about content-pairing utility). Every tag pair that matches
+  (tag, attributes, child count) is paired even when its subtree changed —
+  the inherited-style gate reads the changed container's cached spec;
+  `clean` alone gates reuse (bug_0150: pairing only clean nodes made
+  every child of a changed container re-collect). Per sibling list, an element whose `id` is unique among the old *and* new
   siblings is matched by it, the rest by position among themselves (a
   duplicated `id` keys nothing — keying it looped: the second copy was
   respawned on every restyle its `PseudoState` triggered). A match with the
@@ -613,8 +617,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `.panel p`, `.panel > p`; ancestors match with their own pseudo-state,
   specificity sums over the compounds, and the per-element match cache folds
   the ancestor chain into its key and memoizes failed (compound, offset)
-  states, so a deep `.b .a×7 p` chain is linear; attribute selectors,
-  sibling combinators, other pseudo-classes skipped at `debug`), plus
+  states, so a deep `.b .a×7 p` chain is linear; `data-*` attribute
+  selectors, `+`/`~` next to the subject and the structural
+  pseudo-classes per the Selectors limit below; other pseudo-classes
+  skipped at `debug`), plus
   `:hover`/`:active`/`:focus`/`:focus-visible`,
   matched per element (`HtmlElement`
   tag/id/classes + `PseudoState`, cached per combination) with CSS
@@ -837,6 +843,12 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   guards and their measured headroom are listed under H09 in review_0004;
   convert one to a scaling test when you touch it.
 - Tests: `TestUi::settle()` demands a new build; for a change that legitimately rebuilds nothing (e.g. a `DefaultStylesheet` swap under a ready own `HtmlStylesheet`) use `settle_quiet()`.
+- Tests: under `TestUi::with_layout`/`with_pointer` (picking on),
+  `update_pseudo_states` rewrites every element's `PseudoState` from the
+  hover map each frame, so a hand-inserted hover lasts one frame. Insert
+  states by hand only under `TestUi::new`, or hover with the pointer and
+  assert the state held (bug_0148: a flip test passed on a hover that
+  never held).
 - API changes that touch `src/fuzz.rs`'s imports (`Styler`, `cascade`) need
   `cargo check --lib --features fuzzing`: the module only compiles under the
   feature, and plain `cargo test`/`check` don't see it (CI runs the
@@ -1447,9 +1459,18 @@ Known limits (each skipped/ignored value is logged at `debug`):
   sums over the compounds), plus the interaction pseudo-classes
   (`:hover`/`:active`/`:focus`/`:focus-visible`, on ancestors too) and
   the sibling combinators (`+`/`~`, ADR 0028: adjacent to the subject; a
-  sibling's interaction flip restyles its following siblings' matches);
-  no attribute selectors, other
-  pseudo-classes or pseudo-elements (a selector with one skips the rule).
+  sibling's interaction flip restyles its following siblings' matches)
+  and the structural pseudo-classes (`:nth-*`, `:first-/last-child`,
+  `-of-type`, `:empty`, `:focus-within`, `:not(compound)` incl.
+  `:not(:hover)`). Every compound matches whole in every position
+  (ADR 0030): ancestors and siblings carry their `data-*` dataset (shared
+  `Rc`), pseudo-state and `Position`, so `[data-m] p`, `li:first-child >
+  span` and `.a:hover + p` read them. The style cache keys on what the
+  sheet's selectors read (`SelectorReads`), and a sibling list that
+  changes shape un-cleans its siblings for the skeleton when the sheet is
+  sibling-dependent. No other pseudo-classes or pseudo-elements, no
+  sibling combinator away from the subject (a selector with one skips
+  the rule).
 - **Properties:** `text-align`/`line-height`/`letter-spacing` and
   `list-style-type` work (ADR 0027); `text-decoration`'s
   `overline`/`blink`/`-thickness`/`-style` are skipped (underline,

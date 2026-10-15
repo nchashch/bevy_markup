@@ -198,9 +198,9 @@ the exact CSS subset.
 
 ### Not built yet
 
-- CSS sibling combinators (`+`, `~`), grid lines/names beyond the
-  template (browsers extend the implicit grid; bevy_markup places those
-  `auto`);
+- grid lines/names beyond the template (browsers extend the implicit
+  grid; bevy_markup places those `auto`); sibling combinators anywhere but
+  next to the subject (`.a + .b p` skips the rule);
 - form controls beyond text fields and buttons (no selects, checkboxes, …);
   Enter-in-a-field doesn't submit a form;
 - scrollbars as a built-in widget (the demo builds its own from HTML and

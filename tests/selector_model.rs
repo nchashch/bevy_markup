@@ -8,9 +8,10 @@
 //! on their left. The rule paints a background; each element's built
 //! background must equal the model's "does the selector match" answer.
 //!
-//! Within the documented limits only: structural pseudo-classes and `:not`
-//! appear on the subject, and the sibling combinators sit next to it (ADR
-//! 0028). The elements carry no ids and repeat their classes, so elements that
+//! Every compound may carry every part — structural pseudo-classes and
+//! `:not` included, in ancestor and sibling positions too (the review_0005
+//! fix). The sibling combinators sit next to the subject (ADR 0028's limit).
+//! The elements carry no ids and repeat their classes, so elements that
 //! differ only in what a selector reads stand side by side (the style cache's
 //! key, I06). Found by this property at `e3646ae`: I06, I07, I08.
 
@@ -76,12 +77,12 @@ struct Compound {
     hover: bool,
     not_hover: bool,
     not_class: Option<&'static str>,
-    /// `first-child`, `last-child` or `nth-child(2)` (subject only).
+    /// `first-child`, `last-child`, `nth-child(2)` or `first-of-type`.
     structural: Option<&'static str>,
 }
 
 impl Compound {
-    fn random(rng: &mut Rng, subject: bool) -> Self {
+    fn random(rng: &mut Rng) -> Self {
         let mut compound = Compound {
             tag: [None, Some("div"), Some("p")][rng.below(3)],
             class: [None, Some("a"), Some("b")][rng.below(3)],
@@ -89,15 +90,19 @@ impl Compound {
             hover: rng.below(5) == 0,
             ..Default::default()
         };
-        if subject {
-            match rng.below(5) {
-                0 => compound.not_hover = true,
-                1 => compound.not_class = Some("a"),
-                _ => {}
-            }
-            compound.structural = [None, None, Some("first-child"), Some("last-child"), Some("nth-child(2)")]
-                [rng.below(5)];
+        match rng.below(5) {
+            0 => compound.not_hover = true,
+            1 => compound.not_class = Some("a"),
+            _ => {}
         }
+        compound.structural = [
+            None,
+            None,
+            Some("first-child"),
+            Some("last-child"),
+            Some("nth-child(2)"),
+            Some("first-of-type"),
+        ][rng.below(6)];
         compound
     }
 
@@ -126,8 +131,9 @@ impl Compound {
         if out.is_empty() { "*".to_owned() } else { out }
     }
 
-    /// `index`/`count`: the 1-based position among the parent's elements.
-    fn matches(&self, el: &El, index: usize, count: usize) -> bool {
+    /// `index`/`count`: the 1-based position among the parent's elements;
+    /// `type_index`: among the same tag.
+    fn matches(&self, el: &El, (index, count, type_index): (usize, usize, usize)) -> bool {
         self.tag.is_none_or(|tag| tag == el.tag)
             && self.class.is_none_or(|class| el.classes.contains(&class))
             && match self.attr {
@@ -141,6 +147,7 @@ impl Compound {
                 None => true,
                 Some("first-child") => index == 1,
                 Some("last-child") => index == count,
+                Some("first-of-type") => type_index == 1,
                 Some(_) => index == 2,
             }
     }
@@ -177,48 +184,61 @@ impl Selector {
     }
 }
 
+/// (index, count, type index) of each of `children`.
+fn positions(children: &[El]) -> Vec<(usize, usize, usize)> {
+    children
+        .iter()
+        .enumerate()
+        .map(|(position, child)| {
+            let type_index = children[..=position].iter().filter(|other| other.tag == child.tag).count();
+            (position + 1, children.len(), type_index)
+        })
+        .collect()
+}
+
+type Pos = (usize, usize, usize);
+
 /// The model's answer per element, in document order (pre-order).
 fn expected(root: &El, selector: &Selector) -> Vec<(&'static str, bool)> {
     let mut out = Vec::new();
-    // (element, index, count, ancestors nearest last, previous siblings)
+    // (element, its position, ancestors nearest last, previous siblings
+    // with their positions)
     fn walk<'a>(
         el: &'a El,
-        index: usize,
-        count: usize,
-        ancestors: &mut Vec<(&'a El, usize, usize)>,
-        previous: &[&'a El],
+        position: Pos,
+        ancestors: &mut Vec<(&'a El, Pos)>,
+        previous: &[(&'a El, Pos)],
         selector: &Selector,
         out: &mut Vec<(&'static str, bool)>,
     ) {
-        let subject = selector.subject.matches(el, index, count);
+        let subject = selector.subject.matches(el, position);
         let matched = subject
             && match &selector.left {
                 None => true,
-                Some((left, Combinator::Descendant)) => ancestors
-                    .iter()
-                    .any(|(ancestor, i, n)| left.matches(ancestor, *i, *n)),
-                Some((left, Combinator::Child)) => ancestors
-                    .last()
-                    .is_some_and(|(parent, i, n)| left.matches(parent, *i, *n)),
-                // Siblings carry no structural part (the left compound has
-                // none), so their positions don't matter here.
+                Some((left, Combinator::Descendant)) => {
+                    ancestors.iter().any(|(ancestor, at)| left.matches(ancestor, *at))
+                }
+                Some((left, Combinator::Child)) => {
+                    ancestors.last().is_some_and(|(parent, at)| left.matches(parent, *at))
+                }
                 Some((left, Combinator::Adjacent)) => {
-                    previous.last().is_some_and(|sibling| left.matches(sibling, 0, 0))
+                    previous.last().is_some_and(|(sibling, at)| left.matches(sibling, *at))
                 }
                 Some((left, Combinator::General)) => {
-                    previous.iter().any(|sibling| left.matches(sibling, 0, 0))
+                    previous.iter().any(|(sibling, at)| left.matches(sibling, *at))
                 }
             };
         out.push((el.tag, matched));
-        ancestors.push((el, index, count));
-        let count = el.children.len();
-        for (position, child) in el.children.iter().enumerate() {
-            let previous: Vec<&El> = el.children[..position].iter().collect();
-            walk(child, position + 1, count, ancestors, &previous, selector, out);
+        ancestors.push((el, position));
+        let child_positions = positions(&el.children);
+        let siblings: Vec<(&El, Pos)> = el.children.iter().zip(child_positions.iter().copied()).collect();
+        for (index, (child, at)) in siblings.iter().enumerate() {
+            walk(child, *at, ancestors, &siblings[..index], selector, out);
         }
         ancestors.pop();
     }
-    walk(root, 1, 1, &mut Vec::new(), &[], selector, &mut out);
+    // The root `div` is the document's only top-level element.
+    walk(root, (1, 1, 1), &mut Vec::new(), &[], selector, &mut out);
     out
 }
 
@@ -263,11 +283,11 @@ fn case(seed: u64) {
         data_m: None,
         children: (0..1 + rng.below(3)).map(|_| element(&mut rng, 1)).collect(),
     };
-    let subject = Compound::random(&mut rng, true);
+    let subject = Compound::random(&mut rng);
     let left = match rng.below(5) {
         0 => None,
         n => Some((
-            Compound::random(&mut rng, false),
+            Compound::random(&mut rng),
             [Combinator::Descendant, Combinator::Child, Combinator::Adjacent, Combinator::General][n - 1],
         )),
     };

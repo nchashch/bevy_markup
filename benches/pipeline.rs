@@ -101,6 +101,19 @@ fn frames(c: &mut Criterion) {
             })
         });
 
+        // Changing, nested: the same inside one container (bug_0150).
+        let nested_files = shared::frame_files(size, "changing-nested");
+        let files = shared::borrowed(&nested_files);
+        let (mut app, root) = bench_app(&files);
+        let mut n = 0_i64;
+        group.bench_function(BenchmarkId::new("changing-nested", size), |b| {
+            b.iter(|| {
+                n += 1;
+                set_n(&mut app, root, n);
+                black_box(app.update())
+            })
+        });
+
         // Rebuilding: every paragraph templated — a whole-document diff.
         let rebuilding_files = shared::frame_files(size, "rebuilding");
         let files = shared::borrowed(&rebuilding_files);

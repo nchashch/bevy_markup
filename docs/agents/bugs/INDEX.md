@@ -157,9 +157,28 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0126](bug_0126.md) | Indented Tera block bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0024) | review_0004 (H11) |
 | [bug_0127](bug_0127.md) | Indented raw HTML container bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0025) | ADR 0024's open item |
 | [bug_0128](bug_0128.md) | Tera-printed args with emoji or combining marks fell back to the untranslated content | `src/template.rs` (+ l10n, signals, tooltips) | high | fixed (uncommitted) | testbench example (`hostile-args`) |
-| [bug_0129](bug_0129.md) | `inline_backgrounds` flaked under full-suite load: the broken-sheet step didn't wait for the failed load's restyle | `tests/html_ui.rs` (the test; the crate is fine) | low | fixed (the test waits) | the ADR 0027 test waves |
-| [bug_0130](bug_0130.md) | `+` matched the farthest preceding sibling instead of the adjacent one | `src/cascade.rs` | medium | fixed (uncommitted) | browser oracle (`sibling_combinators`) |
-| [bug_0131](bug_0131.md) | A tiled `background-image` divided by zero and drew a solid rim | `src/build.rs` | high | fixed (uncommitted) | `background` golden scene |
+| [bug_0129](bug_0129.md) | A stylesheet swap to a failing sheet restyled scoped, keeping stale styles (found as an `inline_backgrounds` flake) | `src/build.rs`, `src/rebuild.rs` | medium | fixed (`4b02251`) | the ADR 0027 test waves |
+| [bug_0130](bug_0130.md) | `+` matched the farthest preceding sibling instead of the adjacent one | `src/cascade.rs` | medium | fixed (`e3646ae`) | browser oracle (`sibling_combinators`) |
+| [bug_0131](bug_0131.md) | A tiled `background-image` divided by zero and drew a solid rim | `src/build.rs` | high | fixed (`e3646ae`) | `background` golden scene |
+| [bug_0132](bug_0132.md) | `--features fuzzing` didn't compile: the harness missed `style_of`/`box_of`'s element state | `src/fuzz.rs` | high | fixed (uncommitted) | review_0005 I01 |
+| [bug_0133](bug_0133.md) | `:nth-child(n-2147483647)` panicked with an i32 overflow | `src/cascade.rs` | high | fixed (uncommitted) | review_0005 I02 |
+| [bug_0134](bug_0134.md) | Long sibling lists built in O(n²) time and memory | `src/build.rs` | medium | fixed (uncommitted) | review_0005 I03 |
+| [bug_0135](bug_0135.md) | The entity decoder was quadratic on `&#` references without a `;` | `src/template.rs` | medium | fixed (uncommitted) | review_0005 I04 |
+| [bug_0136](bug_0136.md) | Content reuse kept stale matches for sibling- and position-dependent rules | `src/build.rs` | medium | fixed (uncommitted) | review_0005 I05 |
+| [bug_0137](bug_0137.md) | The style cache's key omitted the dataset and the preceding siblings | `src/cascade.rs` | medium | fixed (uncommitted) | review_0005 I06 |
+| [bug_0138](bug_0138.md) | Sibling and ancestor compounds ignored pseudo-classes, attributes and structural parts | `src/cascade.rs` | medium | fixed (uncommitted) | review_0005 I07 |
+| [bug_0139](bug_0139.md) | `:not()` around a pseudo-class never matched | `src/cascade.rs` | medium | fixed (uncommitted) | review_0005 I08 |
+| [bug_0140](bug_0140.md) | `overflow: auto` stopped scrolling after any in-place update | `src/build.rs` | medium | fixed (uncommitted) | review_0005 I09 |
+| [bug_0141](bug_0141.md) | A debug `println!` printed every frame in apps without a default stylesheet | `src/build.rs` | medium | fixed (uncommitted) | review_0005 I10 |
+| [bug_0142](bug_0142.md) | `:nth-child(+n+3)` was rejected | `src/cascade.rs` | low | fixed (uncommitted) | review_0005 I11 |
+| [bug_0143](bug_0143.md) | Every build appended a line to `/tmp/bevy_markup_buildlog.txt` | `src/build.rs` | high | fixed (uncommitted) | review_0005 (I16, mutation audit) |
+| [bug_0144](bug_0144.md) | `:nth-child(-n+3)` and quoted attribute values with spaces, `+`, `]` or quotes failed | `src/cascade.rs` | medium | fixed (uncommitted) | writing the specificity test in the review_0005 fix session |
+| [bug_0145](bug_0145.md) | Structural pseudo-classes added nothing to specificity | `src/cascade.rs` | medium | fixed (uncommitted) | reading `Compound::specificity` in the review_0005 fix session |
+| [bug_0146](bug_0146.md) | `&#+65;` decoded as `A` | `src/template.rs` | low | fixed (uncommitted) | the bug_0135 fix |
+| [bug_0147](bug_0147.md) | Inline elements had no sibling list, and an `<img>` in a container always counted as an only child | `src/build.rs` | low | fixed (uncommitted) | the bug_0134 refactor |
+| [bug_0148](bug_0148.md) | Two flip tests inserted `PseudoState` by hand under picking, which reset it | `tests/html_ui.rs` | low | fixed (uncommitted) | the bug_0138 fix |
+| [bug_0149](bug_0149.md) | `style::tests::skipped_custom_urls_do_not_shift_the_pairing` flaked under load | `src/style.rs` | low | fixed (uncommitted) | a full `cargo test --lib --features fuzzing` run in the review_0005 fix session |
+| [bug_0150](bug_0150.md) | Content reuse worked only for the document's top-level elements | `src/build.rs` | medium | fixed (uncommitted) | review_0005 fix session (mutation run) |
 
 ## Discovery session metadata: bug_0001–0005
 

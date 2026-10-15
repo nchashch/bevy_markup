@@ -898,24 +898,168 @@ pub(crate) struct ElementState {
     pub empty: bool,
     /// ADR 0028: the element's PRECEDING element siblings in DOM order
     /// (farthest first; the LAST entry is the immediately preceding
-    /// one) — the sibling combinators' input. Shared per parent.
-    pub previous_siblings: Option<std::rc::Rc<Vec<Ancestor>>>,
+    /// one) — the sibling combinators' input: a view into the list its
+    /// parent shares among all its children (review_0005 I03: a copy per
+    /// element was O(n²) per container).
+    pub previous_siblings: Option<Siblings>,
 }
 
-impl PartialEq for ElementState {
-    fn eq(&self, other: &Self) -> bool {
-        self.tag_index == other.tag_index
-            && self.tag_count == other.tag_count
-            && self.type_index == other.type_index
-            && self.type_count == other.type_count
-            && self.focus_within == other.focus_within
-            && self.empty == other.empty
-            // The siblings' CONTENT (the Rc sharing doesn't matter).
-            && match (&self.previous_siblings, &other.previous_siblings) {
-                (Some(a), Some(b)) => a.as_ref() == b.as_ref(),
-                (None, None) => true,
-                _ => false,
-            }
+impl ElementState {
+    /// The state at `position`, with no sibling list.
+    pub(crate) fn at(position: Position) -> Self {
+        Self {
+            tag_index: position.tag_index,
+            tag_count: position.tag_count,
+            type_index: position.type_index,
+            type_count: position.type_count,
+            focus_within: position.focus_within,
+            empty: position.empty,
+            previous_siblings: None,
+        }
+    }
+
+    /// The structural part (what an [`Ancestor`] or sibling carries).
+    pub(crate) fn position(&self) -> Position {
+        Position {
+            tag_index: self.tag_index,
+            tag_count: self.tag_count,
+            type_index: self.type_index,
+            type_count: self.type_count,
+            focus_within: self.focus_within,
+            empty: self.empty,
+        }
+    }
+}
+
+/// An element's structural position (ADR 0028), carried by ancestors and
+/// siblings too, so a structural pseudo-class matches in any compound
+/// (review_0005 I07).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct Position {
+    pub tag_index: usize,
+    pub tag_count: usize,
+    pub type_index: usize,
+    pub type_count: usize,
+    pub focus_within: bool,
+    pub empty: bool,
+}
+
+/// One parent's element children as [`Ancestor`]s, shared by all of
+/// them, with a rolling hash per prefix (the style cache keys an
+/// element on its preceding siblings in O(1) — review_0005 I06).
+#[derive(Debug)]
+pub(crate) struct SiblingList {
+    list: Vec<Ancestor>,
+    /// `prefix[k]`: the hash of `list[..k]` (`prefix[0]` = 0).
+    prefix: Vec<u64>,
+}
+
+impl SiblingList {
+    pub(crate) fn new(list: Vec<Ancestor>) -> std::rc::Rc<Self> {
+        let mut prefix = Vec::with_capacity(list.len() + 1);
+        prefix.push(0u64);
+        for sibling in &list {
+            let last = *prefix.last().expect("seeded");
+            prefix.push(last.wrapping_mul(1_000_003).wrapping_add(sibling.identity_hash()));
+        }
+        std::rc::Rc::new(Self { list, prefix })
+    }
+
+    /// The first `count` entries: the preceding siblings of the element
+    /// at 1-based index `count + 1`.
+    pub(crate) fn preceding(self: &std::rc::Rc<Self>, count: usize) -> Siblings {
+        Siblings {
+            list: self.clone(),
+            count: count.min(self.list.len()),
+        }
+    }
+}
+
+/// A view of a [`SiblingList`]'s first `count` entries (no copy).
+#[derive(Clone, Debug)]
+pub(crate) struct Siblings {
+    list: std::rc::Rc<SiblingList>,
+    count: usize,
+}
+
+impl Siblings {
+    /// A standalone list (tests, the fuzz harness).
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub(crate) fn of(list: Vec<Ancestor>) -> Self {
+        let count = list.len();
+        SiblingList::new(list).preceding(count)
+    }
+
+    /// The hash of the viewed prefix (the cache key's sibling part).
+    fn hash(&self) -> u64 {
+        self.list.prefix[self.count]
+    }
+}
+
+impl std::ops::Deref for Siblings {
+    type Target = [Ancestor];
+    fn deref(&self) -> &[Ancestor] {
+        &self.list.list[..self.count]
+    }
+}
+
+/// Three-valued match (ADR 0029's reactivity wildcards pseudo tests as
+/// "either way"; `:not` must keep that unknown, not invert it —
+/// review_0005 I08). Ordered: `No < Maybe < Yes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Tri {
+    No,
+    Maybe,
+    Yes,
+}
+
+impl Tri {
+    fn of(value: bool) -> Self {
+        if value { Self::Yes } else { Self::No }
+    }
+
+    fn not(self) -> Self {
+        match self {
+            Self::No => Self::Yes,
+            Self::Maybe => Self::Maybe,
+            Self::Yes => Self::No,
+        }
+    }
+}
+
+/// What a compound reads from the element it tests: the subject, an
+/// ancestor, or a sibling — the same test in every position
+/// (review_0005 I07).
+struct Subject<'a> {
+    tag: &'a str,
+    id: Option<&'a str>,
+    classes: &'a [String],
+    dataset: Option<&'a std::collections::BTreeMap<String, String>>,
+    pseudo: Pseudo,
+    position: Position,
+}
+
+impl<'a> Subject<'a> {
+    fn element(element: &'a HtmlElement, pseudo: Pseudo, state: &ElementState) -> Self {
+        Self {
+            tag: &element.tag,
+            id: element.id.as_deref(),
+            classes: &element.classes,
+            dataset: Some(&element.dataset),
+            pseudo,
+            position: state.position(),
+        }
+    }
+
+    fn ancestor(ancestor: &'a Ancestor) -> Self {
+        Self {
+            tag: &ancestor.tag,
+            id: ancestor.id.as_deref(),
+            classes: &ancestor.classes,
+            dataset: ancestor.dataset.as_deref(),
+            pseudo: ancestor.pseudo,
+            position: ancestor.position,
+        }
     }
 }
 
@@ -937,8 +1081,9 @@ impl AnB {
         let text = text.trim();
         let (a, rest) = match text.split_once('n') {
             Some((head, rest)) => {
+                // CSS allows a leading `+` on the `n` term (`+n+3`).
                 let a = match head.trim() {
-                    "" => 1,
+                    "" | "+" => 1,
                     "-" => -1,
                     _ => head.trim().parse::<i32>().ok()?,
                 };
@@ -964,12 +1109,15 @@ impl AnB {
     }
 
     fn matches(&self, index: usize) -> bool {
-        // Solve a*n + b == index for a non-negative n.
-        let index = index as i32;
-        match self.a {
-            0 => self.b == index,
+        // Solve a*n + b == index for a non-negative n, in i64: `a` and
+        // `b` are any i32 from the stylesheet, and `index - b` overflowed
+        // i32 for `n-2147483647` (review_0005 I02).
+        let index = i64::try_from(index).unwrap_or(i64::MAX);
+        let (a, b) = (i64::from(self.a), i64::from(self.b));
+        match a {
+            0 => b == index,
             a => {
-                let remainder = index - self.b;
+                let remainder = index - b;
                 remainder.rem_euclid(a) == 0 && remainder / a >= 0
             }
         }
@@ -986,8 +1134,11 @@ pub(crate) struct AttributeSelector {
 }
 
 impl AttributeSelector {
-    fn matches(&self, element: &HtmlElement) -> bool {
-        let value = element.data(&self.name);
+    fn matches(&self, subject: &Subject) -> bool {
+        let value = subject
+            .dataset
+            .and_then(|dataset| dataset.get(&self.name))
+            .map(String::as_str);
         match &self.value {
             Some(expected) => value == Some(expected.as_str()),
             None => value.is_some(),
@@ -1009,18 +1160,35 @@ enum StructuralPseudo {
 }
 
 impl StructuralPseudo {
-    fn matches(&self, element: &HtmlElement, state: &ElementState) -> bool {
+    fn test(&self, subject: &Subject, wild: bool) -> Tri {
+        let position = &subject.position;
+        Tri::of(match self {
+            Self::NthChild(anb) => anb.matches(position.tag_index),
+            Self::LastChild => position.tag_index == position.tag_count,
+            Self::NthOfType(anb) => anb.matches(position.type_index),
+            Self::LastOfType => position.type_index == position.type_count,
+            // `:not`'s argument is a compound, tested whole against the
+            // same element — its pseudo-classes included (review_0005
+            // I08: they were dropped, so `:not(:hover)` never matched).
+            // A wildcarded pseudo stays unknown through the negation.
+            Self::Not(compound) => return compound.test(subject, wild).not(),
+            Self::FocusWithin => position.focus_within,
+            Self::Empty => position.empty,
+        })
+    }
+
+    /// Specificity (CSS): a pseudo-class counts as a class; `:not()`
+    /// counts its argument (review_0005 fix session: structural parts
+    /// counted nothing, so `p:first-child` tied with `p`).
+    fn specificity(&self) -> (u32, u32, u32) {
         match self {
-            Self::NthChild(anb) => anb.matches(state.tag_index),
-            Self::LastChild => state.tag_index == state.tag_count,
-            Self::NthOfType(anb) => anb.matches(state.type_index),
-            Self::LastOfType => state.type_index == state.type_count,
-            // `:not`'s argument is a compound: the same parts (its own
-            // structural parts included) against the same element.
-            Self::Not(compound) => !compound.matches_parts(element, state),
-            Self::FocusWithin => state.focus_within,
-            Self::Empty => state.empty,
+            Self::Not(compound) => compound.specificity(),
+            _ => (0, 1, 0),
         }
+    }
+
+    fn has_pseudo(&self) -> bool {
+        matches!(self, Self::Not(compound) if compound.has_pseudo())
     }
 }
 
@@ -1269,11 +1437,9 @@ pub(crate) struct Pseudo {
 /// state (for pseudo-classes in a compound selector), nearest first.
 /// Also a sibling list's entry (ADR 0028), so it compares by content.
 #[derive(Clone, Debug, PartialEq)]
+#[derive(Default)]
 pub(crate) struct Ancestor {
-    /// The tag/id/classes a compound selector reads. The dataset is
-    /// deliberately absent: selectors never read it, and carrying it made
-    /// each ancestor a full element clone (the per-child chain copies
-    /// blew memory up on attribute-heavy pages — review_0003 G05).
+    /// The tag/id/classes a compound selector reads.
     pub tag: String,
     pub id: Option<String>,
     pub classes: Vec<String>,
@@ -1281,6 +1447,28 @@ pub(crate) struct Ancestor {
     /// signal (the build's submit-button check reads it).
     pub submit: bool,
     pub pseudo: Pseudo,
+    /// The `data-*` attributes (attribute selectors in an ancestor or
+    /// sibling compound, review_0005 I07). Shared, not copied: chains are
+    /// rebuilt per child, and a copied dataset blew memory up on
+    /// attribute-heavy pages (review_0003 G05). `None` when empty.
+    pub dataset: Option<std::rc::Rc<std::collections::BTreeMap<String, String>>>,
+    /// The structural position (structural pseudo-classes in an ancestor
+    /// or sibling compound).
+    pub position: Position,
+}
+
+impl Ancestor {
+    /// Everything a compound can read, hashed (the style cache's key).
+    fn identity_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.tag.hash(&mut hasher);
+        self.id.hash(&mut hasher);
+        self.classes.hash(&mut hasher);
+        self.pseudo.hash(&mut hasher);
+        self.dataset.as_deref().hash(&mut hasher);
+        self.position.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 /// How a compound selector relates to the next one to its right.
@@ -1298,8 +1486,95 @@ enum Combinator {
     GeneralSibling,
 }
 
-/// A selector: compound selectors joined by combinators (only descendant
-/// and child are supported). The rightmost compound is the subject.
+/// Where the compound at the start of `text` ends: the first combinator
+/// character (whitespace, `>`, `+`, `~`) outside parentheses, brackets
+/// and quotes. A plain scan split `:nth-child(-n+3)` at its `+` and
+/// `[data-x="a b"]` at its space, dropping the rule (lightningcss
+/// serializes `2n+1` as `odd`, but `-n+3` and `3n+1` as written —
+/// review_0005 fix session).
+fn compound_end(text: &str) -> usize {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (_, '\\') => escaped = true,
+            (Some(open), c) if c == open => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(' | '[') => depth += 1,
+            (None, ')' | ']') => depth = depth.saturating_sub(1),
+            (None, c) if depth == 0 && (c.is_whitespace() || matches!(c, '>' | '+' | '~')) => {
+                return at;
+            }
+            _ => {}
+        }
+    }
+    text.len()
+}
+
+/// The `]` closing the attribute selector `text` starts with (`[`),
+/// outside quotes — a `]` inside a quoted value (`[data-x="a] b"]`) is
+/// part of the value.
+fn attribute_end(text: &str) -> Option<usize> {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (_, '\\') => escaped = true,
+            (Some(open), c) if c == open => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, ']') => return Some(at),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A quoted CSS string's escapes resolved: `\"` → `"`, `\\` → `\`, and
+/// hex escapes (`\41 ` → `A`; up to six digits plus one optional
+/// whitespace). lightningcss serializes `[data-x='a"b']` as
+/// `[data-x="a\"b"]`, which matched nothing while the value kept its
+/// backslash.
+fn css_unescape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let mut hex = String::new();
+        while hex.len() < 6 && chars.peek().is_some_and(char::is_ascii_hexdigit) {
+            hex.push(chars.next().expect("peeked"));
+        }
+        if hex.is_empty() {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+            continue;
+        }
+        if chars.peek().is_some_and(|c| c.is_ascii_whitespace()) {
+            chars.next();
+        }
+        let code = u32::from_str_radix(&hex, 16).unwrap_or(0xFFFD);
+        out.push(char::from_u32(code).filter(|c| *c != '\0').unwrap_or('\u{FFFD}'));
+    }
+    out
+}
+
+/// A selector: compound selectors joined by combinators (descendant,
+/// child, and the sibling combinators next to the subject). The rightmost
+/// compound is the subject.
 #[derive(Clone, Debug)]
 struct Selector {
     /// Left to right; the last one matches the element itself.
@@ -1318,9 +1593,7 @@ impl Selector {
         let mut pending = Combinator::Descendant;
         let mut rest = selector.trim();
         while !rest.is_empty() {
-            let end = rest
-                .find(|c: char| c.is_whitespace() || c == '>' || c == '+' || c == '~')
-                .unwrap_or(rest.len());
+            let end = compound_end(rest);
             compounds.push(Compound::parse(&rest[..end])?);
             if !combinators.is_empty() || compounds.len() > 1 {
                 combinators.push(pending);
@@ -1398,11 +1671,11 @@ impl Selector {
                 // sibling is the LAST entry.
                 let matched_sibling = match last_combinator {
                     Combinator::AdjacentSibling => {
-                        siblings.last().filter(|sibling| sibling_parts_match(parts, sibling))
+                        siblings.last().filter(|sibling| parts.matches_ancestor(sibling, false))
                     }
                     _ => siblings
                         .iter()
-                        .find(|sibling| sibling_parts_match(parts, sibling)),
+                        .find(|sibling| parts.matches_ancestor(sibling, false)),
                 };
                 matched_sibling.is_some()
                     && (self.compounds.len() == 2
@@ -1415,9 +1688,7 @@ impl Selector {
     /// Whether any compound in the selector tests a pseudo-class: its
     /// match outcome depends on the interaction state.
     fn has_pseudo(&self) -> bool {
-        self.compounds
-            .iter()
-            .any(|compound| compound.pseudo != Pseudo::default())
+        self.compounds.iter().any(Compound::has_pseudo)
     }
 
     /// Whether the selector could match `element` if every pseudo test
@@ -1432,7 +1703,7 @@ impl Selector {
         let Some(last) = self.compounds.last() else {
             return false;
         };
-        if !last.matches_parts(element, state) {
+        if !last.could_match(element, state) {
             return false;
         }
         // ADR 0028: the sibling combinator's reactivity — the sibling's
@@ -1447,8 +1718,8 @@ impl Selector {
             let reactive = match self.combinators.last() {
                 Some(&Combinator::AdjacentSibling) => siblings
                     .last()
-                    .is_some_and(|sibling| sibling_parts_match(parts, sibling)),
-                _ => siblings.iter().any(|sibling| sibling_parts_match(parts, sibling)),
+                    .is_some_and(|sibling| parts.matches_ancestor(sibling, true)),
+                _ => siblings.iter().any(|sibling| parts.matches_ancestor(sibling, true)),
             };
             return reactive
                 && (self.compounds.len() == 2
@@ -1497,29 +1768,20 @@ impl Selector {
             return false;
         }
         let compound = &self.compounds[index - 1];
-        let parts_only = |ancestor: &Ancestor| compound.matches_parts_ancestor(ancestor);
         let matched = match combinator {
             // A sibling combinator at a non-subject position: never
             // matches (the related element's own siblings aren't
             // threaded).
             Combinator::AdjacentSibling | Combinator::GeneralSibling => false,
             Combinator::Child => ancestors.get(offset).is_some_and(|parent| {
-                (if ignore_pseudo {
-                    parts_only(parent)
-                } else {
-                    compound.matches_ancestor(parent)
-                }) && self.matches_from(index - 1, ancestors, offset + 1, failed, ignore_pseudo)
+                compound.matches_ancestor(parent, ignore_pseudo)
+                    && self.matches_from(index - 1, ancestors, offset + 1, failed, ignore_pseudo)
             }),
             Combinator::Descendant => {
                 let mut any = false;
                 for i in offset..ancestors.len() {
                     let ancestor = &ancestors[i];
-                    let matches = if ignore_pseudo {
-                        parts_only(ancestor)
-                    } else {
-                        compound.matches_ancestor(ancestor)
-                    };
-                    if matches
+                    if compound.matches_ancestor(ancestor, ignore_pseudo)
                         && self.matches_from(index - 1, ancestors, i + 1, failed, ignore_pseudo)
                     {
                         any = true;
@@ -1591,7 +1853,7 @@ impl Compound {
                     // crate's element model carries only `data-*`
                     // attributes: a selector naming a non-data attribute
                     // drops the rule.
-                    let close = rest.find(']')?;
+                    let close = attribute_end(rest)?;
                     let inner = rest[1..close].trim();
                     let (name, value) = match inner.split_once('=') {
                         Some((name, value)) => {
@@ -1605,7 +1867,7 @@ impl Compound {
                                         .and_then(|v| v.strip_suffix('\''))
                                 })
                                 .unwrap_or(value);
-                            (name.trim(), Some(value.to_owned()))
+                            (name.trim(), Some(css_unescape(value)))
                         }
                         None => (inner, None),
                     };
@@ -1724,65 +1986,89 @@ impl Compound {
             + usize::from(self.pseudo.active)
             + usize::from(self.pseudo.focus)
             + usize::from(self.pseudo.focus_visible);
-        (
-            self.ids.len() as u32,
-            classes as u32,
-            self.tag.is_some() as u32,
-        )
+        let own = (self.ids.len() as u32, classes as u32, self.tag.is_some() as u32);
+        self.structural.iter().fold(own, |sum, part| {
+            let (ids, classes, tags) = part.specificity();
+            (sum.0 + ids, sum.1 + classes, sum.2 + tags)
+        })
     }
 
-    fn matches(&self, element: &HtmlElement, pseudo: Pseudo, state: &ElementState) -> bool {
-        (!self.pseudo.hover || pseudo.hover)
-            && (!self.pseudo.active || pseudo.active)
-            && (!self.pseudo.focus || pseudo.focus)
-            && (!self.pseudo.focus_visible || pseudo.focus_visible)
-            && self.matches_parts(element, state)
-    }
-
-    /// The compound's tag/id/classes and structural parts (ADR 0028)
-    /// against the element and its state. The interaction state is *not*
-    /// part of `matches_parts` (the reactivity record wildcards it, and
-    /// only it — a structural part's outcome doesn't depend on
-    /// interaction).
-    fn matches_parts(&self, element: &HtmlElement, state: &ElementState) -> bool {
-        self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
-            && self.ids.iter().all(|id| element.id.as_ref() == Some(id))
-            && self.classes.iter().all(|class| element.has_class(class))
-            && self
-                .structural
-                .iter()
-                .all(|part| part.matches(element, state))
-            && self
-                .attributes
-                .iter()
-                .all(|attribute| attribute.matches(element))
-    }
-
-    /// [`matches`](Self::matches) against a slimmed ancestor: the same
-    /// fields (tag, id, classes, pseudo) — the slim ancestor drops the
-    /// dataset, which selectors never read.
-    /// An ancestor position can't evaluate a structural pseudo (the
-    /// ancestor's own position among *its* siblings isn't threaded): a
-    /// selector with one never matches, like any unsupported selector.
-    fn matches_ancestor(&self, ancestor: &Ancestor) -> bool {
-        if !self.structural.is_empty() {
-            return false;
+    /// Whether the compound (its `:not()` arguments included) reads
+    /// attributes, and whether it reads a position — `:not()` and
+    /// `:focus-within` included, conservatively.
+    fn reads(&self) -> (bool, bool) {
+        let mut attributes = !self.attributes.is_empty();
+        let mut structural = false;
+        for part in &self.structural {
+            match part {
+                StructuralPseudo::Not(compound) => {
+                    let (inner_attributes, inner_structural) = compound.reads();
+                    attributes |= inner_attributes;
+                    structural |= inner_structural;
+                }
+                _ => structural = true,
+            }
         }
-        (!self.pseudo.hover || ancestor.pseudo.hover)
-            && (!self.pseudo.active || ancestor.pseudo.active)
-            && (!self.pseudo.focus || ancestor.pseudo.focus)
-            && (!self.pseudo.focus_visible || ancestor.pseudo.focus_visible)
-            && self.matches_parts_ancestor(ancestor)
+        (attributes, structural)
     }
 
-    /// The compound's tag/id/classes against a slimmed ancestor.
-    fn matches_parts_ancestor(&self, ancestor: &Ancestor) -> bool {
-        self.tag.as_ref().is_none_or(|tag| *tag == ancestor.tag)
-            && self.ids.iter().all(|id| ancestor.id.as_ref() == Some(id))
+    /// Whether the compound tests an interaction state anywhere, its
+    /// `:not()` arguments included.
+    fn has_pseudo(&self) -> bool {
+        self.pseudo != Pseudo::default() || self.structural.iter().any(StructuralPseudo::has_pseudo)
+    }
+
+    /// The whole compound against `subject` — the subject element, an
+    /// ancestor or a sibling alike. With `wild`, each interaction test is
+    /// [`Tri::Maybe`] (ADR 0029's reactivity record: could it match if
+    /// the states went either way?).
+    fn test(&self, subject: &Subject, wild: bool) -> Tri {
+        let parts = self.tag.as_ref().is_none_or(|tag| tag == subject.tag)
+            && self.ids.iter().all(|id| subject.id == Some(id.as_str()))
             && self
                 .classes
                 .iter()
-                .all(|class| ancestor.classes.iter().any(|own| own == class))
+                .all(|class| subject.classes.iter().any(|own| own == class))
+            && self.attributes.iter().all(|attribute| attribute.matches(subject));
+        let mut result = Tri::of(parts);
+        if result == Tri::No {
+            return Tri::No;
+        }
+        let pseudo_tests = [
+            (self.pseudo.hover, subject.pseudo.hover),
+            (self.pseudo.active, subject.pseudo.active),
+            (self.pseudo.focus, subject.pseudo.focus),
+            (self.pseudo.focus_visible, subject.pseudo.focus_visible),
+        ];
+        for (required, actual) in pseudo_tests {
+            if required {
+                result = result.min(if wild { Tri::Maybe } else { Tri::of(actual) });
+            }
+        }
+        for part in &self.structural {
+            if result == Tri::No {
+                break;
+            }
+            result = result.min(part.test(subject, wild));
+        }
+        result
+    }
+
+    fn matches(&self, element: &HtmlElement, pseudo: Pseudo, state: &ElementState) -> bool {
+        self.test(&Subject::element(element, pseudo, state), false) == Tri::Yes
+    }
+
+    /// Could the compound match the element if its interaction states
+    /// went either way (ADR 0029)?
+    fn could_match(&self, element: &HtmlElement, state: &ElementState) -> bool {
+        self.test(&Subject::element(element, Pseudo::default(), state), true) != Tri::No
+    }
+
+    /// The compound against an ancestor or sibling (`wild`: as in
+    /// [`test`](Self::test)).
+    fn matches_ancestor(&self, ancestor: &Ancestor, wild: bool) -> bool {
+        let outcome = self.test(&Subject::ancestor(ancestor), wild);
+        if wild { outcome != Tri::No } else { outcome == Tri::Yes }
     }
 }
 
@@ -1846,8 +2132,48 @@ struct Rule<'a> {
     declarations: &'a [Property<'static>],
 }
 
-/// A stylesheet's rules, matched per element (cached by tag + id + classes
-/// + pseudo-state).
+/// What a sheet's selectors read beyond tag/id/classes/pseudo-state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SelectorReads {
+    /// An attribute selector anywhere (the `data-*` dataset).
+    pub dataset: bool,
+    /// A sibling combinator (`+`/`~`): the preceding siblings.
+    pub siblings: bool,
+    /// A structural pseudo-class on the subject compound: the element's
+    /// own position among its siblings.
+    pub subject_position: bool,
+    /// A structural pseudo-class in an ancestor or sibling compound: an
+    /// ancestor's position decides a descendant's match.
+    pub context_position: bool,
+}
+
+impl SelectorReads {
+    fn with(mut self, selector: &Selector) -> Self {
+        let last = selector.compounds.len().saturating_sub(1);
+        for (index, compound) in selector.compounds.iter().enumerate() {
+            let (attributes, structural) = compound.reads();
+            self.dataset |= attributes;
+            if index == last {
+                self.subject_position |= structural;
+            } else {
+                self.context_position |= structural;
+            }
+        }
+        self.siblings |= selector.combinators.iter().any(|combinator| {
+            matches!(combinator, Combinator::AdjacentSibling | Combinator::GeneralSibling)
+        });
+        self
+    }
+
+    /// Whether a match can depend on the element's siblings at all (a
+    /// combinator, or a position).
+    pub(crate) fn sibling_dependent(&self) -> bool {
+        self.siblings || self.subject_position || self.context_position
+    }
+}
+
+/// A stylesheet's rules, matched per element (cached by everything the
+/// selectors read — [`SelectorReads`]).
 #[derive(Default)]
 pub(crate) struct HtmlStyles<'a> {
     rules: Vec<Rule<'a>>,
@@ -1863,8 +2189,11 @@ pub(crate) struct HtmlStyles<'a> {
     /// pseudo-class (ADR 0029's reactivity record: only these can change
     /// a style when an interaction state flips).
     pseudo_rules: Vec<usize>,
-    /// The `--` names the sheet's non-custom declarations (transitively)
-    /// reference (the wrapper's `var_names`): a custom declaration whose
+    /// What the sheet's selectors read beyond tag/id/classes/pseudo
+    /// (known at load): the cache key folds in exactly that, so a sheet
+    /// without such selectors keeps its cache hits (review_0005 I06).
+    reads: SelectorReads,
+    /// The per-element results, keyed by everything the selectors read.
     cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo, u64, u64), ElementStyle>>,
 }
 
@@ -1940,13 +2269,24 @@ impl<'a> HtmlStyles<'a> {
             .filter(|(_, rule)| rule.selector.has_pseudo())
             .map(|(index, _)| index)
             .collect();
+        let reads = rules
+            .iter()
+            .fold(SelectorReads::default(), |reads, rule| reads.with(&rule.selector));
         Self {
             rules,
             variables,
             context: None,
             pseudo_rules,
+            reads,
             cache: RefCell::default(),
         }
+    }
+
+    /// What the sheet's selectors read (the skeleton's reuse rule needs
+    /// it too: a position-dependent match can't reuse across a sibling
+    /// change — review_0005 I05).
+    pub(crate) fn reads(&self) -> SelectorReads {
+        self.reads
     }
 
     /// The declared style for `element` in the given interaction state:
@@ -1967,26 +2307,36 @@ impl<'a> HtmlStyles<'a> {
             element.classes.clone(),
             pseudo,
             ancestors.iter().fold(0u64, |mut hash, ancestor| {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                let mut hasher = DefaultHasher::new();
                 ancestor.tag.hash(&mut hasher);
                 ancestor.id.hash(&mut hasher);
                 ancestor.classes.hash(&mut hasher);
                 ancestor.pseudo.hash(&mut hasher);
+                if self.reads.dataset {
+                    ancestor.dataset.as_deref().hash(&mut hasher);
+                }
+                if self.reads.context_position {
+                    ancestor.position.hash(&mut hasher);
+                }
                 hash = hash.wrapping_mul(31).wrapping_add(hasher.finish());
                 hash
             }),
             // ADR 0028: the structural pseudo-classes match on the
             // element's position — two elements with the same attributes
-            // and chain but different positions match differently.
+            // and chain but different positions match differently. And
+            // what the sheet's attribute selectors and sibling
+            // combinators read (review_0005 I06: the dataset and the
+            // preceding siblings were missing, so the first element of a
+            // shape decided for every later one).
             {
                 let mut hasher = DefaultHasher::new();
-                state.tag_index.hash(&mut hasher);
-                state.tag_count.hash(&mut hasher);
-                state.type_index.hash(&mut hasher);
-                state.type_count.hash(&mut hasher);
-                state.focus_within.hash(&mut hasher);
-                state.empty.hash(&mut hasher);
+                state.position().hash(&mut hasher);
+                if self.reads.dataset {
+                    element.dataset.hash(&mut hasher);
+                }
+                if self.reads.siblings {
+                    state.previous_siblings.as_ref().map(Siblings::hash).hash(&mut hasher);
+                }
                 hasher.finish()
             },
         );
@@ -2091,21 +2441,6 @@ fn bevy_overflow(axis: OverflowAxisDecl) -> OverflowAxis {
         OverflowAxisDecl::Clip => OverflowAxis::Clip,
         OverflowAxisDecl::Scroll => OverflowAxis::Scroll,
     }
-}
-
-/// ADR 0028: a sibling's parts against a compound — the tag/id/classes
-/// plus its structural parts (evaluated against the SIBLING's state,
-/// which isn't threaded: only the compound's own structural parts'
-/// outcome could depend on it — so the sibling's structural parts are
-/// taken from the compound itself, evaluated against the SUBJECT's
-/// state, a conservative approximation).
-fn sibling_parts_match(compound: &Compound, sibling: &Ancestor) -> bool {
-    compound.tag.as_ref().is_none_or(|tag| *tag == sibling.tag)
-        && compound.ids.iter().all(|id| sibling.id.as_ref() == Some(id))
-        && compound
-            .classes
-            .iter()
-            .all(|class| sibling.classes.iter().any(|own| own == class))
 }
 
 /// `text-transform` (ADR 0028): the four case mappings; lightningcss's
@@ -4751,6 +5086,7 @@ mod tests {
             classes: classes.iter().map(|c| c.to_string()).collect(),
             submit: false,
             pseudo: Pseudo::default(),
+            ..Ancestor::default()
         }
     }
 
@@ -4848,6 +5184,7 @@ mod tests {
                 hover: true,
                 ..Pseudo::default()
             },
+            ..Ancestor::default()
         };
         assert!(selector.matches(
             &element("p", None, &[]),
@@ -4871,6 +5208,118 @@ mod tests {
         assert_eq!(selector("p").specificity(), (0, 0, 1));
     }
 
+    /// Structural pseudo-classes count as classes, and `:not()` counts its
+    /// argument (CSS Selectors 4): they counted nothing, so `p:first-child`
+    /// tied with `p` and a later `p` rule won (review_0005 fix session).
+    #[test]
+    fn structural_pseudo_classes_count_in_specificity() {
+        assert_eq!(selector("p:first-child").specificity(), (0, 1, 1));
+        assert_eq!(selector("li:nth-of-type(2n+1)").specificity(), (0, 1, 1));
+        assert_eq!(selector("p:empty:last-child").specificity(), (0, 2, 1));
+        assert_eq!(selector("p:not(.a)").specificity(), (0, 1, 1));
+        assert_eq!(selector("p:not(#x)").specificity(), (1, 0, 1));
+        assert_eq!(selector("p:not(:hover)").specificity(), (0, 1, 1));
+        assert_eq!(selector("p:not(div)").specificity(), (0, 0, 2));
+        let sheet = owned_sheet("p:first-child { color: red } p { color: blue }");
+        let styles = HtmlStyles::from_sheet(&sheet);
+        let first = ElementState { tag_index: 1, tag_count: 2, ..ElementState::default() };
+        let style = styles.get(&element("p", None, &[]), Pseudo::default(), &[], &first);
+        assert_eq!(style.color, Some(Color::srgb_u8(255, 0, 0)), "the more specific rule wins");
+    }
+
+    /// CSS string escapes: a backslash before a non-hex character keeps
+    /// the character; up to six hex digits are a code point, with one
+    /// optional whitespace after; NUL reads U+FFFD.
+    #[test]
+    fn css_strings_unescape() {
+        for (raw, expected) in [
+            ("plain", "plain"),
+            (r#"a\"b"#, "a\"b"),
+            (r"a\\b", "a\\b"),
+            (r"\41 B", "AB"),
+            (r"\41B", "\u{41B}"),
+            (r"\0000411", "A1"),
+            (r"\1F600x", "\u{1F600}x"),
+            (r"\0 x", "\u{FFFD}x"),
+            (r"end\", "end"),
+        ] {
+            assert_eq!(css_unescape(raw), expected, "{raw}");
+        }
+    }
+
+    /// What a sheet's selectors read (the cache key's and the reuse
+    /// rule's input), per kind and position — `:not()` arguments
+    /// included.
+    #[test]
+    fn selector_reads_by_kind_and_position() {
+        let reads = |css: &str| {
+            let sheet = owned_sheet(css);
+            HtmlStyles::from_sheet(&sheet).reads()
+        };
+        let none = SelectorReads::default();
+        assert_eq!(reads("p { color: red } .a > #b { color: red }"), none);
+        assert_eq!(reads("[data-x] { color: red }"), SelectorReads { dataset: true, ..none });
+        assert_eq!(reads("p:not([data-x]) { color: red }"), SelectorReads { dataset: true, ..none });
+        assert_eq!(reads(".a + p { color: red }"), SelectorReads { siblings: true, ..none });
+        assert_eq!(reads(".a ~ p { color: red }"), SelectorReads { siblings: true, ..none });
+        assert_eq!(reads("p:first-child { color: red }"), SelectorReads { subject_position: true, ..none });
+        assert_eq!(reads("p:not(:last-child) { color: red }"), SelectorReads { subject_position: true, ..none });
+        assert_eq!(reads("li:first-child p { color: red }"), SelectorReads { context_position: true, ..none });
+        assert_eq!(
+            reads("[data-x] + p:nth-child(2) { color: red }"),
+            SelectorReads { dataset: true, siblings: true, subject_position: true, context_position: false }
+        );
+        assert!(!none.sibling_dependent());
+        for dependent in [
+            SelectorReads { siblings: true, ..none },
+            SelectorReads { subject_position: true, ..none },
+            SelectorReads { context_position: true, ..none },
+        ] {
+            assert!(dependent.sibling_dependent(), "{dependent:?}");
+        }
+        assert!(!SelectorReads { dataset: true, ..none }.sibling_dependent());
+    }
+
+    /// A `+` or a space inside parentheses, brackets or quotes is no
+    /// combinator: `:nth-child(-n+3)` (lightningcss keeps it as written)
+    /// and a spaced attribute value parse, and still match.
+    #[test]
+    fn combinator_characters_inside_arguments_and_values() {
+        for (css, index, value, matches) in [
+            ("p:nth-child(-n+3) { color: red }", 3, None, true),
+            ("p:nth-child(-n+3) { color: red }", 4, None, false),
+            ("p:nth-of-type(3n+1) { color: red }", 4, None, true),
+            ("p:nth-of-type(3n+1) { color: red }", 2, None, false),
+            (r#"p[data-x="a b"] { color: red }"#, 1, Some("a b"), true),
+            (r#"p[data-x="a+b~c>d"] { color: red }"#, 1, Some("a+b~c>d"), true),
+            (r#"p[data-x="a b"] { color: red }"#, 1, Some("a"), false),
+            // A `]` and a backslash-escaped quote inside the value.
+            (r#"p[data-x="a] b"] { color: red }"#, 1, Some("a] b"), true),
+            (r#"p[data-x='a"b'] { color: red }"#, 1, Some("a\"b"), true),
+            (r#"p[data-x="a\\b"] { color: red }"#, 1, Some("a\\b"), true),
+            (r#"p[data-x="\41 B"] { color: red }"#, 1, Some("AB"), true),
+            // An escaped quote, then a `]` and a space, all in the value.
+            (r#"p[data-x='a"] b'] { color: red }"#, 1, Some("a\"] b"), true),
+        ] {
+            let sheet = owned_sheet(css);
+            let styles = HtmlStyles::from_sheet(&sheet);
+            assert_eq!(styles.rules.len(), 1, "{css} parses");
+            let mut element = element("p", None, &[]);
+            if let Some(value) = value {
+                element.dataset.insert("x".to_owned(), value.to_owned());
+            }
+            let state = ElementState {
+                tag_index: index,
+                tag_count: 5,
+                type_index: index,
+                type_count: 5,
+                ..ElementState::default()
+            };
+            let style = styles.get(&element, Pseudo::default(), &[], &state);
+            assert_eq!(style.color.is_some(), matches, "{css} at {index} with {value:?}");
+        }
+    }
+
     /// Unsupported selectors skip the whole rule: sibling combinators,
     /// attributes, and other pseudo-classes.
     #[test]
@@ -4879,7 +5328,7 @@ mod tests {
         // immediately preceding sibling.
         let prev = vec![ancestor("section", &["page"]), ancestor("div", &["hot"])];
         let state = ElementState {
-            previous_siblings: Some(std::rc::Rc::new(prev.clone())),
+            previous_siblings: Some(Siblings::of(prev.clone())),
             ..ElementState::default()
         };
         // `+`: the immediately preceding sibling.

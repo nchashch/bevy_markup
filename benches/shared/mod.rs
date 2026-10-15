@@ -286,12 +286,18 @@ pub(crate) fn borrowed(files: &[(String, String)]) -> Vec<(&str, &str)> {
         .collect()
 }
 
-/// The frame workloads' file lists: `workload` ∈ idle/changing/rebuilding —
+/// The frame workloads' file lists: `workload` ∈ idle/changing/
+/// changing-nested/rebuilding —
 /// the same documents at the given size (the `changing` one differs only in
 /// the counter paragraph; `rebuilding` templates every paragraph).
 pub(crate) fn frame_files(size: usize, workload: &str) -> Vec<(String, String)> {
     let page = match workload {
         "changing" => shell_template(size, true),
+        // The same page inside one container: the changing counter makes
+        // the container unclean, and its unchanged children must still
+        // reuse (bug_0150: they re-collected — reuse worked only for
+        // top-level siblings, which is all `changing` exercised).
+        "changing-nested" => format!("<main>{}</main>", shell_template(size, true)),
         _ => shell_template(size, false),
     };
     vec![

@@ -6800,10 +6800,13 @@ fn sibling_flip_restyles_the_following_sibling() {
         <p class="after" id="after">after</p>
         <p class="unrelated" id="unrelated">unrelated</p>"#;
     let css = "html { color: #ffffff } .hot:hover + .after { color: #00ff00 }";
-    let mut target = TestUi::with_layout(
+    // No picking (`TestUi::new`): with the layout harness's picking
+    // plugins, `update_pseudo_states` resets a hand-inserted
+    // `PseudoState` the next frame — the flip below never held, and the
+    // test passed only because I07 ignored the sibling's `:hover`.
+    let mut target = TestUi::new(
         "sibling-flip-target",
         &[("page.html", page), ("style.css", css)],
-        UVec2::new(320, 240),
     )
     .stylesheet("style.css")
     .spawn("page.html", TemplateContext::new(), Node::default());
@@ -7205,7 +7208,10 @@ mod review_0005 {
     fn auto_scroll_panel(name: &str, css_extra: &str) -> TestUi {
         let page = r#"<div id="panel" class="panel {{ c }}"><p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p></div>"#;
         let css = format!("html {{ color: #ffffff; font-size: 16px }} .panel {{ height: 40px; overflow-y: auto }} {css_extra}");
-        let mut ui = TestUi::with_layout(name, &[("page.html", page), ("a.css", css.as_str())], UVec2::new(400, 300))
+        // The pointer harness (layout + picking): the hover test hovers
+        // for real — a hand-inserted `PseudoState` is reset by picking
+        // the next frame.
+        let mut ui = TestUi::with_pointer(name, &[("page.html", page), ("a.css", css.as_str())], UVec2::new(400, 300))
             .stylesheet("a.css")
             .spawn(
                 "page.html",
@@ -7236,9 +7242,204 @@ mod review_0005 {
     #[test]
     fn auto_scroll_survives_a_hover_restyle() {
         let mut ui = auto_scroll_panel("i09-hover", ".panel:hover { background-color: #222222 }");
-        hover(&mut ui, "panel", true);
+        let root = ui.root();
+        let panel = element_by_id(ui.world_mut(), root, "panel");
+        let rect = node_rect(ui.world_mut(), panel).expect("the panel is laid out");
+        ui.move_pointer(rect.center());
         ui.update(10);
+        let hovered = ui.world_mut().get::<PseudoState>(panel).is_some_and(|state| state.hovered);
+        assert!(hovered, "the pointer hovers the panel");
+        assert!(ui.dump().contains("bg=#222222"), "the hover restyled the panel");
         assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll);
+    }
+
+    /// I09's write discipline: a layout change that leaves the axis right
+    /// (the root narrows; the panel still overflows) must not rewrite the
+    /// panel's `Node` — a plain `&mut` gave it a change tick on every
+    /// `ComputedNode` change (the G15 class).
+    #[test]
+    fn auto_scroll_leaves_a_settled_node_unchanged() {
+        let mut ui = auto_scroll_panel("i09-quiet", "");
+        let root = ui.root();
+        let panel = element_by_id(ui.world_mut(), root, "panel");
+        let before = node_rect(ui.world_mut(), panel).expect("laid out");
+        let tick = ui.world_mut().entity(panel).get_ref::<Node>().unwrap().last_changed();
+        ui.world_mut().get_mut::<Node>(root).unwrap().width = Val::Px(300.0);
+        ui.update(5);
+        let after = node_rect(ui.world_mut(), panel).expect("laid out");
+        assert_ne!(before.width(), after.width(), "the panel's layout changed");
+        let later = ui.world_mut().entity(panel).get_ref::<Node>().unwrap().last_changed();
+        assert_eq!(tick, later, "the panel's Node was rewritten with the same axis");
+        assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll);
+    }
+
+    // ---- found while fixing --------------------------------------------
+
+    /// Inline elements match sibling combinators and positions too: the
+    /// run walk threads each child's preceding siblings (ADR 0030). Before,
+    /// inline runs had no sibling list, so `b + i` never matched inside a
+    /// paragraph.
+    #[test]
+    fn inline_sibling_combinators_match() {
+        let dump = built(
+            "fix-inline-siblings",
+            "<p><b>bold</b> <i>next</i> <i>later</i></p>",
+            &format!("{WHITE} b + i {{ color: #ff0000 }} i:last-child {{ color: #00ff00 }}"),
+        );
+        // Bold and italic fall back to the default font here (no families
+        // registered); the runs with equal styles merge.
+        assert_eq!(
+            dump.trim(),
+            "html-ui\n  p\n    \"bold \" default 16px #ffffff\n    \"next\" default 16px #ff0000\n    \" \" default 16px #ffffff\n    \"later\" default 16px #00ff00"
+        );
+    }
+
+    /// `:nth-child(-n+3)` keeps its `+` (lightningcss doesn't rewrite it):
+    /// the combinator scan split it there and dropped the rule.
+    #[test]
+    fn nth_child_with_a_negative_step_applies() {
+        let dump = built(
+            "fix-nth-negative",
+            "<div><p>1</p><p>2</p><p>3</p><p>4</p></div>",
+            &format!("{WHITE} p:nth-child(-n+3) {{ background-color: #ff0000 }}"),
+        );
+        for text in ["1", "2", "3"] {
+            assert!(red_before(&dump, text), "{text}: {dump}");
+        }
+        assert!(!red_before(&dump, "4"), "{dump}");
+    }
+
+    /// I05 one level down: a sibling list inside a container (the nested
+    /// `pair_node` path; a changed container's unchanged children reuse
+    /// since bug_0150's fix, so the sibling check must hold there too).
+    #[test]
+    fn reuse_rechecks_nested_sibling_lists() {
+        let (reused, fresh) = reuse_and_fresh(
+            "i05-nested-adjacent",
+            r#"<section><div class="{{ c }}"><p>a</p></div><p id="t">t</p><p id="u">u</p></section>"#,
+            &format!("{WHITE} .hot + p {{ background-color: #ff0000 }}"),
+            "c", "hot", "cold",
+        );
+        assert!(!red_before(&fresh, "t"), "{fresh}");
+        assert_eq!(reused, fresh);
+    }
+
+    /// I05 one level down, where it bites deep: a sibling list inside a
+    /// container changes shape, moving a `div` from first to second child;
+    /// `div:first-child p` must drop from the `div`'s descendant, whose own
+    /// subtree is unchanged (the nested `pair_node` path; the re-collected
+    /// `div` alone would hand its `p` the cached spec).
+    #[test]
+    fn reuse_rechecks_descendants_of_moved_siblings() {
+        let (reused, fresh) = reuse_and_fresh(
+            "i05-nested",
+            r#"<section>{% if c == "el" %}<div>new</div>{% else %}x{% endif %}<div id="t"><p>t</p></div></section>"#,
+            &format!("{WHITE} div:first-child p {{ background-color: #ff0000 }}"),
+            "c", "text", "el",
+        );
+        assert!(!red_before(&fresh, "t"), "{fresh}");
+        assert_eq!(reused, fresh);
+    }
+
+    /// I05 with a text node turning into an element (same child count, at
+    /// the document's top level): the following element's `:first-child`
+    /// changes.
+    #[test]
+    fn reuse_rechecks_positions_when_text_becomes_an_element() {
+        let (reused, fresh) = reuse_and_fresh(
+            "i05-text-element",
+            r#"{% if c == "el" %}<div>x</div>{% else %}x{% endif %}<p id="t">t</p>"#,
+            &format!("{WHITE} p:first-child {{ background-color: #ff0000 }}"),
+            "c", "text", "el",
+        );
+        assert!(!red_before(&fresh, "t"), "{fresh}");
+        assert_eq!(reused, fresh);
+    }
+
+    /// Inline elements' ancestors carry their positions: `b:first-child i`
+    /// styles only the first `b`'s `i`.
+    #[test]
+    fn inline_ancestors_carry_their_positions() {
+        let dump = built(
+            "fix-inline-ancestor-position",
+            "<p><b>x <i>in</i></b><b>y <i>out</i></b></p>",
+            &format!("{WHITE} b:first-child i {{ color: #ff0000 }}"),
+        );
+        assert!(dump.contains("\"in\" default 16px #ff0000"), "{dump}");
+        // The second `b`'s runs keep the base style and merge.
+        assert!(dump.contains("\"y out\" default 16px #ffffff"), "{dump}");
+    }
+
+    /// An inline ancestor's interaction state reaches its content: a
+    /// hovered link restyles the `i` inside it (`a:hover i`).
+    #[test]
+    fn inline_ancestors_carry_their_pseudo_state() {
+        let files = [
+            ("page.html", "<p><a href=\"x\" id=\"l\">go <i>in</i></a></p>"),
+            ("a.css", "html { color: #ffffff } a:hover i { color: #ff0000 }"),
+        ];
+        let mut ui = TestUi::new("fix-inline-ancestor-pseudo", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let dump = ui.settle().dump();
+        // Unhovered, the link's runs share a style and merge.
+        assert!(dump.contains("\"go in\" default 16px #ffffff"), "{dump}");
+        let link = {
+            let world = ui.world_mut();
+            let mut elements = world.query::<(Entity, &HtmlElement)>();
+            elements
+                .iter(world)
+                .find(|(_, element)| element.tag == "a")
+                .map(|(entity, _)| entity)
+                .expect("the link span")
+        };
+        ui.world_mut().entity_mut(link).insert(PseudoState { hovered: true, ..default() });
+        ui.update(10);
+        let dump = ui.dump();
+        assert!(dump.contains("\"in\" default 16px #ff0000"), "{dump}");
+    }
+
+    /// An ancestor's `:not(:hover)` is flip-reactive: hovering the row
+    /// takes the paragraph's color away, unhovering brings it back.
+    #[test]
+    fn not_hover_on_an_ancestor_follows_the_flip() {
+        let files = [
+            ("page.html", "<div class=\"row\" id=\"r\"><p>label</p></div><p>other</p>"),
+            ("a.css", "html { color: #ffffff } .row:not(:hover) p { color: #ff0000 }"),
+        ];
+        let mut ui = TestUi::new("fix-not-hover-ancestor", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let dump = ui.settle().dump();
+        assert!(dump.contains("\"label\" default 16px #ff0000"), "{dump}");
+        hover(&mut ui, "r", true);
+        let dump = ui.dump();
+        assert!(dump.contains("\"label\" default 16px #ffffff"), "{dump}");
+        hover(&mut ui, "r", false);
+        let dump = ui.dump();
+        assert!(dump.contains("\"label\" default 16px #ff0000"), "{dump}");
+    }
+
+    /// `overflow-x: auto` promotes like `overflow-y` (the x axis of the
+    /// promotion).
+    #[test]
+    fn auto_scroll_promotes_the_x_axis() {
+        let page = r#"<div id="panel" class="panel"><p>a very long line of text that cannot fit in forty pixels</p></div>"#;
+        let css = "html { color: #ffffff; font-size: 16px } .panel { width: 40px; overflow-x: auto } p { white-space: nowrap }";
+        let mut ui = TestUi::with_layout("i09-x", &[("page.html", page), ("a.css", css)], UVec2::new(400, 300))
+            .stylesheet("a.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new(),
+                Node { width: Val::Px(400.0), flex_direction: FlexDirection::Column, ..default() },
+            );
+        ui.settle();
+        ui.update(5);
+        let root = ui.root();
+        let panel = element_by_id(ui.world_mut(), root, "panel");
+        let overflow = ui.world_mut().get::<Node>(panel).unwrap().overflow;
+        assert_eq!(overflow.x, OverflowAxis::Scroll, "the overflowing axis scrolls");
+        assert_eq!(overflow.y, OverflowAxis::Visible, "the other axis is left alone");
     }
 
     // ---- I14: bug_0129's crate half, deterministically -------------------
@@ -7672,7 +7873,18 @@ mod mutation_gaps {
     /// Renders `<p>`s from `values`, then changes them to `changed`, and
     /// returns the skeleton's `(useful, strike)` after the content build.
     fn health_after(name: &str, values: &[&str], changed: &[&str]) -> (bool, u8) {
+        health_after_with(name, values, changed, WHITE)
+    }
+
+    fn health_after_with(name: &str, values: &[&str], changed: &[&str], css: &str) -> (bool, u8) {
+        health_after_in(name, values, changed, css, false)
+    }
+
+    /// `nested`: the paragraphs sit in a `section` (the nested pairing
+    /// path) instead of at the document's top level.
+    fn health_after_in(name: &str, values: &[&str], changed: &[&str], css: &str, nested: bool) -> (bool, u8) {
         let page: String = (0..values.len()).map(|i| format!("<p>{{{{ v{i} }}}}</p>")).collect();
+        let page = if nested { format!("<section>{page}</section>") } else { page };
         let keys: Vec<&'static str> = (0..values.len())
             .map(|i| &*Box::leak(format!("v{i}").into_boxed_str()))
             .collect();
@@ -7680,7 +7892,7 @@ mod mutation_gaps {
         for (key, value) in keys.iter().zip(values) {
             context.insert(*key, value);
         }
-        let files = [("page.html", page.as_str()), ("a.css", WHITE)];
+        let files = [("page.html", page.as_str()), ("a.css", css)];
         let mut ui = TestUi::new(name, &files)
             .stylesheet("a.css")
             .spawn("page.html", context, Node::default());
@@ -7708,4 +7920,34 @@ mod mutation_gaps {
     fn a_mostly_changed_page_strikes_the_pairing() {
         assert_eq!(health_after("gap-reuse-useless", &["a", "b", "c"], &["a", "B", "C"]), (false, 1));
     }
+
+    /// Content reuse inside a container: one changed paragraph of four in
+    /// a `section` reuses the other three (bug_0150: a changed container
+    /// had no pairing entry, so ADR 0029's inherited-style gate made every
+    /// child re-collect — reuse worked only at the document's top level).
+    #[test]
+    fn a_changed_container_reuses_its_unchanged_children() {
+        assert_eq!(
+            health_after_in("gap-reuse-nested", &["a", "b", "c", "d"], &["a", "b", "c", "D"], WHITE, true),
+            (true, 0)
+        );
+    }
+
+    /// A sibling-dependent sheet still reuses across a text-only change:
+    /// the sibling list keeps its shape, so nothing is un-cleaned (ADR
+    /// 0030 §5 must not turn reuse off for such sheets).
+    #[test]
+    fn a_sibling_dependent_sheet_reuses_across_text_changes() {
+        let css = "html { color: #ffffff } p:nth-child(2) { color: #ff0000 } p + p { background-color: #000080 }";
+        assert_eq!(
+            health_after_with("gap-reuse-sibling-sheet", &["a", "b", "c", "d"], &["a", "b", "c", "D"], css),
+            (true, 0)
+        );
+        assert_eq!(
+            health_after_in("gap-reuse-sibling-sheet-nested", &["a", "b", "c", "d"], &["a", "b", "c", "D"], css, true),
+            (true, 0),
+            "the same inside a container"
+        );
+    }
+
 }

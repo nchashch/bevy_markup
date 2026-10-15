@@ -159,6 +159,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
                     classes: vec!["page".into()],
                     submit: false,
                     pseudo: Pseudo::default(),
+                    ..Default::default()
                 },
                 crate::cascade::Ancestor {
                     tag: "div".into(),
@@ -169,6 +170,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
                         hover: true,
                         ..Default::default()
                     },
+                    ..Default::default()
                 },
             ],
             Pseudo::default(),
@@ -180,6 +182,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
                 classes: vec![],
                 submit: false,
                 pseudo: Pseudo::default(),
+                ..Default::default()
             }],
             Pseudo {
                 focus_visible: true,
@@ -187,14 +190,46 @@ pub fn cascade(css: &str) -> Result<String, String> {
             },
         ),
     ];
+    // Structural states (ADR 0028): none, and a middle child with
+    // preceding siblings (the structural pseudo-classes, `+`/`~`).
+    let sibling = |tag: &str, classes: &[&str]| crate::cascade::Ancestor {
+        tag: tag.into(),
+        id: None,
+        classes: classes.iter().map(|class| (*class).into()).collect(),
+        submit: false,
+        pseudo: Pseudo { hover: true, ..Default::default() },
+        dataset: Some(std::rc::Rc::new(std::collections::BTreeMap::from([(
+            "mode".to_owned(),
+            "dark".to_owned(),
+        )]))),
+        position: crate::cascade::Position { tag_index: 1, tag_count: 2, ..Default::default() },
+    };
+    let states = [
+        crate::cascade::ElementState::default(),
+        crate::cascade::ElementState {
+            tag_index: 3,
+            tag_count: 5,
+            type_index: 2,
+            type_count: 3,
+            focus_within: true,
+            empty: false,
+            previous_siblings: Some(crate::cascade::Siblings::of(vec![
+                sibling("h1", &["title"]),
+                sibling("p", &[]),
+            ])),
+        },
+    ];
     // One hit per element (with and without ancestors), then a repeat:
     // exercises the cascade's match cache.
     for round in 0..2 {
         for element in &elements {
-            for (ancestors, pseudo) in &chains {
+            for ((ancestors, pseudo), state) in
+                chains.iter().flat_map(|chain| states.iter().map(move |state| (chain, state)))
+            {
                 let style =
-                    styler.style_of(element, &root, *pseudo, None, ancestors);
-                let boxed: BoxStyle = styler.box_of(element, *pseudo, None, ancestors);
+                    styler.style_of(element, &root, *pseudo, None, ancestors, &state);
+                let boxed: BoxStyle =
+                    styler.box_of(element, *pseudo, None, ancestors, &state);
             std::fmt::write(
                 &mut out,
                 format_args!(

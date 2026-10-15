@@ -26,9 +26,20 @@
 //!   library maintains from picking — a change restyles in place). Matched
 //!   against each element's tag, `id` and `class` attributes, and against
 //!   the ancestor chain: descendant (`A B`) and child (`A > B`)
-//!   combinators, with the ancestors' own pseudo-classes. Attribute
-//!   selectors, sibling combinators and other pseudo-classes are skipped
-//!   (logged at `debug`).
+//!   combinators, with the ancestors' own pseudo-classes. Also (ADR 0028):
+//!   attribute selectors on `data-*` attributes (`[data-x]`,
+//!   `[data-x="v"]`; other attributes and operators skip the rule), the
+//!   sibling combinators `+` and `~` next to the subject (`.a + p`, not
+//!   `.a + .b p`), and the structural pseudo-classes `:first-child`,
+//!   `:last-child`, `:nth-child()`, `:first-of-type`, `:last-of-type`,
+//!   `:nth-of-type()`, `:empty`, `:focus-within` and `:not(compound)` —
+//!   `:not(:hover)` included. Every compound matches whole wherever it
+//!   stands: an ancestor's or sibling's compound tests its classes,
+//!   `data-*` attributes, pseudo-state and position like the subject's
+//!   (`li:first-child > span`, `[data-mode="dark"] p`, `.tab:hover + .panel`).
+//!   Structural pseudo-classes and `:not()` add their specificity as CSS
+//!   does. Other pseudo-classes and pseudo-elements skip the rule (logged
+//!   at `debug`).
 //! - inherited: `color`, `font-family`, `font-size`, `font-weight`,
 //!   `font-style`, `pointer-events` (`none` → `Pickable::IGNORE` on the
 //!   element and, by inheritance, its descendants; `auto` turns it back on)
@@ -383,14 +394,23 @@ mod tests {
             .world()
             .resource::<AssetServer>()
             .load::<Stylesheet>("urls.css");
-        for _ in 0..4 {
+        // The load runs on the IO task pool: poll until it resolves (a
+        // fixed four frames flaked under a loaded full suite — review_0005
+        // fix session), bounded so a hang still fails.
+        let load_state = |app: &App| {
+            app.world()
+                .resource::<AssetServer>()
+                .get_load_state(handle.id())
+                .unwrap()
+        };
+        let start = std::time::Instant::now();
+        while matches!(load_state(&app), LoadState::NotLoaded | LoadState::Loading)
+            && start.elapsed() < std::time::Duration::from_secs(10)
+        {
             app.update();
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        let state = app
-            .world()
-            .resource::<AssetServer>()
-            .get_load_state(handle.id())
-            .unwrap();
+        let state = load_state(&app);
         assert!(matches!(state, LoadState::Loaded), "{state:?}");
 
         let sheet = app

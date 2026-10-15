@@ -20,7 +20,7 @@ use crate::cascade::{
     self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, GridNames,
     HtmlStyles, InlineStyle, LayoutDecl, LetterSpacingSpec, LineHeightSpec, ListStyleSpec,
     ElementState, OverflowAxisDecl, TextTransformSpec, WhiteSpaceSpec,
-    OutlineDecl, Pseudo, SliceValue, TextAlignSpec, TransitionDecl, TransitionProp,
+    OutlineDecl, Position, Pseudo, SelectorReads, SiblingList, SliceValue, TextAlignSpec, TransitionDecl, TransitionProp,
     node_field_mut,
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
@@ -1141,15 +1141,6 @@ pub(crate) fn build_html_ui(
                 || outline.as_ref().is_some_and(|outline| outline.is_changed()),
         };
         let decision = rebuild.decide(frame);
-        if frame.default != Some(Phase::Ready) {
-            println!(
-                "DECIDEDBG decision={decision:?} own={:?} default={:?} content={} full_latch={}",
-                frame.own,
-                frame.default,
-                frame.content_changed,
-                rebuild.pending_full_style()
-            );
-        }
         // The restyled builds record the hash; a `Wait` (a sheet still
         // loading) keeps the old one, so the change outlives the wait —
         // the same rule that keeps pending changes alive.
@@ -1191,21 +1182,6 @@ pub(crate) fn build_html_ui(
             Source::Unstyled => None,
         };
 
-        if let Ok(mut log) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/bevy_markup_buildlog.txt")
-        {
-            use std::io::Write;
-            let _ = writeln!(
-                log,
-                "entity={entity:?} source={source:?} css={} decision={decision:?} content={} default_changed={} default={:?}",
-                css.is_some().then(|| "some").unwrap_or("none"),
-                frame.content_changed,
-                frame.default_changed,
-                frame.default,
-            );
-        }
         // `var(--name)` resolves against the UI's `TemplateContext` first
         // (values interpolated as written), then the sheet's own `--`
         // properties. Built per pass: the context is constant for one
@@ -1352,6 +1328,7 @@ pub(crate) fn build_html_ui(
                 &mut pairing,
                 &mut reverse,
                 &mut clean,
+                styles.reads(),
             );
             // The cached specs' handles point into the previous document;
             // rewrite them to the fresh one while the `Arc`s are
@@ -1910,8 +1887,18 @@ pub(crate) struct AutoScroll(pub [bool; 2]);
 /// re-layouts the next frame: the same one-frame model the calc resolver
 /// uses (the promotion is stable — the content's size doesn't depend on
 /// the axis's clip/scroll mode).
+///
+/// It runs on a `Node` or `AutoScroll` change too: an in-place restyle or
+/// update rewrites the element's `Node` from its spec (the axis back to
+/// `Hidden`) without changing the layout, so with `ComputedNode` alone a
+/// restyled panel — a `:hover` one, say — stopped scrolling for good
+/// (review_0005 I09). The axis is written only when it differs (a plain
+/// `&mut` would mark the `Node` changed every run).
 pub(crate) fn promote_auto_scroll(
-    mut nodes: Query<(&mut Node, &ComputedNode, &AutoScroll), Changed<ComputedNode>>,
+    mut nodes: Query<
+        (&mut Node, &ComputedNode, &AutoScroll),
+        Or<(Changed<ComputedNode>, Changed<Node>, Changed<AutoScroll>)>,
+    >,
 ) {
     for (mut node, computed, auto) in &mut nodes {
         for (axis, (size, content)) in [
@@ -1927,11 +1914,14 @@ pub(crate) fn promote_auto_scroll(
                 OverflowAxis::Hidden
             };
             let current = match axis {
-                0 => &mut node.overflow.x,
-                _ => &mut node.overflow.y,
+                0 => node.overflow.x,
+                _ => node.overflow.y,
             };
-            if *current != want {
-                *current = want;
+            if current != want {
+                match axis {
+                    0 => node.overflow.x = want,
+                    _ => node.overflow.y = want,
+                }
             }
         }
     }
@@ -4079,6 +4069,7 @@ fn pair_trees_into(
     pairing: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
     reverse: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
     clean: &mut HashSet<tl::NodeHandle>,
+    reads: SelectorReads,
 ) {
     for (old_child, fresh_child) in old.children().iter().zip(fresh.children().iter()) {
         pair_node(
@@ -4090,7 +4081,56 @@ fn pair_trees_into(
             reverse,
             clean,
             0,
+            reads,
         );
+    }
+    if !siblings_identical(old.parser(), old.children(), fresh.parser(), fresh.children()) {
+        unclean_siblings(old.parser(), old.children(), clean, reads);
+    }
+}
+
+/// Whether two sibling lists look alike to a selector: the same length,
+/// and per position the same node kind (element or not) with an equal
+/// tag and attributes — what a sibling combinator or a structural
+/// pseudo-class reads. A text change elsewhere leaves them alike.
+fn siblings_identical(
+    old_parser: &tl::Parser,
+    old: &[tl::NodeHandle],
+    fresh_parser: &tl::Parser,
+    fresh: &[tl::NodeHandle],
+) -> bool {
+    old.len() == fresh.len()
+        && old.iter().zip(fresh).all(|(old, fresh)| {
+            match (old.get(old_parser), fresh.get(fresh_parser)) {
+                (Some(tl::Node::Tag(old)), Some(tl::Node::Tag(fresh))) => tag_equal(old, fresh),
+                (Some(tl::Node::Tag(_)), _) | (_, Some(tl::Node::Tag(_))) => false,
+                _ => true,
+            }
+        })
+}
+
+/// A sibling list changed shape (review_0005 I05): when the sheet's
+/// matches can depend on siblings, an unchanged child's cached spec may
+/// hold a stale `+`/`~`/structural match. Each child re-collects; its
+/// descendants still reuse where their inherited style is unchanged —
+/// unless an ancestor compound reads a position (`li:first-child p`),
+/// which can change a descendant's match: then the whole subtrees go.
+fn unclean_siblings(
+    old_parser: &tl::Parser,
+    children: &[tl::NodeHandle],
+    clean: &mut HashSet<tl::NodeHandle>,
+    reads: SelectorReads,
+) {
+    if !reads.sibling_dependent() {
+        return;
+    }
+    let deep = reads.context_position;
+    let mut stack: Vec<tl::NodeHandle> = children.to_vec();
+    while let Some(handle) = stack.pop() {
+        clean.remove(&handle);
+        if deep && let Some(tl::Node::Tag(tag)) = handle.get(old_parser) {
+            stack.extend(tag.children().top().iter().copied());
+        }
     }
 }
 
@@ -4108,13 +4148,16 @@ fn pair_node(
     reverse: &mut HashMap<tl::NodeHandle, tl::NodeHandle>,
     clean: &mut HashSet<tl::NodeHandle>,
     depth: usize,
+    reads: SelectorReads,
 ) -> bool {
     /// A tag pair whose children are being paired; `all` folds their
-    /// results.
+    /// results; `siblings_changed`: the child lists differ in shape
+    /// (review_0005 I05).
     struct Parent {
         old: tl::NodeHandle,
         fresh: tl::NodeHandle,
         all: bool,
+        siblings_changed: bool,
     }
     enum Task {
         /// Pair two nodes, folding the result into the parent tag's
@@ -4190,6 +4233,12 @@ fn pair_node(
                         old,
                         fresh,
                         all: true,
+                        siblings_changed: !siblings_identical(
+                            old_parser,
+                            old_children.as_slice(),
+                            fresh_parser,
+                            fresh_children.as_slice(),
+                        ),
                     });
                     // The tag completes after its children: the completion
                     // task sits below theirs on the stack.
@@ -4222,10 +4271,23 @@ fn pair_node(
                     old,
                     fresh,
                     all: children_all,
+                    siblings_changed,
                 } = parents[parent];
+                if siblings_changed
+                    && let Some(tl::Node::Tag(tag)) = old.get(old_parser)
+                {
+                    unclean_siblings(old_parser, tag.children().top().as_slice(), clean, reads);
+                }
+                // Paired whether or not its subtree is clean: a changed
+                // container's cached spec still carries the inherited style
+                // its unchanged children were built under, and without the
+                // pairing every child of a changed container re-collected
+                // (ADR 0029's inherited-style gate found no cached spec)
+                // — content reuse worked only at the document's top level
+                // (bug_0150). `clean` alone gates reuse.
+                pairing.insert(fresh, old);
+                reverse.insert(old, fresh);
                 if children_all {
-                    pairing.insert(fresh, old);
-                    reverse.insert(old, fresh);
                     clean.insert(old);
                 }
                 match grandparent {
@@ -4462,20 +4524,12 @@ fn collect_items(
     let roots: Vec<tl::NodeHandle> = dom.children().iter().copied().collect();
     // ADR 0028: the top-level elements' positions (1-based, of all and
     // same-tag).
-    let positions = sibling_positions(&roots, &ctx.parser);
-    let siblings_list = Rc::new(
-        roots
-            .iter()
-            .filter_map(|handle| ancestor_of(*handle, &ctx))
-            .collect::<Vec<Ancestor>>(),
-    );
+    let positions = sibling_positions(&roots, &ctx);
+    let siblings_list = sibling_list(&roots, &positions, &ctx);
     for handle in &roots {
         // Raw roots (a whitespace-only page's text, say) collect too —
         // with no position (they aren't elements to match).
-        let position = positions
-            .get(handle)
-            .map(|state| (state.tag_index, state.tag_count, state.type_index, state.type_count))
-            .unwrap_or((0, 0, 0, 0));
+        let position = positions.get(handle).copied().unwrap_or_default();
         collect_node(
             &ctx,
             *handle,
@@ -4497,7 +4551,11 @@ static EMPTY_FOCUS_WITHIN: HashSet<tl::NodeHandle> = HashSet::new();
 
 /// ADR 0028: an element's `Ancestor` (the sibling lists' entry): its
 /// tag/id/classes, the submit marker, and its interaction state.
-fn ancestor_of(handle: tl::NodeHandle, ctx: &Ctx) -> Option<Ancestor> {
+fn ancestor_of(
+    handle: tl::NodeHandle,
+    ctx: &Ctx,
+    positions: &HashMap<tl::NodeHandle, Position>,
+) -> Option<Ancestor> {
     match handle.get(ctx.parser) {
         Some(tl::Node::Tag(tag)) => {
             let element = element_of(tag);
@@ -4506,60 +4564,108 @@ fn ancestor_of(handle: tl::NodeHandle, ctx: &Ctx) -> Option<Ancestor> {
                 .and_then(|states| states.get(&handle))
                 .copied()
                 .unwrap_or_default();
-            let submit = form_submits(&element);
-            Some(Ancestor {
-                tag: element.tag,
-                id: element.id,
-                classes: element.classes,
-                submit,
-                pseudo: state,
-            })
+            Some(ancestor_from(element, state, positions.get(&handle).copied().unwrap_or_default()))
         }
         _ => None,
     }
 }
 
-/// ADR 0028: each element child's 1-based index among the parent's
-/// element children (all, and of the same tag) with both counts — the
-/// `:nth-child`/`:nth-of-type` inputs. Only element handles appear.
+/// An element as an [`Ancestor`]: everything a compound in an ancestor
+/// or sibling position reads (review_0005 I07: dataset and position
+/// too).
+fn ancestor_from(element: HtmlElement, pseudo: Pseudo, position: Position) -> Ancestor {
+    let submit = form_submits(&element);
+    Ancestor {
+        submit,
+        tag: element.tag,
+        id: element.id,
+        classes: element.classes,
+        pseudo,
+        dataset: (!element.dataset.is_empty()).then(|| Rc::new(element.dataset)),
+        position,
+    }
+}
+
+/// The children's full structural states (positions and preceding
+/// siblings): the inline run walk's input, where every child is matched
+/// in place.
+fn sibling_states(handles: &[tl::NodeHandle], ctx: &Ctx) -> HashMap<tl::NodeHandle, ElementState> {
+    let positions = sibling_positions(handles, ctx);
+    let list = sibling_list(handles, &positions, ctx);
+    positions
+        .iter()
+        .map(|(handle, position)| {
+            let state = ElementState {
+                previous_siblings: Some(list.preceding(position.tag_index.saturating_sub(1))),
+                ..ElementState::at(*position)
+            };
+            (*handle, state)
+        })
+        .collect()
+}
+
+/// One parent's element children as a shared sibling list (ADR 0028:
+/// the sibling combinators' input; each child views its prefix).
+fn sibling_list(
+    handles: &[tl::NodeHandle],
+    positions: &HashMap<tl::NodeHandle, Position>,
+    ctx: &Ctx,
+) -> Rc<SiblingList> {
+    SiblingList::new(
+        handles
+            .iter()
+            .filter_map(|handle| ancestor_of(*handle, ctx, positions))
+            .collect(),
+    )
+}
+
+/// ADR 0028: each element child's structural position — its 1-based
+/// index among the parent's element children (all, and of the same tag)
+/// with both counts (the `:nth-child`/`:nth-of-type` inputs), whether it
+/// holds the focus (`:focus-within`) and whether it is `:empty`. Only
+/// element handles appear. Linear: the names are read once and the
+/// total counted once (review_0005 I03: it was recounted per child).
 fn sibling_positions(
     handles: &[tl::NodeHandle],
-    parser: &tl::Parser,
-) -> HashMap<tl::NodeHandle, ElementState> {
-    let tag_name = |handle: &tl::NodeHandle| match handle.get(parser) {
-        Some(tl::Node::Tag(tag)) => Some(tag.name().as_utf8_str().to_string()),
-        _ => None,
-    };
-    let mut totals: HashMap<String, usize> = HashMap::default();
-    for handle in handles {
-        if let Some(name) = tag_name(handle) {
-            *totals.entry(name).or_default() += 1;
-        }
+    ctx: &Ctx,
+) -> HashMap<tl::NodeHandle, Position> {
+    let tags: Vec<(tl::NodeHandle, &tl::HTMLTag)> = handles
+        .iter()
+        .filter_map(|handle| match handle.get(ctx.parser) {
+            Some(tl::Node::Tag(tag)) => Some((*handle, tag)),
+            _ => None,
+        })
+        .collect();
+    let names: Vec<String> = tags
+        .iter()
+        .map(|(_, tag)| tag.name().as_utf8_str().to_ascii_lowercase())
+        .collect();
+    let mut totals: HashMap<&str, usize> = HashMap::default();
+    for name in &names {
+        *totals.entry(name.as_str()).or_default() += 1;
     }
+    let mut seen: HashMap<&str, usize> = HashMap::default();
     let mut out = HashMap::default();
-    let mut element_index = 0usize;
-    let mut seen: HashMap<String, usize> = HashMap::default();
-    for handle in handles {
-        let Some(name) = tag_name(handle) else { continue };
-        element_index += 1;
+    for (index, ((handle, tag), name)) in tags.iter().zip(&names).enumerate() {
         let type_index = {
-            let seen = seen.entry(name.clone()).or_default();
+            let seen = seen.entry(name.as_str()).or_default();
             *seen += 1;
             *seen
         };
-        let type_total = totals[&name.clone()];
-        let element_total = handles
-            .iter()
-            .filter(|candidate| tag_name(candidate).is_some())
-            .count();
         out.insert(
             *handle,
-            ElementState {
-                tag_index: element_index,
-                tag_count: element_total,
+            Position {
+                tag_index: index + 1,
+                tag_count: tags.len(),
                 type_index,
-                type_count: type_total,
-                ..ElementState::default()
+                type_count: totals[name.as_str()],
+                focus_within: ctx.focus_within.contains(handle),
+                // `:empty`: no children at all (comments don't count).
+                empty: !tag
+                    .children()
+                    .top()
+                    .iter()
+                    .any(|child| !matches!(child.get(ctx.parser), Some(tl::Node::Comment(_)))),
             },
         );
     }
@@ -4574,8 +4680,8 @@ fn collect_node(
     chain: Rc<Vec<Ancestor>>,
     grid: Option<&GridNames>,
     depth: usize,
-    position: (usize, usize, usize, usize),
-    siblings: Option<Rc<Vec<Ancestor>>>,
+    position: Position,
+    siblings: Option<Rc<SiblingList>>,
 ) {
     /// A node to collect: everything its children need (the computed
     /// style, the ancestor chain, its grid template), plus, for a
@@ -4618,11 +4724,11 @@ fn collect_node(
             li_index: Option<usize>,
             /// ADR 0028: the node's 1-based index among the parent's
             /// element children (all, then same-tag), with both counts.
-            position: (usize, usize, usize, usize),
+            position: Position,
             /// ADR 0028: the parent's element children as `Ancestor`s
-            /// (the sibling combinators' input; the child slices its
+            /// (the sibling combinators' input; the child views its
             /// prefix).
-            siblings: Option<Rc<Vec<Ancestor>>>,
+            siblings: Option<Rc<SiblingList>>,
             /// ADR 0027: the parent's tag-default list type (`ol` numbers,
             /// `ul` uses `disc`) — the `li`'s own computed type wins when
             /// its chain declared one.
@@ -4753,6 +4859,7 @@ fn collect_node(
                     &mut runs,
                     chain.clone(),
                     &mut reactive,
+                    ElementState::default(),
                 );
                 let runs = finish_runs(runs, white_space);
                 if !runs.is_empty() {
@@ -4829,7 +4936,7 @@ fn collect_node(
                     ancestor_flipped,
                     li_index: None,
                     list_kind: ListStyleSpec::Disc,
-                    position: (0, 0, 0, 0),
+                    position: Position::default(),
                     siblings: None,
                 });
             }
@@ -4843,13 +4950,7 @@ fn collect_node(
             }
         }
         // This element becomes the nearest ancestor for everything inside it.
-        let own = Ancestor {
-            tag: element.tag.clone(),
-            id: element.id.clone(),
-            classes: element.classes.clone(),
-            submit: form_submits(&element),
-            pseudo: state,
-        };
+        let own = ancestor_from(element.clone(), state, position);
         // The child chain is shared with every child task (an Rc clone is
         // O(1); a per-child Vec copy made attribute-heavy pages cost
         // O(children x depth) memory, review_0003 G05). `own`'s fields
@@ -4863,24 +4964,13 @@ fn collect_node(
         // The `<html>` element is what the root style was computed from:
         // re-applying it would square its `opacity`.
         let element_state = ElementState {
-            tag_index: position.0,
-            tag_count: position.1,
-            type_index: position.2,
-            type_count: position.3,
-            focus_within: ctx.focus_within.contains(&handle),
-            // `:empty`: no children at all (comments don't count).
-            empty: !tag
-                .children()
-                .top()
-                .iter()
-                .any(|child| !matches!(child.get(ctx.parser), Some(tl::Node::Comment(_)))),
             // ADR 0028: the parent's siblings list, up to this element
             // (the sibling combinators' input; the parent's task state
-            // carries it).
-            previous_siblings: siblings.clone().map(|list| {
-                let count = position.0.saturating_sub(1);
-                std::rc::Rc::new(list[..count.min(list.len())].to_vec())
-            }),
+            // carries it) — a view, not a copy (review_0005 I03).
+            previous_siblings: siblings
+                .as_ref()
+                .map(|list| list.preceding(position.tag_index.saturating_sub(1))),
+            ..ElementState::at(position)
         };
         let style = if element.tag == "html" {
             inherited.clone()
@@ -5012,6 +5102,7 @@ fn collect_node(
                 &mut runs,
                 child_chain.clone(),
                 &mut reactive,
+                element_state.clone(),
             );
             if !runs.is_empty() {
                 items.push(Item::Block(Block {
@@ -5086,38 +5177,10 @@ fn collect_node(
                     // ADR 0028: the fragment's top-level elements' positions
                     // (the fragment is the translation's own document).
                     let nodes: Vec<tl::NodeHandle> = nodes.iter().copied().collect();
-                    let positions = sibling_positions(&nodes, &fragment.parser);
-                    let fragment_siblings = Rc::new(
-                        nodes
-                            .iter()
-                            .filter_map(|node| {
-                                match node.get(fragment.parser) {
-                                    Some(tl::Node::Tag(tag)) => {
-                                        let element = element_of(tag);
-                                        let submit = form_submits(&element);
-                                        // Fragments' own states: none
-                                        // threaded (the fragment's
-                                        // elements aren't hovered).
-                                        Some(Ancestor {
-                                            tag: element.tag,
-                                            id: element.id,
-                                            classes: element.classes,
-                                            submit,
-                                            pseudo: Pseudo::default(),
-                                        })
-                                    }
-                                    _ => None,
-                                }
-                            })
-                            .collect::<Vec<Ancestor>>(),
-                    );
+                    let positions = sibling_positions(&nodes, fragment);
+                    let fragment_siblings = sibling_list(&nodes, &positions, fragment);
                     for node in nodes {
-                        let position = positions
-                            .get(&node)
-                            .map(|state| {
-                                (state.tag_index, state.tag_count, state.type_index, state.type_count)
-                            })
-                            .unwrap_or((0, 0, 0, 0));
+                        let position = positions.get(&node).copied().unwrap_or_default();
                         collect_node(
                             fragment,
                             node,
@@ -5143,18 +5206,13 @@ fn collect_node(
                         tag.children().top().iter().copied().collect();
                     // ADR 0028: each child's position among the parent's
                     // element children (the `:nth-child` inputs).
-                    let positions = sibling_positions(&children, &ctx.parser);
+                    let positions = sibling_positions(&children, ctx);
                     // ADR 0027: the list's marker state (computed above:
                     // the computed `list-style-type`, with the UA-sheet
                     // tag default) and each `li` child's 1-based position.
                     // ADR 0028: the children's `Ancestor`s too (the
                     // sibling combinators' input, shared per container).
-                    let child_siblings = Rc::new(
-                        children
-                            .iter()
-                            .filter_map(|child| ancestor_of(*child, ctx))
-                            .collect::<Vec<Ancestor>>(),
-                    );
+                    let child_siblings = sibling_list(&children, &positions, ctx);
                     let mut li_count = 0usize;
                     let indexed: Vec<_> = children
                         .iter()
@@ -5184,11 +5242,7 @@ fn collect_node(
                             ancestor_flipped: child_ancestor_flipped,
                             li_index: index,
                             list_kind: child_list_kind,
-                            position: positions
-                                .get(&child)
-                                .map_or((0, 0, 0, 0), |state| {
-                                    (state.tag_index, state.tag_count, state.type_index, state.type_count)
-                                }),
+                            position: positions.get(&child).copied().unwrap_or_default(),
                             siblings: Some(Rc::clone(&child_siblings)),
                         });
                     }
@@ -5315,7 +5369,7 @@ fn push_content_runs(
 ) {
     let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
         let nodes: Vec<tl::NodeHandle> = nodes.iter().copied().collect();
-        let positions = sibling_positions(&nodes, &fragment.parser);
+        let positions = sibling_states(&nodes, fragment);
         run_walk(
             fragment,
             nodes.into_iter(),
@@ -5336,7 +5390,7 @@ fn push_content_runs(
     });
     if !translated {
         let children: Vec<tl::NodeHandle> = tag.children().top().iter().copied().collect();
-        let positions = sibling_positions(&children, &ctx.parser);
+        let positions = sibling_states(&children, ctx);
         run_walk(
             ctx,
             children.into_iter(),
@@ -5424,15 +5478,13 @@ fn run_walk<'a>(
                 let child_chain = if depth < MAX_DOM_DEPTH {
                     let owned = element.clone();
                     let mut child_chain = Vec::with_capacity(chain.len() + 1);
-                    child_chain.push(Ancestor {
-                        tag: owned.as_ref().map(|e| e.tag.clone()).unwrap_or_default(),
-                        id: owned.as_ref().and_then(|e| e.id.clone()),
-                        classes: owned
-                            .as_ref()
-                            .map(|e| e.classes.clone())
-                            .unwrap_or_default(),
-                        submit: owned.as_ref().is_some_and(form_submits),
-                        pseudo: state,
+                    child_chain.push(match owned {
+                        Some(owned) => ancestor_from(owned, state, element_state.position()),
+                        None => Ancestor {
+                            pseudo: state,
+                            position: element_state.position(),
+                            ..Ancestor::default()
+                        },
                     });
                     child_chain.extend(chain.iter().cloned());
                     Rc::new(child_chain)
@@ -5529,7 +5581,7 @@ fn run_walk<'a>(
                 // the recursion visited.
                 let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
                     let nodes: Vec<tl::NodeHandle> = nodes.iter().copied().collect();
-                    let nested = sibling_positions(&nodes, &fragment.parser);
+                    let nested = sibling_states(&nodes, fragment);
                     run_walk(
                         fragment,
                         nodes.into_iter(),
@@ -5552,7 +5604,7 @@ fn run_walk<'a>(
                 if !translated {
                     let children: Vec<tl::NodeHandle> =
                         tag.children().top().iter().copied().collect();
-                    let child_positions = sibling_positions(&children, &ctx.parser);
+                    let child_positions = sibling_states(&children, ctx);
                     for child in children.into_iter().rev() {
                         let child_state =
                             child_positions.get(&child).cloned().unwrap_or_default();
@@ -5580,10 +5632,11 @@ fn push_runs(
     runs: &mut Vec<Run>,
     chain: Rc<Vec<Ancestor>>,
     reactive: &mut bool,
+    state: ElementState,
 ) {
-    // The root's own position (a text node has none; its children's
-    // positions compute in the walk).
-    let positions = sibling_positions(&[handle], &ctx.parser);
+    // The root's own structural state (the caller's: a text node has
+    // none; its children's compute in the walk).
+    let positions = HashMap::from_iter([(handle, state)]);
     run_walk(
         ctx,
         std::iter::once(handle),

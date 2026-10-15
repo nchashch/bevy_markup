@@ -46,5 +46,6 @@ as `[INFERENCE]`.
 | [0027](./0027-text-properties-lists-overflow-entities.md) | Add the missing text properties, list numbering, scroll-if-needed and full entity decoding | Proposed |
 | [0028](./0028-modern-authoring-gaps-roadmap.md) | Modern authoring gaps: what to add next (roadmap) | Proposed |
 | [0029](./0029-restyle-reuse.md) | Restyle reuse: dependency-tracked re-cascade instead of full restyles | Accepted |
+| [0030](./0030-compounds-match-whole-in-every-position.md) | Compounds match whole in every position | Accepted |
 
 Add new records to this index in the same commit that adds the file.

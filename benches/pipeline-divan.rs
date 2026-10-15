@@ -73,6 +73,21 @@ fn changing(bencher: Bencher, size: usize) {
     });
 }
 
+/// Changing, nested: the `changing` page inside one container — the
+/// container is unclean every frame, its unchanged children reuse
+/// (bug_0150).
+#[divan::bench(args = SIZES, max_time = 2)]
+fn changing_nested(bencher: Bencher, size: usize) {
+    let files = frame_files(size, "changing-nested");
+    let (mut app, root) = bench_app(&shared::borrowed(&files));
+    let mut n = 0_i64;
+    bencher.bench_local(|| {
+        n += 1;
+        set_n(&mut app, root, n);
+        black_box(app.update());
+    });
+}
+
 /// Rebuilding: every paragraph templated — a whole-document diff.
 #[divan::bench(args = SIZES, max_time = 2)]
 fn rebuilding(bencher: Bencher, size: usize) {

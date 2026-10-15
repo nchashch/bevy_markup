@@ -60,7 +60,17 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   or double quotes). The crate's element model carries only `data-*`
   attributes, so the selector must name one with its prefix — a
   non-data attribute drops the rule. An attribute counts as a class
-  for specificity.
+  for specificity. Attribute tests work in ancestor and sibling
+  compounds too (`[data-mode="dark"] p`), and quoted values may hold
+  spaces, `]`, escaped quotes and combinator characters.
+- **Structural pseudo-classes** (ADR 0028): `:first-child`,
+  `:last-child`, `:nth-child()`, `:first-of-type`, `:last-of-type`,
+  `:nth-of-type()` (`odd`/`even`/`An+B`, `-n+3` and `+n+3` included),
+  `:empty`, `:focus-within` and `:not(compound)` — `:not(:hover)` and
+  `:not(:focus)` included, restyling when the state flips. Each counts
+  as a class for specificity (`:not()` counts its argument). They work in
+  any compound, ancestors and siblings included (`li:first-child >
+  span`, ADR 0030).
 - **`<table>` maps onto the flex model** (ADR 0028): the
   `table`/`tbody`/`thead`/`tfoot`/`caption` tags are column containers,
   a `tr` lays its cells in a row (the UA-sheet default; a
@@ -70,12 +80,15 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   side by side in the row's flex. Previously the table tags rendered
   as anonymous text (silent garbage).
 - **Sibling combinators** (`+` and `~`, ADR 0028): `.hot + p` colors the
-  immediately following sibling, `.a ~ p` every following one. Supported
-  adjacent to the subject; a sibling combinator deeper in a chain
-  (`.x .a + b`) doesn't match (the sibling's own siblings aren't
-  threaded — the same documented limit as a structural pseudo in an
-  ancestor position). An interaction flip on a sibling restyles its
-  following siblings' matches.
+  immediately following sibling, `.a ~ p` every following one — inline
+  elements in a paragraph included (`b + i`). The sibling's compound is
+  tested whole: its classes, `data-*` attributes, position and
+  interaction state (`.tab:hover + .panel` applies only while the tab
+  is hovered). Supported adjacent to the subject; a sibling combinator
+  deeper in a chain (`.x .a + b`) doesn't match (the sibling's own
+  siblings aren't threaded). An interaction flip on a sibling restyles
+  its following siblings' matches, and a content change to a sibling
+  re-styles the list's other elements.
 - **`overflow: auto`** scrolls if needed (ADR 0027): the axis clips
   (`hidden`), and a promotion system — running after layout — promotes
   it to scrolling when the laid-out content overflows the box and demotes

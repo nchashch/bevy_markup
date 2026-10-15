@@ -185,9 +185,17 @@ fn terminated_digits(
     max: usize,
     prefix: usize,
 ) -> Option<(usize, u32)> {
-    let digits = rest.split(';').next()?;
-    rest.get(digits.len()..)?.starts_with(';').then_some(())?;
-    (digits.len() >= min && digits.len() <= max).then_some(())?;
+    // Only the digit run, at most `max` long (review_0005 I04: finding
+    // the `;` first scanned the rest of the text per `&#`, O(n²) on a
+    // text of unterminated references). Digits only: `from_str_radix`
+    // would accept a sign (`&#+5;` isn't a reference).
+    let length = rest
+        .bytes()
+        .take(max + 1)
+        .take_while(|byte| char::from(*byte).is_digit(radix))
+        .count();
+    let digits = &rest[..length];
+    (length >= min && length <= max && rest[length..].starts_with(';')).then_some(())?;
     // The consumed span includes the terminator and the `&#`/`&#x`
     // prefix (the caller's `at` still sits on the `&`).
     Some((digits.len() + 1 + prefix, u32::from_str_radix(digits, radix).ok()?))
@@ -993,6 +1001,10 @@ fn scanners_stay_linear_on_pathological_input() {
             // (0x97 = U+2014, 0x92 = U+2019).
             ("&#151;", "\u{2014}"),
             ("&#146;", "\u{2019}"),
+            // Digits only: a sign is no reference.
+            ("&#+65;", "&#+65;"),
+            ("&#x+41;", "&#x+41;"),
+            ("&#x41;&#66;", "AB"),
             // One level: a decoded `&` is not re-scanned.
             ("&amp;lt;", "&lt;"),
         ] {
