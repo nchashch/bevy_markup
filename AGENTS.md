@@ -1526,10 +1526,12 @@ Known limits (each skipped/ignored value is logged at `debug`):
   and Bevy's own schedule/layout/text — none of them the rebuild.
   Nested `HtmlUi`s go with a replaced slot; re-nest
   them on `HtmlUiBuilt`.
-- **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
-  CJK (wrapped CJK source lines become spaces); the legacy non-`;`
-  entity aliases (`&lt`-style) stay verbatim (the table holds the
-  semicolon forms). Mixed inline content
+- **Text:** `pre` has a fixed 8px padding; `white-space` works (ADR 0028:
+  the four kinds; a declaration overrides the `pre` tag's UA default);
+  whitespace collapsing doesn't know CJK (wrapped CJK source lines become
+  spaces); the legacy non-`;` entity aliases (`&lt`-style) stay verbatim
+  (the table holds the semicolon forms); `text-overflow: ellipsis` is
+  unsupported (bevy's truncation hard-clips, no ellipsis glyph). Mixed inline content
   directly in a container (`<div>Mixed <b>bold</b> text</div>`, also from a
   translation) becomes one anonymous block per text piece, not one line.
 - **Fluent:** numbers format without locale grouping (fluent-rs; the loader

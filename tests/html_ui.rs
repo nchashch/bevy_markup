@@ -6431,6 +6431,14 @@ html-ui
   div.inherit-align
     p align=Right
       "Inherited center" default 16px #ffff00
+  p.upper
+    "UPPER CASE TEXT" default 16px #ffffff
+  p.lower
+    "lower case text" default 16px #ffffff
+  p.caps
+    "Capitalize Each Word Here" default 16px #ffffff
+  p.pre-ws
+    "pre    keeps     spaces" default 16px #ffffff
 "#,
     );
 }

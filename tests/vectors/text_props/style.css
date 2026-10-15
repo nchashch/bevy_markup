@@ -9,3 +9,7 @@ p { color: #ffffff }
 .ls-em { letter-spacing: 0.25em; font-size: 16px }
 .inherit-align { text-align: right }
 .inherit-align p { color: #ffff00 }
+.upper { text-transform: uppercase }
+.lower { text-transform: lowercase }
+.caps { text-transform: capitalize }
+.pre-ws { white-space: pre }

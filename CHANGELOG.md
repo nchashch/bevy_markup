@@ -9,6 +9,18 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Added
+- **`text-transform`** (`none`/`uppercase`/`lowercase`/`capitalize`,
+  inherited): applied to the run text at collection (Unicode-aware
+  upper/lowercase; `capitalize` uppercases the first typographic letter
+  unit of each word — punctuation starts a word, digits don't, as in
+  browsers).
+- **`white-space`** (`normal`/`nowrap`/`pre`/`pre-wrap`, inherited):
+  collapsing and wrapping per kind, replacing the `pre` tag's
+  hard-coded behavior (which stays the tag's UA default — a
+  `white-space` declaration overrides it, so `pre { white-space:
+  pre-wrap }` wraps). `break-spaces`/`pre-line` drop their declaration.
+  `text-overflow: ellipsis` is NOT supported (bevy 0.20's truncation
+  has no ellipsis glyph — `TextBounds` hard-clips).
 - **`text-align`** (`left`/`right`/`center`/`justify`, inherited;
   `start`/`end` map to `left`/`right` — the text is LTR): the block's
   line alignment, on the block's `TextLayout`. `match-parent` and

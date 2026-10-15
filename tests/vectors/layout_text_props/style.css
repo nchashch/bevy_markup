@@ -6,3 +6,4 @@ p { width: 220px }
 .lh { line-height: 2 }
 
 .ls { letter-spacing: 3px }
+.nowrap { white-space: nowrap }

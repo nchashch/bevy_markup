@@ -19,7 +19,7 @@ use bevy::ui_widgets::TextInput;
 use crate::cascade::{
     self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, GridNames,
     HtmlStyles, InlineStyle, LayoutDecl, LetterSpacingSpec, LineHeightSpec, ListStyleSpec,
-    OverflowAxisDecl,
+    OverflowAxisDecl, TextTransformSpec, WhiteSpaceSpec,
     OutlineDecl, Pseudo, SliceValue, TextAlignSpec, TransitionDecl, TransitionProp,
     node_field_mut,
 };
@@ -68,6 +68,11 @@ pub(crate) struct Style {
     /// chain declared it (the tag's UA-sheet default applies at the
     /// marker). Inert outside list items.
     pub(crate) list_style: Option<ListStyleSpec>,
+    /// `text-transform` (ADR 0028), inherited.
+    pub(crate) text_transform: TextTransformSpec,
+    /// `white-space` (ADR 0028), inherited; `None` = nothing on the chain
+    /// declared it (the `pre` tag's UA default applies at the block).
+    pub(crate) white_space: Option<WhiteSpaceSpec>,
 }
 
 /// `color` with its alpha scaled by `opacity`.
@@ -246,6 +251,9 @@ struct Block {
     /// `list-style-type` with the parent's counter); `None` for non-list
     /// blocks.
     marker: Option<String>,
+    /// ADR 0028: the block's resolved `white-space` (the tag's UA default
+    /// applied: the `pre` tag preserves and doesn't wrap).
+    white_space: WhiteSpaceSpec,
     boxed: BoxStyle,
     runs: Vec<Run>,
 }
@@ -650,6 +658,10 @@ impl Styler<'_> {
             },
             letter_spacing,
             list_style: declared.list_style.or(inherited.list_style),
+            text_transform: declared
+                .text_transform
+                .unwrap_or(inherited.text_transform),
+            white_space: declared.white_space.or(inherited.white_space),
         }
     }
 
@@ -853,6 +865,8 @@ pub(crate) fn root_style(
         line_height: LineHeightSpec::Normal,
         letter_spacing: 0.0,
         list_style: None,
+        text_transform: TextTransformSpec::None,
+        white_space: None,
     };
     Styler {
         styles,
@@ -1332,6 +1346,7 @@ pub(crate) fn build_html_ui(
                 // — no interaction state restyles it (ADR 0029).
                 pseudo_reactive: false,
                 marker: None,
+                white_space: WhiteSpaceSpec::Normal,
             })]
         } else {
             match &*rendered {
@@ -1390,6 +1405,7 @@ pub(crate) fn build_html_ui(
                     // with an interaction state (ADR 0029).
                     pseudo_reactive: false,
                     marker: None,
+                    white_space: WhiteSpaceSpec::Normal,
                     boxed: BoxStyle::default(),
                 })],
             }
@@ -1700,6 +1716,8 @@ impl NodeSpec {
                 line_height: LineHeightSpec::Normal,
                 letter_spacing: 0.0,
                 list_style: None,
+                text_transform: TextTransformSpec::None,
+                white_space: None,
             },
             pseudo_reactive: false,
             auto_scroll: [false; 2],
@@ -2433,7 +2451,10 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
         prefix: block.marker.clone().unwrap_or_default(),
         font: styler.text_font(&block.style),
         color: faded(block.style.color, block.style.opacity),
-        no_wrap: matches!(block.kind, BlockKind::Preformatted),
+        no_wrap: matches!(
+            block.white_space,
+            WhiteSpaceSpec::Preserve | WhiteSpaceSpec::NoWrap
+        ),
         justify: match block.style.align {
             TextAlignSpec::Left => Justify::Left,
             TextAlignSpec::Right => Justify::Right,
@@ -4450,7 +4471,11 @@ fn collect_node(
         let tag = match node {
             tl::Node::Tag(tag) => tag,
             tl::Node::Raw(_) => {
-                // Anonymous block: inherits the container's style.
+                // Anonymous block: inherits the container's style — its
+                // `white-space` decides collapsing (ADR 0028).
+                let white_space = inherited
+                    .white_space
+                    .unwrap_or(WhiteSpaceSpec::Normal);
                 let mut runs = Vec::new();
                 let mut reactive = false;
                 push_runs(
@@ -4462,7 +4487,7 @@ fn collect_node(
                     chain.clone(),
                     &mut reactive,
                 );
-                let runs = collapse_runs(runs);
+                let runs = finish_runs(runs, white_space);
                 if !runs.is_empty() {
                     items.push(Item::Block(Block {
                         kind: BlockKind::Paragraph,
@@ -4475,6 +4500,7 @@ fn collect_node(
                         style: inherited.clone(),
                         pseudo_reactive: reactive,
                         marker: None,
+                        white_space,
                         boxed: BoxStyle::default(),
                         runs,
                     }));
@@ -4690,6 +4716,9 @@ fn collect_node(
                     style: inherited.clone(),
                     pseudo_reactive: reactive,
                     marker: None,
+                    white_space: inherited
+                        .white_space
+                        .unwrap_or(WhiteSpaceSpec::Normal),
                     boxed: BoxStyle::default(),
                     runs,
                 }));
@@ -4806,7 +4835,6 @@ fn collect_node(
             }
         };
         // A missing translation falls back to the element's own content.
-        let preformatted = matches!(kind, BlockKind::Preformatted);
         // Only a submit button *of a form with a submit hook* carries the
         // marker: any button is a submit button in HTML, but outside such
         // a form it has no submit semantics — and `covered_by_deeper`
@@ -4829,6 +4857,12 @@ fn collect_node(
             child_chain.clone(),
             &mut reactive,
         );
+        // ADR 0028: the block's `white-space` — a declaration beats the
+        // `pre` tag's UA default (preserve, no wrap).
+        let white_space = style.white_space.unwrap_or(match kind {
+            BlockKind::Preformatted => WhiteSpaceSpec::Preserve,
+            _ => WhiteSpaceSpec::Normal,
+        });
         // ADR 0027: the `li`'s marker — its own computed
         // `list-style-type` (an own declaration beats the inherited
         // list's; `None` falls back to the parent's tag default)
@@ -4853,9 +4887,10 @@ fn collect_node(
             style,
             pseudo_reactive: reactive,
             marker,
+            white_space,
             submit,
             boxed,
-            runs: finish_runs(runs, preformatted),
+            runs: finish_runs(runs, white_space),
         }));
     }
 }
@@ -4978,6 +5013,7 @@ fn run_walk<'a>(
         match handle.get(ctx.parser) {
             Some(tl::Node::Raw(text)) => {
                 let text = decode_entities(&text.as_utf8_str());
+                let text = transform_text(&text, style.text_transform);
                 match runs.last_mut() {
                     Some(last)
                         if last.style == style && last.extras == extras && last.image.is_none() =>
@@ -5158,10 +5194,42 @@ fn push_runs(
     );
 }
 
-/// Whitespace handling for a block's runs: collapsed as in HTML, or for `pre`
-/// kept, minus a newline right after the start tag and trailing whitespace.
-fn finish_runs(mut runs: Vec<Run>, preformatted: bool) -> Vec<Run> {
-    if !preformatted {
+/// ADR 0028: `text-transform` applied to the run's text at collection
+/// (post-`decode`, pre-collapse: the transform never produces or removes
+/// whitespace).
+fn transform_text(text: &str, transform: TextTransformSpec) -> String {
+    match transform {
+        TextTransformSpec::None => text.to_owned(),
+        TextTransformSpec::Uppercase => text.to_uppercase(),
+        TextTransformSpec::Lowercase => text.to_lowercase(),
+        // An approximation of CSS's titlecase: the first cased character
+        // after any run of non-alphanumerics uppercases; the rest stays.
+        TextTransformSpec::Capitalize => {
+            let mut out = String::with_capacity(text.len());
+            let mut at_boundary = true;
+            for character in text.chars() {
+                let boundary = at_boundary;
+                at_boundary = !character.is_alphanumeric();
+                out.push(if boundary {
+                    character.to_uppercase().next().unwrap_or(character)
+                } else {
+                    character
+                });
+            }
+            out
+        }
+    }
+}
+
+/// Whitespace handling for a block's runs (ADR 0028): collapsed as in
+/// HTML's `normal`/`nowrap`, or — for the preserved kinds (`pre`,
+/// `pre-wrap`) — kept, minus a newline right after the start tag and
+/// trailing whitespace.
+fn finish_runs(mut runs: Vec<Run>, white_space: WhiteSpaceSpec) -> Vec<Run> {
+    if !matches!(
+        white_space,
+        WhiteSpaceSpec::Preserve | WhiteSpaceSpec::PreserveWrap
+    ) {
         return collapse_runs(runs);
     }
     if let Some(first) = runs.first_mut() {
@@ -5450,5 +5518,56 @@ mod tests {
         world.run_system_once(super::advance_transitions).unwrap();
         assert_eq!(world.get::<BackgroundColor>(entity).unwrap().0, to);
         assert_eq!(world.get::<Transitions>(entity).unwrap().0, Vec::new());
+    }
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    #[test]
+    fn text_transform_cases() {
+        assert_eq!(
+            transform_text("mixed Case", TextTransformSpec::None),
+            "mixed Case"
+        );
+        assert_eq!(
+            transform_text("mixed Case", TextTransformSpec::Uppercase),
+            "MIXED CASE"
+        );
+        assert_eq!(
+            transform_text("MIXED Case", TextTransformSpec::Lowercase),
+            "mixed case"
+        );
+        // Unicode-aware: ß uppercases to SS.
+        assert_eq!(transform_text("ß", TextTransformSpec::Uppercase), "SS");
+        // Capitalize: the first typographic letter unit of each word
+        // uppercases — a word boundary is any non-letter-unit (punctuation
+        // included: `don't` capitalizes the T, as Chrome does); digits ARE
+        // letter units (no boundary inside `v2next`); the rest stays.
+        assert_eq!(
+            transform_text("hello world", TextTransformSpec::Capitalize),
+            "Hello World"
+        );
+        assert_eq!(
+            transform_text("don't stop-me_now (yes)", TextTransformSpec::Capitalize),
+            "Don'T Stop-Me_Now (Yes)"
+        );
+        // A leading non-letter: the boundary carries to the first cased
+        // character.
+        assert_eq!(
+            transform_text("\"quoted\"", TextTransformSpec::Capitalize),
+            "\"Quoted\""
+        );
+        // Digits are alphanumeric: no case boundary inside `v2next`.
+        assert_eq!(
+            transform_text("v2next", TextTransformSpec::Capitalize),
+            "V2next"
+        );
+        // The transform never touches whitespace shape.
+        assert_eq!(
+            transform_text("a  b", TextTransformSpec::Capitalize),
+            "A  B"
+        );
     }
 }

@@ -798,6 +798,10 @@ pub(crate) struct ElementStyle {
     pub letter_spacing: Option<LetterSpacingSpec>,
     /// `list-style-type` (inherited, ADR 0027).
     pub list_style: Option<ListStyleSpec>,
+    /// `text-transform` (inherited, ADR 0028).
+    pub text_transform: Option<TextTransformSpec>,
+    /// `white-space` (inherited, ADR 0028).
+    pub white_space: Option<WhiteSpaceSpec>,
     /// `outline` (shorthand and longhands, `outline-offset`).
     pub outline: OutlineDecl,
     /// `text-decoration` (`underline`/`line-through` and its color;
@@ -858,6 +862,32 @@ pub(crate) enum LetterSpacingSpec {
     Px(f32),
     Em(f32),
     Rem(f32),
+}
+
+/// Computed `text-transform` (ADR 0028), inherited; applied to the run
+/// text at collection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TextTransformSpec {
+    #[default]
+    None,
+    Uppercase,
+    Lowercase,
+    /// Each word's first cased character uppercased (an approximation of
+    /// CSS's titlecase: a cased character after any non-alphanumeric).
+    Capitalize,
+}
+
+/// Computed `white-space` (ADR 0028), inherited: how a block's text
+/// collapses and wraps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum WhiteSpaceSpec {
+    #[default]
+    Normal,
+    NoWrap,
+    /// White space is preserved (and no wrapping: CSS's `pre`).
+    Preserve,
+    /// White space is preserved, wrapping allowed.
+    PreserveWrap,
 }
 
 /// Computed `list-style-type` (ADR 0027), inherited from the list to its
@@ -1666,6 +1696,37 @@ fn bevy_overflow(axis: OverflowAxisDecl) -> OverflowAxis {
     }
 }
 
+/// `text-transform` (ADR 0028): the four case mappings; lightningcss's
+/// other variants (`full-width`, `full-size-kana`) drop the declaration.
+fn text_transform_decl(
+    transform: &lightningcss::properties::text::TextTransform,
+) -> Option<TextTransformSpec> {
+    use lightningcss::properties::text::TextTransform as Css;
+    match transform {
+        Css { case, .. } if *case == lightningcss::properties::text::TextTransformCase::None && transform.other == lightningcss::properties::text::TextTransformOther::empty() => Some(TextTransformSpec::None),
+        Css { case: lightningcss::properties::text::TextTransformCase::Uppercase, other } if *other == lightningcss::properties::text::TextTransformOther::empty() => Some(TextTransformSpec::Uppercase),
+        Css { case: lightningcss::properties::text::TextTransformCase::Lowercase, other } if *other == lightningcss::properties::text::TextTransformOther::empty() => Some(TextTransformSpec::Lowercase),
+        Css { case: lightningcss::properties::text::TextTransformCase::Capitalize, other } if *other == lightningcss::properties::text::TextTransformOther::empty() => Some(TextTransformSpec::Capitalize),
+        // full-width / full-size-kana / mixed forms: unsupported.
+        _ => unsupported("text-transform value"),
+    }
+}
+
+/// `white-space` (ADR 0028): the four forms the crate distinguishes;
+/// `break-spaces`/`pre-line` drop the declaration.
+fn white_space_decl(
+    white_space: &lightningcss::properties::text::WhiteSpace,
+) -> Option<WhiteSpaceSpec> {
+    use lightningcss::properties::text::WhiteSpace as Css;
+    match white_space {
+        Css::Normal => Some(WhiteSpaceSpec::Normal),
+        Css::Pre => Some(WhiteSpaceSpec::Preserve),
+        Css::NoWrap => Some(WhiteSpaceSpec::NoWrap),
+        Css::PreWrap => Some(WhiteSpaceSpec::PreserveWrap),
+        Css::BreakSpaces | Css::PreLine => unsupported("white-space value"),
+    }
+}
+
 /// `text-align` (ADR 0027): `Start`/`End` map to `Left`/`Right` (the
 /// crate's text is LTR; there is no `direction` support).
 fn text_align(align: lightningcss::properties::text::TextAlign) -> Option<TextAlignSpec> {
@@ -2406,6 +2467,8 @@ fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
         "line-height" => style.line_height = None,
         "letter-spacing" => style.letter_spacing = None,
         "list-style-type" | "list-style" => style.list_style = None,
+        "text-transform" => style.text_transform = None,
+        "white-space" => style.white_space = None,
         _ => {}
     }
     // A keyword also drops the property's `calc()` entries: the field
@@ -2447,6 +2510,16 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::LetterSpacing(spacing) => {
             if let Some(spec) = letter_spacing_decl(spacing) {
                 style.letter_spacing = Some(spec);
+            }
+        }
+        Property::TextTransform(transform) => {
+            if let Some(spec) = text_transform_decl(transform) {
+                style.text_transform = Some(spec);
+            }
+        }
+        Property::WhiteSpace(white_space) => {
+            if let Some(spec) = white_space_decl(white_space) {
+                style.white_space = Some(spec);
             }
         }
         Property::ListStyleType(list_style) => {
@@ -6086,6 +6159,48 @@ mod tests {
             Some(ListStyleSpec::Disc)
         );
         assert_eq!(declared("list-style-type: upper-roman").list_style, None);
+    }
+
+    #[test]
+    fn text_transform_values_map_to_the_cases() {
+        for (declaration, expected) in [
+            ("text-transform: none", TextTransformSpec::None),
+            ("text-transform: uppercase", TextTransformSpec::Uppercase),
+            ("text-transform: lowercase", TextTransformSpec::Lowercase),
+            ("text-transform: capitalize", TextTransformSpec::Capitalize),
+        ] {
+            assert_eq!(declared(declaration).text_transform, Some(expected));
+        }
+        // full-width / full-size-kana / mixed forms drop the declaration
+        // (an earlier rule's value stands).
+        assert_eq!(
+            declared("text-transform: uppercase; text-transform: full-width").text_transform,
+            Some(TextTransformSpec::Uppercase)
+        );
+        assert_eq!(declared("text-transform: full-width").text_transform, None);
+        assert_eq!(
+            declared("text-transform: uppercase full-width").text_transform,
+            None
+        );
+    }
+
+    #[test]
+    fn white_space_values_map_to_the_modes() {
+        for (declaration, expected) in [
+            ("white-space: normal", WhiteSpaceSpec::Normal),
+            ("white-space: nowrap", WhiteSpaceSpec::NoWrap),
+            ("white-space: pre", WhiteSpaceSpec::Preserve),
+            ("white-space: pre-wrap", WhiteSpaceSpec::PreserveWrap),
+        ] {
+            assert_eq!(declared(declaration).white_space, Some(expected));
+        }
+        // break-spaces / pre-line drop the declaration (an earlier rule's
+        // value stands).
+        assert_eq!(
+            declared("white-space: pre; white-space: break-spaces").white_space,
+            Some(WhiteSpaceSpec::Preserve)
+        );
+        assert_eq!(declared("white-space: pre-line").white_space, None);
     }
 
     #[test]
