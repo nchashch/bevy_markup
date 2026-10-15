@@ -1,0 +1,16 @@
+{
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py", "viewport": [640, 480]},
+ "elements": [
+  {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 0, 640, 248]},
+  {"tag": "p", "id": null, "classes": ["center"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 0, 220, 48]},
+  {"tag": "p", "id": null, "classes": ["right"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 48, 220, 48]},
+  {"tag": "p", "id": null, "classes": ["justify"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 96, 220, 72]},
+  {"tag": "p", "id": null, "classes": ["lh"], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 168, 220, 80]}
+ ],
+ "runs": [
+  {"text": "Centered text wraps here", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "Right aligned wraps here", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "Justified words stretch across the width", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "Line height two lines of text", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""}
+ ]
+}

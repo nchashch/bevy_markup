@@ -1,0 +1,11 @@
+html { color: #ffffff }
+p { color: #ffffff }
+.center { text-align: center }
+.right { text-align: right }
+.justify { text-align: justify; width: 200px }
+.lh-num { line-height: 1.5 }
+.lh-px { line-height: 30px }
+.ls { letter-spacing: 2px }
+.ls-em { letter-spacing: 0.25em; font-size: 16px }
+.inherit-align { text-align: right }
+.inherit-align p { color: #ffff00 }

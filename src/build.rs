@@ -11,14 +11,16 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 #[cfg(feature = "text-input")]
 use bevy::text::EditableText;
+use bevy::text::{LetterSpacing, LineHeight};
 use bevy::text::{InlineBox, InlineBoxKind};
 #[cfg(feature = "text-input")]
 use bevy::ui_widgets::TextInput;
 
 use crate::cascade::{
     self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, GridNames,
-    HtmlStyles, InlineStyle, LayoutDecl, OutlineDecl, Pseudo, SliceValue, TransitionDecl,
-    TransitionProp, node_field_mut,
+    HtmlStyles, InlineStyle, LayoutDecl, LetterSpacingSpec, LineHeightSpec, ListStyleSpec,
+    OutlineDecl, Pseudo, SliceValue, TextAlignSpec, TransitionDecl, TransitionProp,
+    node_field_mut,
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
@@ -54,6 +56,15 @@ pub(crate) struct Style {
     /// The product of the element's and its ancestors' `opacity`: CSS group
     /// opacity, applied by fading every color of the subtree ([`faded`]).
     pub(crate) opacity: f32,
+    /// `text-align` (ADR 0027): the block's line alignment, inherited.
+    pub(crate) align: TextAlignSpec,
+    /// `line-height` (ADR 0027), inherited per kind (a multiplier stays
+    /// relative to each element's own size).
+    pub(crate) line_height: LineHeightSpec,
+    /// `letter-spacing` (ADR 0027), resolved to pixels, inherited.
+    pub(crate) letter_spacing: f32,
+    /// `list-style-type` (ADR 0027), inherited; inert outside list items.
+    pub(crate) list_style: ListStyleSpec,
 }
 
 /// `color` with its alpha scaled by `opacity`.
@@ -594,6 +605,18 @@ impl Styler<'_> {
         let declared = self.styles.get_with(element, pseudo, inline, ancestors);
         let bold = declared.bold.unwrap_or(inherited.bold);
         let italic = declared.italic.unwrap_or(inherited.italic);
+        let size = declared
+            .font_size
+            .map_or(inherited.size, |size| size.resolve(inherited.size, self.root_size));
+        let letter_spacing = declared.letter_spacing.map_or(inherited.letter_spacing, |spec| {
+            match spec {
+                LetterSpacingSpec::Normal => 0.0,
+                LetterSpacingSpec::Px(px) => px,
+                // `em` is against the element's own computed font size.
+                LetterSpacingSpec::Em(em) => em * size,
+                LetterSpacingSpec::Rem(rem) => rem * self.root_size,
+            }
+        });
         Style {
             color: declared.color.unwrap_or(inherited.color),
             // A declared list with no registered family falls back to the
@@ -604,13 +627,22 @@ impl Styler<'_> {
                 Some(list) => Some(self.fonts.resolve_chain(list)),
                 None => inherited.family.clone(),
             },
-            size: declared.font_size.map_or(inherited.size, |size| {
-                size.resolve(inherited.size, self.root_size)
-            }),
+            size,
             bold,
             italic,
             pointer_events: declared.pointer_events.unwrap_or(inherited.pointer_events),
             opacity: inherited.opacity * declared.opacity.unwrap_or(1.0),
+            // ADR 0027: the inherited text properties. `line-height`'s
+            // `rem` computes to an absolute length at the element (CSS:
+            // the computed value inherits); a multiplier stays relative
+            // and re-multiplies per element.
+            align: declared.text_align.unwrap_or(inherited.align),
+            line_height: match declared.line_height.unwrap_or(inherited.line_height) {
+                LineHeightSpec::Rem(rem) => LineHeightSpec::Px(rem * self.root_size),
+                spec => spec,
+            },
+            letter_spacing,
+            list_style: declared.list_style.unwrap_or(inherited.list_style),
         }
     }
 
@@ -810,6 +842,10 @@ pub(crate) fn root_style(
         italic: false,
         pointer_events: true,
         opacity: 1.0,
+        align: TextAlignSpec::Left,
+        line_height: LineHeightSpec::Normal,
+        letter_spacing: 0.0,
+        list_style: ListStyleSpec::Disc,
     };
     Styler {
         styles,
@@ -1597,6 +1633,12 @@ struct TextSpec {
     font: TextFont,
     color: Color,
     no_wrap: bool,
+    /// ADR 0027: the block's line alignment (`text-align`).
+    justify: Justify,
+    /// ADR 0027: the block's line height (`line-height`).
+    line_height: LineHeight,
+    /// ADR 0027: the block's letter spacing (`letter-spacing`), in px.
+    letter_spacing: LetterSpacing,
     spans: Vec<SpanSpec>,
 }
 
@@ -1642,6 +1684,10 @@ impl NodeSpec {
                 italic: false,
                 pointer_events: true,
                 opacity: 1.0,
+                align: TextAlignSpec::Left,
+                line_height: LineHeightSpec::Normal,
+                letter_spacing: 0.0,
+                list_style: ListStyleSpec::Disc,
             },
             pseudo_reactive: false,
             background: None,
@@ -2028,6 +2074,10 @@ fn spawn_spans(spans: &mut ChildSpawnerCommands<'_>, text: &TextSpec, pickable: 
                 TextColor(span.color),
             ))
         };
+        // ADR 0027: bevy's measure reads the line height and letter
+        // spacing from each *span* (`TextSpan` requires its own), so the
+        // block's CSS values are copied onto every run.
+        child.insert((text.line_height, text.letter_spacing));
         // A link span is a picked entity: bevy's per-section text picking
         // resolves clicks to it, and its bindings emit the signals (the
         // `open` click carries the href). `HtmlElement`/`DomNode` give it
@@ -2321,6 +2371,21 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
         font: styler.text_font(&block.style),
         color: faded(block.style.color, block.style.opacity),
         no_wrap: matches!(block.kind, BlockKind::Preformatted),
+        justify: match block.style.align {
+            TextAlignSpec::Left => Justify::Left,
+            TextAlignSpec::Right => Justify::Right,
+            TextAlignSpec::Center => Justify::Center,
+            TextAlignSpec::Justify => Justify::Justified,
+        },
+        line_height: match block.style.line_height {
+            LineHeightSpec::Normal => LineHeight::RelativeToFont(1.2),
+            LineHeightSpec::Relative(factor) => LineHeight::RelativeToFont(factor),
+            LineHeightSpec::Px(px) => LineHeight::Px(px),
+            LineHeightSpec::Rem(_) => {
+                unreachable!("rem resolves at compute time (style_of)")
+            }
+        },
+        letter_spacing: LetterSpacing::Px(block.style.letter_spacing),
         spans: block
             .runs
             .iter()
@@ -2619,9 +2684,14 @@ fn spawn_attached(
             text.font.clone(),
             TextColor(text.color),
         ));
-        if text.no_wrap {
-            entity.insert(TextLayout::no_wrap());
-        }
+        entity.insert(text.line_height);
+        entity.insert(text.letter_spacing);
+        let layout = if text.no_wrap {
+            TextLayout::no_wrap()
+        } else {
+            TextLayout::default()
+        };
+        entity.insert(layout.with_justify(text.justify));
         // bevy_picking resolves text-section hits against the span
         // entity, so the block's `pointer-events: none` must be on the
         // spans too (or the ignored block stays clickable).
@@ -3073,9 +3143,12 @@ fn update_spec<'a>(
         TextLayout::no_wrap()
     } else {
         TextLayout::default()
-    };
+    }
+    .with_justify(text.justify);
     let (prefix, color) = (text.prefix, text.color);
     let font = text.font.clone();
+    let line_height = text.line_height;
+    let letter_spacing = text.letter_spacing;
     let text_transitions = spec.transitions.clone();
     target.queue(move |mut entity: EntityWorldMut| {
         put(&mut entity, Some(Text::new(prefix)));
@@ -3097,6 +3170,11 @@ fn update_spec<'a>(
         if !same {
             entity.insert(layout);
         }
+        // ADR 0027: `line-height`/`letter-spacing` — replace, never
+        // remove (both are `Text`'s required components, and CSS has no
+        // "absent" state: `normal` is a value).
+        put(&mut entity, Some(line_height));
+        put(&mut entity, Some(letter_spacing));
     });
     // Spans carry the block's `pointer-events: none` (see
     // `spawn_spec`); an update without it takes it back. An image
@@ -3123,6 +3201,10 @@ fn update_spec<'a>(
                     let Some(spec) = shared.text.as_ref() else {
                         return;
                     };
+                    // The block's values, before `spec` shadows into the
+                    // span's spec (ADR 0027: copied onto every span).
+                    let (spec_line_height, spec_letter_spacing) =
+                        (spec.line_height, spec.letter_spacing);
                     let spec = &spec.spans[index];
                     if spec.image.is_none() {
                         let content = spec.text.as_str();
@@ -3169,6 +3251,12 @@ fn update_spec<'a>(
                             }
                             _ => put(&mut span, Some(TextColor(spec.color))),
                         }
+                        // ADR 0027: the block's line height/letter spacing
+                        // on every span (bevy's measure reads the span's
+                        // own components); replace, never remove — both
+                        // are `TextSpan` required components.
+                        put(&mut span, Some(spec_line_height));
+                        put(&mut span, Some(spec_letter_spacing));
                     } else {
                         let image = spec.image.as_ref().unwrap();
                         put(

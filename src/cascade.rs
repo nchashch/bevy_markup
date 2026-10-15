@@ -764,6 +764,14 @@ pub(crate) struct ElementStyle {
     /// `opacity`, clamped to `0..=1` (group opacity: multiplies down the
     /// subtree).
     pub opacity: Option<f32>,
+    /// `text-align` (inherited, ADR 0027).
+    pub text_align: Option<TextAlignSpec>,
+    /// `line-height` (inherited, ADR 0027).
+    pub line_height: Option<LineHeightSpec>,
+    /// `letter-spacing` (inherited, ADR 0027); `None` = `normal`.
+    pub letter_spacing: Option<LetterSpacingSpec>,
+    /// `list-style-type` (inherited, ADR 0027).
+    pub list_style: Option<ListStyleSpec>,
     /// `outline` (shorthand and longhands, `outline-offset`).
     pub outline: OutlineDecl,
     /// `text-decoration` (`underline`/`line-through` and its color;
@@ -786,6 +794,56 @@ pub(crate) struct DecorationDecl {
     pub line_through: bool,
     /// `text-decoration-color`; `None` = `currentColor` (the text color).
     pub color: Option<Color>,
+}
+
+/// Computed `text-align` (ADR 0027): a block's line alignment, inherited.
+/// `Start`/`End` map to `Left`/`Right` (the crate's text is LTR; there is
+/// no `direction` support).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TextAlignSpec {
+    #[default]
+    Left,
+    Right,
+    Center,
+    Justify,
+}
+
+/// Computed `line-height` (ADR 0027), inherited per kind exactly as CSS
+/// computes it: a multiplier (`normal`, a unitless number, `%`, `em`)
+/// inherits re-multiplied per element; an absolute length (`px`) inherits
+/// as pixels; `rem` computes to pixels at the element (the root size is
+/// a compute-time input).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LineHeightSpec {
+    Normal,
+    /// A multiplier of the element's own font size (also `em` and `%`).
+    Relative(f32),
+    Px(f32),
+    /// A multiplier of the root size (`rem`), resolved to pixels at
+    /// compute time.
+    Rem(f32),
+}
+
+/// Declared `letter-spacing` (ADR 0027), resolved to pixels at compute
+/// time (`em` against the element's font size, `rem` against the root).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LetterSpacingSpec {
+    Normal,
+    Px(f32),
+    Em(f32),
+    Rem(f32),
+}
+
+/// Computed `list-style-type` (ADR 0027), inherited from the list to its
+/// items. The default is CSS's `disc` — inert outside list items.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ListStyleSpec {
+    #[default]
+    Disc,
+    Circle,
+    Square,
+    Decimal,
+    None,
 }
 
 /// A property the `transition` shorthand names and the crate animates.
@@ -1569,6 +1627,98 @@ fn overflow_axis(keyword: &OverflowKeyword) -> OverflowAxis {
     }
 }
 
+/// `text-align` (ADR 0027): `Start`/`End` map to `Left`/`Right` (the
+/// crate's text is LTR; there is no `direction` support).
+fn text_align(align: lightningcss::properties::text::TextAlign) -> Option<TextAlignSpec> {
+    use lightningcss::properties::text::TextAlign as Css;
+    match align {
+        Css::Start | Css::Left => Some(TextAlignSpec::Left),
+        Css::End | Css::Right => Some(TextAlignSpec::Right),
+        Css::Center => Some(TextAlignSpec::Center),
+        Css::Justify => Some(TextAlignSpec::Justify),
+        // `match-parent`/`justify-all` need `direction`/`text-justify`
+        // support the crate doesn't have: drop the declaration.
+        Css::MatchParent | Css::JustifyAll => unsupported("text-align value"),
+    }
+}
+
+/// `line-height` (ADR 0027): a multiplier inherits re-multiplied per
+/// element (`normal`, a unitless number, `%`, `em`); a length inherits as
+/// pixels (`px`, `rem`; other absolute units convert; viewport units are
+/// unsupported and drop the declaration).
+fn line_height_decl(line_height: &lightningcss::properties::font::LineHeight) -> Option<LineHeightSpec> {
+    use lightningcss::properties::font::LineHeight as Css;
+    match line_height {
+        Css::Normal => Some(LineHeightSpec::Normal),
+        Css::Number(number) => Some(LineHeightSpec::Relative(*number)),
+        Css::Length(LengthPercentage::Dimension(length)) => match length {
+            LengthValue::Px(px) => Some(LineHeightSpec::Px(*px)),
+            // `em` is a multiple of the element's own font size — the
+            // same computation a unitless number is.
+            LengthValue::Em(em) => Some(LineHeightSpec::Relative(*em)),
+            LengthValue::Rem(rem) => Some(LineHeightSpec::Rem(*rem)),
+            length => {
+                // Other absolute units (pt, cm, …) convert; relative ones
+                // (vw, …) drop the declaration.
+                length.to_px().map(|px| LineHeightSpec::Px(px))
+            }
+        },
+        // A percentage of the element's font size: the same computation a
+        // unitless number is.
+        Css::Length(LengthPercentage::Percentage(percentage)) => {
+            Some(LineHeightSpec::Relative(percentage.0))
+        }
+        Css::Length(LengthPercentage::Calc(_)) => unsupported("line-height calc()"),
+    }
+}
+
+/// `letter-spacing` (ADR 0027): the computed length inherits; `normal` is
+/// zero. Viewport units are unsupported and drop the declaration.
+fn letter_spacing_decl(spacing: &lightningcss::properties::text::Spacing) -> Option<LetterSpacingSpec> {
+    match spacing {
+        lightningcss::properties::text::Spacing::Normal => {
+            Some(LetterSpacingSpec::Normal)
+        }
+        lightningcss::properties::text::Spacing::Length(length) => match length {
+            lightningcss::values::length::Length::Value(value) => match value {
+                LengthValue::Px(px) => Some(LetterSpacingSpec::Px(*px)),
+                LengthValue::Em(em) => Some(LetterSpacingSpec::Em(*em)),
+                LengthValue::Rem(rem) => Some(LetterSpacingSpec::Rem(*rem)),
+                value => value.to_px().map(LetterSpacingSpec::Px),
+            },
+            // `letter-spacing: calc(…)` (a length calc) — unsupported
+            // (drops the declaration, like the other calc properties do
+            // when unresolvable at apply time).
+            lightningcss::values::length::Length::Calc(_) => {
+                unsupported("letter-spacing calc()")
+            }
+        },
+    }
+}
+
+/// `list-style-type` (ADR 0027): the four marker kinds the crate draws
+/// plus `none`; an explicit marker string or another counter style drops
+/// the declaration.
+fn list_style_decl(
+    list_style: &lightningcss::properties::list::ListStyleType,
+) -> Option<ListStyleSpec> {
+    use lightningcss::properties::list::{CounterStyle, ListStyleType as Css};
+    use lightningcss::properties::list::PredefinedCounterStyle;
+    match list_style {
+        Css::None => Some(ListStyleSpec::None),
+        Css::CounterStyle(CounterStyle::Predefined(style)) => match style {
+            PredefinedCounterStyle::Disc => Some(ListStyleSpec::Disc),
+            PredefinedCounterStyle::Circle => Some(ListStyleSpec::Circle),
+            PredefinedCounterStyle::Square => Some(ListStyleSpec::Square),
+            PredefinedCounterStyle::Decimal | PredefinedCounterStyle::DecimalLeadingZero => {
+                Some(ListStyleSpec::Decimal)
+            }
+            _ => unsupported("list-style-type counter style"),
+        },
+        Css::CounterStyle(_) | Css::String(_) => unsupported("list-style-type counter style"),
+    }
+}
+
 impl ElementStyle {
     /// Sets `prop` to a plain value (dropping any calc for it), or — when
     /// the declaration was a calc() — records the expression instead (the
@@ -2213,6 +2363,10 @@ fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
                 .retain(|(p, _)| !matches!(p, CalcProp::Top | CalcProp::Right | CalcProp::Bottom | CalcProp::Left));
         }
         "transition" => style.transitions.clear(),
+        "text-align" => style.text_align = None,
+        "line-height" => style.line_height = None,
+        "letter-spacing" => style.letter_spacing = None,
+        "list-style-type" | "list-style" => style.list_style = None,
         _ => {}
     }
     // A keyword also drops the property's `calc()` entries: the field
@@ -2240,6 +2394,33 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         Property::TextDecoration(decoration, _) => {
             style.text_decoration = Some(decoration_decl(decoration.line, Some(&decoration.color)));
+        }
+        Property::TextAlign(align) => {
+            if let Some(spec) = text_align(*align) {
+                style.text_align = Some(spec);
+            }
+        }
+        Property::LineHeight(line_height) => {
+            if let Some(spec) = line_height_decl(line_height) {
+                style.line_height = Some(spec);
+            }
+        }
+        Property::LetterSpacing(spacing) => {
+            if let Some(spec) = letter_spacing_decl(spacing) {
+                style.letter_spacing = Some(spec);
+            }
+        }
+        Property::ListStyleType(list_style) => {
+            if let Some(spec) = list_style_decl(list_style) {
+                style.list_style = Some(spec);
+            }
+        }
+        Property::ListStyle(style_decl) => {
+            // The shorthand's position/image halves are unsupported; its
+            // type half applies when declared.
+            if let Some(spec) = list_style_decl(&style_decl.list_style_type) {
+                style.list_style = Some(spec);
+            }
         }
         Property::TextDecorationLine(line, _) => {
             let mut declared = style.text_decoration.take().unwrap_or_default();
@@ -5799,7 +5980,82 @@ mod tests {
         assert_eq!(layout("width: 3ch").width, None);
     }
 
+    #[test]
+    fn text_align_values_map_one_to_one() {
+        for (declaration, expected) in [
+            ("text-align: left", TextAlignSpec::Left),
+            ("text-align: start", TextAlignSpec::Left),
+            ("text-align: right", TextAlignSpec::Right),
+            ("text-align: end", TextAlignSpec::Right),
+            ("text-align: center", TextAlignSpec::Center),
+            ("text-align: justify", TextAlignSpec::Justify),
+        ] {
+            assert_eq!(declared(declaration).text_align, Some(expected));
+        }
+        // `match-parent`/`justify-all` need direction/text-justify: the
+        // declaration drops (an earlier rule's value stands).
+        assert_eq!(declared("text-align: center; text-align: match-parent").text_align, Some(TextAlignSpec::Center));
+        assert_eq!(declared("text-align: justify-all").text_align, None);
+    }
 
+    #[test]
+    fn line_height_kinds_resolve_per_kind() {
+        assert_eq!(declared("line-height: normal").line_height, Some(LineHeightSpec::Normal));
+        assert_eq!(declared("line-height: 1.5").line_height, Some(LineHeightSpec::Relative(1.5)));
+        assert_eq!(declared("line-height: 150%").line_height, Some(LineHeightSpec::Relative(1.5)));
+        // `em` is a multiple of the element's own size (re-multiplied per
+        // element, like CSS's unitless inheritance).
+        assert_eq!(declared("line-height: 1.25em").line_height, Some(LineHeightSpec::Relative(1.25)));
+        assert_eq!(declared("line-height: 30px").line_height, Some(LineHeightSpec::Px(30.0)));
+        assert_eq!(declared("line-height: 2rem").line_height, Some(LineHeightSpec::Rem(2.0)));
+        // A calc or a viewport unit drops the declaration.
+        assert_eq!(declared("line-height: 10vh").line_height, None);
+    }
+
+    #[test]
+    fn letter_spacing_units_keep_their_kind() {
+        assert_eq!(declared("letter-spacing: normal").letter_spacing, Some(LetterSpacingSpec::Normal));
+        assert_eq!(declared("letter-spacing: 2px").letter_spacing, Some(LetterSpacingSpec::Px(2.0)));
+        assert_eq!(declared("letter-spacing: 0.1em").letter_spacing, Some(LetterSpacingSpec::Em(0.1)));
+        assert_eq!(declared("letter-spacing: 0.5rem").letter_spacing, Some(LetterSpacingSpec::Rem(0.5)));
+        // Other absolute units convert (2.54cm = 96px).
+        assert_eq!(
+            declared("letter-spacing: 2.54cm").letter_spacing,
+            Some(LetterSpacingSpec::Px(96.0))
+        );
+        assert_eq!(declared("letter-spacing: 1vw").letter_spacing, None);
+    }
+
+    #[test]
+    fn list_style_types_map_to_the_markers() {
+        for (declaration, expected) in [
+            ("list-style-type: disc", ListStyleSpec::Disc),
+            ("list-style-type: circle", ListStyleSpec::Circle),
+            ("list-style-type: square", ListStyleSpec::Square),
+            ("list-style-type: decimal", ListStyleSpec::Decimal),
+            ("list-style-type: decimal-leading-zero", ListStyleSpec::Decimal),
+            ("list-style-type: none", ListStyleSpec::None),
+        ] {
+            assert_eq!(declared(declaration).list_style, Some(expected));
+        }
+        // An explicit marker string or another counter style drops the
+        // declaration (an earlier rule's value stands).
+        assert_eq!(
+            declared("list-style-type: disc; list-style-type: \"\\2605\"").list_style,
+            Some(ListStyleSpec::Disc)
+        );
+        assert_eq!(declared("list-style-type: upper-roman").list_style, None);
+    }
+
+    #[test]
+    fn the_list_style_shorthand_takes_its_type() {
+        assert_eq!(
+            declared("list-style: none").list_style,
+            Some(ListStyleSpec::None)
+        );
+        assert_eq!(
+            declared("list-style: square inside").list_style,
+            Some(ListStyleSpec::Square)
+        );
+    }
 }
-
-

@@ -12,6 +12,7 @@ use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
 use bevy::ecs::schedule::ScheduleBuildSettings;
 use bevy::image::{CompressedImageFormats, ImageLoader};
 use bevy::input::ButtonState;
+use bevy::text::{LetterSpacing, LineHeight};
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource, InlineBox};
@@ -937,6 +938,23 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         && background.0 != Color::NONE
     {
         write!(line, " bg={}", hex(background.0)).unwrap();
+    }
+    // ADR 0027: the block's text properties, when non-default
+    // (`text-align`, `line-height`, `letter-spacing`).
+    if let Some(layout) = entity_ref.get::<TextLayout>()
+        && layout.justify != Justify::Left
+    {
+        write!(line, " align={:?}", layout.justify).unwrap();
+    }
+    if let Some(line_height) = entity_ref.get::<LineHeight>()
+        && *line_height != LineHeight::RelativeToFont(1.2)
+    {
+        write!(line, " lh={line_height:?}").unwrap();
+    }
+    if let Some(spacing) = entity_ref.get::<LetterSpacing>()
+        && *spacing != LetterSpacing::Px(0.0)
+    {
+        write!(line, " ls={spacing:?}").unwrap();
     }
     if let Some(image) = entity_ref.get::<ImageNode>()
         && let NodeImageMode::Sliced(slicer) = &image.image_mode

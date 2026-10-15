@@ -6401,3 +6401,33 @@ fn flip_during_a_stylesheet_wait_applies_with_the_sheet() {
         "the sheet and the flip applied together: {dump}"
     );
 }
+
+/// ADR 0027's text properties, dumped: `text-align`/`line-height`/
+/// `letter-spacing` land on the block's components, non-defaults only,
+/// and `text-align` inherits.
+#[test]
+fn text_props_vector() {
+    let mut ui = TestUi::from_vector("text_props");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p.center align=Center
+    "Centered line" default 16px #ffffff
+  p.right align=Right
+    "Right line" default 16px #ffffff
+  p.justify w=200 align=Justified
+    "Justified words wrap and stretch across the block" default 16px #ffffff
+  p.lh-num lh=RelativeToFont(1.5)
+    "Line height one point five" default 16px #ffffff
+  p.lh-px lh=Px(30.0)
+    "Line height thirty pixels" default 16px #ffffff
+  p.ls ls=Px(2.0)
+    "Letter spaced" default 16px #ffffff
+  p.ls-em ls=Px(4.0)
+    "Em spaced" default 16px #ffffff
+  div.inherit-align
+    p align=Right
+      "Inherited center" default 16px #ffff00
+"#,
+    );
+}
