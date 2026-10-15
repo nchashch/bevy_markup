@@ -1532,10 +1532,12 @@ impl Compound {
         }
         // A bare pseudo-class list (`*:hover` prints as `:hover`,
         // `:focus-visible` alone) matches any element in that state — the
-        // standard focus-ring rule.
+        // standard focus-ring rule. A structural part counts as content
+        // (`:not(:first-child)`'s argument is legitimately bare).
         if tag.is_none()
             && ids.is_empty()
             && classes.is_empty()
+            && structural.is_empty()
             && selector != "*"
             && pseudo == Pseudo::default()
         {
@@ -6418,6 +6420,126 @@ mod tests {
         assert_eq!(layout("margin: 2rem").margin, [Some(Val::Rem(2.0)); 4]);
         // `ex`/`ch` have no Bevy counterpart.
         assert_eq!(layout("width: 3ch").width, None);
+    }
+
+    #[test]
+    fn an_b_parses_the_patterns() {
+        for (text, expected) in [
+            ("odd", AnB { a: 2, b: 1 }),
+            ("even", AnB { a: 2, b: 0 }),
+            ("3", AnB { a: 0, b: 3 }),
+            ("2n", AnB { a: 2, b: 0 }),
+            ("2n+1", AnB { a: 2, b: 1 }),
+            ("-n+3", AnB { a: -1, b: 3 }),
+            ("n", AnB { a: 1, b: 0 }),
+            ("-2n-1", AnB { a: -2, b: -1 }),
+        ] {
+            assert_eq!(AnB::parse(text), Some(expected), "{text}");
+        }
+        assert_eq!(AnB::parse("nonsense"), None);
+        assert_eq!(AnB::parse(""), None);
+    }
+
+    #[test]
+    fn an_b_matches_positions() {
+        // 2n+1: the odd positions (1, 3, 5).
+        let odd = AnB { a: 2, b: 1 };
+        for index in [1usize, 3, 5] {
+            assert!(odd.matches(index), "{index}");
+        }
+        for index in [2usize, 4] {
+            assert!(!odd.matches(index), "{index}");
+        }
+        // -n+3: the first three only.
+        let first_three = AnB { a: -1, b: 3 };
+        for index in [1usize, 2, 3] {
+            assert!(first_three.matches(index), "{index}");
+        }
+        assert!(!first_three.matches(4));
+        // A plain position.
+        assert!(AnB { a: 0, b: 2 }.matches(2));
+        assert!(!AnB { a: 0, b: 2 }.matches(3));
+    }
+
+    #[test]
+    fn structural_pseudos_match_the_state() {
+        let nth = selector("p:nth-child(2)").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState { tag_index: 2, ..ElementState::default() },
+        );
+        assert!(nth, "the second p matches nth-child(2)");
+        assert!(
+            !selector("p:nth-child(2)").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default()
+            ),
+            "the first p doesn't"
+        );
+        // :first-child/:last-child/:empty/:focus-within.
+        let state = ElementState {
+            tag_index: 1,
+            tag_count: 1,
+            focus_within: true,
+            empty: true,
+            ..ElementState::default()
+        };
+        assert!(selector("p:first-child").matches(&element("p", None, &[]), Pseudo::default(), &[], &state));
+        assert!(selector("p:last-child").matches(&element("p", None, &[]), Pseudo::default(), &[], &state));
+        assert!(selector("p:empty").matches(&element("p", None, &[]), Pseudo::default(), &[], &state));
+        assert!(selector("p:focus-within").matches(&element("p", None, &[]), Pseudo::default(), &[], &state));
+        assert!(
+            !selector("p:empty").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState { empty: false, ..state }
+            )
+        );
+    }
+
+    #[test]
+    fn not_negates_a_compound() {
+        // `:not(.special)` — a non-special p matches; a special one doesn't.
+        assert!(
+            selector("p:not(.special)").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default()
+            )
+        );
+        assert!(
+            !selector("p:not(.special)").matches(
+                &element("p", None, &["special"]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default()
+            )
+        );
+        // The argument's own structural parts evaluate for the same
+        // element.
+        assert!(
+            !selector("p:not(:first-child)").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState { tag_index: 1, tag_count: 2, ..ElementState::default() }
+            )
+        );
+        assert!(
+            selector("p:not(:first-child)").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState { tag_index: 2, tag_count: 2, ..ElementState::default() }
+            )
+        );
+        // A selector list (a comma inside) is unsupported: the rule skips.
+        assert!(Selector::parse("p:not(.a, .b)").is_none());
     }
 
     #[test]

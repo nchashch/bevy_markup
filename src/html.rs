@@ -26,6 +26,7 @@
 
 use std::borrow::Cow;
 
+use bevy::asset::LoadState;
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
@@ -233,6 +234,7 @@ impl HtmlElements<'_, '_> {
 pub(crate) fn render_templates(
     mut events: MessageReader<AssetEvent<HtmlTemplate>>,
     templates: Res<Assets<HtmlTemplate>>,
+    server: Res<AssetServer>,
     mut views: Query<(Ref<HtmlUi>, Ref<TemplateContext>, &mut RenderedHtml)>,
 ) {
     let reloaded: HashSet<AssetId<HtmlTemplate>> = events
@@ -248,6 +250,17 @@ pub(crate) fn render_templates(
             continue;
         }
         let Some(template) = templates.get(&html.0) else {
+            // A template whose load failed (a Tera syntax error): record
+            // it as a failed render — the error paragraph builds and the
+            // UI converges, like a failed render's — instead of staying
+            // `Pending` forever (a blank UI that never settles).
+            if !matches!(server.load_state(html.0.id()), LoadState::Failed(_)) {
+                continue;
+            }
+            let message = "template failed to load (syntax error?)".to_owned();
+            if !matches!(&*rendered, RenderedHtml::Failed(previous) if *previous == message) {
+                *rendered = RenderedHtml::Failed(message);
+            }
             continue;
         };
         // An identical render changes nothing: leave `RenderedHtml`

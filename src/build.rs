@@ -1104,6 +1104,15 @@ pub(crate) fn build_html_ui(
                 || outline.as_ref().is_some_and(|outline| outline.is_changed()),
         };
         let decision = rebuild.decide(frame);
+        if frame.default != Some(Phase::Ready) {
+            println!(
+                "DECIDEDBG decision={decision:?} own={:?} default={:?} content={} full_latch={}",
+                frame.own,
+                frame.default,
+                frame.content_changed,
+                rebuild.pending_full_style()
+            );
+        }
         // The restyled builds record the hash; a `Wait` (a sheet still
         // loading) keeps the old one, so the change outlives the wait —
         // the same rule that keeps pending changes alive.
@@ -1135,6 +1144,9 @@ pub(crate) fn build_html_ui(
         // outline-removal build must not reuse its stale specs (a theme
         // swap while the outline was shown kept the old theme,
         // review_0003 G26) — the gate below blocks it.
+        // ADR 0029: read the full-style latch BEFORE the apply-clear
+        // consumes it — the pass's `full_style` reads it below.
+        let full_style_latch = rebuild.pending_full_style();
         rebuild.style_pending_applied();
         let css = match source {
             Source::Own => own_sheet.as_ref().and_then(|own| sheets.get(&own.0)),
@@ -1142,6 +1154,21 @@ pub(crate) fn build_html_ui(
             Source::Unstyled => None,
         };
 
+        if let Ok(mut log) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/bevy_markup_buildlog.txt")
+        {
+            use std::io::Write;
+            let _ = writeln!(
+                log,
+                "entity={entity:?} source={source:?} css={} decision={decision:?} content={} default_changed={} default={:?}",
+                css.is_some().then(|| "some").unwrap_or("none"),
+                frame.content_changed,
+                frame.default_changed,
+                frame.default,
+            );
+        }
         // `var(--name)` resolves against the UI's `TemplateContext` first
         // (values interpolated as written), then the sheet's own `--`
         // properties. Built per pass: the context is constant for one
@@ -1280,7 +1307,7 @@ pub(crate) fn build_html_ui(
                     || frame.fonts_changed
                     || frame.images_changed
                     || frame.vars_changed
-                    || rebuild.pending_full_style());
+                    || full_style_latch);
             let (_, blocked) = state_restyle.remove(&entity).unwrap_or_default();
             pair_trees_into(
                 old_document.dom(),
@@ -4759,6 +4786,8 @@ fn collect_node(
                 .iter()
                 .any(|child| !matches!(child.get(ctx.parser), Some(tl::Node::Comment(_)))),
         };
+        eprintln!("STATEDBG tag={} pos={:?} empty={} fw={}",
+            element.tag, position, element_state.empty, element_state.focus_within);
         let style = if element.tag == "html" {
             inherited.clone()
         } else {

@@ -1,0 +1,7 @@
+html { color: #ffffff }
+p, div { color: #ffffff }
+.odd-stripe:nth-child(odd) { color: #00ff00 }
+.first:first-child { color: #00ff00 }
+.last-in:last-child { color: #00ff00 }
+p:not(.special) { color: #ff00ff }
+.e:empty { background-color: #123456 }

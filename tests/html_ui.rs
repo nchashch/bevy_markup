@@ -6655,3 +6655,90 @@ fn font_face_rules_are_a_noop() {
         "the sheet applied: {dump}"
     );
 }
+
+/// ADR 0028's structural pseudo-classes against the browser: odd/even
+/// striping, first/last-child, `:not(compound)` and `:empty` — the same
+/// characters colored the same way Chromium colors them (`:empty`'s
+/// element carries a background instead of text). The striping ps are the
+/// page's first four children; the first/last pair sits in its own
+/// wrapper (first-child is about the position, not the class).
+#[test]
+fn structural_selectors_vector() {
+    let mut ui = TestUi::from_vector("structural_selectors");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p.odd-stripe
+    "one" default 16px #00ff00
+  p.odd-stripe
+    "two" default 16px #ff00ff
+  p.odd-stripe
+    "three" default 16px #00ff00
+  p.odd-stripe
+    "four" default 16px #ff00ff
+  div
+    p.first
+      "first" default 16px #00ff00
+    p.last-in
+      "last" default 16px #00ff00
+  p.not-special
+    "plain" default 16px #ff00ff
+  p.not-special.special
+    "special" default 16px #ffffff
+  div.e bg=#123456
+"#,
+    );
+}
+
+/// `:focus-within` restyles the focused element's ancestors (and itself)
+/// — the focused subtree's chain — scoped: a flip of the focus marks the
+/// new chain and clears the old, each matching a fresh build.
+#[test]
+fn focus_within_restyles_the_focused_chain() {
+    let page = r#"<div id="outer"><p id="inner">text</p></div>
+        <p class="plain" id="other">other</p>"#;
+    let css = "html { color: #ffffff } div:focus-within { background-color: #111111 } p:focus-within { color: #00ff00 }";
+    let mut target = TestUi::with_layout(
+        "focus-within-target",
+        &[("page.html", page), ("style.css", css)],
+        UVec2::new(320, 240),
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    target.settle();
+    let before = target.dump();
+    let root = target.root();
+    let inner = element_by_id(target.world_mut(), root, "inner");
+    // Focus the inner p: the outer div gains the focus-within mark.
+    target
+        .world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(inner, bevy::input_focus::FocusCause::Navigated);
+    target.settle();
+    let after = target.dump();
+    assert!(after.contains("div#outer bg=#111111"), "{after}");
+    assert!(after.contains("\"text\" default 16px #00ff00"), "{after}");
+    assert!(after.contains("\"other\" default 16px #ffffff"), "{after}");
+    // Moving focus out: the chain clears and the newly focused element
+    // marks instead (its own `:focus-within` — it holds the focus).
+    let other = element_by_id(target.world_mut(), root, "other");
+    target
+        .world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(other, bevy::input_focus::FocusCause::Navigated);
+    target.settle();
+    let moved = target.dump();
+    assert!(moved.contains("div#outer\n"), "the outer cleared: {moved}");
+    assert!(!moved.contains("bg=#111111"), "the mark left: {moved}");
+    assert!(
+        moved.contains("\"other\" default 16px #00ff00"),
+        "the newly focused element marked: {moved}"
+    );
+    // Clearing the focus (no focusables to repair to) restores the start.
+    target
+        .world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .clear();
+    target.settle();
+    assert_eq!(target.dump(), before, "the cleared focus restored");
+}
