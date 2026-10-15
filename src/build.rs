@@ -274,6 +274,18 @@ const CONTAINERS: &[&str] = &[
     "blockquote",
     "figure",
     "form",
+    // ADR 0028: tables map onto the flex model — the table/sections are
+    // columns, a row is a row, the cells are containers. Not CSS's table
+    // layout (no col/row spans, no column sizing); a documented
+    // approximation (the flex rows/columns).
+    "table",
+    "tbody",
+    "thead",
+    "tfoot",
+    "caption",
+    "tr",
+    "td",
+    "th",
 ];
 
 /// A spec shared into the diff: built this frame (the entity tree must be
@@ -634,7 +646,10 @@ impl Styler<'_> {
         element_state: &ElementState,
     ) -> Style {
         let declared = self.styles.get_with(element, pseudo, inline, ancestors, element_state);
-        let bold = declared.bold.unwrap_or(inherited.bold);
+        let bold = declared
+            .bold
+            .unwrap_or(inherited.bold || element.tag == "th");
+
         let italic = declared.italic.unwrap_or(inherited.italic);
         let size = declared
             .font_size
@@ -4911,6 +4926,12 @@ fn collect_node(
             &chain,
             &element_state,
         );
+        // ADR 0028: the tables' UA-sheet defaults — a `tr` lays its cells
+        // out in a row (a declaration wins: `flex-direction` already
+        // applies); a `th`'s text is bold.
+        if element.tag == "tr" && boxed.layout.flex_direction.is_none() {
+            boxed.layout.flex_direction = Some(FlexDirection::Row);
+        }
         // ADR 0027: the tag's list-marker default for this element's
         // *children*, before `element` moves into the container's `Open`
         // (the marker reads the parent's kind, carried by the task — an
@@ -5899,6 +5920,81 @@ mod tests {
         world.run_system_once(super::advance_transitions).unwrap();
         assert_eq!(world.get::<BackgroundColor>(entity).unwrap().0, to);
         assert_eq!(world.get::<Transitions>(entity).unwrap().0, Vec::new());
+    }
+}
+
+#[cfg(test)]
+mod ua_default_tests {
+    use super::*;
+    use lightningcss::traits::IntoOwned;
+
+    /// ADR 0028: a `th`'s text is bold unless a rule declares the weight
+    /// (the UA sheet). The visual check needs a registered family (a
+    /// handle font ignores the weight — bevy uses the file as-is); the
+    /// computed style is the contract here.
+    #[test]
+    fn th_text_is_bold_by_default() {
+        let sheet = lightningcss::stylesheet::StyleSheet::parse(
+            "th {}",
+            lightningcss::stylesheet::ParserOptions::default(),
+        )
+        .expect("css")
+        .into_owned();
+        let styles = HtmlStyles::from_sheet(&sheet);
+        let fonts = FontFamilies::default();
+        let images = Assets::<Image>::default();
+        let styler = Styler {
+            styles: &styles,
+            fonts: &fonts,
+            root_size: 16.0,
+            sheet: None,
+            images: &images,
+            server: None,
+            template: None,
+        };
+        let defaults = Style {
+            color: DEFAULT_COLOR,
+            family: None,
+            size: DEFAULT_FONT_SIZE,
+            bold: false,
+            italic: false,
+            pointer_events: true,
+            opacity: 1.0,
+            align: TextAlignSpec::Left,
+            line_height: LineHeightSpec::Normal,
+            letter_spacing: 0.0,
+            list_style: None,
+            text_transform: TextTransformSpec::None,
+            white_space: None,
+        };
+        let state = ElementState::default();
+        let style = styler.style_of(
+            &element_tag("th"),
+            &defaults,
+            Pseudo::default(),
+            None,
+            &[],
+            &state,
+        );
+        assert!(style.bold, "a th's text is bold by default");
+        // An explicit weight wins.
+        let sheet = lightningcss::stylesheet::StyleSheet::parse(
+            "th { font-weight: normal }",
+            lightningcss::stylesheet::ParserOptions::default(),
+        )
+        .expect("css")
+        .into_owned();
+        let styles = HtmlStyles::from_sheet(&sheet);
+        let styler = Styler { styles: &styles, ..styler };
+        let style = styler.style_of(
+            &element_tag("th"),
+            &defaults,
+            Pseudo::default(),
+            None,
+            &[],
+            &state,
+        );
+        assert!(!style.bold, "a declared weight wins");
     }
 }
 

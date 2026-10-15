@@ -6814,3 +6814,39 @@ fn sibling_flip_restyles_the_following_sibling() {
     target.settle();
     assert_eq!(target.dump(), before, "the unhover restored the start");
 }
+
+/// ADR 0028's table mapping: the table/rows/cells build as flex
+/// containers — a `tr` lays its cells in a row, a `th`'s text is bold,
+/// the cells' selectors work — NOT CSS's table layout (no spans/column
+/// sizing; documented).
+#[test]
+fn tables_vector() {
+    let mut ui = TestUi::from_vector("tables");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  table.grid
+    tr.head dir=Row
+      th bg=#222222
+        -
+          "Name" default 16px #ffffff
+      th bg=#222222
+        -
+          "Count" default 16px #ffffff
+    tr dir=Row
+      td.first padding=2,2,2,2
+        -
+          "apples" default 16px #ff00ff
+      td padding=2,2,2,2
+        -
+          "12" default 16px #ffffff
+    tr dir=Row
+      td.first padding=2,2,2,2
+        -
+          "pears" default 16px #ff00ff
+      td padding=2,2,2,2
+        -
+          "7" default 16px #ffffff
+"#,
+    );
+}

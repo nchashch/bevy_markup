@@ -48,6 +48,14 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   the C1 Windows-1252 replacements and U+FFFD for invalid code points,
   longest-match, one-level (`&amp;lt;` reads `&lt;`), unknown references
   verbatim.
+- **`<table>` maps onto the flex model** (ADR 0028): the
+  `table`/`tbody`/`thead`/`tfoot`/`caption` tags are column containers,
+  a `tr` lays its cells in a row (the UA-sheet default; a
+  `flex-direction` declaration wins), `td`/`th` are containers, and a
+  `th`'s text is bold unless a rule declares the weight. NOT CSS's
+  table layout — no col/row spans, no column sizing; the cells sit
+  side by side in the row's flex. Previously the table tags rendered
+  as anonymous text (silent garbage).
 - **Sibling combinators** (`+` and `~`, ADR 0028): `.hot + p` colors the
   immediately following sibling, `.a ~ p` every following one. Supported
   adjacent to the subject; a sibling combinator deeper in a chain

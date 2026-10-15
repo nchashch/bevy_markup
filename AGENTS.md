@@ -1425,6 +1425,11 @@ Known limits (each skipped/ignored value is logged at `debug`):
   `span` anchored at a named line, and a CSS cascade of names (the
   `GridNames` table is container-level: `grid-template`/`grid` reset it, a
   nameless track list clears that axis's names).
+- **Tables:** the table tags map onto the flex model (ADR 0028): the
+  table/sections/caption are columns, a `tr` is a row (the UA default; a
+  `flex-direction` declaration wins), the cells are containers, a `th`'s
+  text is bold. NOT CSS's table layout: no col/row spans, no column
+  sizing.
 - **Lists:** `list-style-type` (`disc`/`circle`/`square`/`decimal`/
   `none`, inherited; the UA-sheet defaults per tag — `ol` numbers,
   `ul` uses `disc`), counted by the parent list and restarting per
