@@ -21,6 +21,8 @@ pub const GROUPS: [(&str, &[&str]); 3] = [
             "localized",
             "many-uis",
             "calc-layout",
+            "selector-list",
+            "text-features",
         ],
     ),
     (
@@ -34,10 +36,65 @@ pub const GROUPS: [(&str, &[&str]); 3] = [
             "args-injection",
             "remote-sources",
             "markdown-bombs",
+            "selector-bombs",
+            "sibling-bombs",
+            "entity-bombs",
         ],
     ),
-    ("correctness", &["reuse-vs-fresh", "indent-vs-flat"]),
+    (
+        "correctness",
+        &[
+            "reuse-vs-fresh",
+            "indent-vs-flat",
+            "selectors-vs-fresh",
+            "restyle-vs-full",
+            "order-independence",
+            "idle-quiet",
+            "scaling",
+        ],
+    ),
 ];
+
+/// How a correctness scenario's comparison is made (review_0005's
+/// methods; see the README).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TwinKind {
+    /// A fresh UI of the same state, spawned for the comparison: the
+    /// incremental paths (reuse, keyed pairing) against a from-scratch
+    /// build.
+    Fresh,
+    /// The scenario's own second UI (a different template of the same
+    /// document).
+    Static,
+    /// A fresh UI of the same rows in reverse order, compared per row id:
+    /// a row's style may depend only on the row (the sheet is
+    /// order-independent), so a cache keyed on too little — the first
+    /// element of a shape deciding for later ones (review_0005 I06) —
+    /// shows as a difference. A fresh twin shares such a bug; the
+    /// metamorphic reversal doesn't.
+    Reversed,
+    /// The same UI before and after a forced full restyle (its
+    /// stylesheet re-inserted): ADR 0029's scoped interaction restyles
+    /// against the from-scratch cascade, with the interaction state held.
+    FullRestyle,
+}
+
+/// The scenario's comparison, if it has one.
+pub fn twin_kind(scenario: &str) -> Option<TwinKind> {
+    match scenario {
+        "reuse-vs-fresh" | "selectors-vs-fresh" => Some(TwinKind::Fresh),
+        "indent-vs-flat" => Some(TwinKind::Static),
+        "order-independence" => Some(TwinKind::Reversed),
+        "restyle-vs-full" => Some(TwinKind::FullRestyle),
+        _ => None,
+    }
+}
+
+/// How many model rows a scenario renders at `size`: the scaling
+/// scenario's large UI renders four times the small one's.
+pub fn model_rows(scenario: &str, size: usize) -> usize {
+    if scenario == "scaling" { size * 4 } else { size }
+}
 
 /// Every scenario id, in the shell's order.
 pub fn all() -> Vec<&'static str> {
@@ -205,6 +262,133 @@ const CARD_HTML: &str = "<div class=\"card\"><p class=\"k\">UI {{ id }}</p><p cl
 
 const CALC_HTML: &str = "<div class=\"wrap\">{% for row in rows %}<div class=\"card\" style=\"width: calc({{ row.pct }}% - {{ row.px }}px)\"><p class=\"v\">{{ row.value }}</p></div>{% endfor %}</div>";
 
+/// (A sibling combinator must sit next to the subject: `.a + .b .k` skips
+/// its rule — the documented limit — so the sibling rules style the rows
+/// themselves.)
+/// ADR 0028/0030's selectors over a nested list (bug_0150: reuse inside a
+/// container), a table and an ordered list: structural pseudo-classes,
+/// sibling combinators, attribute selectors and `:not()` in subject,
+/// ancestor and sibling positions. The attributes follow the row's id and
+/// flags, so the value churn changes text only and the rows keep reusing;
+/// the random edits of `selectors-vs-fresh` toggle the flags too.
+const SELECTOR_LIST_HTML: &str = "<section class=\"list\">{% for row in rows %}<div class=\"item{% if row.hot %} hot{% endif %}\" id=\"row-{{ row.id }}\" data-state=\"{% if row.hot %}hot{% else %}cold{% endif %}\" data-kind=\"k{{ row.id % 3 }}\"><p class=\"k\">{{ row.name }}</p><p class=\"v\">{{ row.value }}</p></div>
+{% endfor %}</section>
+<ol class=\"ranks\">{% for row in rows %}{% if loop.index0 < 20 %}<li data-state=\"{% if row.hot %}hot{% else %}cold{% endif %}\">{{ row.name }} <b>{{ row.value }}</b> <i>pts</i></li>{% endif %}{% endfor %}</ol>
+<table class=\"grid\"><tr><th>name</th><th>value</th></tr>{% for row in rows %}{% if loop.index0 < 20 %}<tr><td>{{ row.name }}</td><td>{{ row.value }}</td></tr>{% endif %}{% endfor %}</table>";
+
+const SELECTOR_CSS: &str = "\
+.item { flex-direction: row; gap: 8px; padding: 1px 4px; border-width: 1px; border-color: #2c3542; }
+.list > .item:nth-child(odd) { background-color: #1a2029; }
+.list > .item:nth-child(-n+3) { border-color: #f0b429; }
+.item[data-state=\"hot\"] .v { color: #ff6b6b; }
+.item.hot + .item { border-color: #f0b429; }
+.item.hot ~ .item { border-color: #7fdbff; }
+.item.hot ~ .item:last-child { background-color: #2a1f3a; }
+.item:not([data-state=\"hot\"]):first-of-type .k { color: #7fdb8f; }
+[data-kind=\"k0\"] > .k { text-decoration: underline; }
+.list .item:nth-of-type(3n+1) .v { font-family: monospace; }
+li:nth-of-type(even) { color: #9fb3c8; }
+li[data-state=\"hot\"] b + i { color: #ff6b6b; }
+tr:first-child th { color: #f0b429; }
+td:last-child { text-align: right; }
+.item:empty { display: none; }
+";
+
+/// ADR 0027/0028's text and box properties on one page: alignment,
+/// line height, letter spacing, case transforms, white-space, list
+/// markers, a table, a tiled background image and an `overflow: auto`
+/// panel holding the rows. The panel's class flips every frame onto a
+/// background colour, so the panel is updated in place — its `Node`
+/// rewritten from the spec (the axis back to clipping) — with its layout
+/// unchanged: the shape that stopped `overflow: auto` from scrolling
+/// (review_0005 I09). (A `border-radius` flip would not do: the radius is
+/// resolved into `ComputedNode`, whose change re-runs the promotion.)
+const TEXT_FEATURES_HTML: &str = "<section class=\"tf\">
+<div class=\"panel{% if tick % 2 == 0 %} even{% endif %}\" id=\"panel\">{% for row in rows %}<p class=\"t{{ loop.index0 % 5 }}\" id=\"row-{{ row.id }}\">{{ row.name }}   value  {{ row.value }}</p>{% endfor %}</div>
+<ul class=\"bullets\">{% for row in rows %}{% if loop.index0 < 10 %}<li>{{ row.name }}</li>{% endif %}{% endfor %}</ul>
+<ol class=\"ranks\">{% for row in rows %}{% if loop.index0 < 10 %}<li>{{ row.name }}</li>{% endif %}{% endfor %}</ol>
+<table class=\"grid\"><tr><th>name</th><th>value</th></tr>{% for row in rows %}{% if loop.index0 < 10 %}<tr><td>{{ row.name }}</td><td>{{ row.value }}</td></tr>{% endif %}{% endfor %}</table>
+</section>";
+
+const TEXT_FEATURES_CSS: &str = "\
+.tf { gap: 6px; }
+.panel { height: 160px; overflow-y: auto; padding: 4px; background-image: url(\"tile.png\"); background-repeat: repeat-x; background-clip: padding-box; }
+.panel.even { background-color: #11161d; }
+.t0 { text-align: center; text-transform: uppercase; }
+.t1 { text-align: right; letter-spacing: 0.1em; }
+.t2 { line-height: 1.6; text-transform: capitalize; }
+.t3 { white-space: pre; font-family: monospace; }
+.t4 { text-align: justify; line-height: 20px; letter-spacing: 1px; }
+.bullets { list-style-type: square; }
+.ranks li:nth-child(odd) { color: #7fdbff; }
+.grid td:last-child { text-align: right; }
+";
+
+/// The tile the text-features panel repeats (the examples' seal).
+const TILE_PNG: &[u8] = include_bytes!("../assets/shared/cat.png");
+
+/// An order-independent sheet over rows that differ only in what the
+/// selectors read (`data-*`, a class): every row's style depends on the
+/// row alone, so reversing the rows must not change any row's result.
+/// I06's shape: each row is the only child of an id-less slot, so rows
+/// share tag, classes, position and ancestor chain — an `id` or a
+/// distinct position would key them apart and hide a cache that forgets
+/// the dataset. The comparison finds a row by its name.
+const ORDER_HTML: &str = "<section class=\"list\">{% for row in rows %}<div class=\"slot\"><div class=\"item{% if row.hot %} hot{% endif %}\" data-state=\"{% if row.hot %}hot{% else %}cold{% endif %}\" data-kind=\"k{{ row.value % 3 }}\"><p class=\"k\">{{ row.name }}</p><p class=\"v\">{{ row.value }}</p></div></div>
+{% endfor %}</section>";
+
+const ORDER_CSS: &str = "\
+.item { flex-direction: row; gap: 8px; padding: 1px 4px; }
+[data-kind=\"k0\"] { background-color: #1a2029; }
+[data-kind=\"k1\"] .v { color: #7fdbff; }
+.item[data-state=\"hot\"] .k { color: #ff6b6b; }
+.item:not(.hot) .v { font-family: monospace; }
+.list [data-kind=\"k2\"]:not([data-state=\"hot\"]) > .k { text-decoration: underline; }
+";
+
+/// Focusable rows (no `HtmlNoFocus` on this scenario's UI): the churn
+/// moves `InputFocus`, and the sheet reacts through `:focus`,
+/// `:focus-visible`, `:focus-within`, `:not()` and the sibling
+/// combinators — the shapes of review_0005 I07/I08 under ADR 0029's
+/// scoped restyles. `.w` is styled by a `:not(:focus)` rule alone: an
+/// element another pseudo rule also targets re-cascades anyway, which
+/// would hide a `:not()` that isn't flip-reactive.
+const FOCUS_HTML: &str = "<section class=\"list\">{% for row in rows %}<div class=\"item\" id=\"row-{{ row.id }}\" tabindex=\"0\"><p class=\"k\">{{ row.name }}</p><p class=\"v\">{{ row.value }}</p><p class=\"w\">idle</p></div>
+{% endfor %}</section>";
+
+const FOCUS_CSS: &str = "\
+.item { flex-direction: row; gap: 8px; padding: 1px 4px; border-width: 1px; border-color: #2c3542; }
+.item:focus { border-color: #f0b429; }
+.item:focus-visible .k { color: #f0b429; }
+.item:focus + .item { border-color: #ff6b6b; }
+.item:focus ~ .item:last-child { background-color: #2a1f3a; }
+.list:focus-within .item:not(:focus) .k { color: #9fb3c8; }
+.item:not(:focus):nth-child(odd) .v { font-family: monospace; }
+.item:not(:focus) .w { color: #7fdb8f; }
+";
+
+/// Everything that could loop on its own writes (calc() widths, an
+/// `overflow: auto` panel, a background image, transitions, structural
+/// selectors): an idle UI must settle and stay quiet.
+const QUIET_HTML: &str = "<section class=\"list\"><div class=\"panel\">{% for row in rows %}<div class=\"item\" id=\"row-{{ row.id }}\" style=\"width: calc({{ row.pct }}% + {{ row.px }}px)\"><p class=\"k\">{{ row.name }}</p><p class=\"v\">{{ row.value }}</p></div>{% endfor %}</div></section>";
+
+const QUIET_CSS: &str = "\
+.panel { height: 200px; overflow-y: auto; background-image: url(\"tile.png\"); }
+.item { flex-direction: row; gap: 8px; transition: background-color 0.2s; }
+.item:nth-child(odd) { background-color: #1a2029; }
+.item:last-child .k { color: #f0b429; }
+";
+
+/// One container of many siblings with unterminated numeric references
+/// (review_0005 I03, I04: both were quadratic).
+const SCALING_HTML: &str = "<section class=\"list\">{% for row in rows %}<p class=\"x{% if row.hot %} hot{% endif %}\">&#1{{ row.value }} &am {{ row.name }}</p>{% endfor %}</section>";
+
+const SCALING_CSS: &str = "\
+.hot ~ p { color: #f0b429; }
+p:nth-child(3n+1) { color: #7fdbff; }
+p:last-of-type { color: #ff6b6b; }
+";
+
 /// Writes `files` under `testbench://<prefix>/` and returns their asset
 /// paths in order.
 fn write(dir: &Dir, prefix: &str, files: &[(&str, String)]) -> Vec<String> {
@@ -242,10 +426,10 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
     match scenario {
         "big-document" | "restyle-storm" | "reuse-vs-fresh" => {
             let paths = write(dir, prefix, &[("rows.html", ROWS_HTML.into()), ("bench.css", BENCH_CSS.into())]);
-            let checks: &'static [&'static str] = if scenario == "reuse-vs-fresh" {
-                &["built", "twins", "budget"]
-            } else {
-                &["built", "budget"]
+            let checks: &'static [&'static str] = match scenario {
+                "reuse-vs-fresh" => &["built", "twins", "budget"],
+                "big-document" => &["built", "reuse", "budget"],
+                _ => &["built", "budget"],
             };
             column(vec![main(&paths[0], &paths[1], Role::Main)], checks)
         }
@@ -402,6 +586,98 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
             let paths = write(dir, prefix, &[("bomb.md", md), ("bench.css", BENCH_CSS.into())]);
             column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["survived", "budget"])
         }
+        "selector-list" | "selectors-vs-fresh" => {
+            let css = format!("{BENCH_CSS}{SELECTOR_CSS}");
+            let paths = write(dir, prefix, &[("list.html", SELECTOR_LIST_HTML.into()), ("bench.css", css)]);
+            let checks: &'static [&'static str] = if scenario == "selectors-vs-fresh" {
+                &["built", "twins", "budget"]
+            } else {
+                &["built", "reuse", "budget"]
+            };
+            column(vec![main(&paths[0], &paths[1], Role::Main)], checks)
+        }
+        "text-features" => {
+            dir.insert_asset(Path::new(&format!("{prefix}/tile.png")), TILE_PNG.to_vec());
+            let css = format!("{BENCH_CSS}{TEXT_FEATURES_CSS}");
+            let paths = write(dir, prefix, &[("page.html", TEXT_FEATURES_HTML.into()), ("bench.css", css)]);
+            // No reuse check: the panel's class flips every frame, and an
+            // element whose attributes change rebuilds its subtree
+            // (ADR 0021: an ancestor's classes can change descendants'
+            // matches).
+            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "auto-scroll", "budget"])
+        }
+        "order-independence" => {
+            let css = format!("{BENCH_CSS}{ORDER_CSS}");
+            let paths = write(dir, prefix, &[("list.html", ORDER_HTML.into()), ("bench.css", css)]);
+            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "twins", "budget"])
+        }
+        "restyle-vs-full" => {
+            let css = format!("{BENCH_CSS}{FOCUS_CSS}");
+            let paths = write(dir, prefix, &[("list.html", FOCUS_HTML.into()), ("bench.css", css)]);
+            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "twins", "budget"])
+        }
+        "idle-quiet" => {
+            dir.insert_asset(Path::new(&format!("{prefix}/tile.png")), TILE_PNG.to_vec());
+            let css = format!("{BENCH_CSS}{QUIET_CSS}");
+            let paths = write(dir, prefix, &[("list.html", QUIET_HTML.into()), ("bench.css", css)]);
+            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "quiet", "budget"])
+        }
+        "scaling" => {
+            let css = format!("{BENCH_CSS}{SCALING_CSS}");
+            let paths = write(dir, prefix, &[("list.html", SCALING_HTML.into()), ("bench.css", css)]);
+            Plan {
+                specs: vec![main(&paths[0], &paths[1], Role::Main), main(&paths[0], &paths[1], Role::Twin)],
+                row: true,
+                checks: &["built", "linear"],
+            }
+        }
+        "selector-bombs" => {
+            let mut css = String::from("html { color: #dfe6ee }\n");
+            // Extreme An+B (review_0005 I02 overflowed i32).
+            for anb in ["n-2147483647", "-n+2147483647", "-2147483648n-2147483648", "2147483647n+2147483647", "+n+3", "-n+3"] {
+                css.push_str(&format!("p:nth-child({anb}) {{ letter-spacing: 1px }}\np:nth-of-type({anb}) {{ line-height: 1.3 }}\n"));
+            }
+            // Combinator characters, `]` and quotes inside quoted values
+            // (bug_0144): the rule must parse and match the probe.
+            css.push_str("p[data-x=\"a] b ~ c + d > e\"] { background-color: #2a6f2a }\n");
+            css.push_str("p[data-y='say \"hi\"'] { color: #7fdb8f }\n");
+            // A 10 000-character attribute value, and 1 000 sibling rules
+            // over the same list.
+            css.push_str(&format!("p[data-z=\"{}\"] {{ color: #ff6b6b }}\n", "z".repeat(10_000)));
+            for i in 0..1000 {
+                css.push_str(&format!(".c{i} ~ p:not(.c{}) {{ padding-left: {}px }}\n", i + 1, i % 7));
+            }
+            // Nested `:not()` (a parenthesized argument drops the rule)
+            // and a long compound.
+            // (Past the loader's nesting guard the whole sheet is refused —
+            // bug_0106 — which the nested-rules scenario covers.)
+            css.push_str(&format!("p{}x{} {{ color: red }}\n", ":not(".repeat(20), ")".repeat(20)));
+            css.push_str(&format!("p{} {{ color: #9fb3c8 }}\n", (0..500).map(|i| format!(".q{i}")).collect::<String>()));
+            let mut html = String::from("<section>");
+            html.push_str("<p id=\"probe\" data-x=\"a] b ~ c + d > e\">the quoted-value probe</p>");
+            html.push_str("<p id=\"quotes\" data-y='say \"hi\"'>the escaped-quote probe</p>");
+            for i in 0..200 {
+                html.push_str(&format!("<p class=\"c{i}\" data-z=\"{}\">sibling {i}</p>", if i % 50 == 0 { "z".repeat(10_000) } else { String::new() }));
+            }
+            html.push_str("</section>");
+            let paths = write(dir, prefix, &[("page.html", html), ("bomb.css", css)]);
+            column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["built", "quoted-match", "budget"])
+        }
+        "sibling-bombs" => {
+            let css = format!("{BENCH_CSS}{SCALING_CSS}.x:nth-child(-n+5) {{ background-color: #1a2029 }}\n");
+            let paths = write(dir, prefix, &[("list.html", SCALING_HTML.into()), ("bench.css", css)]);
+            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "budget"])
+        }
+        "entity-bombs" => {
+            let mut html = String::from("<p id=\"decoded\">&#x41;&#66;&amp;&#+65;&#x110000;</p>\n");
+            html.push_str(&format!("<p>{}</p>\n", "&#1".repeat(50_000)));
+            html.push_str(&format!("<p>{}</p>\n", "&#x1".repeat(50_000)));
+            html.push_str(&format!("<p>{}</p>\n", "&am".repeat(50_000)));
+            html.push_str(&format!("<p>&{};</p>\n", "a".repeat(100_000)));
+            html.push_str(&format!("<p title=\"{}\">attributes decode too</p>\n", "&#9".repeat(20_000)));
+            let paths = write(dir, prefix, &[("page.html", html), ("bench.css", BENCH_CSS.into())]);
+            column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["built", "decoded", "budget"])
+        }
         _ => column(Vec::new(), &[]),
     }
 }
@@ -424,7 +700,19 @@ pub fn churn(scenario: &str, model: &mut Model) -> Changed {
     // About one row in a hundred.
     let sparse = (len / 100).max(1);
     match scenario {
-        "big-document" | "localized" | "markdown" | "indent-vs-flat" => {
+        "text-features" => {
+            // Values every fourth frame; the panel's class flips every
+            // frame (the template reads `tick`): the frames between
+            // rewrite the panel's `Node` with nothing else changing.
+            if model.tick % 4 == 0 {
+                for _ in 0..sparse {
+                    let index = model.random(len);
+                    model.rows[index].value = model.random(1000) as u64;
+                }
+            }
+            Changed::All
+        }
+        "big-document" | "localized" | "markdown" | "indent-vs-flat" | "selector-list" => {
             for _ in 0..sparse {
                 let index = model.random(len);
                 model.rows[index].value = model.random(1000) as u64;
@@ -460,7 +748,54 @@ pub fn churn(scenario: &str, model: &mut Model) -> Changed {
             model.rows[index].value += 1;
             Changed::Card(index)
         }
-        "reuse-vs-fresh" => {
+        "idle-quiet" => {
+            // The same values written every frame: a re-render with an
+            // identical source must not rebuild or restyle anything.
+            Changed::All
+        }
+        "scaling" => {
+            for row in &mut model.rows {
+                row.value = (row.value + 1) % 1000;
+            }
+            let index = model.random(len);
+            model.rows[index].hot ^= true;
+            Changed::All
+        }
+        "sibling-bombs" => {
+            // The `.hot` element moves: `~` restyles everything after it.
+            let tick = model.tick as usize;
+            model.rows[(tick + len - 1) % len].hot = false;
+            model.rows[tick % len].hot = true;
+            Changed::All
+        }
+        "restyle-vs-full" => {
+            // The focus moves in the app (main.rs); the rows stay.
+            Changed::None
+        }
+        "selectors-vs-fresh" => {
+            // Count-preserving edits (value, flag, swap): a length change
+            // makes the pairing skip the list (and strikes the skeleton),
+            // so nothing would be reused — and nothing could go stale.
+            for _ in 0..sparse {
+                match model.random(3) {
+                    0 => {
+                        let index = model.random(len);
+                        model.rows[index].value = model.random(1000) as u64;
+                    }
+                    1 => {
+                        let index = model.random(len);
+                        model.rows[index].hot ^= true;
+                    }
+                    _ if len > 1 => {
+                        let index = model.random(len - 1);
+                        model.rows.swap(index, index + 1);
+                    }
+                    _ => {}
+                }
+            }
+            Changed::All
+        }
+        "reuse-vs-fresh" | "order-independence" => {
             // A random edit: change, insert, remove, move or highlight —
             // the shapes the keyed/positional pairing and the reuse cache
             // have to get right.
@@ -505,6 +840,10 @@ pub fn context(scenario: &str, model: &Model, role: Role) -> Value {
         }
         _ if scenario == "restyle-storm" => {
             json!({ "rows": model.rows, "tick": model.tick, "--accent": model.accent() })
+        }
+        // The scaling scenario's small UI renders the first quarter.
+        Role::Main if scenario == "scaling" => {
+            json!({ "rows": &model.rows[..model.rows.len() / 4], "tick": model.tick })
         }
         _ => json!({ "rows": model.rows, "tick": model.tick }),
     }

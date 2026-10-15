@@ -1,6 +1,6 @@
 # testbench
 
-![The testbench: a scenario list grouped into Performance, Security and Correctness on the left (Hostile Fluent args selected); size, churn, restart and language controls on top; a line of live numbers (frame time, builds and restyles per second, UIs and elements); green PASS checks (built, nothing forged, every payload localized, frame budget); and the stage below showing hostile payloads — HTML tags, Markdown links, crafted markers, a family emoji — rendered as plain text](../screenshots/testbench.png)
+![The testbench: a compact scenario list grouped into Performance, Security and Correctness on the left (Order independence selected); size, churn, restart and language controls on top; a line of live numbers (frame time, builds and restyles per second, UIs and elements); green PASS checks (built, twins match 30 / 0, frame budget); and the stage below showing the rows of the order-independence workload, styled by their data-* attributes and classes](../screenshots/testbench.png)
 
 An interactive torture bench for performance, security and correctness. Pick
 a scenario, change its size, toggle the per-frame churn, and watch the frame
@@ -37,6 +37,8 @@ fixed.
 | | Localized rows | Fluent rows in a `markdown: true` bundle, cached and per-value paths | built, budget |
 | | Many UIs | N separate small `HtmlUi`s; one updates per frame | built, budget |
 | | calc() layout | N cards sized by mixed-unit `calc()` | built, budget |
+| | Selector list | N rows in a container, plus a list and a table, styled by structural pseudo-classes, `+`/`~`, `[data-*]` and `:not()` (ADR 0028/0030); ~1 % of the rows change per frame | built, reuse, budget |
+| | Text features | `text-align`, `line-height`, `letter-spacing`, `text-transform`, `white-space`, list markers, a table, a tiled `background-image` and an `overflow: auto` panel whose class flips every frame (ADR 0027/0028) | built, auto-scroll, budget |
 | Security | Nested CSS rules | 20 000 nested rules: the sheet's load fails cleanly (bug_0106) | sheet refused, built |
 | | Deep DOM | 5 000 nested elements: content past 100 levels is dropped | built |
 | | var() bombs | 2 000-link chains, doubling fallbacks, cycles, nested functions (bug_0092) | built |
@@ -45,11 +47,50 @@ fixed.
 | | Args JSON injection | a hostile name through a Tera map literal and through a hand-written JSON splice (bug_0119) | map literal kept the value |
 | | Remote sources | an `https://` include and `border-image` (bug_0118) | include refused, image skipped |
 | | Markdown bombs | 20 000 `*` and `[`, 2 000 nested quotes, crafted markers, 30 nested indented Tera blocks, 10 000 indented lines | survived |
+| | Selector bombs | extreme `An+B` offsets (bug_0133), a 10 000-character attribute value, 1 000 `~` rules, nested `:not()`, a 500-class compound, `]`/quotes/combinators inside quoted values (bug_0144) | built, quoted values match |
+| | Sibling bombs | one container of N siblings under `~`, `:nth-child`, `:last-of-type` rules while the `.hot` element moves (bug_0134) | built |
+| | Entity bombs | 50 000 references without `;` (bug_0135), a 100 000-letter name, references in attributes, `&#+65;` (bug_0146) | built, references decode |
 | Correctness | Reuse vs fresh build | random edits (change, insert, remove, move, highlight) every frame; every 20 frames the churn holds and the UI is compared with a fresh build of the same state | twins match |
 | | Indented vs flat | an indented and a flat Markdown template of the same document must build the same UI | twins match |
+| | Selectors vs fresh | the selector list under count-preserving random edits (value, flag, swap), compared with a fresh build every 20 frames (bug_0136) | twins match |
+| | Scoped vs full restyle | the focus moves to a random row every frame (`:focus`, `:focus-visible`, `:focus-within`, `:not()`, `+`, `~`); every 20 frames the scoped result is compared with a forced full restyle of the same UI (ADR 0029, bug_0139) | twins match |
+| | Order independence | rows whose style depends only on themselves; a fresh build of the rows in reverse order must style every row the same (bug_0137) | twins match |
+| | Idle stays quiet | `calc()`, `overflow: auto`, a background image, transitions, structural selectors, fed identical contexts every frame: no build, restyle or `Node` write after settling (bug_0140's class) | quiet |
+| | Scaling N vs 4N | a container of N siblings with unterminated references next to one of 4N; phases alternate, the 4N frame may cost at most 8× the N frame, best of three (bug_0134, bug_0135) | linear |
 
 Every scenario also has a **frame budget** check: the worst frame after a
-30-frame warm-up must stay under 250 ms.
+30-frame warm-up must stay under 250 ms, measured in real time (the
+virtual clock clamps every frame to 250 ms, which hid slower frames).
+
+## Methods
+
+The correctness scenarios and checks follow review_0005's methods (the
+testing guide, `docs/agents/skills/testing.md`, has the full list).
+Each check was falsified: the bug it targets was put back and the check
+failed.
+
+- **Fresh twin** (`reuse-vs-fresh`, `selectors-vs-fresh`): the incremental
+  paths (content reuse, keyed pairing) against a from-scratch build of the
+  same state. The edits keep the list's length where reuse is the point:
+  a length change turns the pairing off, and nothing could go stale.
+- **Full restyle** (`restyle-vs-full`): ADR 0029's scoped interaction
+  restyles against the same UI after a forced full restyle (its
+  stylesheet re-inserted), with the interaction state held. Interaction
+  comes from `InputFocus`, not hand-set hover states: picking rewrites
+  `PseudoState` every frame. One row element is styled by a
+  `:not(:focus)` rule alone, because an element that another pseudo rule
+  also targets re-cascades anyway.
+- **Metamorphic reversal** (`order-independence`): a fresh twin shares a
+  matching or caching bug; reversing order-independent rows doesn't. The
+  rows are id-less and each sits alone in its slot, so they share
+  everything but what the selectors read.
+- **Reuse happens** (`reuse`): `Skeleton::last_reuse()` must show at least
+  three quarters of the specs reused. Comparing results can't see lost
+  reuse.
+- **Quiet when idle** (`quiet`): change loops show as builds, restyles or
+  `Node` writes on an idle UI.
+- **Scaling** (`linear`): N against 4N, best of three, at most 8×, with the
+  other UI hidden so its layout doesn't dilute the ratio.
 
 ## Controls
 
@@ -84,7 +125,7 @@ which tells you where to optimise next.
 
 | File | Contents |
 |---|---|
-| `main.rs` | The app: the in-memory asset source, the controls, starting scenarios, churn, the twin comparison, the checks, the shell's numbers |
+| `main.rs` | The app: the in-memory asset source, the controls, starting scenarios, churn (rows, focus, scaling phases), the comparisons (`TwinKind`), the checks, the shell's numbers |
 | `scenarios.rs` | The scenarios: generated templates and stylesheets, the row model, the per-frame churn, the workload contexts |
 | `../assets/testbench/shell.html` | The shell template (scenario list, controls, numbers, checks, the stage) |
 | `../assets/testbench/style.css` | The shell's stylesheet |

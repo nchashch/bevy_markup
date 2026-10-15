@@ -26,14 +26,16 @@ h2 {
   margin-top: 6px;
 }
 
+/* 27 scenarios: compact, so the whole list fits a 900 px window. */
 .sidebar {
   width: 240px;
   flex-shrink: 0;
-  gap: 4px;
+  gap: 2px;
 }
 
 .opt {
-  padding: 4px 8px;
+  font-size: 13px;
+  padding: 2px 8px;
   background-color: #1f2630;
   border-width: 1px;
   border-color: #2c3542;

@@ -20,6 +20,16 @@ tb-sc-remote-sources = Remote sources
 tb-sc-markdown-bombs = Markdown bombs
 tb-sc-reuse-vs-fresh = Reuse vs fresh build
 tb-sc-indent-vs-flat = Indented vs flat
+tb-sc-selector-list = Selector list
+tb-sc-text-features = Text features
+tb-sc-selector-bombs = Selector bombs
+tb-sc-sibling-bombs = Sibling bombs
+tb-sc-entity-bombs = Entity bombs
+tb-sc-selectors-vs-fresh = Selectors vs fresh build
+tb-sc-restyle-vs-full = Scoped vs full restyle
+tb-sc-order-independence = Order independence
+tb-sc-idle-quiet = Idle stays quiet
+tb-sc-scaling = Scaling N vs 4N
 
 tb-desc-big-document = One document of N rows; churn changes about one row in a hundred per frame, so unchanged rows reuse the previous build.
 tb-desc-all-dirty = Every row changes every frame: the full render, parse, cascade and diff.
@@ -38,6 +48,16 @@ tb-desc-remote-sources = An https:// include and border-image: the include fails
 tb-desc-markdown-bombs = Pathological Markdown: deep emphasis, brackets and quotes, crafted class markers, nested indented Tera blocks.
 tb-desc-reuse-vs-fresh = A UI mutated at random every frame is compared with a fresh build of the same state every few frames.
 tb-desc-indent-vs-flat = An indented and a flat Markdown template of the same document must build the same UI.
+tb-desc-selector-list = N rows in a container, plus a list and a table, styled by structural pseudo-classes, sibling combinators, attribute selectors and :not(); about one row in a hundred changes per frame, and the unchanged rows must keep reusing.
+tb-desc-text-features = text-align, line-height, letter-spacing, text-transform and white-space on N rows in an overflow: auto panel with a tiled background image, plus list markers and a table.
+tb-desc-selector-bombs = Extreme An+B offsets, a 10 000-character attribute value, 1 000 sibling rules, 200 nested :not() and combinator characters inside quoted values: nothing panics and the quoted probes still match.
+tb-desc-sibling-bombs = One container of N siblings under ~, :nth-child and :last-of-type rules while the .hot element moves every frame.
+tb-desc-entity-bombs = 50 000 character references without a semicolon, a 100 000-letter name and references in attributes: decoding stays linear and correct.
+tb-desc-selectors-vs-fresh = The selector list mutated at random every frame (change, insert, remove, move, highlight), compared with a fresh build of the same state every few frames.
+tb-desc-restyle-vs-full = The focus moves to a random row every frame (:focus, :focus-visible, :focus-within, :not(), + and ~); every few frames the scoped result is compared with a forced full restyle of the same UI.
+tb-desc-order-independence = Rows whose style depends only on themselves (data-* attributes, classes): a fresh build of the same rows in reverse order must style every row the same. Catches results cached on too little, which a same-order twin shares.
+tb-desc-idle-quiet = calc() widths, an overflow: auto panel, a background image, transitions and structural selectors with identical contexts written every frame: after settling, no build, no restyle and no Node write.
+tb-desc-scaling = A container of N siblings with unterminated references next to one of 4N; phases alternate which one churns, and the 4N frame may cost at most 8 times the N frame (best of three).
 
 tb-size = Size: { $size }
 tb-churn =
@@ -114,3 +134,39 @@ tb-check-twins =
     } twins match { $detail }
 
 tb-hint = N / P or LB / RB: scenario. − / + or [ / ] or LT / RT: size. C / X: churn. R / Select: restart. L / Y: language. Run with --features hotpath and `hotpath console` for live profiling.
+tb-check-reuse =
+    { $state ->
+        [pass] PASS
+        [fail] FAIL
+       *[other] WAIT
+    } unchanged content reused { $detail }
+tb-check-auto-scroll =
+    { $state ->
+        [pass] PASS
+        [fail] FAIL
+       *[other] WAIT
+    } overflow: auto scrolls exactly when needed { $detail }
+tb-check-quiet =
+    { $state ->
+        [pass] PASS
+        [fail] FAIL
+       *[other] WAIT
+    } idle UI stays quiet { $detail }
+tb-check-linear =
+    { $state ->
+        [pass] PASS
+        [fail] FAIL
+       *[other] WAIT
+    } 4N costs at most 8× N { $detail }
+tb-check-quoted-match =
+    { $state ->
+        [pass] PASS
+        [fail] FAIL
+       *[other] WAIT
+    } quoted values match { $detail }
+tb-check-decoded =
+    { $state ->
+        [pass] PASS
+        [fail] FAIL
+       *[other] WAIT
+    } references decode correctly { $detail }

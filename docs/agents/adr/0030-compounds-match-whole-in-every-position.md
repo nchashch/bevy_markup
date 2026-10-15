@@ -71,13 +71,24 @@ a position can't honour (as the structural limit did).
    attribute selectors or non-subject structural parts exist. A sheet
    without them keys exactly as before.
 5. **Reuse respects siblings** (`build.rs` `pair_node`,
-   `pair_trees_into`): when a sibling list changes shape (length, node
-   kind, or an element's tag/attributes — `siblings_identical`) and the
-   sheet is sibling-dependent (`SelectorReads::sibling_dependent`), every
-   child of that list leaves the clean set (`unclean_siblings`). Each
-   re-collects, and its descendants still reuse where their inherited
-   style is unchanged. If an ancestor compound reads a position, the
-   whole subtrees go.
+   `pair_trees_into`, `sibling_change`, `unclean_siblings`). Per sibling
+   list, the change is classified (`SiblingChange`):
+   - **Shape:** the length, a node kind or a tag name changed. When the
+     sheet is sibling-dependent (`SelectorReads::sibling_dependent`),
+     every child leaves the clean set. If an ancestor compound reads a
+     position (`context_position`), whole subtrees go.
+   - **Attributes:** the same shape, but some children's attributes
+     changed. Only sibling combinators read that, and they look backwards.
+     So with a `~` rule, every child after the first changed one
+     re-collects. With only `+`, just the next element after each changed
+     one does. A position-only sheet re-collects nothing.
+
+   A re-collected child's descendants still reuse where their inherited
+   style is unchanged. Every tag pair that matches is paired even when its
+   subtree changed (bug_0150), so this also holds inside containers. The
+   first cut un-cleaned the whole list on any attribute change, and the
+   testbench's `selector-list` lost all reuse to it: every row's
+   `data-kind` changed with its value.
 6. Two parser fixes found on the way: structural pseudo-classes now add
    class-level specificity (`:not()` adds its argument's), and the
    combinator scan (`compound_end`) skips parentheses, brackets and
@@ -107,8 +118,13 @@ a position can't honour (as the structural limit did).
   `tests/selector_model.rs`, now generating every part in every compound
   position (1 000 cases clean). An ablation (structural parts ignored in
   ancestor/sibling positions) fails the model at once.
-- A sibling-dependent sheet loses content reuse for every sibling of a
-  changed list element: a live list striped with `:nth-child` re-collects
-  its rows (not their subtrees) when a row is inserted or retagged.
+- A sibling-dependent sheet loses some content reuse. A list striped with
+  `:nth-child` re-collects its rows (not their subtrees) when a row is
+  inserted or retagged, but not when a row's attributes change. A `~`
+  sheet re-collects the rows after an attribute change.
+- `Skeleton::last_reuse()` (doc-hidden, like `pairing_health()`) reports
+  the last content build's reused and total specs. The testbench's `reuse`
+  check uses it, because `pairing_health()` starts at `(true, 0)` and
+  can't tell "reuse works" from "reuse never ran".
 - Still open: sibling combinators away from the subject (`.a + .b p`) skip
   the rule. `:has()` and `:is()` aren't supported.

@@ -1606,6 +1606,7 @@ pub(crate) fn build_html_ui(
                     };
                     let table = spec_table(&specs);
                     let current_source = current_source.clone();
+                    let reuse = content_build.then(|| (pass.reused.get(), total));
                     // The stored document must be the render the specs
                     // were collected from — but a re-parse per build is
                     // the cost of owning it. Identical sources parse to
@@ -1622,6 +1623,7 @@ pub(crate) fn build_html_ui(
                                 useful,
                                 since_try: 0,
                                 strike,
+                                last_reuse: reuse,
                             });
                             return;
                         };
@@ -1639,6 +1641,9 @@ pub(crate) fn build_html_ui(
                         skeleton.useful = useful;
                         skeleton.since_try = 0;
                         skeleton.strike = strike;
+                        if reuse.is_some() {
+                            skeleton.last_reuse = reuse;
+                        }
                     });
                 }
                 None if !had_skeleton => {
@@ -1652,6 +1657,7 @@ pub(crate) fn build_html_ui(
                         useful: true,
                         since_try: 0,
                         strike: 0,
+                        last_reuse: None,
                     });
                 }
                 None => {
@@ -1662,6 +1668,7 @@ pub(crate) fn build_html_ui(
                     let tick = u32::from(skeleton_eligible);
                     let since_try = previous_since_try + tick;
                     let table = spec_table(&specs);
+                    let reuse = matches!(decision, Decision::Build(_)).then(|| (0, spec_count(&specs)));
                     commands.queue(move |world: &mut World| {
                         let Some(mut skeleton) = world.get_mut::<Skeleton>(entity) else {
                             // No skeleton yet: store the fresh specs as the
@@ -1674,6 +1681,7 @@ pub(crate) fn build_html_ui(
                                 useful: previous_useful,
                                 since_try,
                                 strike: previous_strike,
+                                last_reuse: reuse,
                             });
                             return;
                         };
@@ -1689,6 +1697,9 @@ pub(crate) fn build_html_ui(
                                 current_source.and_then(|source| parse(source));
                         }
                         skeleton.since_try = since_try;
+                        if reuse.is_some() {
+                            skeleton.last_reuse = reuse;
+                        }
                     });
                 }
             }
@@ -4015,6 +4026,9 @@ pub struct Skeleton {
     /// permanently all-dirty workload pays almost nothing while one that
     /// becomes reusable is still found.
     strike: u8,
+    /// The last content build's `(reused subtrees, collected specs)`:
+    /// `(0, total)` when it ran without a pairing walk. `None` before any.
+    last_reuse: Option<(usize, usize)>,
 }
 
 impl Skeleton {
@@ -4033,6 +4047,17 @@ impl Skeleton {
     #[doc(hidden)]
     pub fn pairing_health(&self) -> (bool, u8) {
         (self.useful, self.strike)
+    }
+
+    /// The last content build's `(reused subtrees, collected specs)` —
+    /// `(0, total)` when it ran without a pairing walk, `None` before the
+    /// first content update. `pairing_health` starts at `(true, 0)`, so it
+    /// can't tell "reuse works" from "reuse never ran" (the testbench's
+    /// reuse check passed with bug_0150 put back); this can. Exposed for
+    /// the guards and the testbench; not covered by semver.
+    #[doc(hidden)]
+    pub fn last_reuse(&self) -> Option<(usize, usize)> {
+        self.last_reuse
     }
 }
 
@@ -4084,48 +4109,94 @@ fn pair_trees_into(
             reads,
         );
     }
-    if !siblings_identical(old.parser(), old.children(), fresh.parser(), fresh.children()) {
-        unclean_siblings(old.parser(), old.children(), clean, reads);
-    }
+    let change = sibling_change(old.parser(), old.children(), fresh.parser(), fresh.children());
+    unclean_siblings(old.parser(), old.children(), &change, clean, reads);
 }
 
-/// Whether two sibling lists look alike to a selector: the same length,
-/// and per position the same node kind (element or not) with an equal
-/// tag and attributes — what a sibling combinator or a structural
-/// pseudo-class reads. A text change elsewhere leaves them alike.
-fn siblings_identical(
+/// How a sibling list changed, as a selector sees it (review_0005 I05).
+#[derive(Clone, Default)]
+enum SiblingChange {
+    /// The same length, node kinds, tags and attributes (a text change
+    /// elsewhere leaves a list alike).
+    #[default]
+    Same,
+    /// The same shape, but these children's attributes (class, id,
+    /// `data-*`, …) changed: only what a sibling combinator reads.
+    Attributes(Vec<usize>),
+    /// The length, a node kind (element or not) or a tag name changed:
+    /// positions may have moved.
+    Shape,
+}
+
+fn sibling_change(
     old_parser: &tl::Parser,
     old: &[tl::NodeHandle],
     fresh_parser: &tl::Parser,
     fresh: &[tl::NodeHandle],
-) -> bool {
-    old.len() == fresh.len()
-        && old.iter().zip(fresh).all(|(old, fresh)| {
-            match (old.get(old_parser), fresh.get(fresh_parser)) {
-                (Some(tl::Node::Tag(old)), Some(tl::Node::Tag(fresh))) => tag_equal(old, fresh),
-                (Some(tl::Node::Tag(_)), _) | (_, Some(tl::Node::Tag(_))) => false,
-                _ => true,
+) -> SiblingChange {
+    if old.len() != fresh.len() {
+        return SiblingChange::Shape;
+    }
+    let mut changed = Vec::new();
+    for (index, (old, fresh)) in old.iter().zip(fresh).enumerate() {
+        match (old.get(old_parser), fresh.get(fresh_parser)) {
+            (Some(tl::Node::Tag(old)), Some(tl::Node::Tag(fresh))) => {
+                if !old.name().as_utf8_str().eq_ignore_ascii_case(&fresh.name().as_utf8_str()) {
+                    return SiblingChange::Shape;
+                }
+                if !tag_equal(old, fresh) {
+                    changed.push(index);
+                }
             }
-        })
+            (Some(tl::Node::Tag(_)), _) | (_, Some(tl::Node::Tag(_))) => return SiblingChange::Shape,
+            _ => {}
+        }
+    }
+    if changed.is_empty() { SiblingChange::Same } else { SiblingChange::Attributes(changed) }
 }
 
-/// A sibling list changed shape (review_0005 I05): when the sheet's
-/// matches can depend on siblings, an unchanged child's cached spec may
-/// hold a stale `+`/`~`/structural match. Each child re-collects; its
-/// descendants still reuse where their inherited style is unchanged —
-/// unless an ancestor compound reads a position (`li:first-child p`),
-/// which can change a descendant's match: then the whole subtrees go.
+/// A sibling list changed (review_0005 I05): when the sheet's matches can
+/// depend on siblings, an unchanged child's cached spec may hold a stale
+/// `+`/`~`/structural match, so the affected children leave the clean
+/// set and re-collect. A shape change moves positions: every child goes
+/// (and, when an ancestor compound reads a position — `li:first-child p`
+/// — its whole subtree). An attribute change only matters to sibling
+/// combinators, which look back: the next child after each changed one
+/// for `+`, every child after the first changed one for `~`. A
+/// re-collected child's descendants still reuse where their inherited
+/// style is unchanged.
 fn unclean_siblings(
     old_parser: &tl::Parser,
     children: &[tl::NodeHandle],
+    change: &SiblingChange,
     clean: &mut HashSet<tl::NodeHandle>,
     reads: SelectorReads,
 ) {
-    if !reads.sibling_dependent() {
-        return;
-    }
-    let deep = reads.context_position;
-    let mut stack: Vec<tl::NodeHandle> = children.to_vec();
+    let roots: Vec<tl::NodeHandle> = match change {
+        SiblingChange::Same => return,
+        SiblingChange::Shape if reads.sibling_dependent() => children.to_vec(),
+        SiblingChange::Shape => return,
+        SiblingChange::Attributes(changed) => {
+            let mut roots = Vec::new();
+            if reads.general_siblings
+                && let Some(first) = changed.first()
+            {
+                roots.extend(&children[first + 1..]);
+            } else if reads.adjacent_siblings {
+                // The next element after each changed one (text nodes in
+                // between don't count as siblings for `+`).
+                for index in changed {
+                    let next = children[index + 1..]
+                        .iter()
+                        .find(|child| matches!(child.get(old_parser), Some(tl::Node::Tag(_))));
+                    roots.extend(next);
+                }
+            }
+            roots
+        }
+    };
+    let deep = reads.context_position && matches!(change, SiblingChange::Shape);
+    let mut stack = roots;
     while let Some(handle) = stack.pop() {
         clean.remove(&handle);
         if deep && let Some(tl::Node::Tag(tag)) = handle.get(old_parser) {
@@ -4151,13 +4222,12 @@ fn pair_node(
     reads: SelectorReads,
 ) -> bool {
     /// A tag pair whose children are being paired; `all` folds their
-    /// results; `siblings_changed`: the child lists differ in shape
-    /// (review_0005 I05).
+    /// results; `siblings`: how the child lists differ (review_0005 I05).
     struct Parent {
         old: tl::NodeHandle,
         fresh: tl::NodeHandle,
         all: bool,
-        siblings_changed: bool,
+        siblings: SiblingChange,
     }
     enum Task {
         /// Pair two nodes, folding the result into the parent tag's
@@ -4233,7 +4303,7 @@ fn pair_node(
                         old,
                         fresh,
                         all: true,
-                        siblings_changed: !siblings_identical(
+                        siblings: sibling_change(
                             old_parser,
                             old_children.as_slice(),
                             fresh_parser,
@@ -4267,16 +4337,11 @@ fn pair_node(
                 parent,
                 grandparent,
             } => {
-                let Parent {
-                    old,
-                    fresh,
-                    all: children_all,
-                    siblings_changed,
-                } = parents[parent];
-                if siblings_changed
-                    && let Some(tl::Node::Tag(tag)) = old.get(old_parser)
-                {
-                    unclean_siblings(old_parser, tag.children().top().as_slice(), clean, reads);
+                let (old, fresh, children_all) =
+                    (parents[parent].old, parents[parent].fresh, parents[parent].all);
+                let siblings = std::mem::take(&mut parents[parent].siblings);
+                if let Some(tl::Node::Tag(tag)) = old.get(old_parser) {
+                    unclean_siblings(old_parser, tag.children().top().as_slice(), &siblings, clean, reads);
                 }
                 // Paired whether or not its subtree is clean: a changed
                 // container's cached spec still carries the inherited style

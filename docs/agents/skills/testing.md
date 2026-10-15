@@ -370,6 +370,10 @@ test catches.
   struct-field-deletion mutants; they always run.
 - Under heavy parallel load a mutant can hit the test timeout without being
   a hang. Rerun timeouts alone with a longer limit before triaging.
+- For one change set: `--in-diff <file>` restricts the mutants to the
+  diff's lines (see "Methods from review_0005", 9). The script's
+  `bevy/dynamic_linking` needs the `bevy_dylib` crate in the registry;
+  offline, run a copy without it.
 
 Triage every survivor: write a test that catches it, or document in
 `AGENTS.md` (Testing TODO 6) why the mutant changes no behaviour (typically:
@@ -449,6 +453,72 @@ Typical bug classes found so far, and the layer that found them:
   overlays): the oracles.
 - Whitespace and document order: the structure-aware arbtest model.
 - Coverage gaps and a wrapping bug: mutation-testing triage.
+- Stale reuse after a sibling change, quadratic sibling lists, results
+  that depend on document order, lost content reuse: the methods below
+  (review_0005).
+
+## Methods from review_0005 (and how to apply them)
+
+What found or would have caught the review_0005 defects, in the order to
+reach for them:
+
+1. **Falsify every guard.** A test that cannot fail is not a test. Break
+   the code it guards (revert the fix, or ablate the feature by hand) and
+   watch it fail; only then trust its green. Ones that passed with the
+   bug present, all found this way:
+   - `sibling_flip_restyles_the_following_sibling` asserted only the end
+     state, and its hover never held: picking resets a hand-inserted
+     `PseudoState` (bug_0148).
+   - The testbench's `reuse` check read `pairing_health()`, which starts
+     at `(true, 0)`, so it passed with no pairing at all. It now reads
+     `last_reuse()`.
+   - Its order test gave each row an `id`, which keys the cache apart and
+     hides I06.
+   - Its sibling rule sat away from the subject (`.a + .b .k`), which
+     skips the rule, so the rule never matched.
+   - Its budget used the virtual clock, which clamps every frame to 250 ms.
+   - Its `overflow: auto` probe flipped a `border-radius`, which
+     `ComputedNode` carries, so the promotion re-ran regardless.
+2. **Compare the incremental path with a from-scratch one.** A reused,
+   restyled or keyed UI must equal a fresh build of the same state:
+   `spawn_two` + `assert_same_after`, `reuse_and_fresh`, the testbench
+   twins. Use shapes where the shortcut fires: equal child counts (a
+   length change disables the pairing), elements nested in a container
+   (bug_0150), and sibling- and position-dependent rules.
+3. **A fresh twin shares matching bugs: use a transform or a model.**
+   - A metamorphic transform changes the input in a way whose effect on
+     the output is known. Reversing order-independent rows must leave each
+     row's result alone; that catches a cache keyed on too little (I06),
+     which a same-order twin reproduces exactly.
+   - A reference model: `tests/selector_model.rs` matches random small
+     documents × random selectors against a hand-written matcher (it found
+     I06, I07 and I08 at once).
+   - Give the model elements that differ *only* in what the feature reads:
+     no ids, repeated classes, the same position in different parents.
+4. **Assert the optimization happens, not just the result.** Lost reuse is
+   invisible to result comparisons, because a build that reuses nothing
+   gives the same result. Assert `Skeleton::last_reuse()` / `pairing_health()`.
+   A benchmark only guards the shapes it renders: bug_0150 (no reuse inside
+   containers) hid behind a top-level-only workload until
+   `changing-nested` was added.
+5. **Scaling, not wall time.** Take the best of three at N and at 4N; the
+   larger must cost at most 8× the smaller (I03, I04 were quadratic). In an
+   app, measure with `Time<Real>` and hide the UIs not being measured.
+6. **Quiet when idle.** An idle UI fed identical inputs must stop building,
+   restyling and writing `Node`s. That catches change loops (a write that
+   re-triggers its own system: G15, I09's promotion).
+7. **Lint the source** for what keeps shipping (`tests/source_lint.rs`:
+   debug prints, file writes outside tests). Three debug prints and a
+   `/tmp` log file shipped before the lints existed.
+8. **Probe, then delete.** To learn which path runs, add a temporary
+   `eprintln!` at the gate (`GATEPROBE …`) and run the one test with
+   `--nocapture`. The lint makes sure the probe never ships.
+9. **Mutation-test the diff.** Run `cargo mutants --in-diff <diff>` in a
+   clean worktree. Failing reproduction tests would break its baseline, so
+   apply only the passing tests there. Put new unit tests where the diff's
+   hunks don't move (or regenerate the diff), and add test binaries with
+   `--cargo-arg=--test=<name>`. Every surviving mutant is a test to write
+   or an equivalent to document.
 
 ## Bug reports
 

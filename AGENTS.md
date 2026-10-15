@@ -250,11 +250,18 @@ examples/
                    i.e. before `AssetPlugin`) and spawned as nested `HtmlUi`s in the shell's
                    `is="stage"` element (an app node there would be reconciled away).
                    Groups: performance (big document, all dirty, restyle storm, indented
-                   Markdown, localized rows, many UIs, calc()), security (nested rules,
-                   deep DOM, var()/grid/Markdown bombs, hostile args, args-JSON injection,
-                   remote sources), correctness (reuse vs a fresh build of the same state
-                   every 20 frames; indented vs flat Markdown). `--scenario <id> --size <n>
-                   --no-churn` pin a run; checks log `testbench: final …` on exit;
+                   Markdown, localized rows, many UIs, calc(), selector list, text
+                   features), security (nested rules, deep DOM, var()/grid/Markdown/
+                   selector/sibling/entity bombs, hostile args, args-JSON injection,
+                   remote sources), correctness (`TwinKind`: a fresh twin for reuse and
+                   selectors, a forced full restyle under focus churn, a reversed-order
+                   twin compared per row; plus `reuse` via `Skeleton::last_reuse`,
+                   `quiet` (idle: no build/restyle/`Node` write), `linear` (N vs 4N,
+                   best of three, ≤ 8×, real time); indented vs flat Markdown). Every
+                   check was falsified against its bug (README "Methods").
+                   `--scenario <id> --size <n> --no-churn` pin a run; checks log
+                   `testbench: final …` on exit; frame times are `Time<Real>` (the
+                   virtual clock clamps at 250 ms);
                    `#[hotpath::measure]` on its systems + the library's for profiling
   demo/            main.rs (setup: fonts, window), shell.rs (the full-screen shell HtmlUi:
                    `is="content-slot"` viewports filled once per slot, contexts),
@@ -1466,9 +1473,11 @@ Known limits (each skipped/ignored value is logged at `debug`):
   (ADR 0030): ancestors and siblings carry their `data-*` dataset (shared
   `Rc`), pseudo-state and `Position`, so `[data-m] p`, `li:first-child >
   span` and `.a:hover + p` read them. The style cache keys on what the
-  sheet's selectors read (`SelectorReads`), and a sibling list that
-  changes shape un-cleans its siblings for the skeleton when the sheet is
-  sibling-dependent. No other pseudo-classes or pseudo-elements, no
+  sheet's selectors read (`SelectorReads`). For the skeleton, a sibling
+  list whose shape changes (length, node kind, tag) un-cleans its children
+  when the sheet is sibling-dependent; an attribute-only change un-cleans
+  the following siblings under `~`, the next one under `+`, nothing under
+  a position-only sheet (`SiblingChange`). No other pseudo-classes or pseudo-elements, no
   sibling combinator away from the subject (a selector with one skips
   the rule).
 - **Properties:** `text-align`/`line-height`/`letter-spacing` and

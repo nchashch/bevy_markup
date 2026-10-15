@@ -20,6 +20,16 @@ tb-sc-remote-sources = Entfernte Quellen
 tb-sc-markdown-bombs = Markdown-Bomben
 tb-sc-reuse-vs-fresh = Wiederverwendung gegen Neubau
 tb-sc-indent-vs-flat = Eingerückt gegen flach
+tb-sc-selector-list = Selektorliste
+tb-sc-text-features = Texteigenschaften
+tb-sc-selector-bombs = Selektor-Bomben
+tb-sc-sibling-bombs = Geschwister-Bomben
+tb-sc-entity-bombs = Entity-Bomben
+tb-sc-selectors-vs-fresh = Selektoren gegen Neubau
+tb-sc-restyle-vs-full = Gezielt gegen vollständig neu gestaltet
+tb-sc-order-independence = Reihenfolge-Unabhängigkeit
+tb-sc-idle-quiet = Leerlauf bleibt ruhig
+tb-sc-scaling = Skalierung N gegen 4N
 
 tb-desc-big-document = Ein Dokument aus N Zeilen; pro Frame ändert sich etwa eine von hundert, unveränderte Zeilen verwenden den vorigen Aufbau wieder.
 tb-desc-all-dirty = Jede Zeile ändert sich in jedem Frame: Rendern, Parsen, Kaskade und Abgleich vollständig.
@@ -38,6 +48,16 @@ tb-desc-remote-sources = Ein https://-Include und border-image: das Include sche
 tb-desc-markdown-bombs = Pathologisches Markdown: tiefe Hervorhebung, Klammern und Zitate, präparierte Klassenmarker, verschachtelte eingerückte Tera-Blöcke.
 tb-desc-reuse-vs-fresh = Eine UI, die in jedem Frame zufällig verändert wird, wird alle paar Frames mit einem frischen Aufbau desselben Zustands verglichen.
 tb-desc-indent-vs-flat = Eine eingerückte und eine flache Markdown-Vorlage desselben Dokuments müssen dieselbe UI ergeben.
+tb-desc-selector-list = N Zeilen in einem Container, dazu eine Liste und eine Tabelle, gestaltet mit Struktur-Pseudoklassen, Geschwister-Kombinatoren, Attributselektoren und :not(); pro Frame ändert sich etwa eine von hundert Zeilen, die unveränderten müssen weiter wiederverwendet werden.
+tb-desc-text-features = text-align, line-height, letter-spacing, text-transform und white-space auf N Zeilen in einem overflow: auto-Feld mit gekacheltem Hintergrundbild, dazu Listenmarken und eine Tabelle.
+tb-desc-selector-bombs = Extreme An+B-Werte, ein Attributwert mit 10 000 Zeichen, 1 000 Geschwisterregeln, 200 verschachtelte :not() und Kombinator-Zeichen in Werten in Anführungszeichen: nichts stürzt ab, und die Prüf-Elemente passen weiterhin.
+tb-desc-sibling-bombs = Ein Container mit N Geschwistern unter Regeln mit ~, :nth-child und :last-of-type, während das .hot-Element in jedem Frame wandert.
+tb-desc-entity-bombs = 50 000 Zeichenreferenzen ohne Semikolon, ein Name aus 100 000 Buchstaben und Referenzen in Attributen: die Dekodierung bleibt linear und korrekt.
+tb-desc-selectors-vs-fresh = Die Selektorliste wird in jedem Frame zufällig verändert (ändern, einfügen, entfernen, verschieben, hervorheben) und alle paar Frames mit einem Neubau desselben Zustands verglichen.
+tb-desc-restyle-vs-full = Der Fokus springt in jedem Frame zu einer zufälligen Zeile (:focus, :focus-visible, :focus-within, :not(), + und ~); alle paar Frames wird das gezielte Ergebnis mit einer erzwungenen vollständigen Neugestaltung derselben UI verglichen.
+tb-desc-order-independence = Zeilen, deren Stil nur von ihnen selbst abhängt (data-*-Attribute, Klassen): ein Neubau derselben Zeilen in umgekehrter Reihenfolge muss jede Zeile gleich gestalten. Findet zu knapp zwischengespeicherte Ergebnisse, die ein Zwilling in gleicher Reihenfolge teilt.
+tb-desc-idle-quiet = calc()-Breiten, ein overflow: auto-Feld, ein Hintergrundbild, Übergänge und Struktur-Selektoren, in jedem Frame mit identischem Kontext beschrieben: nach dem Einschwingen kein Aufbau, keine Neugestaltung und kein Node-Schreiben.
+tb-desc-scaling = Ein Container mit N Geschwistern und unterminierten Referenzen neben einem mit 4N; Phasen wechseln, welcher sich ändert, und der 4N-Frame darf höchstens 8-mal so viel kosten wie der N-Frame (bester von drei).
 
 tb-size = Größe: { $size }
 tb-churn =
@@ -114,3 +134,39 @@ tb-check-twins =
     } Zwillinge gleich { $detail }
 
 tb-hint = N / P oder LB / RB: Szenario. − / + oder [ / ] oder LT / RT: Größe. C / X: Änderungen. R / Select: Neustart. L / Y: Sprache. Mit --features hotpath und `hotpath console` live profilieren.
+tb-check-reuse =
+    { $state ->
+        [pass] OK
+        [fail] FEHLER
+       *[other] WARTE
+    } unveränderter Inhalt wiederverwendet { $detail }
+tb-check-auto-scroll =
+    { $state ->
+        [pass] OK
+        [fail] FEHLER
+       *[other] WARTE
+    } overflow: auto scrollt genau bei Bedarf { $detail }
+tb-check-quiet =
+    { $state ->
+        [pass] OK
+        [fail] FEHLER
+       *[other] WARTE
+    } ruhende UI bleibt ruhig { $detail }
+tb-check-linear =
+    { $state ->
+        [pass] OK
+        [fail] FEHLER
+       *[other] WARTE
+    } 4N kostet höchstens das 8-Fache von N { $detail }
+tb-check-quoted-match =
+    { $state ->
+        [pass] OK
+        [fail] FEHLER
+       *[other] WARTE
+    } Werte in Anführungszeichen passen { $detail }
+tb-check-decoded =
+    { $state ->
+        [pass] OK
+        [fail] FEHLER
+       *[other] WARTE
+    } Referenzen korrekt dekodiert { $detail }

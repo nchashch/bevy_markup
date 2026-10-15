@@ -7324,6 +7324,20 @@ mod review_0005 {
         assert_eq!(reused, fresh);
     }
 
+    /// I05 with text between the siblings: `+` skips text nodes, so the
+    /// element after the text is the one that must re-collect.
+    #[test]
+    fn reuse_rechecks_adjacent_rules_across_text() {
+        let (reused, fresh) = reuse_and_fresh(
+            "i05-adjacent-text",
+            r#"<section><div class="{{ c }}"><p>a</p></div> between <p id="t">t</p><p id="u">u</p></section>"#,
+            &format!("{WHITE} .hot + p {{ background-color: #ff0000 }}"),
+            "c", "hot", "cold",
+        );
+        assert!(!red_before(&fresh, "t"), "{fresh}");
+        assert_eq!(reused, fresh);
+    }
+
     /// I05 one level down, where it bites deep: a sibling list inside a
     /// container changes shape, moving a `div` from first to second child;
     /// `div:first-child p` must drop from the `div`'s descendant, whose own
@@ -7931,6 +7945,39 @@ mod mutation_gaps {
             health_after_in("gap-reuse-nested", &["a", "b", "c", "d"], &["a", "b", "c", "D"], WHITE, true),
             (true, 0)
         );
+    }
+
+    /// Renders `page` with `key = from`, changes it to `to`, and returns the
+    /// skeleton's `(useful, strike)` after that content build.
+    fn health_after_page(name: &str, page: &str, css: &str, key: &'static str, from: &str, to: &str) -> (bool, u8) {
+        let files = [("page.html", page), ("a.css", css)];
+        let mut ui = TestUi::new(name, &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new().with(key, &from), Node::default());
+        ui.settle();
+        let root = ui.root();
+        ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert(key, &to);
+        ui.settle();
+        ui.world_mut().get::<Skeleton>(root).unwrap().pairing_health()
+    }
+
+    /// An attribute change leaves positions alone: a position-only sheet
+    /// keeps reusing the other siblings (ADR 0030 §5's refinement; the
+    /// first cut un-cleaned the whole list on any attribute change).
+    #[test]
+    fn an_attribute_change_keeps_reuse_under_a_position_only_sheet() {
+        let page = r#"<section><p>a</p><p>b</p><p class="{{ c }}">c</p><p>d</p><p>e</p><p>f</p></section>"#;
+        let css = format!("{WHITE} p:nth-child(2n) {{ color: #ff0000 }} p:last-of-type {{ color: #00ff00 }}");
+        assert_eq!(health_after_page("gap-attr-positions", page, &css, "c", "x", "y"), (true, 0));
+    }
+
+    /// Under a `+`-only sheet an attribute change un-cleans just the next
+    /// element: the rest reuses.
+    #[test]
+    fn an_attribute_change_unclean_only_the_next_sibling_under_adjacent_rules() {
+        let page = r#"<section><p>a</p><p class="{{ c }}">b</p><p>c</p><p>d</p><p>e</p><p>f</p></section>"#;
+        let css = format!("{WHITE} .hot + p {{ color: #ff0000 }}");
+        assert_eq!(health_after_page("gap-attr-adjacent", page, &css, "c", "hot", "cold"), (true, 0));
     }
 
     /// A sibling-dependent sheet still reuses across a text-only change:

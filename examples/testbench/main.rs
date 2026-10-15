@@ -4,14 +4,18 @@
 //!
 //! - **Performance:** large and churning documents, all-dirty rebuilds,
 //!   restyle storms, indented Markdown, localized rows (cached and
-//!   per-value Fluent paths), many UIs, `calc()` layout.
+//!   per-value Fluent paths), many UIs, `calc()` layout, a selector-heavy
+//!   nested list (content reuse must keep working), the text and box
+//!   properties of ADR 0027/0028.
 //! - **Security:** pathological inputs that once crashed, hung or injected
 //!   (nested CSS rules, a 5 000-deep DOM, `var()` and grid bombs, hostile
 //!   Fluent arguments, args-JSON injection, remote asset sources, Markdown
-//!   bombs). Each must survive, with a check showing why.
-//! - **Correctness:** a UI mutated at random every frame is compared with a
-//!   fresh build of the same state, and an indented Markdown template with
-//!   its flat twin.
+//!   bombs, selector, sibling and character-reference bombs). Each must
+//!   survive, with a check showing why.
+//! - **Correctness:** incremental paths against from-scratch ones (a fresh
+//!   twin; a forced full restyle), a metamorphic reversal (order
+//!   independence), reuse and quiet-when-idle checks, and an N vs 4N
+//!   scaling check — review_0005's methods (see the README).
 //!
 //! The workloads are generated at runtime into an in-memory asset source
 //! (`testbench://`), so they go through the real loaders, pre-scans and
@@ -32,6 +36,8 @@ use std::sync::OnceLock;
 use bevy::asset::io::memory::{Dir, MemoryAssetReader};
 use bevy::asset::io::{AssetSourceBuilder, ErasedAssetReader};
 use bevy::diagnostic::FrameCount;
+use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
+use bevy::text::LetterSpacing;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
 use serde_json::{Value, json};
@@ -44,7 +50,7 @@ use input::{Hotkeys, SettingStep};
 mod harness;
 
 mod scenarios;
-use scenarios::{Changed, Model, Role, SIZES};
+use scenarios::{Changed, Model, Role, SIZES, TwinKind};
 
 /// The in-memory files behind `testbench://` (shared with the asset
 /// source's reader, so files written at runtime are loadable at once).
@@ -81,6 +87,7 @@ fn main() {
                 .init_resource::<Checks>()
                 .init_resource::<Twins>()
                 .init_resource::<Built>()
+                .init_resource::<Scaling>()
                 .define_html_element("stage", connect_stage)
                 .add_observer(count_builds)
                 .add_observer(count_restyles)
@@ -94,6 +101,7 @@ fn main() {
                         hotkeys,
                         start_scenario,
                         churn,
+                        move_focus,
                         compare_twins,
                         check_scenario,
                         update_stats,
@@ -261,11 +269,40 @@ struct Twins {
 }
 
 struct Pending {
+    kind: TwinKind,
     main: Entity,
     twin: Entity,
     /// Spawned for this comparison (despawned after it).
     fresh: bool,
     since: u32,
+    /// [`TwinKind::FullRestyle`]: the signature before the forced full
+    /// restyle (`None` until it is taken and the restyle is triggered).
+    before: Option<Vec<String>>,
+}
+
+/// The scaling scenario's measurement (review_0005's method: best of
+/// three at N and at 4N, the larger at most 8× the smaller — I03 and I04
+/// were quadratic). After a warm-up, phases of [`PHASE`] frames alternate
+/// which UI churns (the small one renders N rows, the large one 4N); each
+/// phase's mean frame time counts, the best of each kind compares.
+#[derive(Resource, Default)]
+struct Scaling {
+    small: Vec<f32>,
+    large: Vec<f32>,
+    current: Vec<f32>,
+    phase: Option<usize>,
+}
+
+/// Frames per scaling phase, the warm-up before the first, the phases.
+const PHASE: u32 = 30;
+const SCALING_WARMUP: u32 = 60;
+const SCALING_PHASES: usize = 6;
+
+/// The UI the scaling scenario churns `since` frames after its start:
+/// even phases the small one, odd phases the large one.
+fn scaling_phase(since: u32) -> Option<usize> {
+    let phase = since.checked_sub(SCALING_WARMUP)? / PHASE;
+    (phase < SCALING_PHASES as u32).then_some(phase as usize)
 }
 
 /// Both locales, preloaded.
@@ -445,6 +482,7 @@ fn start_scenario(
     mut checks: ResMut<Checks>,
     mut twins: ResMut<Twins>,
     mut built: ResMut<Built>,
+    mut scaling: ResMut<Scaling>,
     mut commands: Commands,
 ) {
     if !bench.restart {
@@ -460,7 +498,7 @@ fn start_scenario(
     bench.generation += 1;
     let id = bench.id();
     debug!("testbench: start {id} #{} (size {})", bench.generation, SIZES[bench.size]);
-    bench.model = Model::new(SIZES[bench.size]);
+    bench.model = Model::new(scenarios::model_rows(id, SIZES[bench.size]));
     bench.paused = false;
     bench.started = frames.0;
     bench.worst_ms = 0.0;
@@ -476,6 +514,7 @@ fn start_scenario(
         })
         .collect();
     *twins = Twins::default();
+    *scaling = Scaling::default();
     built.0.clear();
     // The workload UIs are nested `HtmlUi` roots right in the stage: the
     // shell keeps those across its own updates (an app node there would be
@@ -507,7 +546,6 @@ fn start_scenario(
                 HtmlUi::new(template.clone()),
                 template_context(&context),
                 node,
-                HtmlNoFocus,
                 Workload {
                     role,
                     template,
@@ -518,6 +556,12 @@ fn start_scenario(
             if let Some(sheet) = sheet {
                 ui.insert(HtmlStylesheet(sheet));
             }
+            // The focus scenario's rows take the focus (the churn moves
+            // it); every other workload stays out of the shell's
+            // navigation.
+            if id != "restyle-vs-full" {
+                ui.insert(HtmlNoFocus);
+            }
         }
     }
 }
@@ -526,7 +570,8 @@ fn start_scenario(
 #[hotpath::measure]
 fn churn(
     mut bench: ResMut<Bench>,
-    mut workloads: Query<(&Workload, &mut TemplateContext), Without<FreshTwin>>,
+    frames: Res<FrameCount>,
+    mut workloads: Query<(&Workload, &mut TemplateContext, &mut Node), Without<FreshTwin>>,
 ) {
     if !bench.churn || bench.paused || bench.restart {
         return;
@@ -539,17 +584,37 @@ fn churn(
             template_context(&scenarios::context(id, &bench.model, role))
         });
     };
+    // The scaling scenario churns one of its UIs per phase, the other
+    // hidden (`display: none` skips its layout, which would otherwise
+    // dilute the ratio with a constant).
+    let scaling = (id == "scaling").then(|| {
+        scaling_phase(frames.0.saturating_sub(bench.started)).map(|phase| {
+            if phase % 2 == 0 { Role::Main } else { Role::Twin }
+        })
+    });
+    if let Some(Some(active)) = scaling {
+        for (workload, _, mut node) in &mut workloads {
+            let display = if workload.role == active { Display::Flex } else { Display::None };
+            if node.display != display {
+                node.display = display;
+            }
+        }
+    }
     match changed {
         Changed::None => {}
         Changed::All => {
-            for (workload, mut context) in &mut workloads {
-                if matches!(workload.role, Role::Main | Role::Twin) {
+            for (workload, mut context, _) in &mut workloads {
+                let churns = match scaling {
+                    Some(role) => role == Some(workload.role),
+                    None => matches!(workload.role, Role::Main | Role::Twin),
+                };
+                if churns {
                     update(workload.role, &mut context);
                 }
             }
         }
         Changed::Card(index) => {
-            for (workload, mut context) in &mut workloads {
+            for (workload, mut context, _) in &mut workloads {
                 if workload.role == Role::Card(index) {
                     update(workload.role, &mut context);
                 }
@@ -558,46 +623,127 @@ fn churn(
     }
 }
 
-/// What a UI built, as text: elements (tag, id, classes), text runs and
-/// backgrounds in document order. Two UIs of the same state must agree.
-#[hotpath::measure]
-fn signature(
-    root: Entity,
-    tree: &Query<&Children>,
-    parts: &Query<(
-        Option<&HtmlElement>,
-        Option<&Text>,
-        Option<&TextSpan>,
-        Option<&BackgroundColor>,
-    )>,
-) -> Vec<String> {
-    let mut lines = Vec::new();
-    for entity in tree.iter_descendants_depth_first(root) {
-        let Ok((element, text, span, background)) = parts.get(entity) else {
-            continue;
-        };
-        let mut line = String::new();
-        if let Some(element) = element {
-            let _ = write!(line, "<{} {:?} {:?}>", element.tag, element.id, element.classes);
-        }
-        if let Some(text) = text {
-            let _ = write!(line, "{:?}", text.0);
-        }
-        if let Some(span) = span {
-            let _ = write!(line, "{:?}", span.0);
-        }
-        if let Some(background) = background.filter(|background| background.0 != Color::NONE) {
-            let _ = write!(line, " bg={:?}", background.0);
-        }
-        if !line.is_empty() {
-            lines.push(line);
-        }
+/// The focus scenario's churn: the focus moves to a random row each frame
+/// (shown, so `:focus-visible` holds), which restyles in place — scoped
+/// to the flipped rows and their siblings (ADR 0029).
+fn move_focus(
+    mut bench: ResMut<Bench>,
+    workloads: Query<Entity, (With<Workload>, Without<FreshTwin>)>,
+    tree: Query<&Children>,
+    focusables: Query<(), With<Focusable>>,
+    mut focus: ResMut<InputFocus>,
+    mut visible: ResMut<InputFocusVisible>,
+) {
+    if bench.id() != "restyle-vs-full" || !bench.churn || bench.paused || bench.restart {
+        return;
     }
-    lines
+    let candidates: Vec<Entity> = workloads
+        .iter()
+        .flat_map(|root| tree.iter_descendants_depth_first(root).collect::<Vec<_>>())
+        .filter(|entity| focusables.contains(*entity))
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let pick = bench.model.random(candidates.len());
+    focus.set(candidates[pick], FocusCause::Navigated);
+    visible.0 = true;
 }
 
-/// The correctness scenarios: every 20 frames, hold the churn, let both
-/// UIs settle, and compare what they built.
+/// The components a signature reads.
+type SignatureParts<'a> = (
+    Option<&'a HtmlElement>,
+    Option<&'a Text>,
+    Option<&'a TextSpan>,
+    Option<&'a BackgroundColor>,
+    Option<&'a TextColor>,
+    Option<&'a TextFont>,
+    Option<&'a BorderColor>,
+    Option<&'a Node>,
+    Option<&'a TextLayout>,
+    Option<&'a LetterSpacing>,
+);
+
+/// What a UI built, as text: elements (tag, id, classes, display, border
+/// color), text runs with their color, size, weight, alignment and
+/// spacing, and backgrounds, in document order. Two UIs of the same state
+/// must agree — a dump that only held tags and backgrounds missed most
+/// of what selectors style.
+#[hotpath::measure]
+fn signature(root: Entity, tree: &Query<&Children>, parts: &Query<SignatureParts>) -> Vec<String> {
+    tree.iter_descendants_depth_first(root)
+        .filter_map(|entity| signature_line(entity, parts))
+        .collect()
+}
+
+/// One entity's signature line (`None`: nothing to compare).
+fn signature_line(entity: Entity, parts: &Query<SignatureParts>) -> Option<String> {
+    let (element, text, span, background, color, font, border, node, layout, spacing) =
+        parts.get(entity).ok()?;
+    let mut line = String::new();
+    if let Some(element) = element {
+        let _ = write!(line, "<{} {:?} {:?}>", element.tag, element.id, element.classes);
+        if let Some(node) = node {
+            let _ = write!(line, " {:?}", node.display);
+        }
+        if let Some(border) = border.filter(|border| **border != BorderColor::DEFAULT) {
+            let _ = write!(line, " border={:?}", border.top);
+        }
+    }
+    if let Some(text) = text {
+        let _ = write!(line, "{:?}", text.0);
+    }
+    if let Some(span) = span {
+        let _ = write!(line, "{:?}", span.0);
+    }
+    if text.is_some() || span.is_some() {
+        if let Some(color) = color {
+            let _ = write!(line, " {:?}", color.0);
+        }
+        if let Some(font) = font {
+            let _ = write!(line, " {:?} {:?}", font.font_size, font.weight);
+        }
+        if let Some(layout) = layout {
+            let _ = write!(line, " {:?}", layout.justify);
+        }
+        if let Some(spacing) = spacing {
+            let _ = write!(line, " {spacing:?}");
+        }
+    }
+    if let Some(background) = background.filter(|background| background.0 != Color::NONE) {
+        let _ = write!(line, " bg={:?}", background.0);
+    }
+    (!line.is_empty()).then_some(line)
+}
+
+/// Per row (a `slot` element, keyed by the row name it shows), the
+/// signature of its subtree: the order-independence comparison (row
+/// order differs, each row's result must not).
+fn row_signatures(
+    root: Entity,
+    tree: &Query<&Children>,
+    parts: &Query<SignatureParts>,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut rows = std::collections::BTreeMap::new();
+    for entity in tree.iter_descendants_depth_first(root) {
+        let Ok((Some(element), ..)) = parts.get(entity) else {
+            continue;
+        };
+        if !element.classes.iter().any(|class| class == "slot") {
+            continue;
+        }
+        let lines: Vec<String> = std::iter::once(entity)
+            .chain(tree.iter_descendants_depth_first(entity))
+            .filter_map(|entity| signature_line(entity, parts))
+            .collect();
+        let key = lines.iter().find(|line| line.contains("unit-")).cloned().unwrap_or_default();
+        rows.insert(key, lines);
+    }
+    rows
+}
+
+/// The correctness scenarios: every 20 frames, hold the churn, let the
+/// UIs settle, and compare what they built ([`TwinKind`]).
 #[hotpath::measure]
 #[allow(clippy::too_many_arguments)]
 fn compare_twins(
@@ -607,20 +753,18 @@ fn compare_twins(
     built: Res<Built>,
     workloads: Query<(Entity, &Workload, &TemplateContext, &ChildOf)>,
     tree: Query<&Children>,
-    parts: Query<(
-        Option<&HtmlElement>,
-        Option<&Text>,
-        Option<&TextSpan>,
-        Option<&BackgroundColor>,
-    )>,
+    parts: Query<SignatureParts>,
     mut commands: Commands,
 ) {
     let id = bench.id();
-    if !matches!(id, "reuse-vs-fresh" | "indent-vs-flat") || bench.restart {
+    let Some(kind) = scenarios::twin_kind(id) else {
+        return;
+    };
+    if bench.restart {
         return;
     }
     let now = frames.0;
-    let Some(pending) = twins.pending.take() else {
+    let Some(mut pending) = twins.pending.take() else {
         if now.saturating_sub(bench.started) < 30 || now % 20 != 0 {
             return;
         }
@@ -629,11 +773,11 @@ fn compare_twins(
         else {
             return;
         };
-        let pending = if id == "reuse-vs-fresh" {
-            // A fresh UI of the same state, laid out nowhere.
+        let spawn_twin = |context: TemplateContext, commands: &mut Commands| {
+            // A fresh UI, laid out nowhere.
             let mut twin = commands.spawn((
                 HtmlUi::new(workload.template.clone()),
-                context.clone(),
+                context,
                 Node {
                     display: Display::None,
                     ..default()
@@ -650,54 +794,115 @@ fn compare_twins(
             if let Some(sheet) = &workload.sheet {
                 twin.insert(HtmlStylesheet(sheet.clone()));
             }
-            Pending {
-                main,
-                twin: twin.id(),
-                fresh: true,
-                since: now,
+            twin.id()
+        };
+        let (twin, fresh) = match kind {
+            TwinKind::Fresh => (spawn_twin(context.clone(), &mut commands), true),
+            TwinKind::Reversed => {
+                // The same rows, reversed (the churn is held, so the model
+                // is what the main UI rendered).
+                let mut value = scenarios::context(id, &bench.model, Role::Main);
+                if let Some(rows) = value.get_mut("rows").and_then(Value::as_array_mut) {
+                    rows.reverse();
+                }
+                (spawn_twin(template_context(&value), &mut commands), true)
             }
-        } else {
-            let Some((twin, ..)) = workloads.iter().find(|(_, workload, ..)| workload.role == Role::Twin) else {
-                return;
-            };
-            Pending {
-                main,
-                twin,
-                fresh: false,
-                since: now,
+            TwinKind::Static => {
+                let Some((twin, ..)) = workloads.iter().find(|(_, workload, ..)| workload.role == Role::Twin) else {
+                    return;
+                };
+                (twin, false)
             }
+            TwinKind::FullRestyle => (main, false),
         };
         bench.paused = true;
-        twins.pending = Some(pending);
+        twins.pending = Some(Pending {
+            kind,
+            main,
+            twin,
+            fresh,
+            since: now,
+            before: None,
+        });
         return;
     };
-    // Settled: the twin has built, and neither UI changed for two frames.
     let last = |entity| built.0.get(&entity).copied();
-    let settled = last(pending.twin).is_some_and(|twin| twin >= pending.since)
-        && now.saturating_sub(last(pending.twin).unwrap_or(now).max(last(pending.main).unwrap_or(0))) >= 2
-        && now.saturating_sub(pending.since) >= 3;
+    let quiet_since = |entity, frames: u32| now.saturating_sub(last(entity).unwrap_or(0)) >= frames;
     let timed_out = now.saturating_sub(pending.since) > 300;
+    let settled = match pending.kind {
+        TwinKind::FullRestyle => match &pending.before {
+            // First the scoped state settles; then the forced full
+            // restyle (re-inserting the sheet is a full-page style
+            // signal) must land and settle.
+            None => {
+                if quiet_since(pending.main, 2) && now.saturating_sub(pending.since) >= 3 {
+                    pending.before = Some(signature(pending.main, &tree, &parts));
+                    if let Ok((_, workload, ..)) = workloads.get(pending.main)
+                        && let Some(sheet) = &workload.sheet
+                    {
+                        commands.entity(pending.main).insert(HtmlStylesheet(sheet.clone()));
+                    }
+                    pending.since = now;
+                }
+                false
+            }
+            Some(_) => {
+                // The forced restyle lands in this frame's PostUpdate.
+                last(pending.main).is_some_and(|frame| frame >= pending.since) && quiet_since(pending.main, 2)
+            }
+        },
+        _ => {
+            last(pending.twin).is_some_and(|twin| twin >= pending.since)
+                && now.saturating_sub(last(pending.twin).unwrap_or(now).max(last(pending.main).unwrap_or(0))) >= 2
+                && now.saturating_sub(pending.since) >= 3
+        }
+    };
     if !settled && !timed_out {
         twins.pending = Some(pending);
         return;
     }
-    if timed_out && !settled {
-        twins.mismatches += 1;
-        twins.last_mismatch = "timeout: the twin never settled".into();
+    let mismatch = if timed_out && !settled {
+        Some("timeout: the comparison never settled".to_owned())
     } else {
-        let main = signature(pending.main, &tree, &parts);
-        let twin = signature(pending.twin, &tree, &parts);
-        if main == twin {
-            twins.matches += 1;
-        } else {
+        match pending.kind {
+            TwinKind::Reversed => {
+                let main = row_signatures(pending.main, &tree, &parts);
+                let twin = row_signatures(pending.twin, &tree, &parts);
+                main.iter()
+                    .find(|(id, lines)| twin.get(*id) != Some(*lines))
+                    .map(|(id, lines)| {
+                        format!(
+                            "{id}: {} / {}",
+                            lines.join(" "),
+                            twin.get(id).map_or("(missing)".to_owned(), |lines| lines.join(" "))
+                        )
+                    })
+                    .or_else(|| (main.len() != twin.len()).then(|| format!("{} rows / {}", main.len(), twin.len())))
+            }
+            kind => {
+                let main = if kind == TwinKind::FullRestyle {
+                    pending.before.clone().unwrap_or_default()
+                } else {
+                    signature(pending.main, &tree, &parts)
+                };
+                let twin = signature(pending.twin, &tree, &parts);
+                (main != twin).then(|| {
+                    let at = main.iter().zip(&twin).position(|(a, b)| a != b).unwrap_or(main.len().min(twin.len()));
+                    format!(
+                        "line {at}: {} / {}",
+                        main.get(at).map_or("(end)", String::as_str),
+                        twin.get(at).map_or("(end)", String::as_str)
+                    )
+                })
+            }
+        }
+    };
+    match mismatch {
+        None => twins.matches += 1,
+        Some(mismatch) => {
             twins.mismatches += 1;
-            let at = main.iter().zip(&twin).position(|(a, b)| a != b).unwrap_or(main.len().min(twin.len()));
-            twins.last_mismatch = format!(
-                "line {at}: {} / {}",
-                main.get(at).map_or("(end)", String::as_str),
-                twin.get(at).map_or("(end)", String::as_str)
-            );
-            warn!("testbench: twins differ at {}", twins.last_mismatch);
+            warn!("testbench: twins differ at {mismatch}");
+            twins.last_mismatch = mismatch;
         }
     }
     if pending.fresh {
@@ -739,8 +944,17 @@ fn check_scenario(
     tree: Query<&Children>,
     elements: Query<(Entity, &HtmlElement, Option<&ElementSignals>)>,
     texts: Query<(Option<&Text>, Option<&TextSpan>)>,
+    skeletons: Query<&bevy_markup::Skeleton>,
+    nodes: Query<(Ref<Node>, Option<&ComputedNode>)>,
+    paint: Query<(Option<&TextColor>, Option<&BackgroundColor>)>,
+    scaling: Res<Scaling>,
 ) {
     let now = frames.0;
+    let since = now.saturating_sub(bench.started);
+    let main_ui = workloads
+        .iter()
+        .find(|(_, workload, _)| workload.role == Role::Main)
+        .map(|(entity, ..)| entity);
     let probe = |name: &str| {
         workloads
             .iter()
@@ -871,6 +1085,113 @@ fn check_scenario(
                 }
                 None => ("wait", String::new()),
             },
+            // ADR 0021's reuse keeps working (bug_0150: it silently
+            // stopped inside containers; every result still matched a
+            // fresh build, so only the reuse itself shows it).
+            // `last_reuse`, not `pairing_health`: the health starts at
+            // `(true, 0)` and passed with bug_0150 put back (no pairing
+            // ran at all).
+            "reuse" => match main_ui.and_then(|ui| skeletons.get(ui).ok()) {
+                _ if since < 90 => ("wait", String::new()),
+                Some(skeleton) => match skeleton.last_reuse() {
+                    Some((reused, total)) => {
+                        let (useful, strike) = skeleton.pairing_health();
+                        let detail = format!("({reused} of {total} reused; useful {useful}, strike {strike})");
+                        // Three quarters: a sparse churn reuses nearly
+                        // everything; bug_0150 still reused the rows'
+                        // grandchildren (two thirds), so "half" missed it.
+                        let pass = reused > 0 && reused * 4 >= total * 3 && useful && strike == 0;
+                        (if pass { "pass" } else { "fail" }, detail)
+                    }
+                    None => ("wait", "(no content update yet)".into()),
+                },
+                None => ("fail", "no skeleton".into()),
+            },
+            // `overflow: auto` scrolls exactly when the content overflows,
+            // also after in-place updates (review_0005 I09).
+            "auto-scroll" if check.state == "fail" => (check.state, check.detail.clone()),
+            "auto-scroll" => {
+                let panel = workload_elements().find(|(_, element, _)| element.id.as_deref() == Some("panel"));
+                match panel.and_then(|(entity, ..)| nodes.get(entity).ok()) {
+                    // Past the warm-up, every frame (a failure sticks:
+                    // the promotion may recover on a later layout change).
+                    Some((node, Some(computed))) if since >= 60 => {
+                        let overflows = computed.content_size.y > computed.size.y + 0.5;
+                        let scrolls = node.overflow.y == OverflowAxis::Scroll;
+                        let detail = format!("(content {:.0} / box {:.0}, {:?})", computed.content_size.y, computed.size.y, node.overflow.y);
+                        (if overflows == scrolls { "pass" } else { "fail" }, detail)
+                    }
+                    _ => ("wait", String::new()),
+                }
+            }
+            // An idle UI stays quiet: no build, no restyle and no `Node`
+            // write after it settles (the change-loop class: a write that
+            // re-triggers its own trigger — review_0005 I09's promotion,
+            // review_0003 G15). The churn writes identical contexts.
+            "quiet" => {
+                if check.state == "fail" {
+                    (check.state, check.detail.clone())
+                } else if since < 90 {
+                    ("wait", String::new())
+                } else {
+                    let rebuilt = main_ui.and_then(|ui| built.0.get(&ui)).copied().filter(|frame| frame.saturating_sub(bench.started) > 90);
+                    let written = workload_elements()
+                        .filter(|(entity, ..)| nodes.get(*entity).is_ok_and(|(node, _)| node.is_changed()))
+                        .count();
+                    match (rebuilt, written) {
+                        (Some(frame), _) => ("fail", format!("(updated at frame {frame})")),
+                        (None, written) if written > 0 => ("fail", format!("({written} Node writes at frame {now})")),
+                        _ if since >= 150 => ("pass", format!("(frames {}..{now})", bench.started + 90)),
+                        _ => ("wait", String::new()),
+                    }
+                }
+            }
+            // Scaling: best of three at N and at 4N (see `Scaling`).
+            "linear" => {
+                let best = |samples: &[f32]| samples.iter().copied().fold(f32::INFINITY, f32::min);
+                if scaling.small.len() < SCALING_PHASES / 2 || scaling.large.len() < SCALING_PHASES / 2 {
+                    ("wait", format!("({} / {} phases)", scaling.small.len(), scaling.large.len()))
+                } else {
+                    let (small, large) = (best(&scaling.small), best(&scaling.large));
+                    let ratio = large / small.max(0.001);
+                    let detail = format!("(N {small:.2} ms, 4N {large:.2} ms: {ratio:.1}×)");
+                    (if ratio <= 8.0 { "pass" } else { "fail" }, detail)
+                }
+            }
+            // The quoted-value probes matched (bug_0144: a `]`, combinator
+            // characters or an escaped quote inside a value dropped the
+            // rule).
+            "quoted-match" => {
+                let painted = |id: &str| {
+                    workload_elements()
+                        .find(|(_, element, _)| element.id.as_deref() == Some(id))
+                        .map(|(entity, ..)| {
+                            std::iter::once(entity)
+                                .chain(tree.iter_descendants_depth_first(entity))
+                                .filter_map(|entity| paint.get(entity).ok())
+                                .collect::<Vec<_>>()
+                        })
+                };
+                match (painted("probe"), painted("quotes")) {
+                    (Some(probe), Some(quotes)) => {
+                        let background = probe.iter().any(|(_, bg)| bg.is_some_and(|bg| bg.0 == Color::srgb_u8(0x2a, 0x6f, 0x2a)));
+                        let color = quotes.iter().any(|(color, _)| color.is_some_and(|color| color.0 == Color::srgb_u8(0x7f, 0xdb, 0x8f)));
+                        let detail = format!("(brackets {background}, quotes {color})");
+                        (if background && color { "pass" } else { "fail" }, detail)
+                    }
+                    _ => ("wait", String::new()),
+                }
+            }
+            // Character references decode as browsers do (review_0005
+            // I04's fix also stopped a sign from counting as a digit).
+            "decoded" => match workload_elements().find(|(_, element, _)| element.id.as_deref() == Some("decoded")) {
+                Some((entity, ..)) => {
+                    let text = element_text(entity, &tree, &texts);
+                    let expected = "AB&&#+65;\u{FFFD}";
+                    (if text == expected { "pass" } else { "fail" }, format!("({text:?})"))
+                }
+                None => ("wait", String::new()),
+            },
             "twins" => {
                 let detail = if twins.mismatches > 0 {
                     format!("({} / {}: {})", twins.matches, twins.mismatches, twins.last_mismatch)
@@ -922,8 +1243,37 @@ fn summarize_on_exit(
 }
 
 /// Frame time and update rates.
-fn update_stats(time: Res<Time>, frames: Res<FrameCount>, mut stats: ResMut<Stats>, mut bench: ResMut<Bench>) {
+fn update_stats(
+    // Real time: the virtual clock clamps a frame to 250 ms, which capped
+    // the budget check's worst frame and the scaling phases at exactly
+    // that (a 4N frame of a second read as 250 ms).
+    time: Res<Time<Real>>,
+    frames: Res<FrameCount>,
+    mut stats: ResMut<Stats>,
+    mut bench: ResMut<Bench>,
+    mut scaling: ResMut<Scaling>,
+) {
     let ms = time.delta_secs() * 1000.0;
+    // The scaling phases: a phase's mean frame time, its first frames
+    // skipped (the switch's own rebuild).
+    if bench.id() == "scaling" && !bench.restart {
+        let phase = scaling_phase(frames.0.saturating_sub(bench.started));
+        if phase != scaling.phase {
+            if let Some(done) = scaling.phase {
+                let samples = std::mem::take(&mut scaling.current);
+                let mean = samples.iter().sum::<f32>() / samples.len().max(1) as f32;
+                if done % 2 == 0 {
+                    scaling.small.push(mean);
+                } else {
+                    scaling.large.push(mean);
+                }
+            }
+            scaling.phase = phase;
+            scaling.current.clear();
+        } else if phase.is_some() && frames.0.saturating_sub(bench.started).saturating_sub(SCALING_WARMUP) % PHASE >= 5 {
+            scaling.current.push(ms);
+        }
+    }
     if stats.frame_ms.len() == 120 {
         stats.frame_ms.pop_front();
     }

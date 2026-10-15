@@ -2137,8 +2137,10 @@ struct Rule<'a> {
 pub(crate) struct SelectorReads {
     /// An attribute selector anywhere (the `data-*` dataset).
     pub dataset: bool,
-    /// A sibling combinator (`+`/`~`): the preceding siblings.
-    pub siblings: bool,
+    /// A `+` combinator: the immediately preceding sibling.
+    pub adjacent_siblings: bool,
+    /// A `~` combinator: every preceding sibling.
+    pub general_siblings: bool,
     /// A structural pseudo-class on the subject compound: the element's
     /// own position among its siblings.
     pub subject_position: bool,
@@ -2159,16 +2161,25 @@ impl SelectorReads {
                 self.context_position |= structural;
             }
         }
-        self.siblings |= selector.combinators.iter().any(|combinator| {
-            matches!(combinator, Combinator::AdjacentSibling | Combinator::GeneralSibling)
-        });
+        for combinator in &selector.combinators {
+            match combinator {
+                Combinator::AdjacentSibling => self.adjacent_siblings = true,
+                Combinator::GeneralSibling => self.general_siblings = true,
+                _ => {}
+            }
+        }
         self
+    }
+
+    /// A sibling combinator of either kind.
+    pub(crate) fn siblings(&self) -> bool {
+        self.adjacent_siblings || self.general_siblings
     }
 
     /// Whether a match can depend on the element's siblings at all (a
     /// combinator, or a position).
     pub(crate) fn sibling_dependent(&self) -> bool {
-        self.siblings || self.subject_position || self.context_position
+        self.siblings() || self.subject_position || self.context_position
     }
 }
 
@@ -2334,7 +2345,7 @@ impl<'a> HtmlStyles<'a> {
                 if self.reads.dataset {
                     element.dataset.hash(&mut hasher);
                 }
-                if self.reads.siblings {
+                if self.reads.siblings() {
                     state.previous_siblings.as_ref().map(Siblings::hash).hash(&mut hasher);
                 }
                 hasher.finish()
@@ -5260,18 +5271,25 @@ mod tests {
         assert_eq!(reads("p { color: red } .a > #b { color: red }"), none);
         assert_eq!(reads("[data-x] { color: red }"), SelectorReads { dataset: true, ..none });
         assert_eq!(reads("p:not([data-x]) { color: red }"), SelectorReads { dataset: true, ..none });
-        assert_eq!(reads(".a + p { color: red }"), SelectorReads { siblings: true, ..none });
-        assert_eq!(reads(".a ~ p { color: red }"), SelectorReads { siblings: true, ..none });
+        assert_eq!(reads(".a + p { color: red }"), SelectorReads { adjacent_siblings: true, ..none });
+        assert_eq!(reads(".a ~ p { color: red }"), SelectorReads { general_siblings: true, ..none });
         assert_eq!(reads("p:first-child { color: red }"), SelectorReads { subject_position: true, ..none });
         assert_eq!(reads("p:not(:last-child) { color: red }"), SelectorReads { subject_position: true, ..none });
         assert_eq!(reads("li:first-child p { color: red }"), SelectorReads { context_position: true, ..none });
         assert_eq!(
             reads("[data-x] + p:nth-child(2) { color: red }"),
-            SelectorReads { dataset: true, siblings: true, subject_position: true, context_position: false }
+            SelectorReads {
+                dataset: true,
+                adjacent_siblings: true,
+                general_siblings: false,
+                subject_position: true,
+                context_position: false
+            }
         );
         assert!(!none.sibling_dependent());
         for dependent in [
-            SelectorReads { siblings: true, ..none },
+            SelectorReads { adjacent_siblings: true, ..none },
+            SelectorReads { general_siblings: true, ..none },
             SelectorReads { subject_position: true, ..none },
             SelectorReads { context_position: true, ..none },
         ] {
