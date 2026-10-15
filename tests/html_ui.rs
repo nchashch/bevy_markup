@@ -6483,7 +6483,7 @@ html-ui
 /// the one-level rule and an unknown reference.
 #[test]
 fn entities_decode_through_the_pipeline() {
-    let mut ui = TestUi::new(
+    let ui = TestUi::new(
         "entities",
         &[(
             "page.html",

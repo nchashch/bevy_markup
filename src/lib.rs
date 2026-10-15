@@ -392,6 +392,11 @@ impl Plugin for BevyMarkupPlugin {
                     build::advance_transitions
                         .after(HtmlUiSystems::Build)
                         .before(UiSystems::Prepare),
+                    // ADR 0027: `overflow: auto` promotes after layout
+                    // (the laid-out `ComputedNode` decides; the write
+                    // re-layouts the next frame, like the calc resolver's
+                    // one-frame model).
+                    build::promote_auto_scroll.in_set(UiSystems::PostLayout),
                 ),
             );
         focus::plugin(app);

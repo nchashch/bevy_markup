@@ -8,6 +8,40 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+- **`text-align`** (`left`/`right`/`center`/`justify`, inherited;
+  `start`/`end` map to `left`/`right` — the text is LTR): the block's
+  line alignment, on the block's `TextLayout`. `match-parent` and
+  `justify-all` drop their declaration.
+- **`line-height`** (inherited): a multiplier (`normal` = Bevy's 1.2
+  default, unitless numbers, `%`, `em` — re-multiplied per element, as
+  CSS's unitless inheritance) or an absolute length (`px`; `rem`
+  computes to pixels at the element). Applied on the block's `Text` and
+  on every span (bevy's measure reads the span's own components).
+- **`letter-spacing`** (inherited): `normal` (zero) or a length resolved
+  to pixels at the element (`em` against its own size, `rem` against
+  the root).
+- **List markers** (ADR 0027): `list-style-type` (`disc`/`circle`/
+  `square`/`decimal`/`none`, inherited) replaces the hard-coded `• `
+  bullet. An `ol` numbers its items (UA-sheet default; the cascade has
+  no UA stylesheet), a nested list restarts the count, a per-item or
+  per-list declaration overrides the inherited type, and `none` removes
+  the marker (the 12 px `li` indent stays, as in a browser — it was
+  already overridable per side by CSS `padding`). **Breaking:** an `ol`
+  now numbers its items (templates that relied on `ol` not numbering
+  change appearance); a `ul`'s items keep the disc bullet.
+- **Full character references** in templates, translations and Markdown:
+  the named WHATWG table (2 125 semicolon forms — the legacy
+  non-`&;` aliases stay verbatim, documented), numeric decimal/hex with
+  the C1 Windows-1252 replacements and U+FFFD for invalid code points,
+  longest-match, one-level (`&amp;lt;` reads `&lt;`), unknown references
+  verbatim.
+- **`overflow: auto`** scrolls if needed (ADR 0027): the axis clips
+  (`hidden`), and a promotion system — running after layout — promotes
+  it to scrolling when the laid-out content overflows the box and demotes
+  it when it doesn't (one frame later, like the calc resolver's model).
+  Previously `auto` scrolled always.
+
 ### Changed
 - **Interaction restyles are scoped (ADR 0029):** a `:hover`/`:active`/
   `:focus` change pairs against the cached build like a content change:

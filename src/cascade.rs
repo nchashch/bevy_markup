@@ -423,7 +423,19 @@ pub(crate) struct LayoutDecl {
     /// `[x, y]` pairs (CSS `border-radius: h / v`).
     pub border_radius: [Option<(Val, Val)>; 4],
     /// `overflow-x`, `overflow-y` (and the `overflow` shorthand).
-    pub overflow: [Option<OverflowAxis>; 2],
+    pub overflow: [Option<OverflowAxisDecl>; 2],
+}
+
+/// A declared `overflow` axis. `Auto` scrolls if needed: the build clips
+/// (CSS's hidden) and the promotion system watches the laid-out content
+/// (ADR 0027).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverflowAxisDecl {
+    Visible,
+    Hidden,
+    Clip,
+    Scroll,
+    Auto,
 }
 
 /// A declared `position`. `static` is CSS's initial value: Bevy's
@@ -542,8 +554,14 @@ impl LayoutDecl {
             &mut corners.bottom_left,
             &self.border_radius[3].map(CornerRadius::from),
         );
-        set(&mut node.overflow.x, &self.overflow[0]);
-        set(&mut node.overflow.y, &self.overflow[1]);
+        set(
+            &mut node.overflow.x,
+            &self.overflow[0].map(bevy_overflow),
+        );
+        set(
+            &mut node.overflow.y,
+            &self.overflow[1].map(bevy_overflow),
+        );
         let position_type = match self.position {
             // `fixed` positions against the viewport (via the `FixedNode`
             // component, added by the build), with absolute-style insets.
@@ -671,8 +689,16 @@ impl LayoutDecl {
             &base_corners.bottom_left,
             &self.border_radius[3],
         );
-        put(&mut node.overflow.x, &base.overflow.x, &self.overflow[0]);
-        put(&mut node.overflow.y, &base.overflow.y, &self.overflow[1]);
+        put(
+            &mut node.overflow.x,
+            &base.overflow.x,
+            &self.overflow[0].map(bevy_overflow),
+        );
+        put(
+            &mut node.overflow.y,
+            &base.overflow.y,
+            &self.overflow[1].map(bevy_overflow),
+        );
         // `apply_to` sets the position and insets for every non-`static`
         // position (`fixed` resolves against the viewport through the
         // `FixedNode` component, but the insets and the position type are
@@ -1617,13 +1643,26 @@ impl<'a> HtmlStyles<'a> {
     }
 }
 
-/// CSS `overflow` per axis; `auto` scrolls (Bevy has no "only if needed").
-fn overflow_axis(keyword: &OverflowKeyword) -> OverflowAxis {
+/// CSS `overflow` per axis (ADR 0027: `auto` keeps its own declaration —
+/// the build clips and the promotion system scrolls if needed).
+fn overflow_axis(keyword: &OverflowKeyword) -> OverflowAxisDecl {
     match keyword {
-        OverflowKeyword::Visible => OverflowAxis::Visible,
-        OverflowKeyword::Hidden => OverflowAxis::Hidden,
-        OverflowKeyword::Clip => OverflowAxis::Clip,
-        OverflowKeyword::Scroll | OverflowKeyword::Auto => OverflowAxis::Scroll,
+        OverflowKeyword::Visible => OverflowAxisDecl::Visible,
+        OverflowKeyword::Hidden => OverflowAxisDecl::Hidden,
+        OverflowKeyword::Clip => OverflowAxisDecl::Clip,
+        OverflowKeyword::Scroll => OverflowAxisDecl::Scroll,
+        OverflowKeyword::Auto => OverflowAxisDecl::Auto,
+    }
+}
+
+/// The declaration's Bevy counterpart: `auto` clips (the promotion system
+/// promotes to scrolling when the laid-out content overflows).
+fn bevy_overflow(axis: OverflowAxisDecl) -> OverflowAxis {
+    match axis {
+        OverflowAxisDecl::Visible => OverflowAxis::Visible,
+        OverflowAxisDecl::Hidden | OverflowAxisDecl::Auto => OverflowAxis::Hidden,
+        OverflowAxisDecl::Clip => OverflowAxis::Clip,
+        OverflowAxisDecl::Scroll => OverflowAxis::Scroll,
     }
 }
 
@@ -5234,19 +5273,21 @@ mod tests {
 
         assert_eq!(
             layout("overflow: hidden scroll").overflow,
-            [Some(OverflowAxis::Hidden), Some(OverflowAxis::Scroll)]
+            [Some(OverflowAxisDecl::Hidden), Some(OverflowAxisDecl::Scroll)]
         );
         assert_eq!(
             layout("overflow: clip").overflow,
-            [Some(OverflowAxis::Clip), Some(OverflowAxis::Clip)]
+            [Some(OverflowAxisDecl::Clip), Some(OverflowAxisDecl::Clip)]
         );
+        // ADR 0027: `auto` keeps its own declaration (the build clips and
+        // the promotion system scrolls if needed).
         assert_eq!(
             layout("overflow-y: auto").overflow,
-            [None, Some(OverflowAxis::Scroll)]
+            [None, Some(OverflowAxisDecl::Auto)]
         );
         assert_eq!(
             layout("overflow-x: visible").overflow,
-            [Some(OverflowAxis::Visible), None]
+            [Some(OverflowAxisDecl::Visible), None]
         );
 
         let flow = layout("flex-flow: column-reverse wrap");

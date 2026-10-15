@@ -155,6 +155,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0126](bug_0126.md) | Indented Tera block bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0024) | review_0004 (H11) |
 | [bug_0127](bug_0127.md) | Indented raw HTML container bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0025) | ADR 0024's open item |
 | [bug_0128](bug_0128.md) | Tera-printed args with emoji or combining marks fell back to the untranslated content | `src/template.rs` (+ l10n, signals, tooltips) | high | fixed (uncommitted) | testbench example (`hostile-args`) |
+| [bug_0129](bug_0129.md) | `inline_backgrounds` races the stylesheet load under full-suite load (an unstyled build after `settle` confirmed the load) | the stylesheet load path + `TestUi::settle` | low | **open** | the ADR 0027 test waves |
 
 ## Discovery session metadata: bug_0001–0005
 

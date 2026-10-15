@@ -1387,9 +1387,7 @@ The remaining authoring gaps and the order to close them in are the
 roadmap ADR: `docs/agents/adr/0028-modern-authoring-gaps-roadmap.md` —
 add new gap items there, not here.
 
-Known limits (each skipped/ignored value is logged at `debug`, except
-`text-align`/`line-height`/`letter-spacing`, which have no arm at all and
-are silently ignored):
+Known limits (each skipped/ignored value is logged at `debug`):
 
 - **Layout:** flex and grid layout, sizes, margins and `box-sizing` work on
   blocks, containers and the root (see the CSS subset); `position: sticky`, `order`,
@@ -1427,8 +1425,13 @@ are silently ignored):
   `span` anchored at a named line, and a CSS cascade of names (the
   `GridNames` table is container-level: `grid-template`/`grid` reset it, a
   nameless track list clears that axis's names).
-- **Lists:** `ul`/`ol` are plain columns; `li` draws a fixed `• ` with a
-  hard-coded 12px indent; `ol` isn't numbered; no `list-style`.
+- **Lists:** `list-style-type` (`disc`/`circle`/`square`/`decimal`/
+  `none`, inherited; the UA-sheet defaults per tag — `ol` numbers,
+  `ul` uses `disc`), counted by the parent list and restarting per
+  list; the marker renders in the `li`'s own style. The `li`'s 12px
+  indent is CSS-overridable per side. A nested list inside an `li`
+  renders as inline content (containers inside blocks are inline — the
+  mixed-content rule).
 - **Selectors:** compound selectors (type/`*` + `.class` + `#id`) joined by
   descendant/child combinators (`.panel p`, `.panel > p` — matched against
   the ancestor chain the walk threads through the cascade; the
@@ -1437,11 +1440,13 @@ are silently ignored):
   (`:hover`/`:active`/`:focus`/`:focus-visible`, on ancestors too); no
   sibling combinators (`+`, `~`), attribute selectors, other
   pseudo-classes or pseudo-elements (a selector with one skips the rule).
-- **Properties:** no `text-align`, `line-height`, `letter-spacing`,
-  `text-decoration`'s `overline`/`blink`/`-thickness`/`-style` (underline,
+- **Properties:** `text-align`/`line-height`/`letter-spacing` and
+  `list-style-type` work (ADR 0027); `text-decoration`'s
+  `overline`/`blink`/`-thickness`/`-style` are skipped (underline,
   line-through and a declared color work), border styles (every
-  border is solid); `overflow: auto` scrolls always (Bevy has no
-  scroll-if-needed). Lengths: px/em/rem/% for `font-size`, absolute only
+  border is solid); `overflow: auto` promotes to scrolling one frame
+  after layout decides the content overflows (the promotion system;
+  the calc resolver's one-frame model). Lengths: px/em/rem/% for `font-size`, absolute only
   for `padding`/`border-width`/`gap`; px/%/viewport units for sizes and margins,
   plus `calc()` in sizes/margins/insets, including `min()`/`max()`/`clamp()`
   (`clamp(min, v, max)` = `max(min, min(v, max))`; single-unit expressions at style
@@ -1522,8 +1527,9 @@ are silently ignored):
   Nested `HtmlUi`s go with a replaced slot; re-nest
   them on `HtmlUiBuilt`.
 - **Text:** `pre` has a fixed 8px padding; whitespace collapsing doesn't know
-  CJK (wrapped CJK source lines become spaces); `decode_entities` handles only
-  the five escapes Tera emits (no numeric references). Mixed inline content
+  CJK (wrapped CJK source lines become spaces); the legacy non-`;`
+  entity aliases (`&lt`-style) stay verbatim (the table holds the
+  semicolon forms). Mixed inline content
   directly in a container (`<div>Mixed <b>bold</b> text</div>`, also from a
   translation) becomes one anonymous block per text piece, not one line.
 - **Fluent:** numbers format without locale grouping (fluent-rs; the loader

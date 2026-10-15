@@ -19,6 +19,7 @@ use bevy::ui_widgets::TextInput;
 use crate::cascade::{
     self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, GridNames,
     HtmlStyles, InlineStyle, LayoutDecl, LetterSpacingSpec, LineHeightSpec, ListStyleSpec,
+    OverflowAxisDecl,
     OutlineDecl, Pseudo, SliceValue, TextAlignSpec, TransitionDecl, TransitionProp,
     node_field_mut,
 };
@@ -1599,6 +1600,9 @@ struct NodeSpec {
     /// or its content (the runs' inline elements included) — an
     /// interaction flip on it or an ancestor may change its style.
     pseudo_reactive: bool,
+    /// ADR 0027: the node's `overflow: auto` axes (which the promotion
+    /// system watches).
+    auto_scroll: [bool; 2],
     background: Option<Color>,
     image: Option<ImageNode>,
     border_color: Option<BorderColor>,
@@ -1698,6 +1702,7 @@ impl NodeSpec {
                 list_style: None,
             },
             pseudo_reactive: false,
+            auto_scroll: [false; 2],
             background: None,
             image: None,
             border_color: None,
@@ -1733,6 +1738,47 @@ pub(crate) struct CssOwned {
     pickable: bool,
     fixed: bool,
     visibility: bool,
+}
+
+/// The node's `overflow: auto` axes (ADR 0027): the build clips them and
+/// [`promote_auto_scroll`] promotes them to scrolling when the laid-out
+/// content overflows. CSS-owned like the `Node` fields: the spec writes
+/// it and a restyle without the declaration takes it back.
+#[derive(Component, Clone, Copy, Default, PartialEq, Debug)]
+pub(crate) struct AutoScroll(pub [bool; 2]);
+
+/// ADR 0027: `overflow: auto` scrolls if needed. The build clips the axis
+/// (CSS's `hidden`); this system — running after layout, in
+/// `UiSystems::PostLayout` — promotes it to scrolling when the laid-out
+/// content overflows the box and demotes it when it doesn't. The write
+/// re-layouts the next frame: the same one-frame model the calc resolver
+/// uses (the promotion is stable — the content's size doesn't depend on
+/// the axis's clip/scroll mode).
+pub(crate) fn promote_auto_scroll(
+    mut nodes: Query<(&mut Node, &ComputedNode, &AutoScroll), Changed<ComputedNode>>,
+) {
+    for (mut node, computed, auto) in &mut nodes {
+        for (axis, (size, content)) in [
+            (0usize, (computed.size.x, computed.content_size.x)),
+            (1usize, (computed.size.y, computed.content_size.y)),
+        ] {
+            if !auto.0[axis] {
+                continue;
+            }
+            let want = if content > size {
+                OverflowAxis::Scroll
+            } else {
+                OverflowAxis::Hidden
+            };
+            let current = match axis {
+                0 => &mut node.overflow.x,
+                _ => &mut node.overflow.y,
+            };
+            if *current != want {
+                *current = want;
+            }
+        }
+    }
 }
 
 /// Sets a node's CSS-owned components; on a restyle, resets the ones CSS set
@@ -2140,6 +2186,14 @@ type Tree<'w, 's> = Query<
 /// open container: its partial spec, its remaining child items, the
 /// child specs built so far), so the item tree's depth costs heap, not
 /// stack.
+/// ADR 0027: which of the layout declaration's overflow axes are `auto`.
+fn auto_axes(layout: &LayoutDecl) -> [bool; 2] {
+    [
+        matches!(layout.overflow[0], Some(OverflowAxisDecl::Auto)),
+        matches!(layout.overflow[1], Some(OverflowAxisDecl::Auto)),
+    ]
+}
+
 /// ADR 0029: the item's own reactivity (its subtree's is folded in at
 /// its construction; a cached item carries its spec's).
 fn item_shell_reactive(item: &Item) -> bool {
@@ -2212,6 +2266,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
         children,
         style,
         pseudo_reactive,
+        auto_scroll,
     ) = match item {
             // A reused subtree's spec comes out by refcount in the caller;
             // this path only builds fresh items.
@@ -2272,6 +2327,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                     font_size,
                     style,
                     pseudo_reactive,
+                    auto_scroll: auto_axes(&boxed.layout),
                     #[cfg(feature = "text-input")]
                     text_input: Some(value),
                     children: Vec::new(),
@@ -2306,6 +2362,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 children,
                 style.clone(),
                 *pseudo_reactive,
+                auto_axes(&boxed.layout),
             ),
         };
     let mut node = Node {
@@ -2339,6 +2396,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
         font_size,
         style,
         pseudo_reactive,
+        auto_scroll,
         calc: boxed.calc.clone(),
         transitions: boxed.transitions.clone(),
         ..NodeSpec::new(node)
@@ -2460,6 +2518,7 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
             font_size: block.style.size,
             style: block.style.clone(),
             pseudo_reactive: block.pseudo_reactive,
+            auto_scroll: auto_axes(&boxed.layout),
             images,
             text: Some(text),
             calc: boxed.calc.clone(),
@@ -2503,6 +2562,7 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
         font_size: block.style.size,
         style: block.style.clone(),
         pseudo_reactive: block.pseudo_reactive,
+        auto_scroll: auto_axes(&boxed.layout),
         images,
         children: vec![SpecNode::Fresh(Arc::new(NodeSpec {
             pickable: block.style.pointer_events,
@@ -2683,6 +2743,9 @@ fn spawn_attached(
         // A spawn has no previous style: CSS transitions don't run.
         &[],
     );
+    if spec.auto_scroll[0] || spec.auto_scroll[1] {
+        entity.insert(AutoScroll(spec.auto_scroll));
+    }
     if let Some(text) = &spec.text {
         entity.insert((
             Text::new(text.prefix.clone()),
@@ -3027,6 +3090,7 @@ fn update_spec<'a>(
     if !spec.signals.is_empty() || submit {
         signals::observe_pointer_signals(&mut target);
     }
+    let auto_scroll = spec.auto_scroll;
     let queued = Arc::clone(spec);
     #[cfg(feature = "text-input")]
     let is_text_input = queued.text_input.is_some();
@@ -3180,6 +3244,14 @@ fn update_spec<'a>(
         // "absent" state: `normal` is a value).
         put(&mut entity, Some(line_height));
         put(&mut entity, Some(letter_spacing));
+    });
+    // ADR 0027: the `overflow: auto` axes (the promotion system's marker);
+    // a restyle without the declaration takes it back.
+    target.queue(move |mut entity: EntityWorldMut| {
+        put(
+            &mut entity,
+            (auto_scroll[0] || auto_scroll[1]).then_some(AutoScroll(auto_scroll)),
+        );
     });
     // Spans carry the block's `pointer-events: none` (see
     // `spawn_spec`); an update without it takes it back. An image
