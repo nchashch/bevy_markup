@@ -6503,3 +6503,58 @@ fn entities_decode_through_the_pipeline() {
         "decoded: {dump}"
     );
 }
+
+/// ADR 0027: `overflow: auto` scrolls if needed. The axis clips until the
+/// laid-out content overflows the box, promotes to scrolling then, demotes
+/// when the content shrinks back, and the x axis (declared `scroll`) never
+/// moves.
+#[test]
+fn overflow_auto_promotes_and_demotes_with_content() {
+    let page = r#"<div id="box" class="clip">{% for i in rows %}<p>row {{ i }}</p>{% endfor %}</div>"#;
+    let css = ".clip { height: 40px; overflow-x: scroll; overflow-y: auto }";
+    let mut ui = TestUi::with_layout(
+        "overflow-auto",
+        &[("page.html", page), ("style.css", css)],
+        UVec2::new(320, 240),
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("rows", &[0, 1, 2, 3, 4]),
+        Node::default(),
+    );
+    ui.settle();
+    let overflow = |ui: &mut TestUi| {
+        let root = ui.root();
+        let box_entity = element_by_id(ui.world_mut(), root, "box");
+        let node = ui
+            .world_mut()
+            .get::<Node>(box_entity)
+            .expect("node")
+            .clone();
+        node.overflow
+    };
+    // Five rows (~96px) inside a 40px box: the y axis promotes.
+    let promoted = overflow(&mut ui);
+    assert_eq!(promoted.y, OverflowAxis::Scroll, "overflowing: promoted");
+    assert_eq!(promoted.x, OverflowAxis::Scroll, "declared scroll stays");
+    // The content shrinks under the box: the axis demotes.
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("rows", &[0]);
+    ui.settle();
+    let demoted = overflow(&mut ui);
+    assert_eq!(demoted.y, OverflowAxis::Hidden, "fitting: demoted");
+    assert_eq!(demoted.x, OverflowAxis::Scroll, "declared scroll stays");
+    // And it re-promotes (a rebuild resets the axis; the promotion runs
+    // again).
+    let root = ui.root();
+    ui.world_mut()
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("rows", &[0, 1, 2, 3, 4]);
+    ui.settle();
+    assert_eq!(overflow(&mut ui).y, OverflowAxis::Scroll, "re-promoted");
+}

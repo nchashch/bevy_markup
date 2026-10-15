@@ -4,3 +4,5 @@ p { width: 220px }
 .right { text-align: right }
 .justify { text-align: justify }
 .lh { line-height: 2 }
+
+.ls { letter-spacing: 3px }

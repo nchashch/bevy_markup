@@ -1,0 +1,18 @@
+{
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py", "viewport": [640, 480]},
+ "elements": [
+  {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 0, 640, 120]},
+  {"tag": "ul", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 0, 640, 72]},
+  {"tag": "li", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [12, 0, 628, 24]},
+  {"tag": "li", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [12, 24, 628, 48]},
+  {"tag": "ol", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [0, 72, 640, 48]},
+  {"tag": "li", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [12, 72, 628, 24]},
+  {"tag": "li", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)", "rect": [12, 96, 628, 24]}
+ ],
+ "runs": [
+  {"text": "first item", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "second item that is long enough to wrap onto a second line here", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "numbered one", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "numbered two", "color": "rgb(255, 255, 255)", "fontSize": 20, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""}
+ ]
+}
