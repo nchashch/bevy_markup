@@ -439,10 +439,12 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   content-only — except for scoped restyles (ADR 0029): a pure
   `PseudoState` change pairs too, and reuses everything outside the
   flipped elements' paths to the root; a re-collected element's children
-  re-cascade only where its fresh inherited style differs from the cached
-  spec's (`NodeSpec::style`), so a `:hover` flip that changes only a
-  background leaves the children cached while one that changes `color`
-  re-cascades them. Other style-side changes (`var()` values, font,
+  re-cascade when its fresh inherited style differs from the cached
+  spec's (`NodeSpec::style`), or when they are themselves
+  pseudo-reactive (`NodeSpec::pseudo_reactive`: some pseudo-referencing
+  selector's non-pseudo parts match the element or its content —
+  `.row:hover .label` restyles the label when the row flips, hovered
+  itself or not). Other style-side changes (`var()` values, font,
   image or stylesheet changes) still rebuild fully
   (`RebuildState::style_pending` — set on
   any style signal, surviving a `Wait` until an update applies it — and

@@ -1079,23 +1079,53 @@ impl Selector {
         self.matches_rest(self.compounds.len() - 1, ancestors)
     }
 
+    /// Whether any compound in the selector tests a pseudo-class: its
+    /// match outcome depends on the interaction state.
+    fn has_pseudo(&self) -> bool {
+        self.compounds
+            .iter()
+            .any(|compound| compound.pseudo != Pseudo::default())
+    }
+
+    /// Whether the selector could match `element` if every pseudo test
+    /// went either way (ADR 0029's reactivity record): the non-pseudo
+    /// parts of every compound match the element and its ancestors.
+    fn matches_ignoring_pseudo(&self, element: &HtmlElement, ancestors: &[Ancestor]) -> bool {
+        let Some(last) = self.compounds.last() else {
+            return false;
+        };
+        if !last.matches_parts(element) {
+            return false;
+        }
+        self.matches_from(
+            self.compounds.len() - 1,
+            ancestors,
+            0,
+            &mut HashSet::new(),
+            true,
+        )
+    }
+
     /// Matches `compounds[..index]` against `ancestors` (nearest first).
     /// Memoized by (compound index, ancestor offset): a `.b .a ×n p`
     /// selector against deep `.a` ancestors retried every combination
     /// (hundreds of ms per element); with the failure memo it is linear.
     fn matches_rest(&self, index: usize, ancestors: &[Ancestor]) -> bool {
         let mut failed = HashSet::new();
-        self.matches_from(index, ancestors, 0, &mut failed)
+        self.matches_from(index, ancestors, 0, &mut failed, false)
     }
 
     /// [`matches_rest`](Self::matches_rest) from `offset` (the absolute
-    /// ancestor position), recording failed states in `failed`.
+    /// ancestor position), recording failed states in `failed`. With
+    /// `ignore_pseudo`, the compounds' pseudo parts match anything (ADR
+    /// 0029's reactivity record).
     fn matches_from(
         &self,
         index: usize,
         ancestors: &[Ancestor],
         offset: usize,
         failed: &mut HashSet<(usize, usize)>,
+        ignore_pseudo: bool,
     ) -> bool {
         if index == 0 {
             return true;
@@ -1105,17 +1135,26 @@ impl Selector {
         }
         let combinator = self.combinators[index - 1];
         let compound = &self.compounds[index - 1];
+        let parts_only = |ancestor: &Ancestor| compound.matches_parts_ancestor(ancestor);
         let matched = match combinator {
             Combinator::Child => ancestors.get(offset).is_some_and(|parent| {
-                compound.matches_ancestor(parent)
-                    && self.matches_from(index - 1, ancestors, offset + 1, failed)
+                (if ignore_pseudo {
+                    parts_only(parent)
+                } else {
+                    compound.matches_ancestor(parent)
+                }) && self.matches_from(index - 1, ancestors, offset + 1, failed, ignore_pseudo)
             }),
             Combinator::Descendant => {
                 let mut any = false;
                 for i in offset..ancestors.len() {
                     let ancestor = &ancestors[i];
-                    if compound.matches_ancestor(ancestor)
-                        && self.matches_from(index - 1, ancestors, i + 1, failed)
+                    let matches = if ignore_pseudo {
+                        parts_only(ancestor)
+                    } else {
+                        compound.matches_ancestor(ancestor)
+                    };
+                    if matches
+                        && self.matches_from(index - 1, ancestors, i + 1, failed, ignore_pseudo)
                     {
                         any = true;
                         break;
@@ -1234,7 +1273,13 @@ impl Compound {
             && (!self.pseudo.active || pseudo.active)
             && (!self.pseudo.focus || pseudo.focus)
             && (!self.pseudo.focus_visible || pseudo.focus_visible)
-            && self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
+            && self.matches_parts(element)
+    }
+
+    /// The compound's tag/id/classes (its non-pseudo parts) against the
+    /// element.
+    fn matches_parts(&self, element: &HtmlElement) -> bool {
+        self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
             && self.ids.iter().all(|id| element.id.as_ref() == Some(id))
             && self.classes.iter().all(|class| element.has_class(class))
     }
@@ -1247,7 +1292,12 @@ impl Compound {
             && (!self.pseudo.active || ancestor.pseudo.active)
             && (!self.pseudo.focus || ancestor.pseudo.focus)
             && (!self.pseudo.focus_visible || ancestor.pseudo.focus_visible)
-            && self.tag.as_ref().is_none_or(|tag| *tag == ancestor.tag)
+            && self.matches_parts_ancestor(ancestor)
+    }
+
+    /// The compound's tag/id/classes against a slimmed ancestor.
+    fn matches_parts_ancestor(&self, ancestor: &Ancestor) -> bool {
+        self.tag.as_ref().is_none_or(|tag| *tag == ancestor.tag)
             && self.ids.iter().all(|id| ancestor.id.as_ref() == Some(id))
             && self
                 .classes
@@ -1329,6 +1379,10 @@ pub(crate) struct HtmlStyles<'a> {
     /// `variables`; values interpolate as written (strings raw, numbers
     /// and bools as their CSS spelling). `None` = no context.
     context: Option<&'a dyn Fn(&str) -> Option<String>>,
+    /// Indices into `rules` of the rules whose selector tests a
+    /// pseudo-class (ADR 0029's reactivity record: only these can change
+    /// a style when an interaction state flips).
+    pseudo_rules: Vec<usize>,
     /// The `--` names the sheet's non-custom declarations (transitively)
     /// reference (the wrapper's `var_names`): a custom declaration whose
     cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo, u64), ElementStyle>>,
@@ -1390,10 +1444,18 @@ impl<'a> HtmlStyles<'a> {
         }
         // Apply in ascending rank: later application wins.
         rules.sort_by_key(|rule| rule.rank);
+        // After the sort, so the indices address the sorted order.
+        let pseudo_rules: Vec<usize> = rules
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| rule.selector.has_pseudo())
+            .map(|(index, _)| index)
+            .collect();
         Self {
             rules,
             variables,
             context: None,
+            pseudo_rules,
             cache: RefCell::default(),
         }
     }
@@ -1440,6 +1502,19 @@ impl<'a> HtmlStyles<'a> {
         }
         self.cache.borrow_mut().insert(key, style.clone());
         style
+    }
+
+    /// Whether some pseudo-referencing selector could match `element` if
+    /// every pseudo test went either way: the element's (or its runs')
+    /// style may change when an interaction state flips anywhere on its
+    /// chain — ADR 0029's reactivity record. Cheap when the sheet has no
+    /// pseudo rules (the common case is an empty list).
+    pub fn pseudo_reactive(&self, element: &HtmlElement, ancestors: &[Ancestor]) -> bool {
+        self.pseudo_rules.iter().any(|&index| {
+            self.rules[index]
+                .selector
+                .matches_ignoring_pseudo(element, ancestors)
+        })
     }
 
     /// [`get`](Self::get) with the element's `style` attribute: normal rules,

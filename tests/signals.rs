@@ -591,6 +591,57 @@ fn hover_restyles_scoped_like_a_fresh_build() {
     assert_eq!(hovered.dump(), before, "the unhover restored the start");
 }
 
+/// ADR 0029's soundness: a rule keyed on an *ancestor's* pseudo state
+/// (`.row:hover .label`) restyles elements that did not flip themselves.
+/// The hover here lands on the row's padding — neither label is hovered —
+/// so both labels must re-cascade because the row flipped, not because
+/// their own state moved.
+#[test]
+fn ancestor_pseudo_rule_restyles_uncached_descendants() {
+    let page = r#"<div id="wrap">
+        <div class="row pad" id="row">
+            <p class="label" id="label-1">one</p>
+            <p class="label" id="label-2">two</p>
+        </div>
+    </div>"#;
+    let css = r#"
+        .pad { padding: 24px }
+        .pad:hover .label { color: #00ff00 }
+    "#;
+    let mut ui = page_ui("scoped-hover-ancestor", page, css, TemplateContext::new());
+    ui.settle();
+    let before = ui.dump();
+
+    // Hover the row's top padding strip: above both labels.
+    let root = ui.root();
+    let row = element_by_id(ui.world_mut(), root, "row");
+    let rect = node_rect(ui.world_mut(), row).expect("laid out");
+    let at = Vec2::new((rect.min.x + rect.max.x) / 2.0, rect.min.y + 4.0);
+    ui.move_pointer(at);
+    let row_entity = element_by_id(ui.world_mut(), root, "row");
+    assert!(pseudo(ui.world_mut(), row_entity).hovered, "row hovered");
+    let label_1 = element_by_id(ui.world_mut(), root, "label-1");
+    let label_2 = element_by_id(ui.world_mut(), root, "label-2");
+    assert!(
+        !pseudo(ui.world_mut(), label_1).hovered
+            && !pseudo(ui.world_mut(), label_2).hovered,
+        "no label hovered"
+    );
+    ui.settle();
+
+    let after = ui.dump();
+    assert_ne!(after, before, "the hover restyled the labels");
+    // Both labels carry the rule's green; nothing else moved (the row's
+    // own padding/background is untouched by the rule).
+    assert!(after.contains("\"one\" default 16px #00ff00"), "{after}");
+    assert!(after.contains("\"two\" default 16px #00ff00"), "{after}");
+
+    // And the unhover returns the start.
+    ui.move_pointer(Vec2::new(320.0, 600.0));
+    ui.settle();
+    assert_eq!(ui.dump(), before, "the unhover restored the start");
+}
+
 /// `enter`/`leave` count for a whole element subtree (like CSS `:hover`),
 /// and each bound element on the way enters and leaves.
 #[test]

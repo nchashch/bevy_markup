@@ -12,9 +12,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 - **Interaction restyles are scoped (ADR 0029):** a `:hover`/`:active`/
   `:focus` change pairs against the cached build like a content change:
   the flipped elements and their ancestors re-collect, and their
-  descendants re-cascade only where the inherited style actually changed
-  (a `color` change re-cascades the subtree, a background-only one leaves
-  it cached). Measured (release, 2000-row page, one pseudo flip per
+  descendants re-cascade when the inherited style actually changed **or**
+  a pseudo-referencing selector could match them (`.row:hover .label`:
+  the label restyles when the row flips, hovered itself or not).
+  Measured (release, 2000-row page, one pseudo flip per
   frame): the flip frame dropped from ~15.5 ms to ~9.2 ms; the remainder
   is the per-restyle document walk, not the cascade. Stylesheet, font,
   image and `var()` changes still restyle the whole UI. Behavior is

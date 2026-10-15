@@ -221,9 +221,13 @@ struct Block {
     custom: Option<CustomElement>,
     /// The DOM node, for `:hover`/`:active` restyles.
     handle: Option<tl::NodeHandle>,
-    /// The block element's own computed style (bullet; root `Text` font).
+    /// The element's computed (inherited) style: the children's inherited
+    /// base (ADR 0029's scoping compares it with the cached spec's).
     style: Style,
-    /// Box properties, computed with the element's interaction state.
+    /// ADR 0029: a pseudo-referencing selector could match this element
+    /// or its content — an interaction flip on it or an ancestor may
+    /// change its style.
+    pseudo_reactive: bool,
     boxed: BoxStyle,
     runs: Vec<Run>,
 }
@@ -284,6 +288,9 @@ enum Item {
         /// The element's computed style: the children's inherited base
         /// (ADR 0029's scoping compares it with the cached spec's).
         style: Style,
+        /// ADR 0029: a pseudo-referencing selector could match this
+        /// element or something inside it.
+        pseudo_reactive: bool,
         children: Vec<Item>,
     },
     /// A `<input type="text">` (the `text-input` feature).
@@ -300,6 +307,8 @@ enum Item {
         /// The element's computed style: the children's inherited base
         /// (ADR 0029's scoping compares it with the cached spec's).
         style: Style,
+        /// ADR 0029: a pseudo-referencing selector could match this field.
+        pseudo_reactive: bool,
         value: TextInputSpec,
     },
     /// ADR 0021: a reused subtree — the previous build's spec, handed to
@@ -563,6 +572,13 @@ pub(crate) struct Styler<'a> {
 }
 
 impl Styler<'_> {
+    /// Whether some pseudo-referencing selector could match `element`
+    /// given its chain (ADR 0029's reactivity record): only such an
+    /// element's style can change when an interaction state flips.
+    pub(crate) fn pseudo_reactive(&self, element: &HtmlElement, ancestors: &[Ancestor]) -> bool {
+        self.styles.pseudo_reactive(element, ancestors)
+    }
+
     /// `element`'s computed style: its declared values (with its `style`
     /// attribute, `inline`) over `inherited`. `pseudo` is the element's
     /// interaction state (`:hover`/`:active`).
@@ -1269,6 +1285,9 @@ pub(crate) fn build_html_ui(
                 }],
                 boxed: BoxStyle::default(),
                 style,
+                // The outline's own style: `pre` with `Pseudo::default()`
+                // — no interaction state restyles it (ADR 0029).
+                pseudo_reactive: false,
             })]
         } else {
             match &*rendered {
@@ -1323,6 +1342,9 @@ pub(crate) fn build_html_ui(
                         image: None,
                     }],
                     style: root,
+                    // A failed render's error paragraph never restyles
+                    // with an interaction state (ADR 0029).
+                    pseudo_reactive: false,
                     boxed: BoxStyle::default(),
                 })],
             }
@@ -1528,6 +1550,10 @@ struct NodeSpec {
     /// re-collected element's fresh style with this to decide whether its
     /// children must re-cascade).
     style: Style,
+    /// ADR 0029: a pseudo-referencing selector could match this element
+    /// or its content (the runs' inline elements included) — an
+    /// interaction flip on it or an ancestor may change its style.
+    pseudo_reactive: bool,
     background: Option<Color>,
     image: Option<ImageNode>,
     border_color: Option<BorderColor>,
@@ -1616,6 +1642,7 @@ impl NodeSpec {
                 pointer_events: true,
                 opacity: 1.0,
             },
+            pseudo_reactive: false,
             background: None,
             image: None,
             border_color: None,
@@ -2054,6 +2081,18 @@ type Tree<'w, 's> = Query<
 /// open container: its partial spec, its remaining child items, the
 /// child specs built so far), so the item tree's depth costs heap, not
 /// stack.
+/// ADR 0029: the item's own reactivity (its subtree's is folded in at
+/// its construction; a cached item carries its spec's).
+fn item_shell_reactive(item: &Item) -> bool {
+    match item {
+        Item::Block(block) => block.pseudo_reactive,
+        Item::Container { pseudo_reactive, .. } => *pseudo_reactive,
+        #[cfg(feature = "text-input")]
+        Item::TextInput { pseudo_reactive, .. } => *pseudo_reactive,
+        Item::Cached(spec) => spec.pseudo_reactive,
+    }
+}
+
 fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
     struct Frame<'a> {
         spec: NodeSpec,
@@ -2102,8 +2141,19 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
 /// with its child items for [`item_spec`] to build (and its `children`
 /// and `images` still empty).
 fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpec, Option<&'a [Item]>) {
-    let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children, style) =
-        match item {
+    let (
+        element,
+        handle,
+        signals,
+        focus,
+        custom,
+        boxed,
+        pointer_events,
+        font_size,
+        children,
+        style,
+        pseudo_reactive,
+    ) = match item {
             // A reused subtree's spec comes out by refcount in the caller;
             // this path only builds fresh items.
             Item::Cached(_) => unreachable!("a cached item never reaches item_spec"),
@@ -2119,6 +2169,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 pointer_events,
                 font_size,
                 style,
+                pseudo_reactive,
                 value,
             } => {
                 // Returns directly: the other arms feed the shared tuple tail.
@@ -2132,6 +2183,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 let handle = *handle;
                 let pointer_events = *pointer_events;
                 let style = style.clone();
+                let pseudo_reactive = *pseudo_reactive;
                 let mut node = Node {
                     flex_direction: FlexDirection::Column,
                     flex_shrink: 0.0,
@@ -2160,6 +2212,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                         .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
                     font_size,
                     style,
+                    pseudo_reactive,
                     #[cfg(feature = "text-input")]
                     text_input: Some(value),
                     children: Vec::new(),
@@ -2178,6 +2231,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 pointer_events,
                 font_size,
                 style,
+                pseudo_reactive,
                 children,
             } => (
                 element.clone(),
@@ -2192,6 +2246,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 // subtree per container.
                 children,
                 style.clone(),
+                *pseudo_reactive,
             ),
         };
     let mut node = Node {
@@ -2224,6 +2279,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
             .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
         font_size,
         style,
+        pseudo_reactive,
         calc: boxed.calc.clone(),
         transitions: boxed.transitions.clone(),
         ..NodeSpec::new(node)
@@ -2332,6 +2388,7 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
             submit: block.submit,
             font_size: block.style.size,
             style: block.style.clone(),
+            pseudo_reactive: block.pseudo_reactive,
             images,
             text: Some(text),
             calc: boxed.calc.clone(),
@@ -2374,12 +2431,15 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
         submit: block.submit,
         font_size: block.style.size,
         style: block.style.clone(),
+        pseudo_reactive: block.pseudo_reactive,
         images,
         children: vec![SpecNode::Fresh(Arc::new(NodeSpec {
             pickable: block.style.pointer_events,
             // The inner text node's inherited base is the block's: its
-            // runs styled from it (ADR 0029's scoping reads it).
+            // runs styled from it, and it reacts when the block does
+            // (ADR 0029's scoping reads both).
             style: block.style.clone(),
+            pseudo_reactive: block.pseudo_reactive,
             text: Some(text),
             ..NodeSpec::new(text_node)
         }))],
@@ -4089,6 +4149,9 @@ fn collect_node(
         font_size: f32,
         start: usize,
         style: Style,
+        /// The container element's own reactivity; the children's folds in
+        /// at completion (ADR 0029).
+        own_reactive: bool,
     }
     enum Task {
         Node {
@@ -4102,6 +4165,10 @@ fn collect_node(
             /// may differ, so it may not reuse (its children re-decide
             /// from its fresh inherited style).
             inherited_changed: bool,
+            /// An ancestor's interaction state flipped (ADR 0029): the
+            /// node re-decides reuse from its cached spec's
+            /// `pseudo_reactive`.
+            ancestor_flipped: bool,
         },
         Complete(Box<Open>),
     }
@@ -4115,46 +4182,66 @@ fn collect_node(
         // inline images — every one of them a `full_style` signal — so a
         // build that reuses at all has an unchanged root base.
         inherited_changed: false,
+        ancestor_flipped: false,
     }];
     while let Some(task) = stack.pop() {
-        let (handle, inherited, chain, grid, depth, inherited_changed) = match task {
-            Task::Complete(open) => {
-                let Open {
-                    element,
+        let (handle, inherited, chain, grid, depth, inherited_changed, ancestor_flipped) =
+            match task {
+                Task::Complete(open) => {
+                    let Open {
+                        element,
+                        handle,
+                        signals,
+                        focus,
+                        custom,
+                        boxed,
+                        pointer_events,
+                        font_size,
+                        start,
+                        style,
+                        own_reactive,
+                    } = *open;
+                    let children: Vec<Item> = items.drain(start..).collect();
+                    // The container re-cascades on a flip when its own
+                    // rules or anything inside it could react (ADR 0029).
+                    let pseudo_reactive = own_reactive
+                        || children.iter().any(|item| match item {
+                            Item::Cached(spec) => spec.pseudo_reactive,
+                            item => item_shell_reactive(item),
+                        });
+                    items.push(Item::Container {
+                        element,
+                        handle: Some(handle),
+                        signals,
+                        focus,
+                        custom,
+                        boxed,
+                        pointer_events,
+                        font_size,
+                        style,
+                        pseudo_reactive,
+                        children,
+                    });
+                    continue;
+                }
+                Task::Node {
                     handle,
-                    signals,
-                    focus,
-                    custom,
-                    boxed,
-                    pointer_events,
-                    font_size,
-                    start,
-                    style,
-                } = *open;
-                let children = items.drain(start..).collect();
-                items.push(Item::Container {
-                    element,
-                    handle: Some(handle),
-                    signals,
-                    focus,
-                    custom,
-                    boxed,
-                    pointer_events,
-                    font_size,
-                    style,
-                    children,
-                });
-                continue;
-            }
-            Task::Node {
-                handle,
-                inherited,
-                chain,
-                grid,
-                depth,
-                inherited_changed,
-            } => (handle, inherited, chain, grid, depth, inherited_changed),
-        };
+                    inherited,
+                    chain,
+                    grid,
+                    depth,
+                    inherited_changed,
+                    ancestor_flipped,
+                } => (
+                    handle,
+                    inherited,
+                    chain,
+                    grid,
+                    depth,
+                    inherited_changed,
+                    ancestor_flipped,
+                ),
+            };
         if depth >= MAX_DOM_DEPTH {
             warn_overdepth();
             continue;
@@ -4167,6 +4254,7 @@ fn collect_node(
             tl::Node::Raw(_) => {
                 // Anonymous block: inherits the container's style.
                 let mut runs = Vec::new();
+                let mut reactive = false;
                 push_runs(
                     ctx,
                     handle,
@@ -4174,6 +4262,7 @@ fn collect_node(
                     RunExtras::default(),
                     &mut runs,
                     chain.clone(),
+                    &mut reactive,
                 );
                 let runs = collapse_runs(runs);
                 if !runs.is_empty() {
@@ -4186,6 +4275,7 @@ fn collect_node(
                         custom: None,
                         submit: false,
                         style: inherited.clone(),
+                        pseudo_reactive: reactive,
                         boxed: BoxStyle::default(),
                         runs,
                     }));
@@ -4205,13 +4295,20 @@ fn collect_node(
         // (itself or an ancestor flipped) re-cascades — its rules may now
         // match differently, or its inherited base moved — while every
         // other clean node's style comes out identical and reuses. So does
-        // a node whose inherited base is unchanged (the parent's flag).
+        // a node whose inherited base is unchanged (the parent's flag); a
+        // node under a flipped ancestor reuses only when no
+        // pseudo-referencing selector could match it (the cached spec's
+        // `pseudo_reactive`).
         if let Some(skeleton) = ctx.skeleton
             && !skeleton.full_style
             && !inherited_changed
             && let Some(&old) = skeleton.pairing.get(&handle)
             && skeleton.clean.contains(&old)
             && !skeleton.flipped.contains(&old)
+            && !(ancestor_flipped
+                && skeleton
+                    .cached_spec(old)
+                    .is_some_and(|spec| spec.pseudo_reactive))
             && skeleton.reuse(old, items)
         {
             continue;
@@ -4237,6 +4334,7 @@ fn collect_node(
                     grid: None,
                     depth: depth + 1,
                     inherited_changed,
+                    ancestor_flipped,
                 });
             }
             continue;
@@ -4286,6 +4384,18 @@ fn collect_node(
                 .is_none_or(|cached| cached.style != style),
             None => true,
         };
+        // A flipped element makes its whole subtree re-decide from their
+        // cached `pseudo_reactive` (the flip's handle numbering is the
+        // cached document's — identical sources parse identically; on a
+        // full_style pass nothing reuses, so the flag's value is moot).
+        let child_ancestor_flipped = ancestor_flipped
+            || ctx
+                .skeleton
+                .is_some_and(|skeleton| !skeleton.full_style && skeleton.flipped.contains(&handle));
+        // ADR 0029: whether a pseudo-referencing selector could match this
+        // element — its own style (and, for containers, anything inside
+        // it) may change on a flip.
+        let own_reactive = ctx.styler.pseudo_reactive(&element, &chain);
         let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), &chain);
         // This element's own placement resolves against its parent's grid
         // (named lines and areas); its own template then backs its children's.
@@ -4325,6 +4435,7 @@ fn collect_node(
                 pointer_events: style.pointer_events,
                 font_size: style.size,
                 style: style.clone(),
+                pseudo_reactive: own_reactive,
                 value: TextInputSpec {
                     initial: value.unwrap_or_default(),
                     font: ctx.styler.text_font(&style),
@@ -4348,6 +4459,7 @@ fn collect_node(
         // piece gets. In a block, `push_runs` handles it inline instead.
         if element.tag == "img" {
             let mut runs = Vec::new();
+            let mut reactive = own_reactive;
             push_runs(
                 ctx,
                 handle,
@@ -4355,6 +4467,7 @@ fn collect_node(
                 RunExtras::default(),
                 &mut runs,
                 child_chain.clone(),
+                &mut reactive,
             );
             if !runs.is_empty() {
                 items.push(Item::Block(Block {
@@ -4366,6 +4479,7 @@ fn collect_node(
                     custom: None,
                     submit: false,
                     style: inherited.clone(),
+                    pseudo_reactive: reactive,
                     boxed: BoxStyle::default(),
                     runs,
                 }));
@@ -4417,6 +4531,7 @@ fn collect_node(
                         font_size: style.size,
                         start,
                         style: style.clone(),
+                        own_reactive,
                     })));
                 }
                 let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
@@ -4450,6 +4565,7 @@ fn collect_node(
                             grid: grid_of_own.clone(),
                             depth: depth + 1,
                             inherited_changed: children_inherited_changed,
+                            ancestor_flipped: child_ancestor_flipped,
                         });
                     }
                 }
@@ -4469,6 +4585,7 @@ fn collect_node(
                 .iter()
                 .any(|ancestor| ancestor.submit);
         let mut runs = Vec::new();
+        let mut reactive = own_reactive;
         push_content_runs(
             ctx,
             handle,
@@ -4477,6 +4594,7 @@ fn collect_node(
             RunExtras::default(),
             &mut runs,
             child_chain.clone(),
+            &mut reactive,
         );
         items.push(Item::Block(Block {
             kind,
@@ -4486,6 +4604,7 @@ fn collect_node(
             focus,
             custom,
             style,
+            pseudo_reactive: reactive,
             submit,
             boxed,
             runs: finish_runs(runs, preformatted),
@@ -4547,6 +4666,7 @@ fn push_content_runs(
     extras: RunExtras,
     runs: &mut Vec<Run>,
     chain: Rc<Vec<Ancestor>>,
+    reactive: &mut bool,
 ) {
     let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
         run_walk(
@@ -4556,6 +4676,7 @@ fn push_content_runs(
             &extras,
             runs,
             Rc::new(chain[..].to_vec()),
+            reactive,
         );
         // The fragment's inline-var names feed the parent's accumulator
         // (review_0003 G30): translations rebuild only when a tracked
@@ -4573,6 +4694,7 @@ fn push_content_runs(
             &extras,
             runs,
             chain,
+            reactive,
         );
     }
 }
@@ -4589,6 +4711,7 @@ fn run_walk<'a>(
     extras: &RunExtras,
     runs: &mut Vec<Run>,
     chain: Rc<Vec<Ancestor>>,
+    reactive: &mut bool,
 ) {
     // The chain is shared (an Rc clone is O(1)); the depth caps how deep
     // the chain grows — inline nesting used to be uncapped, and every
@@ -4660,6 +4783,11 @@ fn run_walk<'a>(
                     chain.clone()
                 };
                 if tag.name().as_utf8_str() == *"img" {
+                    // The run's size styles from the image's CSS — reactive
+                    // to a flip like any other run (ADR 0029).
+                    if let Some(element) = &element {
+                        *reactive |= ctx.styler.pseudo_reactive(element, &chain);
+                    }
                     push_image_run(ctx, tag, &element, state, &style, extras, runs, &chain);
                     continue;
                 }
@@ -4667,7 +4795,14 @@ fn run_walk<'a>(
                 let style = match &element {
                     Some(element) => {
                         let inline = cascade::inline_style(tag);
-                        ctx.styler.style_of(element, &style, state, inline.as_ref(), &chain)
+                        let styled =
+                            ctx.styler
+                                .style_of(element, &style, state, inline.as_ref(), &chain);
+                        // ADR 0029: the run carries this element's style —
+                        // the owning block re-cascades on a flip when the
+                        // element could react to one.
+                        *reactive |= ctx.styler.pseudo_reactive(element, &chain);
+                        styled
                     }
                     None => style,
                 };
@@ -4725,6 +4860,7 @@ fn run_walk<'a>(
                         &extras,
                         runs,
                         child_chain.clone(),
+                        reactive,
                     );
                     // The fragment's inline-var names feed the parent's
                     // accumulator: translations rebuild only when a tracked
@@ -4761,8 +4897,17 @@ fn push_runs(
     extras: RunExtras,
     runs: &mut Vec<Run>,
     chain: Rc<Vec<Ancestor>>,
+    reactive: &mut bool,
 ) {
-    run_walk(ctx, std::iter::once(handle), style, &extras, runs, chain);
+    run_walk(
+        ctx,
+        std::iter::once(handle),
+        style,
+        &extras,
+        runs,
+        chain,
+        reactive,
+    );
 }
 
 /// Whitespace handling for a block's runs: collapsed as in HTML, or for `pre`
