@@ -6566,3 +6566,60 @@ fn overflow_auto_promotes_and_demotes_with_content() {
     ui.settle();
     assert_eq!(overflow(&mut ui).y, OverflowAxis::Scroll, "re-promoted");
 }
+
+/// ADR 0028's `background-image`: the sheet's handle by URL, tiling per
+/// `background-repeat` (the CSS default is tiling both axes), `stretch`
+/// when `no-repeat` (bevy's `ImageNode` always fills its visual box), the
+/// box from `background-clip`, and the rule that a `border-image`'s frame
+/// wins the node's single `ImageNode` (the background's color shows
+/// through it instead).
+#[test]
+fn background_vector() {
+    let mut ui = TestUi::from_vector("background");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div.tiled padding=20,20,20,20 w=100 bg-image=frame.png tiled=true,true
+    -
+      "Tiled" default 16px #ffffff
+  div.fill padding=20,20,20,20 w=100 bg-image=frame.png stretch
+    -
+      "Filled" default 16px #ffffff
+  div.clip padding=20,20,20,20 w=100 bg-image=frame.png tiled=true,true visual-box=PaddingBox
+    -
+      "Padding box" default 16px #ffffff
+  div.frame.bg padding=20,20,20,20 w=100 slice=frame.png 8,8,8,8 stretch
+    -
+      "Frame with background" default 16px #ffffff
+"#,
+    );
+}
+
+/// A background image's schemed URL is skipped like a border-image's
+/// (bug_0118): the sheet loads, the background doesn't, nothing else
+/// breaks.
+#[test]
+fn remote_background_images_are_refused() {
+    let ui = TestUi::new(
+        "background-remote",
+        &[
+            (
+                "page.html",
+                r#"<div class="bg" id="box"><p>text</p></div>"#,
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff } .bg { background-image: url(https://evil.example/bg.png) }",
+            ),
+        ],
+    );
+    let mut ui = ui
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let dump = ui.dump();
+    assert!(
+        !dump.contains("bg-image"),
+        "the remote background skipped: {dump}"
+    );
+}

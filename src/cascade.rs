@@ -802,6 +802,8 @@ pub(crate) struct ElementStyle {
     pub text_transform: Option<TextTransformSpec>,
     /// `white-space` (inherited, ADR 0028).
     pub white_space: Option<WhiteSpaceSpec>,
+    /// `background-image` (ADR 0028).
+    pub background_image: Option<BackgroundImageDecl>,
     /// `outline` (shorthand and longhands, `outline-offset`).
     pub outline: OutlineDecl,
     /// `text-decoration` (`underline`/`line-through` and its color;
@@ -862,6 +864,19 @@ pub(crate) enum LetterSpacingSpec {
     Px(f32),
     Em(f32),
     Rem(f32),
+}
+
+/// A declared `background-image` (ADR 0028): the URL as written (the
+/// loader resolves it against the sheet), the tiling from
+/// `background-repeat`, and the box from `background-clip`. Sizes other
+/// than the box's (`cover`/`contain`/a length) are unsupported — bevy's
+/// `ImageNode` has no crop — and drop the declaration.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BackgroundImageDecl {
+    pub url: String,
+    /// `background-repeat`'s two axes (bevy's `Tiled` mode).
+    pub tiled: (bool, bool),
+    pub clip: VisualBox,
 }
 
 /// Computed `text-transform` (ADR 0028), inherited; applied to the run
@@ -951,11 +966,19 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
             .iter()
             .chain(&rule.declarations.important_declarations);
         for declaration in declarations {
+            // ADR 0028: a background image is a sheet dependency like a
+            // border-image's (a schemed URL is skipped by the loader, so
+            // the rest of the sheet applies).
             let image = match declaration {
-                Property::BorderImage(border_image, _) => &border_image.source,
-                Property::BorderImageSource(image) => image,
-                _ => continue,
+                Property::BorderImage(border_image, _) => Some(&border_image.source),
+                Property::BorderImageSource(image) => Some(image),
+                Property::BackgroundImage(images) => images.first(),
+                Property::Background(backgrounds) => {
+                    backgrounds.first().map(|layer| &layer.image)
+                }
+                _ => None,
             };
+            let Some(image) = image else { continue };
             if let Some(url) = image_url(image)
                 && !urls.contains(&url)
             {
@@ -2494,6 +2517,42 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 style.background = Some(color);
             }
         }
+        Property::BackgroundImage(images) => {
+            style.background_image = images.first().and_then(|image| {
+                image_url(image).map(|url| background_image(url, None))
+            });
+        }
+        Property::Background(backgrounds) => {
+            // The shorthand resets `background-repeat` and `background-clip`
+            // to their initials (CSS reset semantics); its first layer's
+            // color and image apply when supported.
+            let Some(background) = backgrounds.first() else { return };
+            if let Some(color) = to_color(&background.color) {
+                style.background = Some(color);
+            }
+            style.background_image = image_url(&background.image)
+                .map(|url| background_image(url, None));
+        }
+        Property::BackgroundRepeat(repeats) => {
+            if let Some(repeat) = repeats.first() {
+                if let Some(image) = &style.background_image {
+                    style.background_image = Some(BackgroundImageDecl {
+                        tiled: repeat_tiled(repeat),
+                        ..image.clone()
+                    });
+                }
+            }
+        }
+        Property::BackgroundClip(clips, _) => {
+            if let Some(clip) = clips.first() {
+                if let Some(image) = &style.background_image {
+                    if let Some(box_) = background_clip(clip) {
+                        style.background_image =
+                            Some(BackgroundImageDecl { clip: box_, ..image.clone() });
+                    }
+                }
+            }
+        }
         Property::TextDecoration(decoration, _) => {
             style.text_decoration = Some(decoration_decl(decoration.line, Some(&decoration.color)));
         }
@@ -3127,12 +3186,47 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
     }
 }
 
+/// ADR 0028: a background image's declaration — `background-repeat`
+/// defaults to tiling both axes (CSS's initial) and the clip to the
+/// border box. `background-size` is unsupported (bevy's `ImageNode` has
+/// no crop: `cover`/`contain`/a length would need it) and drops the
+/// declaration.
+fn background_image(url: String, tiled: Option<(bool, bool)>) -> BackgroundImageDecl {
+    BackgroundImageDecl {
+        url,
+        tiled: tiled.unwrap_or((true, true)),
+        clip: VisualBox::BorderBox,
+    }
+}
+
+/// `background-repeat`'s two axes → bevy's `Tiled` flags. `space`/`round`
+/// approximate to `repeat`.
+fn repeat_tiled(repeat: &lightningcss::properties::background::BackgroundRepeat) -> (bool, bool) {
+    use lightningcss::properties::background::BackgroundRepeatKeyword as Css;
+    let axis = |keyword: &Css| !matches!(keyword, Css::NoRepeat);
+    (axis(&repeat.x), axis(&repeat.y))
+}
+
+/// `background-clip` → the `ImageNode`'s visual box (`text` drops the
+/// declaration).
+fn background_clip(
+    clip: &lightningcss::properties::background::BackgroundClip,
+) -> Option<VisualBox> {
+    use lightningcss::properties::background::BackgroundClip as Css;
+    match clip {
+        Css::BorderBox | Css::Border => Some(VisualBox::BorderBox),
+        Css::PaddingBox => Some(VisualBox::PaddingBox),
+        Css::ContentBox => Some(VisualBox::ContentBox),
+        Css::Text => unsupported("background-clip: text"),
+    }
+}
+
 fn image_url(image: &Image) -> Option<String> {
     match image {
         Image::Url(url) => Some(url.url.to_string()),
         Image::None => None,
         _ => {
-            debug!("html css: only url() border-image sources are supported");
+            debug!("html css: only url() image sources are supported");
             None
         }
     }

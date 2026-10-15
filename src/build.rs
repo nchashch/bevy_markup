@@ -352,6 +352,9 @@ pub(crate) struct BoxStyle {
     pub(crate) padding: [Option<f32>; 4],
     pub(crate) background: Option<Color>,
     pub(crate) image: Option<(Handle<Image>, TextureSlicer)>,
+    /// ADR 0028: the resolved `background-image` (the sheet's handle by
+    /// URL, the tiling mode, the clip's box).
+    pub(crate) background_image: Option<ImageNode>,
     /// `row-gap` for containers (not part of `is_empty`: blocks ignore it).
     pub(crate) row_gap: Option<f32>,
     /// `z-index` (`None` for `auto`/undeclared).
@@ -398,6 +401,13 @@ impl BoxStyle {
             && self.padding.iter().all(Option::is_none)
             && self.background.is_none()
             && self.image.is_none()
+            && self.background_image.is_none()
+    }
+
+    /// The node's `ImageNode`: the `border-image`'s frame when declared,
+    /// else the `background-image` (ADR 0028).
+    fn node_image(&self) -> Option<ImageNode> {
+        self.sliced_image().or(self.background_image.clone())
     }
 
     fn sliced_image(&self) -> Option<ImageNode> {
@@ -825,12 +835,30 @@ impl Styler<'_> {
                 },
             ))
         });
+        let background_image = declared.background_image.as_ref().and_then(|decl| {
+            let handle = self.sheet?.image(&decl.url)?;
+            let mode = if decl.tiled.0 || decl.tiled.1 {
+                NodeImageMode::Tiled {
+                    tile_x: decl.tiled.0,
+                    tile_y: decl.tiled.1,
+                    stretch_value: 0.0,
+                }
+            } else {
+                NodeImageMode::Stretch
+            };
+            Some(ImageNode {
+                visual_box: decl.clip,
+                color: Color::WHITE,
+                ..ImageNode::new(handle.clone()).with_mode(mode)
+            })
+        });
         BoxStyle {
             border: declared.border_width,
             border_color: declared.border_color,
             padding: declared.padding,
             background: declared.background,
             image,
+            background_image,
             row_gap: declared.row_gap,
             z_index: declared.z_index.flatten(),
             outline: declared.outline,
@@ -2333,7 +2361,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                     handle,
                     border_color: boxed.border_color(),
                     background: boxed.background,
-                    image: boxed.sliced_image(),
+                    image: boxed.node_image(),
                     outline: boxed.drawn_outline,
                     z_index: boxed.z_index.map(ZIndex),
                     pickable: pointer_events,
@@ -2401,7 +2429,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
         custom,
         handle,
         background: boxed.background,
-        image: boxed.sliced_image(),
+        image: boxed.node_image(),
         border_color: boxed.border_color(),
         outline: boxed.drawn_outline,
         z_index: boxed.z_index.map(ZIndex),
@@ -2569,7 +2597,7 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
         custom: block.custom.clone(),
         handle: block.handle,
         background: boxed.background,
-        image: boxed.sliced_image(),
+        image: boxed.node_image(),
         border_color: boxed.border_color(),
         outline: boxed.drawn_outline,
         z_index: boxed.z_index.map(ZIndex),
@@ -3675,7 +3703,7 @@ fn apply_root(entity: &mut EntityWorldMut, boxed: BoxStyle, pointer_events: bool
         (boxed.layout.position == Some(CssPosition::Fixed)).then_some(FixedNode),
         &mut owned.fixed,
     );
-    claim(entity, boxed.sliced_image(), &mut owned.image);
+    claim(entity, boxed.node_image(), &mut owned.image);
 
     let declares_node = boxed
         .border

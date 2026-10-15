@@ -979,6 +979,27 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
         if !matches!(image.visual_box, VisualBox::BorderBox) {
             write!(line, " visual-box={:?}", image.visual_box).unwrap();
         }
+    } else if let Some(image) = entity_ref.get::<ImageNode>() {
+        // ADR 0028: a background image — tiled per `background-repeat` or
+        // stretched to fill (CSS's `no-repeat` can't be drawn: the
+        // `ImageNode` always fills its visual box).
+        let file = image
+            .image
+            .path()
+            .map(|path| path.path().display().to_string())
+            .unwrap_or_default();
+        match &image.image_mode {
+            NodeImageMode::Tiled { tile_x, tile_y, .. } => {
+                write!(line, " bg-image={file} tiled={tile_x},{tile_y}").unwrap();
+            }
+            NodeImageMode::Stretch => {
+                write!(line, " bg-image={file} stretch").unwrap();
+            }
+            _ => {}
+        }
+        if !matches!(image.visual_box, VisualBox::BorderBox) {
+            write!(line, " visual-box={:?}", image.visual_box).unwrap();
+        }
     }
     writeln!(out, "{indent}{line}").unwrap();
 

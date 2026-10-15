@@ -1,0 +1,7 @@
+html { color: #ffffff }
+div { padding: 20px; width: 100px }
+.tiled { background-image: url(frame.png) }
+.fill { background-image: url(frame.png); background-repeat: no-repeat }
+.clip { background-image: url(frame.png); background-clip: padding-box }
+.frame { border-image: url(frame.png) 8 fill }
+.bg { background-image: url(frame.png); background-repeat: repeat-y }
