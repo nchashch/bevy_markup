@@ -896,9 +896,9 @@ pub(crate) struct ElementState {
     /// No content at all (no element or text children; comments don't
     /// count): `:empty`.
     pub empty: bool,
-    /// ADR 0028: the element's PRECEDING element siblings, nearest first
-    /// (the last entry is the immediately preceding one) — the sibling
-    /// combinators' input. Shared per parent.
+    /// ADR 0028: the element's PRECEDING element siblings in DOM order
+    /// (farthest first; the LAST entry is the immediately preceding
+    /// one) — the sibling combinators' input. Shared per parent.
     pub previous_siblings: Option<std::rc::Rc<Vec<Ancestor>>>,
 }
 
@@ -1394,11 +1394,11 @@ impl Selector {
                     return false;
                 };
                 let parts = &self.compounds[self.compounds.len() - 2];
-                // Nearest first: the immediately preceding sibling is the
-                // FIRST entry.
+                // DOM order (farthest first): the immediately preceding
+                // sibling is the LAST entry.
                 let matched_sibling = match last_combinator {
                     Combinator::AdjacentSibling => {
-                        siblings.first().filter(|sibling| sibling_parts_match(parts, sibling))
+                        siblings.last().filter(|sibling| sibling_parts_match(parts, sibling))
                     }
                     _ => siblings
                         .iter()
@@ -1446,7 +1446,7 @@ impl Selector {
             let parts = &self.compounds[self.compounds.len() - 2];
             let reactive = match self.combinators.last() {
                 Some(&Combinator::AdjacentSibling) => siblings
-                    .first()
+                    .last()
                     .is_some_and(|sibling| sibling_parts_match(parts, sibling)),
                 _ => siblings.iter().any(|sibling| sibling_parts_match(parts, sibling)),
             };
@@ -4875,7 +4875,9 @@ mod tests {
     /// attributes, and other pseudo-classes.
     #[test]
     fn sibling_combinators_match_preceding_siblings() {
-        let prev = vec![ancestor("div", &["hot"]), ancestor("section", &["page"])];
+        // DOM order: the section precedes the div; the div is the
+        // immediately preceding sibling.
+        let prev = vec![ancestor("section", &["page"]), ancestor("div", &["hot"])];
         let state = ElementState {
             previous_siblings: Some(std::rc::Rc::new(prev.clone())),
             ..ElementState::default()
@@ -4889,6 +4891,16 @@ mod tests {
                 &state
             ),
             "the hot div is the immediately preceding sibling"
+        );
+        // `+` does not reach past the adjacent sibling.
+        assert!(
+            !selector(".page + p").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &state
+            ),
+            "the page section is not adjacent"
         );
         // `~`: any preceding sibling.
         assert!(

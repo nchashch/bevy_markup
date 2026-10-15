@@ -1,0 +1,20 @@
+{
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py", "viewport": [640, 480]},
+ "elements": [
+  {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "div", "id": null, "classes": ["hot"], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": null, "classes": ["after-hot"], "color": "rgb(0, 255, 0)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": null, "classes": ["far-after"], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "div", "id": null, "classes": ["checked"], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": null, "classes": ["after-checked"], "color": "rgb(0, 255, 0)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "p", "id": null, "classes": ["no-sibling"], "color": "rgb(0, 255, 0)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"}
+ ],
+ "runs": [
+  {"text": "hot", "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "after hot", "color": "rgb(0, 255, 0)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "far after", "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "checked", "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "after checked", "color": "rgb(0, 255, 0)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "standalone", "color": "rgb(0, 255, 0)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""}
+ ]
+}

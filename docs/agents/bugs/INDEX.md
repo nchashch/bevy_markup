@@ -156,6 +156,8 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0127](bug_0127.md) | Indented raw HTML container bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0025) | ADR 0024's open item |
 | [bug_0128](bug_0128.md) | Tera-printed args with emoji or combining marks fell back to the untranslated content | `src/template.rs` (+ l10n, signals, tooltips) | high | fixed (uncommitted) | testbench example (`hostile-args`) |
 | [bug_0129](bug_0129.md) | `inline_backgrounds` flaked under full-suite load: the broken-sheet step didn't wait for the failed load's restyle | `tests/html_ui.rs` (the test; the crate is fine) | low | fixed (the test waits) | the ADR 0027 test waves |
+| [bug_0130](bug_0130.md) | `+` matched the farthest preceding sibling instead of the adjacent one | `src/cascade.rs` | medium | fixed (uncommitted) | browser oracle (`sibling_combinators`) |
+| [bug_0131](bug_0131.md) | A tiled `background-image` divided by zero and drew a solid rim | `src/build.rs` | high | fixed (uncommitted) | `background` golden scene |
 
 ## Discovery session metadata: bug_0001–0005
 

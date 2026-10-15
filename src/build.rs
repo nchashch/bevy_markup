@@ -862,10 +862,13 @@ impl Styler<'_> {
         let background_image = declared.background_image.as_ref().and_then(|decl| {
             let handle = self.sheet?.image(&decl.url)?;
             let mode = if decl.tiled.0 || decl.tiled.1 {
+                // 1.0 = tiles at the image's intrinsic size (bevy divides
+                // the node's extent by image size x stretch_value; 0.0
+                // would divide by zero).
                 NodeImageMode::Tiled {
                     tile_x: decl.tiled.0,
                     tile_y: decl.tiled.1,
-                    stretch_value: 0.0,
+                    stretch_value: 1.0,
                 }
             } else {
                 NodeImageMode::Stretch
@@ -4879,8 +4882,6 @@ fn collect_node(
                 std::rc::Rc::new(list[..count.min(list.len())].to_vec())
             }),
         };
-        eprintln!("STATEDBG tag={} pos={:?} empty={} fw={}",
-            element.tag, position, element_state.empty, element_state.focus_within);
         let style = if element.tag == "html" {
             inherited.clone()
         } else {

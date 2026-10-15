@@ -1,0 +1,1 @@
+p[data-kind="a b"] ~ span[data-x], tr:hover + td, [data-empty] { background-color: #fff }

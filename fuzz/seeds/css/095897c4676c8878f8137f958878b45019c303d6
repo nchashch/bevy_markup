@@ -1,0 +1,1 @@
+table.grid > tbody tr:nth-of-type(odd) td.first { font-weight: 500 }

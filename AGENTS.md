@@ -923,8 +923,9 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   vectors), set `color` on
   `html` (browsers default to black, bevy_markup to white) and `border-style: solid`
   where widths matter. Deliberate differences (root background,
-  `border-style`, `li` bullets) are skipped and listed above
-  `FIXTURE_SIZE` in `tests/html_ui.rs`; add new ones there with a reason. The
+  `border-style`, `li` bullets, the browser's synthesized `tbody`) are
+  skipped and listed above `FIXTURE_SIZE` in `tests/html_ui.rs`; add new
+  ones there with a reason. The
   oracle's first run found two real bugs (unregistered `font-family` kept the
   inherited family; weight 501–599 wasn't bold).
 - **Layout** (`TestUi::with_layout` / `from_layout_vector`, `layout_dump()`):

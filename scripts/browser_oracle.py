@@ -63,7 +63,10 @@ BEVY_MARKUP_CSS = """
 html { display: flex; flex-direction: column; color: #ffffff;
        font-family: "bevy_markup default"; font-size: 16px; line-height: 1.2; }
 body, div, section, article, header, footer, main, nav, aside, ul, ol,
-blockquote, figure, form { display: flex; flex-direction: column; flex-shrink: 0; }
+blockquote, figure, form, table, tbody, thead, tfoot, caption, td, th
+{ display: flex; flex-direction: column; flex-shrink: 0; }
+tr { display: flex; flex-direction: row; flex-shrink: 0; }
+th { font-weight: bold; }
 h1, h2, h3, h4, h5, h6, p, li, pre { display: block; flex-shrink: 0; }
 li { margin-left: 12px; }
 li::before { content: "\\2022  "; }

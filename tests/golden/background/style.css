@@ -1,0 +1,14 @@
+/* Golden scene: `background-image` tiles (bevy's Tiled at the image's
+   intrinsic size) over `background-color`; `background-clip: padding-box`
+   insets the last one's tiling area. The tile's black center (16x8 of the
+   32x24 frame.png) must be visible inside every red rim — a wrong
+   stretch_value divides by zero and draws a solid rim color instead. */
+html { color: #ffffff; font-size: 14px; gap: 10px; padding: 8px }
+div {
+  padding: 6px;
+  background-image: url("frame.png");
+  background-color: #1c9c48;
+}
+.tall { height: 100px }
+.short { height: 50px }
+.inset { height: 70px; background-clip: padding-box }

@@ -1,0 +1,16 @@
+{
+ "generator": {"browser": "Chromium 153.0.8010.52 Arch Linux", "script": "scripts/browser_oracle.py", "viewport": [640, 480]},
+ "elements": [
+  {"tag": "html", "id": null, "classes": [], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [0, 0, 0, 0], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "div", "id": null, "classes": ["tiled"], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [20, 20, 20, 20], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "div", "id": null, "classes": ["fill"], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [20, 20, 20, 20], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "div", "id": null, "classes": ["clip"], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [20, 20, 20, 20], "border": [0, 0, 0, 0], "borderImageSource": "none", "borderImageSlice": "100%", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"},
+  {"tag": "div", "id": null, "classes": ["frame", "bg"], "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\"", "padding": [20, 20, 20, 20], "border": [0, 0, 0, 0], "borderImageSource": "url(\"frame.png\")", "borderImageSlice": "8 fill", "borderImageRepeat": "stretch", "rowGap": "normal", "backgroundColor": "rgba(0, 0, 0, 0)"}
+ ],
+ "runs": [
+  {"text": "Tiled", "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "Filled", "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "Padding box", "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""},
+  {"text": "Frame with background", "color": "rgb(255, 255, 255)", "fontSize": 16, "fontWeight": 400, "fontStyle": "normal", "fontFamily": "\"bevy_markup default\""}
+ ]
+}

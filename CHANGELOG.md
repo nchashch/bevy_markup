@@ -48,6 +48,13 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   the C1 Windows-1252 replacements and U+FFFD for invalid code points,
   longest-match, one-level (`&amp;lt;` reads `&lt;`), unknown references
   verbatim.
+- **`background-image`** on blocks, containers and the root:
+  `url()` (resolved like `border-image`'s, restyling when the image
+  loads), `background-repeat` (`repeat`/`repeat-x`/`repeat-y`/
+  `no-repeat` — bevy tiles at the image's intrinsic size) and
+  `background-clip` (`border-box` default, `padding-box`). The image
+  draws over `background-color`. `background-size` is unsupported and
+  drops its declaration (bevy's `ImageNode` cannot crop).
 - **Attribute selectors** for `data-*` attributes (ADR 0028):
   `[data-kind]` (presence) and `[data-kind="value"]` (the value; single
   or double quotes). The crate's element model carries only `data-*`
@@ -88,6 +95,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   image and `var()` changes still restyle the whole UI. Behavior is
   unchanged (a restyled UI's dump matches a fresh build); only the cost
   changed.
+
+### Fixed
+- `+` matched the *farthest* preceding sibling instead of the adjacent
+  one (`.hot + p` went green on every following `p`, not just the next).
+  Found by the new browser-oracle vector.
 
 ## [0.7.0] - 2026-10-15
 

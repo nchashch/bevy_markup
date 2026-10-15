@@ -4250,6 +4250,16 @@ const CONTAINERS: &[&str] = &[
     "blockquote",
     "figure",
     "form",
+    // ADR 0028: the flex table model — the table/sections/caption are
+    // columns, a tr is a row, the cells are containers.
+    "table",
+    "tbody",
+    "thead",
+    "tfoot",
+    "caption",
+    "tr",
+    "td",
+    "th",
 ];
 
 /// The face CSS font matching picks for this computed style, with the test
@@ -4536,13 +4546,23 @@ fn pair_elements<'o>(
 ) -> Result<Vec<(Entity, &'o serde_json::Value, String)>, String> {
     let mut ours = vec![root];
     collect_elements(world, root, &mut ours);
+    // A browser's HTML parser synthesizes `tbody` around bare `tr`s
+    // (bevy_markup's tl parser doesn't); skip it on both sides. An
+    // explicit tbody loses its box comparison.
+    ours.retain(|&entity| {
+        world
+            .entity(entity)
+            .get::<HtmlElement>()
+            .is_none_or(|element| element.tag != "tbody")
+    });
     let theirs: Vec<&serde_json::Value> = oracle["elements"]
         .as_array()
         .unwrap()
         .iter()
         .filter(|e| {
             let tag = e["tag"].as_str().unwrap();
-            tag == "html" || BLOCKS.contains(&tag) || CONTAINERS.contains(&tag)
+            (tag == "html" || BLOCKS.contains(&tag) || CONTAINERS.contains(&tag))
+                && tag != "tbody"
         })
         .collect();
     if ours.len() != theirs.len() {
@@ -6758,7 +6778,7 @@ html-ui
   p.after-hot
     "after hot" default 16px #00ff00
   p.far-after
-    "far after" default 16px #00ff00
+    "far after" default 16px #ffffff
   div.checked
     -
       "checked" default 16px #ffffff
