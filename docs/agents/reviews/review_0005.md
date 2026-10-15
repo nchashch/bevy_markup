@@ -45,7 +45,8 @@ several directions:
   sibling- and position-dependent rules.
 
 A test written to guard the sibling flip passes with the bug baked in. A
-debug `println!` shipped again. On the positive side: the scoped-restyle
+debug `println!` shipped again, and so did a debug log *file* that every app
+appends to on every build (I16, found by the mutation audit). On the positive side: the scoped-restyle
 design is careful and its core path held under every probe I ran, the
 unsupported attribute operators are refused cleanly, and lists, tables and
 `text-transform` look correct.
@@ -227,6 +228,22 @@ unsupported attribute operators are refused cleanly, and lists, tables and
 `+n+3` as part of `a`, which fails to parse, so the rule is skipped. CSS
 allows it. (`2n + 1` with spaces works: lightningcss normalizes it.)
 
+**I16 · high · Every build appends a line to `/tmp/bevy_markup_buildlog.txt`** — `6efb830` [code]/[probe]
+- `build.rs:1194`: `build_html_ui` opens `/tmp/bevy_markup_buildlog.txt`
+  (`create(true).append(true)`) and writes `entity=… source=… decision=…`
+  for every UI on every build. It's debug scaffolding from the same series
+  as I10; review_0005 missed it at first, and the mutation audit (below)
+  turned it up.
+- Effects in every app: an unbounded file (23 MB, 200 808 lines on this
+  machine after one session of test runs), a file open and write per UI per
+  build (a restyle storm writes one per frame), and a fixed path in a
+  world-writable directory. Another local user can pre-create the path as a
+  symlink, and the app then appends to whatever it points at. On platforms
+  without `/tmp` the open just fails silently.
+- **Fix:** remove it. `tests/source_lint.rs` now fails on file writes in
+  library code (`OpenOptions`, `File::create`, `fs::write`, `create_dir`, a
+  `"/tmp` literal) outside the test modules.
+
 ### Tests (do they test the code?)
 
 **I12 · medium · `sibling_flip_restyles_the_following_sibling` passes with I07 baked in** [code]/[probe]
@@ -300,7 +317,8 @@ allows it. (`2n + 1` with spaces works: lightningcss normalizes it.)
 
 ## Triage
 
-1. **CI and the panic:** I01, I02, I10 (each a few lines).
+1. **CI, the panic and the debug leftovers:** I01, I02, I10, I16 (each a few
+   lines).
 2. **DoS:** I03 (every page with long sibling lists), then I04.
 3. **Selector correctness:** I07 and I08 (matching), I06 (cache), I05 (reuse).
    Fix in that order: the reuse fix (I05) should track what the corrected
@@ -308,3 +326,112 @@ allows it. (`2n + 1` with spaces works: lightningcss normalizes it.)
    are checked against a reference.
 4. **I09** (`overflow: auto`).
 5. **Tests and records:** I12, I13, I14, I15, I11.
+
+## Reproduction tests
+
+Each finding has a test that fails at `e3646ae` for the reason the finding
+names, and must pass once it is fixed. Each was run and its failure message
+checked against the finding. I14's guard passes, as it should for a fixed
+bug, and fails 3/3 with the fix's `build.rs` half removed.
+
+| Finding | Test | Fails at `e3646ae` with |
+|---|---|---|
+| I01 | CI's `cargo check --lib --features fuzzing` (a feature that doesn't compile can't be a cargo test) | `error[E0061]` ×2 in `src/fuzz.rs` |
+| I02 | `cascade::tests::an_b_extreme_offsets_match_without_overflow`; `review_0005::nth_child_extreme_offsets_neither_panic_nor_mismatch` (tests/html_ui.rs) | `attempt to subtract with overflow` (`cascade.rs:972`) |
+| I03 | `review_0005::long_sibling_lists_build_linearly` | 800 → 108 ms, 3 200 → 1.23 s (11.3×; bound 8×) |
+| I04 | `template::entity_decoding_stays_linear_without_terminators` | numeric: 10k 13 ms, 40k 143 ms (10.7×) |
+| I05 | `review_0005::reuse_rechecks_{adjacent_sibling_rules,general_sibling_rules,nth_of_type,last_of_type}` | reused `p#t bg=#ff0000` vs fresh `p#t` |
+| I06 | `review_0005::cache_keys_on_preceding_siblings`, `cache_keys_on_the_dataset`; `selector_model` | order-dependent backgrounds |
+| I07 | `review_0005::sibling_compounds_test_their_pseudo_state`, `sibling_compounds_test_their_attributes`, `ancestor_compounds_test_their_attributes`; `sibling_flip_restyles_the_following_sibling` (with I12's assertion); `selector_model` | the rule applies where the left compound doesn't match |
+| I08 | `review_0005::not_hover_matches_while_not_hovered`, `not_focus_matches_while_not_focused`, `not_hover_sibling_rules_follow_the_flip` (also needs I07 and the reactivity hazard); `selector_model` | `:not(:hover)`/`:not(:focus)` never match |
+| I09 | `review_0005::auto_scroll_survives_an_in_place_update`, `auto_scroll_survives_a_hover_restyle` | `overflow.y` `Hidden`, expected `Scroll` |
+| I10 | `tests/source_lint.rs` `library_code_has_no_debug_prints` | `src/build.rs:1145: println!(` |
+| I16 | `tests/source_lint.rs` `library_code_writes_no_files` | `src/build.rs:1194` (`OpenOptions`), `:1197` (`"/tmp/bevy_markup_buildlog.txt"`) |
+| I11 | `cascade::tests::an_b_accepts_a_leading_plus` | `AnB::parse("+n+3")` is `None` |
+| I12 | `sibling_flip_restyles_the_following_sibling` now asserts the unhovered start | the start is already green |
+| I13 | `tests/selector_model.rs` `selectors_match_the_reference_model` (proptest, 96 random documents × rules vs a reference matcher, within the documented limits) | I06/I07/I08 cases, e.g. `p:not(:hover)`, `[data-m] > p:first-child` |
+| I14 | `review_0005::failed_sheet_swap_during_a_wait_updates_unstyled` (guard; passes) | — (fails 3/3 with `full_style_latch` removed) |
+| I15 | none (records) | — |
+
+## Mutation audit (do the existing tests test the code?)
+
+`cargo mutants --in-diff` over the 22 commits' `src/` changes, with the
+tests CI's mutation job runs plus `signals` (unit, `html_ui`, `stateful`,
+`signals`), in a clean worktree at `e3646ae` (statically linked:
+`bevy/dynamic_linking` doesn't resolve offline).
+
+| | caught | missed | timeout | unviable |
+|---|---|---|---|---|
+| at `e3646ae` (522 mutants) | 394 | **80** | 13 | 35 |
+| the 93 missed + timeouts, rerun with the gap tests | +53 | **27** | 13 | — |
+
+Timeouts are the scanners turned infinite (`decode_entities`,
+`json_from_tera`): caught. One of the 27 (`build.rs:663`, `rem`
+letter-spacing) was killed afterwards by a by-hand check.
+
+**Gap tests** (all pass at `e3646ae`; `mutation_gaps` in
+`tests/html_ui.rs`, plus two unit tests), each killing mutants that changed
+behaviour with no test failing:
+
+| Code | Test |
+|---|---|
+| `sibling_positions`' per-type counts; the `:nth-of-type`/`:first-of-type`/`:last-of-type` parse arms and match | `of_type_pseudo_classes_count_per_tag` |
+| `:empty`'s comment rule | `empty_counts_text_but_not_comments` |
+| a sibling selector's leading compounds (`.x h1 + p`), in `matches` and `matches_ignoring_pseudo` | `sibling_selectors_test_the_compounds_before_the_pair` |
+| `sibling_parts_match`'s tag test; spaceless `h1+p`/`h1~p` | `sibling_combinators_parse_without_spaces` |
+| attribute names with `-`/`_` | `attribute_names_keep_dashes_and_underscores` |
+| sibling combinators inside a translation's fragment | `sibling_combinators_match_inside_translations` |
+| `letter-spacing` `em`/`rem`, `line-height` `rem` | `em_letter_spacing_and_rem_line_height_resolve` |
+| `unset` for `text-align`/`line-height`/`letter-spacing`/`text-transform` | `unset_resets_the_text_properties` |
+| `text-transform` with an unsupported extra keyword | `text_transform_with_full_width_is_dropped` |
+| `repeat_tiled`, `background_clip` (the vector only used the default box and `no-repeat`) | `background_repeat_axes_and_clip_boxes` |
+| the `background` shorthand | `background_shorthand_sets_color_image_and_resets_repeat` |
+| background URLs as sheet dependencies (the vector shares `frame.png` with a border-image) | `cascade::tests::background_image_urls_are_sheet_dependencies` |
+| `json_from_tera`'s `is_ascii` guard (without it: a panic slicing `\é`) | `template::attribute_json_with_a_backslash_before_non_ascii_is_an_error` |
+| the boxed block's and inline runs' `pseudo_reactive` | `boxed_block_under_a_hovered_ancestor_restyles`, `inline_run_under_a_hovered_ancestor_restyles` |
+| `full_style`'s own-sheet, default-sheet and `var()` terms | `own_stylesheet_swap_restyles_unchanged_content`, `default_stylesheet_swap_restyles_unchanged_content`, `sheet_var_change_restyles_unchanged_content` |
+| reuse happening at all (`document_ready`'s `!`, `full_style`'s `restyle &&`), the useful/strike rule, `pairing_health` | `a_mostly_unchanged_page_reuses_and_stays_useful` (1 of 4 changed → `(true, 0)`), `a_mostly_changed_page_strikes_the_pairing` (2 of 3 → `(false, 1)`) |
+
+No test asserted that the skeleton ever reuses anything: with reuse switched
+off entirely (`build.rs:1293`, `delete !`), every test passed. The fresh-twin
+tests compare results, and a build that reuses nothing gets the same result.
+
+**Still missed (26), and why:**
+
+- **Redundant or conservative** (no observable change):
+  - `build.rs:1343:35` and `:57`: `full_style`'s default-sheet term.
+    `RebuildState::decide` sets `pending_full_style` in the same frame for
+    every full-page signal, and the consumer ORs the latch in, so the term is
+    a duplicate. Checked by hand: `default_stylesheet_swap_to_a_loaded_sheet_restyles`
+    passes under both mutants.
+  - `build.rs:4801` (`&&` → `||`): more re-collection.
+  - `rebuild.rs:149`: `full_style` implies `style`.
+  - `cascade.rs:1432`, `:1455`: `matches_ignoring_pseudo` only gates
+    re-collection (and `len - 2` equals `len / 2` for 3–4 compounds).
+- **Equivalent:**
+  - `build.rs:1618` (`>` → `>=`): differs only for an empty page.
+  - `build.rs:1654`: equal sources parse alike.
+  - `cascade.rs:973` (`/` → `*`): same sign.
+  - `cascade.rs:1322:63/:75`: lightningcss re-serializes selectors with
+    spaces around combinators, so the spaceless split never runs.
+  - `cascade.rs:1619:25`, `:1646:62`: the parse fails later on the same
+    inputs.
+- **Masked:** `build.rs:2553` and `:2722`, the container's and block's
+  `style` replaced by `NodeSpec::new`'s placeholder. The
+  inherited-style comparison they feed (`children_inherited_changed`) didn't
+  decide any case I could build. Checked by hand:
+  `hover_back_to_the_default_color_recascades_children` passes under the
+  mutant, because the flipped subtree re-cascades by another path. Either
+  the comparison is redundant (simplify it) or it needs a shape I didn't
+  find.
+- **Dead code:** `cascade.rs:907–915`, 6 mutants. `ElementState`'s hand
+  `PartialEq` is never called (derive it or drop it).
+- **Covered once fixed:** `build.rs:3412` (the I09 tests); `build.rs:1144`
+  (I10's `println!` goes).
+- **Open gap:** `build.rs:5446`, the reactivity of an `<img>` run (`.row:hover
+  img { width }`). It needs a loaded image in the harness.
+- **Harness gap:** `build.rs:2473–2486`, the `text-input` `item_shell` arm.
+  The mutation run (and `mutants.yml`) builds without `--features
+  text-input`, so those lines are never compiled under test. Add a
+  text-input pass to the mutation job.
+

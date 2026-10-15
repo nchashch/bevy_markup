@@ -6809,6 +6809,13 @@ fn sibling_flip_restyles_the_following_sibling() {
     .spawn("page.html", TemplateContext::new(), Node::default());
     target.settle();
     let before = target.dump();
+    // Nothing is hovered yet: the rule must not apply (review_0005 I12 —
+    // without this check the test passed with the sibling's `:hover`
+    // ignored, I07: `after` was green before the flip too).
+    assert!(
+        before.contains("\"after\" default 16px #ffffff"),
+        "the following sibling is unstyled before the flip: {before}"
+    );
     let root = target.root();
     let hot = element_by_id(target.world_mut(), root, "hot");
     // Flip the hot div (direct state: the scoping's input).
@@ -6908,4 +6915,797 @@ fn attribute_selectors_through_the_pipeline() {
          dump with a handle font — the match is unit-tested)"
     );
     assert!(dump.contains("\"bare\" default 16px #ffffff"));
+}
+
+/// Reproductions of review_0005's findings (`docs/agents/reviews/
+/// review_0005.md`). Each test fails at `e3646ae` for the reason its
+/// finding names and must pass once that finding is fixed; the doc comment
+/// names the finding.
+mod review_0005 {
+    use super::*;
+
+    const WHITE: &str = "html { color: #ffffff } ";
+
+    /// Builds `page` with `css` once and returns the settled dump.
+    fn built(name: &str, page: &str, css: &str) -> String {
+        let files = [("page.html", page), ("a.css", css)];
+        TestUi::new(name, &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default())
+            .settle()
+            .dump()
+    }
+
+    /// Renders `page` with `key = from`, changes it to `to`, and returns
+    /// (the incrementally updated dump, a fresh build's dump of `to`). The
+    /// fresh comparator drops its skeleton first, so nothing is reused.
+    fn reuse_and_fresh(name: &str, page: &str, css: &str, key: &'static str, from: &str, to: &str) -> (String, String) {
+        let files = [("page.html", page), ("a.css", css)];
+        let context = TemplateContext::new().with(key, &from);
+        let mut reused = TestUi::new(&format!("{name}-reused"), &files)
+            .stylesheet("a.css")
+            .spawn("page.html", context.clone(), Node::default());
+        let mut fresh = TestUi::new(&format!("{name}-fresh"), &files)
+            .stylesheet("a.css")
+            .spawn("page.html", context, Node::default());
+        reused.settle();
+        fresh.settle();
+        for (ui, keep) in [(&mut reused, true), (&mut fresh, false)] {
+            let root = ui.root();
+            if !keep {
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
+            }
+            ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert(key, &to);
+        }
+        (reused.settle().dump(), fresh.settle().dump())
+    }
+
+    /// Whether the dump shows a styled (red) element right before `text`.
+    fn red_before(dump: &str, text: &str) -> bool {
+        let at = dump.find(&format!("\"{text}\"")).unwrap_or_else(|| panic!("{text} in {dump}"));
+        let element = dump[..at].lines().rev().find(|line| {
+            let line = line.trim_start();
+            !line.is_empty() && !line.starts_with('-') && !line.starts_with('"')
+        });
+        element.is_some_and(|line| line.contains("bg=#ff0000"))
+    }
+
+    // ---- I02: `:nth-child` overflow panics -------------------------------
+
+    /// I02: `n-2147483647` overflowed `i32` in `AnB::matches` and panicked
+    /// the build (debug). Every element index is reachable (n large), so it
+    /// matches every `p`; `-n-2147483647` matches none.
+    #[test]
+    fn nth_child_extreme_offsets_neither_panic_nor_mismatch() {
+        let page = "<div><p>1</p><p>2</p><p>3</p></div>";
+        let all = built("i02-all", page, &format!("{WHITE} p:nth-child(n-2147483647) {{ background-color: #ff0000 }}"));
+        for text in ["1", "2", "3"] {
+            assert!(red_before(&all, text), "n-2147483647 matches every index:\n{all}");
+        }
+        let none = built("i02-none", page, &format!("{WHITE} p:nth-child(-n-2147483647) {{ background-color: #ff0000 }}"));
+        assert!(!none.contains("bg=#ff0000"), "-n-2147483647 matches no index:\n{none}");
+    }
+
+    // ---- I03: O(n²) sibling lists ----------------------------------------
+
+    /// I03: every element copied its preceding siblings (and positions
+    /// were recounted per child), so a long sibling list built in O(n²),
+    /// with or without a sibling rule. Scaling, not wall time (AGENTS.md):
+    /// 4× the children may cost at most 8× (best of three).
+    #[test]
+    fn long_sibling_lists_build_linearly() {
+        use std::time::{Duration, Instant};
+        let css = format!("{WHITE} .hot ~ p {{ color: #00ff00 }}");
+        let time = |count: usize| {
+            (0..3)
+                .map(|run| {
+                    let page = format!("<div>{}</div>", "<p class=\"x\">r</p>".repeat(count));
+                    let files = [("page.html", page.as_str()), ("a.css", css.as_str())];
+                    let mut ui = TestUi::new(&format!("i03-{count}-{run}"), &files)
+                        .stylesheet("a.css")
+                        .spawn("page.html", TemplateContext::new(), Node::default());
+                    let start = Instant::now();
+                    ui.settle();
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        // Debug builds: 400 → 1600 measured 7.3× (linear costs hide the
+        // quadratic), 800 → 3200 10.9× at `e3646ae`.
+        let (small, large) = (time(800), time(3200));
+        assert!(
+            large < small * 8 + Duration::from_millis(50),
+            "sibling lists build superlinearly: 800 → {small:?}, 3200 → {large:?}"
+        );
+    }
+
+    // ---- I05: content reuse ignores siblings and positions --------------
+
+    /// I05: `[div.hot, p#t]` → `[div.cold, p#t]` — `p#t` is unchanged and
+    /// was reused with `.hot + p`'s stale result.
+    #[test]
+    fn reuse_rechecks_adjacent_sibling_rules() {
+        let (reused, fresh) = reuse_and_fresh(
+            "i05-adjacent",
+            r#"<div class="{{ c }}"><p>a</p></div><p id="t">t</p><p id="u">u</p>"#,
+            &format!("{WHITE} .hot + p {{ background-color: #ff0000 }}"),
+            "c", "hot", "cold",
+        );
+        assert_eq!(reused, fresh);
+    }
+
+    /// I05: as above for `~`.
+    #[test]
+    fn reuse_rechecks_general_sibling_rules() {
+        let (reused, fresh) = reuse_and_fresh(
+            "i05-general",
+            r#"<div class="{{ c }}"><p>a</p></div><div><p>s</p></div><p id="t">t</p>"#,
+            &format!("{WHITE} .hot ~ p {{ background-color: #ff0000 }}"),
+            "c", "hot", "cold",
+        );
+        assert_eq!(reused, fresh);
+    }
+
+    /// I05: the preceding sibling turns from a `div` into a `p`: `p#t` is
+    /// now the second `p` — its `:nth-of-type(1)` no longer holds.
+    #[test]
+    fn reuse_rechecks_nth_of_type() {
+        let (reused, fresh) = reuse_and_fresh(
+            "i05-nth-of-type",
+            r#"<{{ c }} class="x">a</{{ c }}><p id="t">t</p>"#,
+            &format!("{WHITE} p:nth-of-type(1) {{ background-color: #ff0000 }}"),
+            "c", "div", "p",
+        );
+        assert_eq!(reused, fresh);
+    }
+
+    /// I05: the following sibling turns into a `p`: `p#t` is no longer the
+    /// last of its type.
+    #[test]
+    fn reuse_rechecks_last_of_type() {
+        let (reused, fresh) = reuse_and_fresh(
+            "i05-last-of-type",
+            r#"<p id="t">t</p><{{ c }} class="x">a</{{ c }}>"#,
+            &format!("{WHITE} p:last-of-type {{ background-color: #ff0000 }}"),
+            "c", "div", "p",
+        );
+        assert_eq!(reused, fresh);
+    }
+
+    // ---- I06: the style cache's key -------------------------------------
+
+    /// I06: two id-less `p`s at the same position under the same chain;
+    /// only the first follows `.hot`. The cache (keyed without the
+    /// preceding siblings) gave both the first one's result — in either
+    /// order.
+    #[test]
+    fn cache_keys_on_preceding_siblings() {
+        let css = format!("{WHITE} .hot + p {{ background-color: #ff0000 }}");
+        let dump = built("i06-siblings", "<div><div class=\"hot\">x</div><p>a</p></div><div><div>x</div><p>b</p></div>", &css);
+        assert!(red_before(&dump, "a") && !red_before(&dump, "b"), "{dump}");
+        let dump = built("i06-siblings-reversed", "<div><div>x</div><p>b</p></div><div><div class=\"hot\">x</div><p>a</p></div>", &css);
+        assert!(red_before(&dump, "a") && !red_before(&dump, "b"), "{dump}");
+    }
+
+    /// I06: two `p`s differing only in `data-x`; the cache (keyed without
+    /// the dataset) gave the second the first one's result.
+    #[test]
+    fn cache_keys_on_the_dataset() {
+        let css = format!("{WHITE} [data-x=\"2\"] {{ background-color: #ff0000 }}");
+        let dump = built("i06-dataset", "<div><p data-x=\"1\">a</p></div><div><p data-x=\"2\">b</p></div>", &css);
+        assert!(!red_before(&dump, "a") && red_before(&dump, "b"), "{dump}");
+        let dump = built("i06-dataset-reversed", "<div><p data-x=\"2\">b</p></div><div><p data-x=\"1\">a</p></div>", &css);
+        assert!(!red_before(&dump, "a") && red_before(&dump, "b"), "{dump}");
+    }
+
+    // ---- I07: sibling and ancestor compounds ----------------------------
+
+    /// I07: a sibling compound's pseudo-class was ignored: `.a:hover + .b`
+    /// styled `.b` with nothing hovered.
+    #[test]
+    fn sibling_compounds_test_their_pseudo_state() {
+        let dump = built("i07-sibling-hover", "<div class=\"a\">A</div><p class=\"b\">B</p>",
+            &format!("{WHITE} .a:hover + .b {{ background-color: #ff0000 }}"));
+        assert!(!red_before(&dump, "B"), "nothing is hovered:\n{dump}");
+    }
+
+    /// I07: a sibling compound's attribute test was ignored.
+    #[test]
+    fn sibling_compounds_test_their_attributes() {
+        let css = format!("{WHITE} [data-m=\"dark\"] + p {{ background-color: #ff0000 }}");
+        let dump = built("i07-sibling-attr", "<div><div data-m=\"light\">x</div><p>no</p></div><div><div data-m=\"dark\">x</div><p>yes</p></div>", &css);
+        assert!(!red_before(&dump, "no") && red_before(&dump, "yes"), "{dump}");
+    }
+
+    /// I07: an ancestor compound's attribute test was ignored: the rule
+    /// matched under any ancestor (`Ancestor` carries no dataset).
+    #[test]
+    fn ancestor_compounds_test_their_attributes() {
+        let css = format!("{WHITE} [data-m=\"dark\"] p {{ background-color: #ff0000 }}");
+        let dump = built(
+            "i07-ancestor-attr",
+            "<div data-m=\"dark\"><p>yes</p></div><div data-m=\"light\"><p>light</p></div><div><p>absent</p></div>",
+            &css,
+        );
+        assert!(red_before(&dump, "yes"), "{dump}");
+        assert!(!red_before(&dump, "light") && !red_before(&dump, "absent"), "{dump}");
+    }
+
+    // ---- I08: `:not()` around a pseudo-class ----------------------------
+
+    /// Sets `PseudoState::hovered` on the element with `id` and lets the
+    /// restyle land.
+    fn hover(ui: &mut TestUi, id: &str, hovered: bool) {
+        let root = ui.root();
+        let entity = element_by_id(ui.world_mut(), root, id);
+        ui.world_mut().entity_mut(entity).insert(PseudoState { hovered, ..default() });
+        ui.update(10);
+    }
+
+    /// I08: `:not(:hover)` negated a compound whose pseudo test was
+    /// dropped, so it never matched. Unhovered it matches; hovered not;
+    /// unhovered again it matches.
+    #[test]
+    fn not_hover_matches_while_not_hovered() {
+        let files = [
+            ("page.html", "<div id=\"a\" class=\"a\"><p>A</p></div>"),
+            ("a.css", "html { color: #ffffff } .a:not(:hover) { background-color: #ff0000 }"),
+        ];
+        let mut ui = TestUi::new("i08-not-hover", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let dump = ui.settle().dump();
+        assert!(dump.contains("div#a.a bg=#ff0000"), "unhovered:\n{dump}");
+        hover(&mut ui, "a", true);
+        let dump = ui.dump();
+        assert!(!dump.contains("bg=#ff0000"), "hovered:\n{dump}");
+        hover(&mut ui, "a", false);
+        let dump = ui.dump();
+        assert!(dump.contains("div#a.a bg=#ff0000"), "unhovered again:\n{dump}");
+    }
+
+    /// I08: `p:not(:focus)` never matched either.
+    #[test]
+    fn not_focus_matches_while_not_focused() {
+        let dump = built("i08-not-focus", "<div><p>a</p></div>",
+            &format!("{WHITE} p:not(:focus) {{ background-color: #ff0000 }}"));
+        assert!(red_before(&dump, "a"), "{dump}");
+    }
+
+    /// I08 × ADR 0029: once `:not(:hover)` matches, a flip on the sibling
+    /// must restyle the following element — the reactivity record
+    /// wildcards pseudo tests as "match", which inside a `:not` reads as
+    /// "never" (the stale-reuse hazard the review names).
+    #[test]
+    fn not_hover_sibling_rules_follow_the_flip() {
+        let files = [
+            ("page.html", "<div id=\"a\" class=\"a\"><p>A</p></div><p class=\"b\">B</p>"),
+            ("a.css", "html { color: #ffffff } .a:not(:hover) + .b { background-color: #ff0000 }"),
+        ];
+        let mut ui = TestUi::new("i08-not-hover-sibling", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let dump = ui.settle().dump();
+        assert!(red_before(&dump, "B"), "unhovered:\n{dump}");
+        hover(&mut ui, "a", true);
+        let dump = ui.dump();
+        assert!(!red_before(&dump, "B"), "hovered:\n{dump}");
+    }
+
+    // ---- I09: `overflow: auto` after an in-place update ----------------
+
+    /// The `overflow.y` of the element with `id`.
+    fn overflow_y(ui: &mut TestUi, id: &str) -> OverflowAxis {
+        let root = ui.root();
+        let entity = element_by_id(ui.world_mut(), root, id);
+        ui.world_mut().get::<Node>(entity).unwrap().overflow.y
+    }
+
+    fn auto_scroll_panel(name: &str, css_extra: &str) -> TestUi {
+        let page = r#"<div id="panel" class="panel {{ c }}"><p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p></div>"#;
+        let css = format!("html {{ color: #ffffff; font-size: 16px }} .panel {{ height: 40px; overflow-y: auto }} {css_extra}");
+        let mut ui = TestUi::with_layout(name, &[("page.html", page), ("a.css", css.as_str())], UVec2::new(400, 300))
+            .stylesheet("a.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new().with("c", "off"),
+                Node { width: Val::Px(400.0), flex_direction: FlexDirection::Column, ..default() },
+            );
+        ui.settle();
+        ui.update(5);
+        assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll, "the overflowing panel scrolls");
+        ui
+    }
+
+    /// I09: an in-place update rewrote the panel's `Node` (axis `Hidden`)
+    /// and nothing promoted it again — the layout's size didn't change, so
+    /// `Changed<ComputedNode>` never fired.
+    #[test]
+    fn auto_scroll_survives_an_in_place_update() {
+        let mut ui = auto_scroll_panel("i09-update", ".on { background-color: #222222 }");
+        let root = ui.root();
+        ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("c", &"on");
+        ui.settle();
+        ui.update(10);
+        assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll);
+    }
+
+    /// I09: the same through a `:hover` restyle — a hovered panel stopped
+    /// scrolling for good.
+    #[test]
+    fn auto_scroll_survives_a_hover_restyle() {
+        let mut ui = auto_scroll_panel("i09-hover", ".panel:hover { background-color: #222222 }");
+        hover(&mut ui, "panel", true);
+        ui.update(10);
+        assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll);
+    }
+
+    // ---- I14: bug_0129's crate half, deterministically -------------------
+
+    /// I14: a stylesheet swap whose new sheet fails while the build waits
+    /// for it must update unstyled — the full-page restyle latched in the
+    /// `Wait` (`RebuildState::pending_full_style`). The suite guarded this
+    /// only through a test that flaked one run in three; this one compares
+    /// with a UI built unstyled from the start.
+    #[test]
+    fn failed_sheet_swap_during_a_wait_updates_unstyled() {
+        let files = [
+            ("page.html", "<div class=\"box\"><p class=\"t\">text</p></div>"),
+            ("a.css", "html { color: #ffffff } .box { background-color: #ff0000 } .t { color: #00ff00 }"),
+            ("broken.css", "{ not css"),
+        ];
+        let mut ui = TestUi::new("i14-swap", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let styled = ui.settle().dump();
+        assert!(styled.contains("bg=#ff0000"), "{styled}");
+        let broken = ui.load::<Stylesheet>("broken.css");
+        ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(broken);
+        let swapped = ui.settle().dump();
+        let unstyled = TestUi::new("i14-unstyled", &files)
+            .stylesheet("broken.css")
+            .spawn("page.html", TemplateContext::new(), Node::default())
+            .settle()
+            .dump();
+        assert_eq!(swapped, unstyled);
+    }
+}
+
+/// Gaps the review_0005 mutation audit found: code that mutants changed
+/// without any test failing. Each test names the code it pins; the
+/// expectations come from CSS semantics (and the skeleton's documented
+/// adaptive rule), not from the code's output.
+mod mutation_gaps {
+    use super::*;
+
+    const WHITE: &str = "html { color: #ffffff } ";
+
+    fn built(name: &str, page: &str, css: &str) -> String {
+        let files = [("page.html", page), ("a.css", css)];
+        TestUi::new(name, &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default())
+            .settle()
+            .dump()
+    }
+
+    /// The dump line of the element right before the text run `text`.
+    fn element_before<'a>(dump: &'a str, text: &str) -> &'a str {
+        let at = dump.find(&format!("\"{text}\"")).unwrap_or_else(|| panic!("{text} in {dump}"));
+        dump[..at]
+            .lines()
+            .rev()
+            .map(str::trim_start)
+            .find(|line| !line.is_empty() && !line.starts_with('-') && !line.starts_with('"'))
+            .unwrap_or("")
+    }
+
+    /// The color of the text run `text` (the run line's last field).
+    fn run_color<'a>(dump: &'a str, text: &str) -> &'a str {
+        dump.lines()
+            .find(|line| line.trim_start().starts_with(&format!("\"{text}\"")))
+            .unwrap_or_else(|| panic!("{text} in {dump}"))
+            .rsplit(' ')
+            .next()
+            .unwrap()
+    }
+
+    fn hover(ui: &mut TestUi, id: &str, hovered: bool) {
+        let root = ui.root();
+        let entity = element_by_id(ui.world_mut(), root, id);
+        ui.world_mut().entity_mut(entity).insert(PseudoState { hovered, ..default() });
+        ui.update(10);
+    }
+
+    // ---- structural pseudo-classes -------------------------------------
+
+    /// `:first-of-type`/`:last-of-type`/`:nth-of-type()` count among the
+    /// siblings of the same tag only (`sibling_positions`' per-type
+    /// index and total; the parser's of-type arms).
+    #[test]
+    fn of_type_pseudo_classes_count_per_tag() {
+        let dump = built(
+            "gap-of-type",
+            "<div><h1>h1</h1><p>p1</p><h2>h2</h2><p>p2</p><p>p3</p></div>",
+            &format!(
+                "{WHITE} p:first-of-type {{ background-color: #ff0000 }} \
+                 p:nth-of-type(2) {{ background-color: #0000ff }} \
+                 p:last-of-type {{ background-color: #00ff00 }} \
+                 h2:first-of-type {{ background-color: #ffff00 }}"
+            ),
+        );
+        assert!(element_before(&dump, "p1").contains("bg=#ff0000"), "{dump}");
+        assert!(element_before(&dump, "p2").contains("bg=#0000ff"), "{dump}");
+        assert!(element_before(&dump, "p3").contains("bg=#00ff00"), "{dump}");
+        // The h2 is the third element but the first of its type.
+        assert!(element_before(&dump, "h2").contains("bg=#ffff00"), "{dump}");
+        assert!(!element_before(&dump, "h1").contains("bg="), "{dump}");
+    }
+
+    /// `:empty`: no children except comments — text makes an element
+    /// non-empty, a comment doesn't.
+    #[test]
+    fn empty_counts_text_but_not_comments() {
+        let dump = built(
+            "gap-empty",
+            "<section><div class=\"e\"></div><div class=\"c\"><!-- c --></div><div class=\"t\">text</div></section>",
+            &format!("{WHITE} div:empty {{ background-color: #ff0000 }}"),
+        );
+        assert!(dump.contains("div.e bg=#ff0000"), "{dump}");
+        assert!(dump.contains("div.c bg=#ff0000"), "{dump}");
+        assert!(!element_before(&dump, "text").contains("bg="), "{dump}");
+    }
+
+    // ---- selectors ------------------------------------------------------
+
+    /// Sibling combinators need no spaces around them (`h1+p`, `h1~p`).
+    #[test]
+    fn sibling_combinators_parse_without_spaces() {
+        let page = "<div><h1>h</h1><p>a</p><p>b</p></div>";
+        let dump = built("gap-adjacent", page, &format!("{WHITE} h1+p {{ background-color: #ff0000 }}"));
+        assert!(element_before(&dump, "a").contains("bg=#ff0000"), "{dump}");
+        assert!(!element_before(&dump, "b").contains("bg="), "{dump}");
+        let dump = built("gap-general", page, &format!("{WHITE} h1~p {{ background-color: #ff0000 }}"));
+        assert!(element_before(&dump, "a").contains("bg=#ff0000"), "{dump}");
+        assert!(element_before(&dump, "b").contains("bg=#ff0000"), "{dump}");
+    }
+
+    /// A sibling selector with a compound before the pair still tests
+    /// it: `.x h1 + p` matches only under `.x`.
+    #[test]
+    fn sibling_selectors_test_the_compounds_before_the_pair() {
+        let dump = built(
+            "gap-three-compounds",
+            "<div class=\"x\"><h1>h</h1><p>in</p></div><div class=\"y\"><h1>h</h1><p>out</p></div>",
+            &format!("{WHITE} .x h1 + p {{ background-color: #ff0000 }}"),
+        );
+        assert!(element_before(&dump, "in").contains("bg=#ff0000"), "{dump}");
+        assert!(!element_before(&dump, "out").contains("bg="), "{dump}");
+    }
+
+    /// Attribute names keep `-` and `_` (`[data-a-b]`, `[data-a_b]`).
+    #[test]
+    fn attribute_names_keep_dashes_and_underscores() {
+        let dump = built(
+            "gap-attribute-names",
+            "<div><p data-a-b=\"1\">dash</p><p data-a_b=\"1\">under</p><p>none</p></div>",
+            &format!(
+                "{WHITE} [data-a-b] {{ background-color: #ff0000 }} [data-a_b] {{ background-color: #0000ff }}"
+            ),
+        );
+        assert!(element_before(&dump, "dash").contains("bg=#ff0000"), "{dump}");
+        assert!(element_before(&dump, "under").contains("bg=#0000ff"), "{dump}");
+        assert!(!element_before(&dump, "none").contains("bg="), "{dump}");
+    }
+
+    // ---- text properties -------------------------------------------------
+
+    /// `letter-spacing: 0.5em` is half the element's own font size,
+    /// `0.25rem` a quarter of the root's; `line-height: 2rem` twice the
+    /// root's.
+    #[test]
+    fn em_letter_spacing_and_rem_line_height_resolve() {
+        let dump = built(
+            "gap-text-units",
+            "<div><p class=\"ls\">spaced</p><p class=\"rem\">root</p><p class=\"lh\">tall</p></div>",
+            "html { color: #ffffff; font-size: 20px } \
+             .ls { font-size: 10px; letter-spacing: 0.5em } \
+             .rem { font-size: 10px; letter-spacing: 0.25rem } \
+             .lh { font-size: 10px; line-height: 2rem }",
+        );
+        assert!(element_before(&dump, "spaced").contains("ls=Px(5.0)"), "{dump}");
+        assert!(element_before(&dump, "root").contains("ls=Px(5.0)"), "{dump}");
+        assert!(element_before(&dump, "tall").contains("lh=Px(40.0)"), "{dump}");
+    }
+
+    /// `unset` on the new inherited text properties drops an earlier
+    /// rule's value (they inherit the root's defaults here).
+    #[test]
+    fn unset_resets_the_text_properties() {
+        let dump = built(
+            "gap-text-unset",
+            "<div><p>set</p><p class=\"u\">unset</p></div>",
+            &format!(
+                "{WHITE} p {{ text-align: center; line-height: 2; letter-spacing: 3px; text-transform: uppercase }} \
+                 p.u {{ text-align: unset; line-height: unset; letter-spacing: unset; text-transform: unset }}"
+            ),
+        );
+        let set = element_before(&dump, "SET");
+        assert!(set.contains("align=") && set.contains("lh=") && set.contains("ls="), "{dump}");
+        let unset = element_before(&dump, "unset");
+        assert!(!unset.contains("align=") && !unset.contains("lh=") && !unset.contains("ls="), "{dump}");
+    }
+
+    /// `text-transform` with an unsupported extra keyword drops the whole
+    /// declaration: the earlier rule's `uppercase` stands.
+    #[test]
+    fn text_transform_with_full_width_is_dropped() {
+        let dump = built(
+            "gap-text-transform",
+            "<div><p class=\"l\">Lower</p><p class=\"c\">cap it</p></div>",
+            &format!(
+                "{WHITE} p {{ text-transform: uppercase }} \
+                 .l {{ text-transform: lowercase full-width }} \
+                 .c {{ text-transform: capitalize full-width }}"
+            ),
+        );
+        assert!(dump.contains("\"LOWER\""), "{dump}");
+        assert!(dump.contains("\"CAP IT\""), "{dump}");
+    }
+
+    /// Sibling combinators work inside a translation's markup: the
+    /// fragment's elements carry their own sibling list.
+    #[test]
+    fn sibling_combinators_match_inside_translations() {
+        let files = [
+            ("page.html", "<div data-l10n-id=\"m\">fallback</div>"),
+            ("a.css", "html { color: #ffffff } h1 + p { background-color: #ff0000 }"),
+            ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
+            ("locales/en-US/ui.ftl", "m = <h1>head</h1><p>next</p><p>later</p>"),
+        ];
+        let dump = TestUi::new("gap-fragment-siblings", &files)
+            .stylesheet("a.css")
+            .locale("locales/en-US/main.ftl.ron")
+            .spawn("page.html", TemplateContext::new(), Node::default())
+            .settle()
+            .dump();
+        assert!(element_before(&dump, "next").contains("bg=#ff0000"), "{dump}");
+        assert!(!element_before(&dump, "later").contains("bg="), "{dump}");
+    }
+
+    // ---- backgrounds -----------------------------------------------------
+
+    /// `background-repeat: repeat-x` tiles one axis; `background-clip`
+    /// picks the visual box (border-box: the dump's default, unflagged).
+    #[test]
+    fn background_repeat_axes_and_clip_boxes() {
+        let dump = built(
+            "gap-background",
+            "<section><div class=\"x\">x</div><div class=\"y\">y</div>\
+             <div class=\"content\">content</div><div class=\"border\">border</div></section>",
+            &format!(
+                "{WHITE} div {{ background-image: url(frame.png); padding: 4px }} \
+                 .x {{ background-repeat: repeat-x }} .y {{ background-repeat: repeat-y }} \
+                 .content {{ background-clip: content-box }} .border {{ background-clip: border-box }}"
+            ),
+        );
+        assert!(dump.contains("div.x padding=4,4,4,4 bg-image=frame.png tiled=true,false"), "{dump}");
+        assert!(dump.contains("div.y padding=4,4,4,4 bg-image=frame.png tiled=false,true"), "{dump}");
+        assert!(dump.contains("div.content padding=4,4,4,4 bg-image=frame.png tiled=true,true visual-box=ContentBox"), "{dump}");
+        assert!(dump.contains("div.border padding=4,4,4,4 bg-image=frame.png tiled=true,true\n"), "{dump}");
+    }
+
+    /// The `background` shorthand sets the color and the image, and
+    /// resets `background-repeat` to `repeat`.
+    #[test]
+    fn background_shorthand_sets_color_image_and_resets_repeat() {
+        let dump = built(
+            "gap-background-shorthand",
+            "<section><div class=\"c\">c</div><div class=\"i\">i</div></section>",
+            &format!(
+                "{WHITE} .c {{ background: #ff0000 }} \
+                 .i {{ background-repeat: no-repeat; background: url(frame.png) }}"
+            ),
+        );
+        assert!(dump.contains("div.c bg=#ff0000"), "{dump}");
+        // The shorthand's omitted color resets to transparent.
+        let image = element_before(&dump, "i");
+        assert!(image.starts_with("div.i ") && image.ends_with(" bg-image=frame.png tiled=true,true"), "{dump}");
+    }
+
+    // ---- scoped interaction restyles (ADR 0029) ----------------------------
+
+    /// A hover that sets a container's color back to the initial white:
+    /// its children must re-cascade (the cached container spec's style is
+    /// what the walk compares the fresh inherited style against).
+    #[test]
+    fn hover_back_to_the_default_color_recascades_children() {
+        let files = [
+            ("page.html", "<div class=\"row\" id=\"r\"><p>child</p></div><p>other</p>"),
+            ("a.css", "html { color: #ffffff } .row { color: #ff0000 } .row:hover { color: #ffffff }"),
+        ];
+        let mut ui = TestUi::new("gap-hover-default", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "child"), "#ff0000", "{dump}");
+        hover(&mut ui, "r", true);
+        let dump = ui.dump();
+        assert_eq!(run_color(&dump, "child"), "#ffffff", "{dump}");
+        hover(&mut ui, "r", false);
+        let dump = ui.dump();
+        assert_eq!(run_color(&dump, "child"), "#ff0000", "{dump}");
+    }
+
+    /// A boxed block (one with a background) under a hovered ancestor
+    /// restyles: its spec records that it reacts to the flip.
+    #[test]
+    fn boxed_block_under_a_hovered_ancestor_restyles() {
+        let files = [
+            ("page.html", "<div class=\"row\" id=\"r\"><p class=\"boxed\">boxed</p></div><p>other</p>"),
+            (
+                "a.css",
+                "html { color: #ffffff } .boxed { background-color: #000080 } .row:hover .boxed { color: #00ff00 }",
+            ),
+        ];
+        let mut ui = TestUi::new("gap-hover-boxed", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "boxed"), "#ffffff", "{dump}");
+        hover(&mut ui, "r", true);
+        let dump = ui.dump();
+        assert_eq!(run_color(&dump, "boxed"), "#00ff00", "{dump}");
+    }
+
+    /// An inline run whose rule depends on an ancestor's hover restyles
+    /// with it (`.row:hover b`).
+    #[test]
+    fn inline_run_under_a_hovered_ancestor_restyles() {
+        let files = [
+            ("page.html", "<div class=\"row\" id=\"r\"><p>plain <b>bold</b></p></div><p>other</p>"),
+            ("a.css", "html { color: #ffffff } .row:hover b { color: #00ff00 }"),
+        ];
+        let mut ui = TestUi::new("gap-hover-inline", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let dump = ui.settle().dump();
+        // One style, one run.
+        assert_eq!(run_color(&dump, "plain bold"), "#ffffff", "{dump}");
+        hover(&mut ui, "r", true);
+        let dump = ui.dump();
+        assert_eq!(run_color(&dump, "plain "), "#ffffff", "{dump}");
+        assert_eq!(run_color(&dump, "bold"), "#00ff00", "{dump}");
+    }
+
+    // ---- full-page restyle triggers (ADR 0029 `full_style`) --------------
+
+    /// Swapping the UI's own stylesheet restyles every element (nothing
+    /// may reuse a cached spec styled by the old sheet).
+    #[test]
+    fn own_stylesheet_swap_restyles_unchanged_content() {
+        let files = [
+            ("page.html", "<div><p>a</p><p>b</p></div>"),
+            ("a.css", "html { color: #ffffff } p { color: #ff0000 }"),
+            ("b.css", "html { color: #ffffff } p { color: #0000ff }"),
+        ];
+        let mut ui = TestUi::new("gap-own-swap", &files)
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let a = ui.load::<Stylesheet>("a.css");
+        let root = ui.root();
+        ui.world_mut().entity_mut(root).insert(HtmlStylesheet(a));
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "b"), "#ff0000", "{dump}");
+        let b = ui.load::<Stylesheet>("b.css");
+        ui.world_mut().entity_mut(root).insert(HtmlStylesheet(b));
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "a"), "#0000ff", "{dump}");
+        assert_eq!(run_color(&dump, "b"), "#0000ff", "{dump}");
+    }
+
+    /// Swapping `DefaultStylesheet` restyles a UI without its own sheet.
+    #[test]
+    fn default_stylesheet_swap_restyles_unchanged_content() {
+        let files = [
+            ("page.html", "<div><p>a</p><p>b</p></div>"),
+            ("a.css", "html { color: #ffffff } p { color: #ff0000 }"),
+            ("b.css", "html { color: #ffffff } p { color: #0000ff }"),
+        ];
+        let mut ui = TestUi::new("gap-default-swap", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "b"), "#ff0000", "{dump}");
+        let b = ui.load::<Stylesheet>("b.css");
+        ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b);
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "a"), "#0000ff", "{dump}");
+        assert_eq!(run_color(&dump, "b"), "#0000ff", "{dump}");
+    }
+
+    /// The same swap to a sheet that has already loaded: no `Wait`
+    /// latches the full-page restyle, so the swap frame's own signal must
+    /// (`own != Ready && default_changed` for a UI without its own sheet).
+    #[test]
+    fn default_stylesheet_swap_to_a_loaded_sheet_restyles() {
+        let files = [
+            ("page.html", "<div><p>a</p><p>b</p></div>"),
+            ("a.css", "html { color: #ffffff } p { color: #ff0000 }"),
+            ("b.css", "html { color: #ffffff } p { color: #0000ff }"),
+        ];
+        let mut ui = TestUi::new("gap-default-swap-loaded", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let b = ui.load::<Stylesheet>("b.css");
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "b"), "#ff0000", "{dump}");
+        assert!(ui.app_mut().world().resource::<AssetServer>().is_loaded_with_dependencies(&b));
+        ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b);
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "a"), "#0000ff", "{dump}");
+        assert_eq!(run_color(&dump, "b"), "#0000ff", "{dump}");
+    }
+
+    /// A context `var()` change restyles every element using the sheet's
+    /// variable (the content renders identically).
+    #[test]
+    fn sheet_var_change_restyles_unchanged_content() {
+        let files = [
+            ("page.html", "<div><p>a</p><p>b</p></div>"),
+            ("a.css", "html { color: #ffffff } p { color: var(--c) }"),
+        ];
+        let mut ui = TestUi::new("gap-var", &files)
+            .stylesheet("a.css")
+            .spawn("page.html", TemplateContext::new().with("--c", &"#ff0000"), Node::default());
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "b"), "#ff0000", "{dump}");
+        let root = ui.root();
+        ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("--c", &"#0000ff");
+        let dump = ui.settle().dump();
+        assert_eq!(run_color(&dump, "a"), "#0000ff", "{dump}");
+        assert_eq!(run_color(&dump, "b"), "#0000ff", "{dump}");
+    }
+
+    // ---- skeleton reuse (ADR 0021) ---------------------------------------
+
+    /// Renders `<p>`s from `values`, then changes them to `changed`, and
+    /// returns the skeleton's `(useful, strike)` after the content build.
+    fn health_after(name: &str, values: &[&str], changed: &[&str]) -> (bool, u8) {
+        let page: String = (0..values.len()).map(|i| format!("<p>{{{{ v{i} }}}}</p>")).collect();
+        let keys: Vec<&'static str> = (0..values.len())
+            .map(|i| &*Box::leak(format!("v{i}").into_boxed_str()))
+            .collect();
+        let mut context = TemplateContext::new();
+        for (key, value) in keys.iter().zip(values) {
+            context.insert(*key, value);
+        }
+        let files = [("page.html", page.as_str()), ("a.css", WHITE)];
+        let mut ui = TestUi::new(name, &files)
+            .stylesheet("a.css")
+            .spawn("page.html", context, Node::default());
+        ui.settle();
+        let root = ui.root();
+        let mut context = ui.world_mut().get_mut::<TemplateContext>(root).unwrap();
+        for (key, value) in keys.iter().zip(changed) {
+            context.insert(*key, value);
+        }
+        ui.settle();
+        ui.world_mut().get::<Skeleton>(root).unwrap().pairing_health()
+    }
+
+    /// One changed paragraph of four: three subtrees reuse, so the
+    /// pairing stays useful (no strike) — reuse actually happens on a
+    /// content build.
+    #[test]
+    fn a_mostly_unchanged_page_reuses_and_stays_useful() {
+        assert_eq!(health_after("gap-reuse-useful", &["a", "b", "c", "d"], &["a", "b", "c", "D"]), (true, 0));
+    }
+
+    /// Two changed paragraphs of three: one subtree reuses, under half —
+    /// the pairing is useless and takes a strike (the backoff).
+    #[test]
+    fn a_mostly_changed_page_strikes_the_pairing() {
+        assert_eq!(health_after("gap-reuse-useless", &["a", "b", "c"], &["a", "B", "C"]), (false, 1));
+    }
 }

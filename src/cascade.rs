@@ -6545,6 +6545,18 @@ mod tests {
         assert_eq!(custom_image_urls(&sheet), ["a.png"]);
     }
 
+    /// Background images load as sheet dependencies like border-images,
+    /// from the longhand and from the shorthand's first layer (ADR 0028;
+    /// the background vector reuses `frame.png`, which the border-image
+    /// already loads, so it can't tell).
+    #[test]
+    fn background_image_urls_are_sheet_dependencies() {
+        let sheet = owned_sheet(
+            r#"p { background-image: url("a.png") } div { background: url("b.png") no-repeat }"#,
+        );
+        assert_eq!(image_urls(&sheet), ["a.png", "b.png"]);
+    }
+
     /// `position` and the insets: shorthand and longhands, `static` kept as
     /// such (it ignores insets), `sticky` unsupported, `fixed` mapped to
     /// absolute insets (the `FixedNode` component is the build's).
@@ -6729,6 +6741,32 @@ mod tests {
         assert_eq!(layout("margin: 2rem").margin, [Some(Val::Rem(2.0)); 4]);
         // `ex`/`ch` have no Bevy counterpart.
         assert_eq!(layout("width: 3ch").width, None);
+    }
+
+    /// review_0005 I02: `index - b` and `rem_euclid` overflowed `i32` for
+    /// offsets near its bounds (`n-2147483647`) and panicked the build.
+    /// `a*n + b == index` for a non-negative integer `n`: `n-2147483647`
+    /// reaches every index (n = index + 2147483647); `-n-2147483647`
+    /// reaches none; `-n+2147483647` reaches every index (n large).
+    #[test]
+    fn an_b_extreme_offsets_match_without_overflow() {
+        let anb = |a, b| AnB { a, b };
+        for index in [1, 2, 7] {
+            assert!(anb(1, -2147483647).matches(index), "n-2147483647 at {index}");
+            assert!(!anb(-1, -2147483647).matches(index), "-n-2147483647 at {index}");
+            assert!(anb(-1, 2147483647).matches(index), "-n+2147483647 at {index}");
+            assert!(!anb(i32::MIN, i32::MIN).matches(index), "MIN·n+MIN at {index}");
+            assert!(anb(i32::MAX, index as i32).matches(index), "MAX·n+{index}");
+        }
+    }
+
+    /// review_0005 I11: `+n+3` and `+3n-1` are valid CSS (a `+` sign on
+    /// `a`); both were rejected and the rule skipped.
+    #[test]
+    fn an_b_accepts_a_leading_plus() {
+        assert_eq!(AnB::parse("+n+3"), Some(AnB { a: 1, b: 3 }));
+        assert_eq!(AnB::parse("+3n-1"), Some(AnB { a: 3, b: -1 }));
+        assert_eq!(AnB::parse("+5"), Some(AnB { a: 0, b: 5 }));
     }
 
     #[test]

@@ -740,6 +740,14 @@ fn scanner_code_is_commonmark_code() {
     }
 }
 
+/// A backslash before a non-ASCII character is no escape the rewrite
+/// keeps whole: slicing the pair would cut the character (a panic on
+/// attribute text from the page). Malformed JSON is an error, not a crash.
+#[test]
+fn attribute_json_with_a_backslash_before_non_ascii_is_an_error() {
+    assert!(parse_attribute_json("{\"a\": \"\\u{41}\\é\"}").is_err());
+}
+
 /// The scanner's code protection agrees with pulldown on the shapes G13
 /// found: a fence after prose, indented code, whitespace-control raw
 /// variants, code spans across blank lines (their content is scanned),
@@ -788,6 +796,32 @@ mod tests {
 /// H09: a 2 s bound passed a quadratic rewrite at 1.25 s): 4× the input
 /// may cost at most 8× the time — linear is ~4×, quadratic ~16× — best of
 /// three runs each, so machine speed and load cancel out.
+/// review_0005 I04: each `&#` scanned to the next `;` (or the end of the
+/// text) before checking the digit bound, so a text of `&#` references
+/// without terminators decoded in O(n²) — on every render. Scaling, not
+/// wall time: 4× the input may cost at most 8× (best of three).
+#[test]
+fn entity_decoding_stays_linear_without_terminators() {
+    use std::time::{Duration, Instant};
+    let best = |text: &str| {
+        (0..3)
+            .map(|_| {
+                let start = Instant::now();
+                std::hint::black_box(decode_entities(text));
+                start.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+    for (shape, unit) in [("numeric", "&#1"), ("hex", "&#x1"), ("named", "&am")] {
+        let (small, large) = (best(&unit.repeat(10_000)), best(&unit.repeat(40_000)));
+        assert!(
+            large < small * 8 + Duration::from_millis(5),
+            "decode_entities scales superlinearly on {shape}: 10k {small:?}, 40k {large:?}"
+        );
+    }
+}
+
 #[test]
 fn scanners_stay_linear_on_pathological_input() {
     use std::time::{Duration, Instant};
