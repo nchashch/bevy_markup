@@ -4,8 +4,10 @@
 //! tag, id, classes and pseudo-state.
 
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -879,6 +881,109 @@ pub(crate) struct BackgroundImageDecl {
     pub clip: VisualBox,
 }
 
+/// ADR 0028: an element's structural position, for the structural
+/// pseudo-classes (`:nth-child` and friends): the 1-based index among the
+/// parent's element children and the count (of all, and of the same
+/// tag), plus whether the element or a descendant holds the focus
+/// (`:focus-within`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ElementState {
+    pub tag_index: usize,
+    pub tag_count: usize,
+    pub type_index: usize,
+    pub type_count: usize,
+    pub focus_within: bool,
+    /// No content at all (no element or text children; comments don't
+    /// count): `:empty`.
+    pub empty: bool,
+}
+
+/// An `An+B` pattern (`:nth-child(2)`, `(2n+1)`, `(-n+3)`, `odd`, `even`):
+/// the n-th element matches when `a * n + b == index` for some `n >= 0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AnB {
+    pub a: i32,
+    pub b: i32,
+}
+
+impl AnB {
+    fn parse(text: &str) -> Option<Self> {
+        match text.trim() {
+            "odd" => return Some(Self { a: 2, b: 1 }),
+            "even" => return Some(Self { a: 2, b: 0 }),
+            text => text,
+        };
+        let text = text.trim();
+        let (a, rest) = match text.split_once('n') {
+            Some((head, rest)) => {
+                let a = match head.trim() {
+                    "" => 1,
+                    "-" => -1,
+                    _ => head.trim().parse::<i32>().ok()?,
+                };
+                (a, rest)
+            }
+            None => {
+                let b = text.parse::<i32>().ok()?;
+                return Some(Self { a: 0, b });
+            }
+        };
+        let b = match rest.trim() {
+            "" => 0,
+            rest => {
+                let (sign, number) = rest.split_at(1);
+                match (sign, number.parse::<i32>().ok()) {
+                    ("+", Some(number)) => number,
+                    ("-", Some(number)) => -number,
+                    _ => return None,
+                }
+            }
+        };
+        Some(Self { a, b })
+    }
+
+    fn matches(&self, index: usize) -> bool {
+        // Solve a*n + b == index for a non-negative n.
+        let index = index as i32;
+        match self.a {
+            0 => self.b == index,
+            a => {
+                let remainder = index - self.b;
+                remainder.rem_euclid(a) == 0 && remainder / a >= 0
+            }
+        }
+    }
+}
+
+/// A compound's structural pseudo-class (ADR 0028): evaluated against the
+/// element's [`ElementState`].
+#[derive(Clone, Debug, PartialEq)]
+enum StructuralPseudo {
+    NthChild(AnB),
+    LastChild,
+    NthOfType(AnB),
+    LastOfType,
+    Not(Box<Compound>),
+    FocusWithin,
+    Empty,
+}
+
+impl StructuralPseudo {
+    fn matches(&self, element: &HtmlElement, state: &ElementState) -> bool {
+        match self {
+            Self::NthChild(anb) => anb.matches(state.tag_index),
+            Self::LastChild => state.tag_index == state.tag_count,
+            Self::NthOfType(anb) => anb.matches(state.type_index),
+            Self::LastOfType => state.type_index == state.type_count,
+            // `:not`'s argument is a compound: the same parts (its own
+            // structural parts included) against the same element.
+            Self::Not(compound) => !compound.matches_parts(element, state),
+            Self::FocusWithin => state.focus_within,
+            Self::Empty => state.empty,
+        }
+    }
+}
+
 /// Computed `text-transform` (ADR 0028), inherited; applied to the run
 /// text at collection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1204,13 +1309,20 @@ impl Selector {
         })
     }
 
-    /// `element` (with its `pseudo`) against the subject compound, then the
-    /// rest against `ancestors` (nearest first).
-    fn matches(&self, element: &HtmlElement, pseudo: Pseudo, ancestors: &[Ancestor]) -> bool {
+    /// `element` (with its `pseudo` and structural state, ADR 0028)
+    /// against the subject compound, then the rest against `ancestors`
+    /// (nearest first).
+    fn matches(
+        &self,
+        element: &HtmlElement,
+        pseudo: Pseudo,
+        ancestors: &[Ancestor],
+        state: &ElementState,
+    ) -> bool {
         let Some(last) = self.compounds.last() else {
             return false;
         };
-        if !last.matches(element, pseudo) {
+        if !last.matches(element, pseudo, state) {
             return false;
         }
         self.matches_rest(self.compounds.len() - 1, ancestors)
@@ -1227,11 +1339,16 @@ impl Selector {
     /// Whether the selector could match `element` if every pseudo test
     /// went either way (ADR 0029's reactivity record): the non-pseudo
     /// parts of every compound match the element and its ancestors.
-    fn matches_ignoring_pseudo(&self, element: &HtmlElement, ancestors: &[Ancestor]) -> bool {
+    fn matches_ignoring_pseudo(
+        &self,
+        element: &HtmlElement,
+        ancestors: &[Ancestor],
+        state: &ElementState,
+    ) -> bool {
         let Some(last) = self.compounds.last() else {
             return false;
         };
-        if !last.matches_parts(element) {
+        if !last.matches_parts(element, state) {
             return false;
         }
         self.matches_from(
@@ -1309,14 +1426,17 @@ impl Selector {
 
 /// A compound selector: optional type (or `*`), then any number of `.class`
 /// and `#id` parts, e.g. `p.note`, `.a.b`, `#title`; optionally qualified
-/// by `:hover` / `:active` / `:focus` / `:focus-visible`.
-#[derive(Clone, Debug)]
+/// by `:hover` / `:active` / `:focus` / `:focus-visible`, plus the
+/// structural pseudo-classes (ADR 0028).
+#[derive(Clone, Debug, PartialEq)]
 struct Compound {
     /// Lowercase; `None` for `*` or no type.
     tag: Option<String>,
     ids: Vec<String>,
     classes: Vec<String>,
     pseudo: Pseudo,
+    /// The structural pseudo-classes (ADR 0028); ALL must hold.
+    structural: Vec<StructuralPseudo>,
 }
 
 impl Compound {
@@ -1337,6 +1457,7 @@ impl Compound {
         }
         let mut ids = Vec::new();
         let mut classes = Vec::new();
+        let mut structural = Vec::new();
         let mut pseudo = Pseudo::default();
         while let Some((_, kind)) = rest.char_indices().next() {
             // Only `.class`, `#id` and `:pseudo` parts continue the selector;
@@ -1353,6 +1474,44 @@ impl Compound {
                         "active" => pseudo.active = true,
                         "focus" => pseudo.focus = true,
                         "focus-visible" => pseudo.focus_visible = true,
+                        // ADR 0028: the structural pseudo-classes, with
+                        // their argument up to the first `)` (nesting a
+                        // parenthesized argument is unsupported).
+                        name @ ("nth-child" | "nth-of-type" | "not") => {
+                            let after = &body[end..];
+                            let Some(close) = after.find(')') else {
+                                return None;
+                            };
+                            if after[1..close].contains('(') || close == 1 {
+                                return None;
+                            }
+                            let argument = after[1..close].trim();
+                            match name {
+                                "nth-child" => structural.push(
+                                    StructuralPseudo::NthChild(AnB::parse(argument)?),
+                                ),
+                                "nth-of-type" => structural.push(
+                                    StructuralPseudo::NthOfType(AnB::parse(argument)?),
+                                ),
+                                // A selector list (a comma inside) fails
+                                // the compound's parse.
+                                _ => structural.push(StructuralPseudo::Not(
+                                    Box::new(Compound::parse(argument)?),
+                                )),
+                            }
+                            rest = &after[close + 1..];
+                            continue;
+                        }
+                        "first-child" => {
+                            structural.push(StructuralPseudo::NthChild(AnB { a: 0, b: 1 }))
+                        }
+                        "last-child" => structural.push(StructuralPseudo::LastChild),
+                        "first-of-type" => {
+                            structural.push(StructuralPseudo::NthOfType(AnB { a: 0, b: 1 }))
+                        }
+                        "last-of-type" => structural.push(StructuralPseudo::LastOfType),
+                        "focus-within" => structural.push(StructuralPseudo::FocusWithin),
+                        "empty" => structural.push(StructuralPseudo::Empty),
                         _ => return None,
                     }
                     rest = &body[end..];
@@ -1387,6 +1546,7 @@ impl Compound {
             ids,
             classes,
             pseudo,
+            structural,
         })
     }
 
@@ -1405,26 +1565,39 @@ impl Compound {
         )
     }
 
-    fn matches(&self, element: &HtmlElement, pseudo: Pseudo) -> bool {
+    fn matches(&self, element: &HtmlElement, pseudo: Pseudo, state: &ElementState) -> bool {
         (!self.pseudo.hover || pseudo.hover)
             && (!self.pseudo.active || pseudo.active)
             && (!self.pseudo.focus || pseudo.focus)
             && (!self.pseudo.focus_visible || pseudo.focus_visible)
-            && self.matches_parts(element)
+            && self.matches_parts(element, state)
     }
 
-    /// The compound's tag/id/classes (its non-pseudo parts) against the
-    /// element.
-    fn matches_parts(&self, element: &HtmlElement) -> bool {
+    /// The compound's tag/id/classes and structural parts (ADR 0028)
+    /// against the element and its state. The interaction state is *not*
+    /// part of `matches_parts` (the reactivity record wildcards it, and
+    /// only it — a structural part's outcome doesn't depend on
+    /// interaction).
+    fn matches_parts(&self, element: &HtmlElement, state: &ElementState) -> bool {
         self.tag.as_ref().is_none_or(|tag| *tag == element.tag)
             && self.ids.iter().all(|id| element.id.as_ref() == Some(id))
             && self.classes.iter().all(|class| element.has_class(class))
+            && self
+                .structural
+                .iter()
+                .all(|part| part.matches(element, state))
     }
 
     /// [`matches`](Self::matches) against a slimmed ancestor: the same
     /// fields (tag, id, classes, pseudo) — the slim ancestor drops the
     /// dataset, which selectors never read.
+    /// An ancestor position can't evaluate a structural pseudo (the
+    /// ancestor's own position among *its* siblings isn't threaded): a
+    /// selector with one never matches, like any unsupported selector.
     fn matches_ancestor(&self, ancestor: &Ancestor) -> bool {
+        if !self.structural.is_empty() {
+            return false;
+        }
         (!self.pseudo.hover || ancestor.pseudo.hover)
             && (!self.pseudo.active || ancestor.pseudo.active)
             && (!self.pseudo.focus || ancestor.pseudo.focus)
@@ -1522,7 +1695,7 @@ pub(crate) struct HtmlStyles<'a> {
     pseudo_rules: Vec<usize>,
     /// The `--` names the sheet's non-custom declarations (transitively)
     /// reference (the wrapper's `var_names`): a custom declaration whose
-    cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo, u64), ElementStyle>>,
+    cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo, u64, u64), ElementStyle>>,
 }
 
 impl<'a> HtmlStyles<'a> {
@@ -1616,6 +1789,7 @@ impl<'a> HtmlStyles<'a> {
         element: &HtmlElement,
         pseudo: Pseudo,
         ancestors: &[Ancestor],
+        state: &ElementState,
     ) -> ElementStyle {
         let key = (
             element.tag.clone(),
@@ -1632,6 +1806,19 @@ impl<'a> HtmlStyles<'a> {
                 hash = hash.wrapping_mul(31).wrapping_add(hasher.finish());
                 hash
             }),
+            // ADR 0028: the structural pseudo-classes match on the
+            // element's position — two elements with the same attributes
+            // and chain but different positions match differently.
+            {
+                let mut hasher = DefaultHasher::new();
+                state.tag_index.hash(&mut hasher);
+                state.tag_count.hash(&mut hasher);
+                state.type_index.hash(&mut hasher);
+                state.type_count.hash(&mut hasher);
+                state.focus_within.hash(&mut hasher);
+                state.empty.hash(&mut hasher);
+                hasher.finish()
+            },
         );
         if let Some(style) = self.cache.borrow().get(&key) {
             return style.clone();
@@ -1640,7 +1827,7 @@ impl<'a> HtmlStyles<'a> {
         for rule in self
             .rules
             .iter()
-            .filter(|rule| rule.selector.matches(element, pseudo, ancestors))
+            .filter(|rule| rule.selector.matches(element, pseudo, ancestors, state))
         {
             for declaration in rule.declarations {
                 apply_resolved(&mut style, declaration, &self.variables, self.context);
@@ -1654,12 +1841,19 @@ impl<'a> HtmlStyles<'a> {
     /// every pseudo test went either way: the element's (or its runs')
     /// style may change when an interaction state flips anywhere on its
     /// chain — ADR 0029's reactivity record. Cheap when the sheet has no
-    /// pseudo rules (the common case is an empty list).
-    pub fn pseudo_reactive(&self, element: &HtmlElement, ancestors: &[Ancestor]) -> bool {
+    /// pseudo rules (the common case is an empty list). The structural
+    /// parts evaluate normally: their outcome doesn't depend on
+    /// interaction.
+    pub fn pseudo_reactive(
+        &self,
+        element: &HtmlElement,
+        ancestors: &[Ancestor],
+        state: &ElementState,
+    ) -> bool {
         self.pseudo_rules.iter().any(|&index| {
             self.rules[index]
                 .selector
-                .matches_ignoring_pseudo(element, ancestors)
+                .matches_ignoring_pseudo(element, ancestors, state)
         })
     }
 
@@ -1674,15 +1868,16 @@ impl<'a> HtmlStyles<'a> {
         pseudo: Pseudo,
         inline: Option<&InlineStyle>,
         ancestors: &[Ancestor],
+        state: &ElementState,
     ) -> ElementStyle {
         let Some(InlineStyle(block)) = inline else {
-            return self.get(element, pseudo, ancestors);
+            return self.get(element, pseudo, ancestors, state);
         };
         let mut style = ElementStyle::default();
         let matching: Vec<&Rule> = self
             .rules
             .iter()
-            .filter(|rule| rule.selector.matches(element, pseudo, ancestors))
+            .filter(|rule| rule.selector.matches(element, pseudo, ancestors, state))
             .collect();
         // `rules` is sorted by rank, whose first key is importance.
         let (important, normal): (Vec<&Rule>, Vec<&Rule>) =
@@ -4117,7 +4312,7 @@ mod tests {
     fn color_with(css: &'static str, element: &HtmlElement, pseudo: Pseudo) -> Option<Color> {
         let sheet = sheet(css);
         HtmlStyles::from_sheet(&sheet)
-            .get(element, pseudo, &[])
+            .get(element, pseudo, &[], &ElementState::default())
             .color
     }
 
@@ -4386,7 +4581,7 @@ mod tests {
         let ancestors: Vec<Ancestor> = (0..40)
             .map(|_| ancestor("div", &["a"]))
             .collect();
-        assert!(!deep.matches(&element("p", None, &[]), Pseudo::default(), &ancestors));
+        assert!(!deep.matches(&element("p", None, &[]), Pseudo::default(), &ancestors, &ElementState::default()));
         assert!(
             start.elapsed() < std::time::Duration::from_millis(100),
             "the combinator matching took {:?}",
@@ -4395,18 +4590,19 @@ mod tests {
         let selector = selector(".panel p");
         let ancestors = vec![ancestor("div", &["panel"]), ancestor("section", &["page"])];
         assert!(
-            selector.matches(&element("p", None, &[]), Pseudo::default(), &ancestors),
+            selector.matches(&element("p", None, &[]), Pseudo::default(), &ancestors, &ElementState::default()),
             "the panel is an ancestor"
         );
         assert!(
-            !selector.matches(&element("p", None, &[]), Pseudo::default(), &[]),
+            !selector.matches(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default()),
             "no ancestors"
         );
         assert!(
             !selector.matches(
                 &element("p", None, &[]),
                 Pseudo::default(),
-                &[ancestor("div", &["page"])]
+                &[ancestor("div", &["page"])],
+                &ElementState::default()
             ),
             "the wrong ancestor"
         );
@@ -4418,16 +4614,16 @@ mod tests {
         let selector = selector(".panel > p");
         let direct = vec![ancestor("div", &["panel"]), ancestor("section", &["page"])];
         assert!(
-            selector.matches(&element("p", None, &[]), Pseudo::default(), &direct),
+            selector.matches(&element("p", None, &[]), Pseudo::default(), &direct, &ElementState::default()),
             "the panel is the parent"
         );
         let deep = vec![ancestor("div", &["other"]), ancestor("div", &["panel"])];
         assert!(
-            !selector.matches(&element("p", None, &[]), Pseudo::default(), &deep),
+            !selector.matches(&element("p", None, &[]), Pseudo::default(), &deep, &ElementState::default()),
             "the panel is a grandparent"
         );
         assert!(
-            !selector.matches(&element("p", None, &[]), Pseudo::default(), &[]),
+            !selector.matches(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default()),
             "no parent"
         );
     }
@@ -4443,13 +4639,13 @@ mod tests {
             ancestor("main", &["outer"]),
         ];
         assert!(
-            selector.matches(&element("p", None, &[]), Pseudo::default(), &ancestors),
+            selector.matches(&element("p", None, &[]), Pseudo::default(), &ancestors, &ElementState::default()),
             ".b is the parent, .a is above it"
         );
         // .b and .a are the other way round: no chain satisfies both.
         let wrong_order = vec![ancestor("div", &["a"]), ancestor("section", &["b"])];
         assert!(
-            !selector.matches(&element("p", None, &[]), Pseudo::default(), &wrong_order),
+            !selector.matches(&element("p", None, &[]), Pseudo::default(), &wrong_order, &ElementState::default()),
             ".a must be above .b"
         );
     }
@@ -4471,12 +4667,14 @@ mod tests {
         assert!(selector.matches(
             &element("p", None, &[]),
             Pseudo::default(),
-            std::slice::from_ref(&hovered)
+            std::slice::from_ref(&hovered),
+            &ElementState::default()
         ));
         assert!(!selector.matches(
             &element("p", None, &[]),
             Pseudo::default(),
-            &[ancestor("div", &["panel"])]
+            &[ancestor("div", &["panel"])],
+            &ElementState::default()
         ));
     }
 
@@ -4495,7 +4693,22 @@ mod tests {
         assert!(Selector::parse(".a + p").is_none());
         assert!(Selector::parse(".a ~ p").is_none());
         assert!(Selector::parse("p[attr]").is_none());
-        assert!(Selector::parse("p:focus-within").is_none());
+        // `:focus-within` is SUPPORTED now (ADR 0028); a structural
+        // pseudo in an ANCESTOR position parses but never matches (the
+        // ancestor's own position isn't threaded — a documented limit).
+        assert!(Selector::parse("div:nth-child(2) p").is_some());
+        {
+            let subject = selector("div:nth-child(2) p");
+            assert!(
+                !subject.matches(
+                    &element("p", None, &[]),
+                    Pseudo::default(),
+                    &[ancestor("div", &[])],
+                    &ElementState::default()
+                ),
+                "the ancestor's structural pseudo can't evaluate"
+            );
+        }
         assert!(
             Selector::parse(".a > p b").is_some(),
             "chains of any length"
@@ -4697,7 +4910,12 @@ mod tests {
 
     fn declared(declarations: &str) -> ElementStyle {
         let sheet = owned_sheet(&format!("p {{ {declarations} }}"));
-        HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), Pseudo::default(), &[])
+        HtmlStyles::from_sheet(&sheet).get(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState::default(),
+        )
     }
 
     /// `declared` with a `TemplateContext` lookup: `context(name)` answers
@@ -4710,9 +4928,12 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.to_string())
         };
-        HtmlStyles::from_sheet(&sheet)
-            .with_context(&context)
-            .get(&element("p", None, &[]), Pseudo::default(), &[])
+        HtmlStyles::from_sheet(&sheet).with_context(&context).get(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState::default(),
+        )
     }
 
     /// A `var()` graph can be exponential: a self-reference with two
@@ -4826,7 +5047,7 @@ mod tests {
         let parsed = owned_sheet(&sheet);
         let styles = HtmlStyles::from_sheet(&parsed);
         let start = std::time::Instant::now();
-        let style = styles.get(&element("p", None, &[]), Pseudo::default(), &[]);
+        let style = styles.get(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default());
         let elapsed = start.elapsed();
         assert!(
             elapsed < std::time::Duration::from_millis(150),
@@ -5046,7 +5267,7 @@ mod tests {
     fn unsupported_shorthand_sides_drop_the_whole_declaration() {
         let get = |rules: &str| {
             HtmlStyles::from_sheet(&owned_sheet(rules))
-                .get(&element("p", None, &[]), Pseudo::default(), &[])
+                .get(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default())
         };
         let style = get(
             "p { display: grid; grid-column: 2 / 3 } p { display: grid; grid-column: span x / 5 }",
@@ -5161,6 +5382,7 @@ mod tests {
                 &element("p", None, classes),
                 Pseudo::default(),
                 &[],
+                &ElementState::default(),
             )
         };
         // An unsupported track invalidates the whole declaration.
@@ -5209,7 +5431,7 @@ mod tests {
     fn inherit_initial_unset_clear_the_field() {
         let get = |rules: &str| {
             HtmlStyles::from_sheet(&owned_sheet(rules))
-                .get(&element("p", None, &[]), Pseudo::default(), &[])
+                .get(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default())
         };
         assert_eq!(get("p { color: #ff0000 } p { color: initial }").color, None);
         assert_eq!(get("p { color: #ff0000 } p { color: inherit }").color, None);
@@ -5287,7 +5509,7 @@ mod tests {
     fn pseudo_only_compounds_match_any_element() {
         let style = |pseudo| {
             let sheet = owned_sheet(":focus-visible { color: #ff0000 } *:hover { color: #00ff00 }");
-            HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), pseudo, &[])
+            HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), pseudo, &[], &ElementState::default())
         };
         assert_eq!(
             style(Pseudo {
@@ -5960,6 +6182,7 @@ mod tests {
             &element("strong", None, &[]),
             Pseudo::default(),
             &[],
+            &ElementState::default(),
         );
         assert_eq!(style.bold, Some(true));
     }

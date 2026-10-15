@@ -97,6 +97,13 @@ pub(crate) struct RebuildState {
     /// a later `Build`, so the consumer can tell a content-only build from
     /// one that carries style changes (and must not reuse cached specs).
     style_pending: bool,
+    /// ADR 0029: a *full-page* style change latched while a needed sheet
+    /// loads. The swap frame's `default_changed`-class flags are consumed
+    /// by its `Wait`; the resolution frame's are all-false — this bit
+    /// carries the change's full-page-ness across the wait, so the
+    /// resolution frame's restyle doesn't run scoped and reuse the
+    /// (now-stale) specs.
+    pending_full_style: bool,
     /// The context's `--` values' hash as of the last update: `Frame`'s
     /// `vars_changed` compares against it. Only restyled builds record it
     /// (a `Wait` keeps the old hash, so the change outlives the wait).
@@ -117,6 +124,14 @@ impl RebuildState {
     /// again once a fresh render arrives.
     pub(crate) fn style_pending_applied(&mut self) {
         self.style_pending = false;
+        self.pending_full_style = false;
+    }
+
+    /// ADR 0029: a full-page style change is outstanding — latched during
+    /// a `Wait` (the flags that would say so on the resolution frame are
+    /// consumed). The consumer's `full_style` must OR it in.
+    pub(crate) fn pending_full_style(&self) -> bool {
+        self.pending_full_style
     }
 
     pub fn decide(&mut self, frame: Frame) -> Decision {
@@ -127,6 +142,17 @@ impl RebuildState {
             || frame.state_changed
             || frame.images_changed
             || frame.vars_changed;
+        // ADR 0029: a full-page style change (a sheet, font, image or
+        // var() change — an interaction flip scopes) latches its
+        // full-page-ness across a `Wait`, alongside the pending update.
+        let full_style = frame.own_changed
+            || (!own_ready && frame.default_changed)
+            || frame.fonts_changed
+            || frame.images_changed
+            || frame.vars_changed;
+        if style && full_style {
+            self.pending_full_style = true;
+        }
         // The bit is consumed by the consumer when the update runs, not
         // here: a style change seen during a `Wait` must still be visible
         // in the build that finally runs for it.
@@ -190,6 +216,53 @@ mod tests {
             Some(Phase::Loading) => None,
             _ => Some(Source::Unstyled),
         }
+    }
+
+    /// ADR 0029's latch: a full-page style change that lands during a
+    /// `Wait` (the sheet loading) reaches the resolution frame's
+    /// `pending_full_style` — its own flags are consumed by then, and
+    /// without the latch the latched restyle would run scoped and reuse
+    /// the (now-stale) specs. The swap's resolution as `Unstyled` (the
+    /// failed sheet) is the failing shape.
+    #[test]
+    fn a_full_page_change_latched_in_a_wait_survives_to_the_resolution() {
+        // The swap frame: the sheet loads, the change waits.
+        let mut state = built();
+        let waited = state.decide(Frame {
+            own: None,
+            default: Some(Phase::Loading),
+            document_ready: true,
+            default_changed: true,
+            ..Frame::default()
+        });
+        assert_eq!(waited, Decision::Wait);
+        assert!(state.pending_full_style(), "the swap latched full-style");
+        // The resolution frame: the sheet failed; every flag is false.
+        let resolved = state.decide(Frame {
+            own: None,
+            default: Some(Phase::Failed),
+            document_ready: true,
+            ..Frame::default()
+        });
+        assert_eq!(
+            resolved,
+            Decision::Restyle(Source::Unstyled),
+            "the latched restyle ran unstyled"
+        );
+        assert!(state.pending_full_style(), "the latch read by the consumer");
+        // The applied update clears it.
+        state.style_pending_applied();
+        assert!(!state.pending_full_style(), "cleared on apply");
+        // And a later frame without signals skips (no stuck latch).
+        assert_eq!(
+            state.decide(Frame {
+                own: None,
+                default: Some(Phase::Failed),
+                document_ready: true,
+                ..Frame::default()
+            }),
+            Decision::Skip
+        );
     }
 
     /// A state that has built once (so restyles are possible).

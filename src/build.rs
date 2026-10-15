@@ -19,7 +19,7 @@ use bevy::ui_widgets::TextInput;
 use crate::cascade::{
     self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, GridNames,
     HtmlStyles, InlineStyle, LayoutDecl, LetterSpacingSpec, LineHeightSpec, ListStyleSpec,
-    OverflowAxisDecl, TextTransformSpec, WhiteSpaceSpec,
+    ElementState, OverflowAxisDecl, TextTransformSpec, WhiteSpaceSpec,
     OutlineDecl, Pseudo, SliceValue, TextAlignSpec, TransitionDecl, TransitionProp,
     node_field_mut,
 };
@@ -611,8 +611,13 @@ impl Styler<'_> {
     /// Whether some pseudo-referencing selector could match `element`
     /// given its chain (ADR 0029's reactivity record): only such an
     /// element's style can change when an interaction state flips.
-    pub(crate) fn pseudo_reactive(&self, element: &HtmlElement, ancestors: &[Ancestor]) -> bool {
-        self.styles.pseudo_reactive(element, ancestors)
+    pub(crate) fn pseudo_reactive(
+        &self,
+        element: &HtmlElement,
+        ancestors: &[Ancestor],
+        element_state: &ElementState,
+    ) -> bool {
+        self.styles.pseudo_reactive(element, ancestors, element_state)
     }
 
     /// `element`'s computed style: its declared values (with its `style`
@@ -626,8 +631,9 @@ impl Styler<'_> {
         pseudo: Pseudo,
         inline: Option<&InlineStyle>,
         ancestors: &[Ancestor],
+        element_state: &ElementState,
     ) -> Style {
-        let declared = self.styles.get_with(element, pseudo, inline, ancestors);
+        let declared = self.styles.get_with(element, pseudo, inline, ancestors, element_state);
         let bold = declared.bold.unwrap_or(inherited.bold);
         let italic = declared.italic.unwrap_or(inherited.italic);
         let size = declared
@@ -685,8 +691,9 @@ impl Styler<'_> {
         state: Pseudo,
         inline: Option<&InlineStyle>,
         ancestors: &[Ancestor],
+        element_state: &ElementState,
     ) -> Option<RunExtras> {
-        let declared = self.styles.get_with(element, state, inline, ancestors);
+        let declared = self.styles.get_with(element, state, inline, ancestors, element_state);
         if declared.background.is_none() && declared.text_decoration.is_none() {
             return None;
         }
@@ -708,6 +715,7 @@ impl Styler<'_> {
         element: &HtmlElement,
         state: Pseudo,
         ancestors: &[Ancestor],
+        element_state: &ElementState,
     ) -> Option<ImageRun> {
         let src = tag
             .attributes()
@@ -734,7 +742,7 @@ impl Styler<'_> {
         let inline = cascade::inline_style(tag);
         let declared = self
             .styles
-            .get_with(element, state, inline.as_ref(), ancestors);
+            .get_with(element, state, inline.as_ref(), ancestors, element_state);
         let size = |val: Option<Val>, name: &str| {
             val.and_then(|val| match val {
                 Val::Px(px) => Some(ImageSize::Px(px)),
@@ -794,8 +802,9 @@ impl Styler<'_> {
         pseudo: Pseudo,
         inline: Option<&InlineStyle>,
         ancestors: &[Ancestor],
+        element_state: &ElementState,
     ) -> BoxStyle {
-        let declared = self.styles.get_with(element, pseudo, inline, ancestors);
+        let declared = self.styles.get_with(element, pseudo, inline, ancestors, element_state);
         let image = declared.border_image.as_ref().and_then(|decl| {
             let url = decl.source.as_ref()?.as_ref()?;
             let handle = self.sheet?.image(url)?;
@@ -905,7 +914,14 @@ pub(crate) fn root_style(
         server,
         template: None,
     }
-    .style_of(root, &defaults, Pseudo::default(), inline, &[])
+    .style_of(
+        root,
+        &defaults,
+        Pseudo::default(),
+        inline,
+        &[],
+        &ElementState::default(),
+    )
 }
 
 /// The element the `HtmlUi` node itself is styled as, with its `style`
@@ -1166,8 +1182,13 @@ pub(crate) fn build_html_ui(
             template,
         };
 
-        let mut root_box =
-            styler.box_of(&root_element, Pseudo::default(), root_inline.as_ref(), &[]);
+        let mut root_box = styler.box_of(
+            &root_element,
+            Pseudo::default(),
+            root_inline.as_ref(),
+            &[],
+            &ElementState::default(),
+        );
         root_box.fade(root.opacity);
         let root_grid = root_box.layout.grid_names();
         // Nested containers space their children like the root does.
@@ -1249,12 +1270,17 @@ pub(crate) fn build_html_ui(
             // re-collect; the descendants re-collect only where the
             // re-collected ancestor's inherited style actually changed
             // (the walk compares it against the cached spec's).
+            // ADR 0029: a full-page style signal — live this frame, or
+            // latched by a `Wait` (the swap frame's flags are consumed by
+            // the time the sheet resolves; the latch carries the
+            // full-page-ness to this frame).
             let full_style = restyle
                 && (frame.own_changed
-                    || frame.default_changed
+                    || (frame.own != Some(Phase::Ready) && frame.default_changed)
                     || frame.fonts_changed
                     || frame.images_changed
-                    || frame.vars_changed);
+                    || frame.vars_changed
+                    || rebuild.pending_full_style());
             let (_, blocked) = state_restyle.remove(&entity).unwrap_or_default();
             pair_trees_into(
                 old_document.dom(),
@@ -1283,7 +1309,6 @@ pub(crate) fn build_html_ui(
         // items style for `:hover`/`:active`. Nested `HtmlUi`s have their
         // own documents — their handles index those, not this one — so their
         // subtrees are skipped (the starting entity is the UI root itself).
-        let mut states = HashMap::new();
         // A translated element's subtree is fragment-keyed (its spans'
         // `DomNode` handles index the translation fragment, re-parsed per
         // build), so those states are collected per fragment. The map holds
@@ -1299,9 +1324,22 @@ pub(crate) fn build_html_ui(
                 focus_visible: state.focus_visible,
             })
         };
+        let mut states = HashMap::new();
+        let mut focus_within: HashSet<tl::NodeHandle> = HashSet::new();
         let mut stack = vec![(entity, None)];
         while let Some((current, fragment)) = stack.pop() {
             if let Ok((handle, state)) = dom_nodes.get(current) {
+                // ADR 0028: the focused element and every ancestor up the
+                // UI's tree hold the focus for `:focus-within`.
+                if state.is_some_and(|state| state.focused) {
+                    let mut current = Some(current);
+                    while let Some(node) = current {
+                        if let Ok((DomNode(handle), _)) = dom_nodes.get(node) {
+                            focus_within.insert(reverse.get(handle).copied().unwrap_or(*handle));
+                        }
+                        current = parents.get(node).ok().map(|parent| parent.0);
+                    }
+                }
                 // The entity's `DomNode` may lag the fresh document (a
                 // reused subtree's handle is written by the frame it last
                 // synced): map it through the pairing, so the keys match
@@ -1353,7 +1391,14 @@ pub(crate) fn build_html_ui(
                 }
                 RenderedHtml::Failed(message) => format!("failed to render: {message}"),
             };
-            let style = styler.style_of(&element_tag("pre"), &root, Pseudo::default(), None, &[]);
+            let style = styler.style_of(
+                &element_tag("pre"),
+                &root,
+                Pseudo::default(),
+                None,
+                &[],
+                &ElementState::default(),
+            );
             vec![Item::Block(Block {
                 kind: BlockKind::Paragraph,
                 element: None,
@@ -1385,6 +1430,7 @@ pub(crate) fn build_html_ui(
                         &localized.0,
                         Some(&states),
                         &fragments,
+                        &focus_within,
                         &styler,
                         root,
                         root_grid.as_ref(),
@@ -3804,6 +3850,9 @@ struct Ctx<'a, 'p, 'buf> {
     /// ADR 0021: the previous build's tree, when this build may reuse its
     /// clean subtrees. `None` inside a translation (fragments are rebuilt).
     skeleton: Option<&'a SkeletonPass<'a>>,
+    /// ADR 0028: the handles holding or containing the focus
+    /// (`:focus-within`). Empty inside a translation.
+    focus_within: &'a HashSet<tl::NodeHandle>,
     /// The `var(--name)` names every parsed inline `style` references
     /// (the main walk's accumulator; fragments create their own and
     /// discard it — translations are rebuilt every frame, so their
@@ -3872,6 +3921,7 @@ fn walk_translation(
         fragments: None,
         styler: ctx.styler,
         named: Some(&named),
+        focus_within: &EMPTY_FOCUS_WITHIN,
         skeleton: None,
         // Discarded: translations are rebuilt every frame, so their
         // inline vars are never stale.
@@ -4327,6 +4377,7 @@ fn collect_items(
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
     states: Option<&HashMap<tl::NodeHandle, Pseudo>>,
     fragments: &HashMap<tl::NodeHandle, HashMap<tl::NodeHandle, Pseudo>>,
+    focus_within: &HashSet<tl::NodeHandle>,
     styler: &Styler,
     root: Style,
     grid: Option<&GridNames>,
@@ -4341,12 +4392,74 @@ fn collect_items(
         named: None,
         skeleton,
         inline_vars: std::cell::RefCell::default(),
+        focus_within,
     };
     let mut items = Vec::new();
-    for handle in dom.children() {
-        collect_node(&ctx, *handle, &root, &mut items, Rc::new(Vec::new()), grid, 0);
+    let roots: Vec<tl::NodeHandle> = dom.children().iter().copied().collect();
+    // ADR 0028: the top-level elements' positions (1-based, of all and
+    // same-tag).
+    let positions = sibling_positions(&roots, &ctx.parser);
+    for handle in &roots {
+        // Raw roots (a whitespace-only page's text, say) collect too —
+        // with no position (they aren't elements to match).
+        let position = positions
+            .get(handle)
+            .map(|state| (state.tag_index, state.tag_count, state.type_index, state.type_count))
+            .unwrap_or((0, 0, 0, 0));
+        collect_node(&ctx, *handle, &root, &mut items, Rc::new(Vec::new()), grid, 0, position);
     }
     (items, ctx.inline_vars.borrow().iter().cloned().collect())
+}
+
+/// The empty focus-within set for translation fragments (fragments don't
+/// carry the document's focus handles).
+static EMPTY_FOCUS_WITHIN: HashSet<tl::NodeHandle> = HashSet::new();
+
+/// ADR 0028: each element child's 1-based index among the parent's
+/// element children (all, and of the same tag) with both counts — the
+/// `:nth-child`/`:nth-of-type` inputs. Only element handles appear.
+fn sibling_positions(
+    handles: &[tl::NodeHandle],
+    parser: &tl::Parser,
+) -> HashMap<tl::NodeHandle, ElementState> {
+    let tag_name = |handle: &tl::NodeHandle| match handle.get(parser) {
+        Some(tl::Node::Tag(tag)) => Some(tag.name().as_utf8_str().to_string()),
+        _ => None,
+    };
+    let mut totals: HashMap<String, usize> = HashMap::default();
+    for handle in handles {
+        if let Some(name) = tag_name(handle) {
+            *totals.entry(name).or_default() += 1;
+        }
+    }
+    let mut out = HashMap::default();
+    let mut element_index = 0usize;
+    let mut seen: HashMap<String, usize> = HashMap::default();
+    for handle in handles {
+        let Some(name) = tag_name(handle) else { continue };
+        element_index += 1;
+        let type_index = {
+            let seen = seen.entry(name.clone()).or_default();
+            *seen += 1;
+            *seen
+        };
+        let type_total = totals[&name.clone()];
+        let element_total = handles
+            .iter()
+            .filter(|candidate| tag_name(candidate).is_some())
+            .count();
+        out.insert(
+            *handle,
+            ElementState {
+                tag_index: element_index,
+                tag_count: element_total,
+                type_index,
+                type_count: type_total,
+                ..ElementState::default()
+            },
+        );
+    }
+    out
 }
 
 fn collect_node(
@@ -4357,6 +4470,7 @@ fn collect_node(
     chain: Rc<Vec<Ancestor>>,
     grid: Option<&GridNames>,
     depth: usize,
+    position: (usize, usize, usize, usize),
 ) {
     /// A node to collect: everything its children need (the computed
     /// style, the ancestor chain, its grid template), plus, for a
@@ -4397,6 +4511,9 @@ fn collect_node(
             /// `li` children (`None` for anything that isn't an `li`):
             /// the marker's number comes from the parent list's counter.
             li_index: Option<usize>,
+            /// ADR 0028: the node's 1-based index among the parent's
+            /// element children (all, then same-tag), with both counts.
+            position: (usize, usize, usize, usize),
             /// ADR 0027: the parent's tag-default list type (`ol` numbers,
             /// `ul` uses `disc`) — the `li`'s own computed type wins when
             /// its chain declared one.
@@ -4417,6 +4534,9 @@ fn collect_node(
         ancestor_flipped: false,
         li_index: None,
         list_kind: ListStyleSpec::Disc,
+        // The caller's position (the document root list's, computed by
+        // `collect_items`; the fragment walk's for its own).
+        position,
     }];
     while let Some(task) = stack.pop() {
         let (
@@ -4429,6 +4549,7 @@ fn collect_node(
             ancestor_flipped,
             li_index,
             list_kind,
+            position,
         ) = match task {
                 Task::Complete(open) => {
                     let Open {
@@ -4477,6 +4598,7 @@ fn collect_node(
                     ancestor_flipped,
                     li_index,
                     list_kind,
+                    position,
                 } => (
                     handle,
                     inherited,
@@ -4487,6 +4609,7 @@ fn collect_node(
                     ancestor_flipped,
                     li_index,
                     list_kind,
+                    position,
                 ),
             };
         if depth >= MAX_DOM_DEPTH {
@@ -4504,6 +4627,7 @@ fn collect_node(
                 let white_space = inherited
                     .white_space
                     .unwrap_or(WhiteSpaceSpec::Normal);
+
                 let mut runs = Vec::new();
                 let mut reactive = false;
                 push_runs(
@@ -4590,6 +4714,7 @@ fn collect_node(
                     ancestor_flipped,
                     li_index: None,
                     list_kind: ListStyleSpec::Disc,
+                    position: (0, 0, 0, 0),
                 });
             }
             continue;
@@ -4621,11 +4746,30 @@ fn collect_node(
         };
         // The `<html>` element is what the root style was computed from:
         // re-applying it would square its `opacity`.
+        let element_state = ElementState {
+            tag_index: position.0,
+            tag_count: position.1,
+            type_index: position.2,
+            type_count: position.3,
+            focus_within: ctx.focus_within.contains(&handle),
+            // `:empty`: no children at all (comments don't count).
+            empty: !tag
+                .children()
+                .top()
+                .iter()
+                .any(|child| !matches!(child.get(ctx.parser), Some(tl::Node::Comment(_)))),
+        };
         let style = if element.tag == "html" {
             inherited.clone()
         } else {
-            ctx.styler
-                .style_of(&element, &inherited, state, inline.as_ref(), &chain)
+            ctx.styler.style_of(
+                &element,
+                &inherited,
+                state,
+                inline.as_ref(),
+                &chain,
+                &element_state,
+            )
         };
         // ADR 0029: the children's inherited base is this element's fresh
         // computed style; it changed when it differs from the cached
@@ -4650,8 +4794,16 @@ fn collect_node(
         // ADR 0029: whether a pseudo-referencing selector could match this
         // element — its own style (and, for containers, anything inside
         // it) may change on a flip.
-        let own_reactive = ctx.styler.pseudo_reactive(&element, &chain);
-        let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), &chain);
+        let own_reactive =
+            ctx.styler
+                .pseudo_reactive(&element, &chain, &element_state);
+        let mut boxed = ctx.styler.box_of(
+            &element,
+            state,
+            inline.as_ref(),
+            &chain,
+            &element_state,
+        );
         // ADR 0027: the tag's list-marker default for this element's
         // *children*, before `element` moves into the container's `Open`
         // (the marker reads the parent's kind, carried by the task — an
@@ -4802,15 +4954,26 @@ fn collect_node(
                     })));
                 }
                 let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
+                    // ADR 0028: the fragment's top-level elements' positions
+                    // (the fragment is the translation's own document).
+                    let nodes: Vec<tl::NodeHandle> = nodes.iter().copied().collect();
+                    let positions = sibling_positions(&nodes, &fragment.parser);
                     for node in nodes {
+                        let position = positions
+                            .get(&node)
+                            .map(|state| {
+                                (state.tag_index, state.tag_count, state.type_index, state.type_count)
+                            })
+                            .unwrap_or((0, 0, 0, 0));
                         collect_node(
                             fragment,
-                            *node,
+                            node,
                             &style,
                             items,
                             child_chain.clone(),
                             grid_of_own.as_ref(),
                             depth + 1,
+                            position,
                         );
                     }
                     // The fragment's inline-var names feed the parent's
@@ -4824,6 +4987,9 @@ fn collect_node(
                     // Reversed: the leftmost child pops first.
                     let children: Vec<tl::NodeHandle> =
                         tag.children().top().iter().copied().collect();
+                    // ADR 0028: each child's position among the parent's
+                    // element children (the `:nth-child` inputs).
+                    let positions = sibling_positions(&children, &ctx.parser);
                     // ADR 0027: the list's marker state (computed above:
                     // the computed `list-style-type`, with the UA-sheet
                     // tag default) and each `li` child's 1-based position.
@@ -4851,11 +5017,16 @@ fn collect_node(
                             inherited: style.clone(),
                             chain: child_chain.clone(),
                             grid: grid_of_own.clone(),
-                            depth: depth + 1,
+                                            depth: depth + 1,
                             inherited_changed: children_inherited_changed,
                             ancestor_flipped: child_ancestor_flipped,
                             li_index: index,
                             list_kind: child_list_kind,
+                            position: positions
+                                .get(&child)
+                                .map_or((0, 0, 0, 0), |state| {
+                                    (state.tag_index, state.tag_count, state.type_index, state.type_count)
+                                }),
                         });
                     }
                 }
@@ -4980,14 +5151,17 @@ fn push_content_runs(
     reactive: &mut bool,
 ) {
     let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
+        let nodes: Vec<tl::NodeHandle> = nodes.iter().copied().collect();
+        let positions = sibling_positions(&nodes, &fragment.parser);
         run_walk(
             fragment,
-            nodes.iter().copied(),
+            nodes.into_iter(),
             style,
             &extras,
             runs,
             Rc::new(chain[..].to_vec()),
             reactive,
+            &positions,
         );
         // The fragment's inline-var names feed the parent's accumulator
         // (review_0003 G30): translations rebuild only when a tracked
@@ -4998,14 +5172,17 @@ fn push_content_runs(
         }
     });
     if !translated {
+        let children: Vec<tl::NodeHandle> = tag.children().top().iter().copied().collect();
+        let positions = sibling_positions(&children, &ctx.parser);
         run_walk(
             ctx,
-            tag.children().top().iter().copied(),
+            children.into_iter(),
             style,
             &extras,
             runs,
             chain,
             reactive,
+            &positions,
         );
     }
 }
@@ -5023,6 +5200,7 @@ fn run_walk<'a>(
     runs: &mut Vec<Run>,
     chain: Rc<Vec<Ancestor>>,
     reactive: &mut bool,
+    positions: &HashMap<tl::NodeHandle, ElementState>,
 ) {
     // The chain is shared (an Rc clone is O(1)); the depth caps how deep
     // the chain grows — inline nesting used to be uncapped, and every
@@ -5030,14 +5208,18 @@ fn run_walk<'a>(
     // (20k nested `<b>` cost ~4×10⁸ ancestor copies, review_0003 G06).
     // Past MAX_DOM_DEPTH the text is kept, the ancestor contribution
     // stops — the same rule as the block walk.
-    let mut stack: Vec<(tl::NodeHandle, Style, RunExtras, Rc<Vec<Ancestor>>, usize)> = roots
-        .into_iter()
-        .map(|handle| (handle, style.clone(), extras.clone(), chain.clone(), 0))
-        .collect();
+    let mut stack: Vec<(tl::NodeHandle, Style, RunExtras, Rc<Vec<Ancestor>>, usize, ElementState)> =
+        roots
+            .into_iter()
+            .map(|handle| {
+                let state = positions.get(&handle).copied().unwrap_or_default();
+                (handle, style.clone(), extras.clone(), chain.clone(), 0, state)
+            })
+            .collect();
     // Reversed: the last entry pops first, so the first root (and, in the
     // tag arm, the leftmost child) is visited first.
     stack.reverse();
-    while let Some((handle, style, extras, chain, depth)) = stack.pop() {
+    while let Some((handle, style, extras, chain, depth, element_state)) = stack.pop() {
         match handle.get(ctx.parser) {
             Some(tl::Node::Raw(text)) => {
                 let text = decode_entities(&text.as_utf8_str());
@@ -5098,22 +5280,40 @@ fn run_walk<'a>(
                     // The run's size styles from the image's CSS — reactive
                     // to a flip like any other run (ADR 0029).
                     if let Some(element) = &element {
-                        *reactive |= ctx.styler.pseudo_reactive(element, &chain);
+                        *reactive |=
+                            ctx.styler
+                                .pseudo_reactive(element, &chain, &ElementState::default());
                     }
-                    push_image_run(ctx, tag, &element, state, &style, extras, runs, &chain);
+                    push_image_run(
+                        ctx,
+                        tag,
+                        &element,
+                        state,
+                        &style,
+                        extras,
+                        runs,
+                        &chain,
+                        &element_state,
+                    );
                     continue;
                 }
                 // An unmatched `data-l10n-name` element is plain text.
                 let style = match &element {
                     Some(element) => {
                         let inline = cascade::inline_style(tag);
-                        let styled =
-                            ctx.styler
-                                .style_of(element, &style, state, inline.as_ref(), &chain);
+                        let styled = ctx.styler.style_of(
+                            element,
+                            &style,
+                            state,
+                            inline.as_ref(),
+                            &chain,
+                            &element_state,
+                        );
                         // ADR 0029: the run carries this element's style —
                         // the owning block re-cascades on a flip when the
                         // element could react to one.
-                        *reactive |= ctx.styler.pseudo_reactive(element, &chain);
+                        *reactive |=
+                            ctx.styler.pseudo_reactive(element, &chain, &element_state);
                         styled
                     }
                     None => style,
@@ -5126,7 +5326,7 @@ fn run_walk<'a>(
                     .and_then(|element| {
                         let inline = cascade::inline_style(tag);
                         ctx.styler
-                            .run_extras(element, state, inline.as_ref(), &chain)
+                            .run_extras(element, state, inline.as_ref(), &chain, &element_state)
                     })
                     .map(|extras| extras.faded(style.opacity))
                     .unwrap_or(extras);
@@ -5165,14 +5365,17 @@ fn run_walk<'a>(
                 // the leftmost subtree: the same depth-first document order
                 // the recursion visited.
                 let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
+                    let nodes: Vec<tl::NodeHandle> = nodes.iter().copied().collect();
+                    let nested = sibling_positions(&nodes, &fragment.parser);
                     run_walk(
                         fragment,
-                        nodes.iter().copied(),
+                        nodes.into_iter(),
                         &style,
                         &extras,
                         runs,
                         child_chain.clone(),
                         reactive,
+                        &nested,
                     );
                     // The fragment's inline-var names feed the parent's
                     // accumulator: translations rebuild only when a tracked
@@ -5186,13 +5389,17 @@ fn run_walk<'a>(
                 if !translated {
                     let children: Vec<tl::NodeHandle> =
                         tag.children().top().iter().copied().collect();
+                    let child_positions = sibling_positions(&children, &ctx.parser);
                     for child in children.into_iter().rev() {
+                        let child_state =
+                            child_positions.get(&child).copied().unwrap_or_default();
                         stack.push((
                             child,
                             style.clone(),
                             extras.clone(),
                             child_chain.clone(),
                             depth + 1,
+                            child_state,
                         ));
                     }
                 }
@@ -5211,6 +5418,9 @@ fn push_runs(
     chain: Rc<Vec<Ancestor>>,
     reactive: &mut bool,
 ) {
+    // The root's own position (a text node has none; its children's
+    // positions compute in the walk).
+    let positions = sibling_positions(&[handle], &ctx.parser);
     run_walk(
         ctx,
         std::iter::once(handle),
@@ -5219,6 +5429,7 @@ fn push_runs(
         runs,
         chain,
         reactive,
+        &positions,
     );
 }
 
@@ -5291,10 +5502,11 @@ fn push_image_run(
     extras: RunExtras,
     runs: &mut Vec<Run>,
     ancestors: &[Ancestor],
+    element_state: &ElementState,
 ) {
     let Some(image) = element
         .as_ref()
-        .and_then(|element| ctx.styler.image_of(tag, element, state, ancestors))
+        .and_then(|element| ctx.styler.image_of(tag, element, state, ancestors, element_state))
     else {
         return;
     };
