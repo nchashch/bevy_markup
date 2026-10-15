@@ -201,18 +201,62 @@ fn navigate(
     }
 }
 
+/// The entity's (global, local) z-order, for picking the topmost modal: a
+/// missing component counts as 0, like the library's `active_modal` (both
+/// were required, and most roots have no `GlobalZIndex`, so every modal
+/// tied and the last one iterated won — review_0003 G40).
+fn z_order(entity: Entity, global: &Query<&GlobalZIndex>, local: &Query<&ZIndex>) -> (i32, i32) {
+    (
+        global.get(entity).map_or(0, |z| z.0),
+        local.get(entity).map_or(0, |z| z.0),
+    )
+}
+
+/// Whether `entity` shows: the nearest ancestor-or-self with an explicit
+/// `Visibility` decides (`Inherited` defers to the parent), as Bevy's
+/// visibility propagation and the library's focus scope read it.
+fn shown(entity: Entity, visibility: &Query<&Visibility>, parents: &Query<&ChildOf>) -> bool {
+    for ancestor in std::iter::once(entity).chain(parents.iter_ancestors(entity)) {
+        match visibility.get(ancestor) {
+            Ok(Visibility::Hidden) => return false,
+            Ok(Visibility::Visible) => return true,
+            _ => {}
+        }
+    }
+    true
+}
+
+/// The roots the linear walk visits, in order — the library's
+/// `active_modal` rule: hidden and `HtmlNoFocus` roots are skipped, and an
+/// open modal (the visible one, topmost by z-order) confines the walk to
+/// its subtree.
+fn walk_roots(
+    roots: impl Iterator<Item = Entity>,
+    no_focus_roots: &Query<(), With<HtmlNoFocus>>,
+    modals: &Query<(), With<HtmlModal>>,
+    visibility: &Query<&Visibility>,
+    parents: &Query<&ChildOf>,
+    global_z: &Query<&GlobalZIndex>,
+    z_index: &Query<&ZIndex>,
+) -> Vec<Entity> {
+    let candidates: Vec<Entity> = roots
+        .filter(|&root| !no_focus_roots.contains(root) && shown(root, visibility, parents))
+        .collect();
+    let modal = candidates
+        .iter()
+        .copied()
+        .filter(|&root| modals.contains(root))
+        .max_by_key(|&root| z_order(root, global_z, z_index));
+    match modal {
+        Some(modal) => vec![modal],
+        None => candidates,
+    }
+}
+
 /// [`ArrowMode::Linear`]: left/right step through the focusable elements in
 /// document order (a depth-first walk of the top-level UI roots), stopping
 /// at the ends, and show the focus ring like navigating does.
 #[allow(clippy::too_many_arguments)]
-/// The entity's (global, local) z-order, for picking the topmost modal.
-fn z_order(entity: Entity, global: &Query<&GlobalZIndex>, local: &Query<&ZIndex>) -> Option<(i32, i32)> {
-    Some((
-        global.get(entity).ok()?.0,
-        local.get(entity).ok()?.0,
-    ))
-}
-
 fn step_linear(
     time: Res<Time>,
     arrows: Arrows,
@@ -233,46 +277,15 @@ fn step_linear(
     if step == 0 {
         return;
     }
-    // Which subtrees participate: `HtmlNoFocus` roots are skipped
-    // entirely; an open `HtmlModal` confines the walk to its subtree.
-    // An open modal confines the walk: the *visible* one, topmost by
-    // z-order (the same rule the library's `active_modal` uses — a
-    // hidden modal must not capture the walk, and the topmost wins when
-    // several are open).
-    let visible_modal = |root: Entity| -> bool {
-        if !modals.contains(root) {
-            return false;
-        }
-        let mut visible = true;
-        let mut current = Some(root);
-        while let Some(entity) = current {
-            match visibility.get(entity) {
-                Ok(Visibility::Hidden) => {
-                    visible = false;
-                    break;
-                }
-                _ => current = parents.get(entity).ok().map(|parent| parent.0),
-            }
-        }
-        visible
-    };
-    let topmost: Vec<Entity> = {
-        let all: Vec<Entity> = roots.iter().collect();
-        let modal = all
-            .iter()
-            .copied()
-            .filter(|&root| visible_modal(root))
-            .max_by_key(|&root| {
-                z_order(root, &global_z, &z_index).unwrap_or((0, 0))
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
-        if modal.is_empty() {
-            all.into_iter().filter(|root| !no_focus_roots.contains(*root)).collect()
-        } else {
-            modal
-        }
-    };
+    let topmost = walk_roots(
+        roots.iter(),
+        &no_focus_roots,
+        &modals,
+        &visibility,
+        &parents,
+        &global_z,
+        &z_index,
+    );
     let mut order = Vec::new();
     for root in &topmost {
         let mut stack = vec![*root];
@@ -317,5 +330,52 @@ fn activate(
     };
     if let Some(input) = activation {
         focus.activate(input);
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// The topmost modal is chosen by z-order with a missing component as 0
+    /// (review_0003 G40: requiring both made every modal without a
+    /// `GlobalZIndex` tie, so the last one iterated won), and a hidden or
+    /// `HtmlNoFocus` root never captures the walk.
+    #[test]
+    fn linear_walk_confines_to_the_topmost_visible_modal() {
+        let mut world = World::new();
+        let low = world.spawn((HtmlModal, ZIndex(10))).id();
+        let high = world.spawn((HtmlModal, ZIndex(20))).id();
+        let plain = world.spawn_empty().id();
+        let hidden = world.spawn((HtmlModal, ZIndex(30), Visibility::Hidden)).id();
+        let no_focus = world.spawn((HtmlModal, ZIndex(40), HtmlNoFocus)).id();
+        let walk = |world: &mut World, roots: Vec<Entity>| {
+            world
+                .run_system_once(
+                    move |no_focus_roots: Query<(), With<HtmlNoFocus>>,
+                          modals: Query<(), With<HtmlModal>>,
+                          visibility: Query<&Visibility>,
+                          parents: Query<&ChildOf>,
+                          global_z: Query<&GlobalZIndex>,
+                          z_index: Query<&ZIndex>| {
+                        walk_roots(
+                            roots.clone().into_iter(),
+                            &no_focus_roots,
+                            &modals,
+                            &visibility,
+                            &parents,
+                            &global_z,
+                            &z_index,
+                        )
+                    },
+                )
+                .unwrap()
+        };
+        // Either iteration order: z 20 wins, whatever comes last.
+        assert_eq!(walk(&mut world, vec![high, low, plain, hidden, no_focus]), vec![high]);
+        assert_eq!(walk(&mut world, vec![no_focus, hidden, plain, high, low]), vec![high]);
+        // No visible modal: every shown, focus-taking root participates.
+        assert_eq!(walk(&mut world, vec![plain, hidden, no_focus]), vec![plain]);
     }
 }

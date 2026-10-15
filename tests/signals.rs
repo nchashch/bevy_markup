@@ -1279,6 +1279,79 @@ fn plain_button_outside_a_form_does_not_swallow_the_wrapper_click() {
     );
 }
 
+/// Clicks the element with `id` and returns the drained signals.
+fn click_id(ui: &mut TestUi, id: &str) -> Vec<ElementSignal> {
+    let entity = {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement)>();
+        elements
+            .iter(world)
+            .find(|(_, element)| element.id.as_deref() == Some(id))
+            .map(|(entity, _)| entity)
+            .unwrap_or_else(|| panic!("{id}"))
+    };
+    let at = node_rect(ui.world_mut(), entity).expect("laid out").center();
+    ui.click_at(at);
+    ui.take_signals()
+}
+
+/// An empty (or blank) `data-on-submit` binds nothing, so its buttons are
+/// not submit buttons: a click reaches the enclosing wrapper (review_0003
+/// G12: the button was marked, counted as bound, and swallowed the click
+/// while emitting nothing).
+#[test]
+fn an_empty_submit_hook_does_not_swallow_clicks() {
+    for hook in ["", "  "] {
+        let page = format!(
+            r#"<div id="wrap" data-on-click="wrap"><form data-on-submit="{hook}"><button id="go">Go</button></form></div>"#
+        );
+        let mut ui = page_ui(
+            "empty-submit",
+            &page,
+            "button { height: 24px; width: 100px }",
+            TemplateContext::new(),
+        );
+        ui.settle();
+        ui.update(1);
+        let signals = click_id(&mut ui, "go");
+        assert!(
+            signals.iter().any(|signal| signal.name.as_ref() == "wrap"),
+            "{hook:?}: the wrapper's click was swallowed: {signals:?}"
+        );
+    }
+}
+
+/// HTML's `<button type>` defaults to `submit` for a missing *and* an
+/// invalid value: only `button` and `reset` don't submit (review_0003
+/// G16: a misspelt `type` did nothing).
+#[test]
+fn invalid_button_types_submit() {
+    for (kind, submits) in [
+        ("sbumit", true),
+        ("", true),
+        ("SUBMIT", true),
+        ("reset", false),
+        ("Button", false),
+    ] {
+        let page = format!(
+            r#"<form data-on-submit="send"><button type="{kind}" id="go">Go</button></form>"#
+        );
+        let mut ui = page_ui(
+            "button-types",
+            &page,
+            "button { height: 24px; width: 100px }",
+            TemplateContext::new(),
+        );
+        ui.settle();
+        ui.update(1);
+        let signals = click_id(&mut ui, "go");
+        let submitted = signals
+            .iter()
+            .any(|signal| signal.trigger == SignalTrigger::Submit);
+        assert_eq!(submitted, submits, "type={kind:?}: {signals:?}");
+    }
+}
+
 /// Activation (Enter / gamepad A) on a submit button submits the form,
 /// with the activation as the signal source.
 #[test]

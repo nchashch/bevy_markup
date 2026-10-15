@@ -65,9 +65,11 @@ jobs:
       # features and skipped by --all-targets.
       - name: Gated examples compile
         run: cargo check --examples --features hot-reload,dev-tools,text-input
-      # Example `#[cfg(test)]` modules (the hot-reload palette's
-      # round trip through the committed stylesheet) don't run under
-      # plain `cargo test` or `cargo check --examples`.
+      # Example `#[cfg(test)]` modules run under plain `cargo test` only
+      # for examples marked `test = true` in Cargo.toml (grid-names, which
+      # also runs the shared input module's tests). hot-reload needs its
+      # feature (the palette's round trip through the committed
+      # stylesheet), so it runs here.
       - name: Example unit tests
         run: cargo test --example hot-reload --features hot-reload
       - name: Fuzz harness unit tests

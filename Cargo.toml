@@ -136,6 +136,13 @@ harness = false
 name = "hot-reload"
 required-features = ["hot-reload"]
 
+# Its `#[cfg(test)]` module (the board's content checks, plus the shared
+# input module's) runs under plain `cargo test` — examples are built but
+# not tested by default, so it never ran in CI (review_0003 R64).
+[[example]]
+name = "grid-names"
+test = true
+
 # fluent-syntax from the fork with fixes for two bugs reachable from any FTL
 # asset (docs/agents/bugs/UPSTREAM.md U1, U2): a panic on an invalid unicode
 # escape before a multi-byte character, and a stack overflow on deeply nested

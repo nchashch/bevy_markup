@@ -173,23 +173,6 @@ impl TestUi {
             ImagePlugin::default(),
             BevyMarkupPlugin,
         ));
-        // The text-input widget's systems read picking state and messages;
-        // register them headlessly (the full picking plugins would run
-        // systems that keep the build from settling without a camera).
-        // Gated: with them present, the hover-driven systems engage in
-        // every test, changing when builds restyle.
-        #[cfg(feature = "text-input")]
-        {
-            // Only what the widget's systems read (autoscroll needs
-            // `PointerState`, the IME path reads the messages); NOT the
-            // `HoverMap` — with it present, the hover/pseudo systems engage
-            // in every headless test, overwriting direct `PseudoState`
-            // inserts. The hover tests inject their own maps.
-            app.init_resource::<bevy::picking::events::PointerState>()
-                .add_message::<bevy::picking::events::PointerRelease>()
-                .add_message::<bevy::picking::events::PointerPress>()
-                .add_message::<bevy::picking::events::PointerMove>();
-        }
         // bevy_render normally registers the image loader.
         app.register_asset_loader(ImageLoader::new(CompressedImageFormats::empty()))
             .init_resource::<Builds>()

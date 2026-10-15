@@ -9,7 +9,9 @@
 | Findings | verdicts on review_0002's `F01`–`F43` (partial, see Coverage); new defects `G01`… (stable ids) |
 | Discovery agent | omp session, `anthropic/claude-opus-5-5:high` |
 
-Nothing in this review is fixed yet.
+Status: the G-series fix session (`aa12dd6..4776aea`) and its audit,
+[review_0004](review_0004.md), whose own fix session closed the rest —
+see review_0004's **Fix session** section for every item's outcome.
 
 ## Coverage — read this first
 

@@ -131,7 +131,29 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0102](bug_0102.md) | The ancestor chain was cloned per child; inline nesting was uncapped and quadratic | `src/build.rs` (Ancestor, run_walk) | medium | fixed (`944e8fa`) | review_0003 (G05+G06) |
 | [bug_0103](bug_0103.md) | Code inside a `{% raw %}` block rendered as brace garbage | `src/md.rs` (rewrite) | medium | fixed (`bde26f8`) | review_0003 (G07) |
 | [bug_0104](bug_0104.md) | A skipped custom URL shifted the stylesheet's image pairing | `src/style.rs` | medium | fixed (`bc01dc5`) | review_0003 (G09) |
-| [bug_0105](bug_0105.md) | The `fuzzing` feature stopped compiling after the `Ancestor` rework | `src/fuzz.rs` | low | fixed | manual fuzz sweep |
+| [bug_0105](bug_0105.md) | The `fuzzing` feature stopped compiling after the `Ancestor` rework | `src/fuzz.rs` | high | fixed (`ce19a69`) | manual fuzz sweep; review_0004 (H01) |
+| [bug_0106](bug_0106.md) | Nested style rules still overflowed lightningcss's parser and aborted the app | `src/cascade.rs`, `src/style.rs` | high | fixed (uncommitted) | review_0004 (H02) |
+| [bug_0107](bug_0107.md) | Fluent string args forged links and images on the Markdown per-value path | `src/l10n.rs` | medium | fixed (uncommitted) | review_0004 (H03) |
+| [bug_0108](bug_0108.md) | The Markdown template scanners' code rules disagreed with CommonMark | `src/md.rs`, `src/template.rs` | medium | fixed (uncommitted) | review_0004 (H04), review_0003 (G17, G18) |
+| [bug_0109](bug_0109.md) | Debug prints shipped in library code | `src/md.rs`, `src/template.rs` | medium | fixed (uncommitted) | review_0004 (H05) |
+| [bug_0110](bug_0110.md) | calc() on a direct child of a top-level HtmlUi root never resolved | `src/build.rs` | medium | fixed (uncommitted) | review_0004 (H07) |
+| [bug_0111](bug_0111.md) | Viewport units in a nested calc() measured the root's box, not the viewport | `src/build.rs` | low | fixed (uncommitted) | review_0004 (H08) |
+| [bug_0112](bug_0112.md) | A root's calc() used the last camera when none was marked | `src/build.rs` | medium | fixed (uncommitted) | review_0003 (G10) |
+| [bug_0113](bug_0113.md) | text-input headless apps panicked on the first update (PointerState) | `src/lib.rs` | medium | fixed (uncommitted) | review_0003 (G11) |
+| [bug_0114](bug_0114.md) | An empty data-on-submit made its buttons swallow clicks | `src/build.rs` | low | fixed (uncommitted) | review_0003 (G12) |
+| [bug_0115](bug_0115.md) | An invalid `<button type>` didn't submit | `src/build.rs` | low | fixed (uncommitted) | review_0003 (G16) |
+| [bug_0116](bug_0116.md) | An invalid `<input type>` built no field | `src/build.rs` | low | fixed (uncommitted) | review_0003 (G36) |
+| [bug_0117](bug_0117.md) | A var() cycle invalidated only the reference closing it | `src/cascade.rs` | low | fixed (uncommitted) | review_0002 (F25) |
+| [bug_0118](bug_0118.md) | Content could load assets from network sources | `src/template.rs`, `src/l10n.rs`, `src/nine_slice.rs`, `src/style.rs` | low | fixed (uncommitted) | review_0003 (G19) |
+| [bug_0119](bug_0119.md) | The documented data-l10n-args pattern allowed argument injection | README, docs, examples | low | fixed (uncommitted) | review_0003 (G20) |
+| [bug_0120](bug_0120.md) | Unbounded repetition driven by content | `src/l10n.rs`, `src/custom_elements.rs`, `src/build.rs` | low | fixed (uncommitted) | review_0003 (G22) |
+| [bug_0121](bug_0121.md) | A grid track count could wrap on 32-bit targets | `src/cascade.rs` | low | fixed (uncommitted) | review_0003 (G38) |
+| [bug_0122](bug_0122.md) | The examples' linear navigation picked the last modal, not the topmost | `examples/shared/input.rs` | low | fixed (uncommitted) | review_0003 (G40, G41) |
+| [bug_0123](bug_0123.md) | Esc in the menu's Reset dialog sent focus to Volume | `examples/menu/main.rs` | low | fixed (uncommitted) | review_0003 (G42) |
+| [bug_0124](bug_0124.md) | honggfuzz/test-fuzz scripts exited 0 after finding crashes | `scripts/` | low | fixed (uncommitted) | review_0003 (G43) |
+| [bug_0125](bug_0125.md) | Example unit tests (grid-names) never ran | `Cargo.toml`, CI | low | fixed (uncommitted) | review_0003 (R64) |
+| [bug_0126](bug_0126.md) | Indented Tera block bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0024) | review_0004 (H11) |
+| [bug_0127](bug_0127.md) | Indented raw HTML container bodies in Markdown templates rendered as code blocks | `src/md.rs` | medium | fixed (uncommitted; ADR 0025) | ADR 0024's open item |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -273,7 +295,8 @@ settle (rebuild observed) and the resulting dump to match a reference model.
     open — a documented deviation whose "no API" premise is FALSE, see
     the file). review_0003's G-series fixes are filed as bug_0088–
     bug_0104 (G01–G04, G08, G13–G15, G21, G26–G30, then G05+G06, G07,
-    G09 as bug_0102–bug_0104).
+    G09 as bug_0102–bug_0104). bug_0088–bug_0095 were listed here but
+    never committed; review_0004's fix session wrote them (H06).
   - **The F→fix mapping** (authoritative; review_0002's Status claimed a
     mapping existed here — it didn't):
     - Re-findings of an R finding or its test: F04→R01 (bug_0031/0036),
@@ -290,3 +313,22 @@ settle (rebuild observed) and the resulting dump to match a reference model.
       named in its subject), F04/F21/F41/F42 (test/CI work), F18/F19
       (bug_0079 class / ADR 0023), F24 (build.rs), G-series →
       review_0003.
+
+## Discovery session metadata: review_0004 and its fix session (2026-10-15)
+
+- **Review:** [review_0004](../reviews/review_0004.md) audited the G-fix
+  session (`4717e13..4776aea`) at `4776aea`: CI's exact commands in a
+  worktree, behaviour probes and guard reverts in a scratch worktree.
+- **Reports:** bug_0105 (H01, filed by the user's session that fixed it,
+  `glm-5.3-flash`), bug_0106–bug_0111 (H02–H05, H07, H08),
+  bug_0112–bug_0125 (G-series and F25/R64 findings review_0003 left
+  open), bug_0126 (H11, decided by the user: dedent, ADR 0024), bug_0127 (the
+  same for HTML containers, ADR 0025); bug_0088–bug_0095 written retroactively (H06).
+- **Discovery and fix agent:** Claude Code session, `claude-opus-5-5`
+  (same model for review and fixes). Each fix's regression test was
+  checked by reverting exactly that fix and watching the test fail,
+  except where a report says otherwise (bug_0095, bug_0109, bug_0121,
+  bug_0123, bug_0124).
+- **Machine/toolchain:** as for review_0003 (Arch Linux, rustc 1.98.1,
+  Bevy 0.20.0).
+

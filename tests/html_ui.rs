@@ -464,6 +464,143 @@ html-ui
     );
 }
 
+/// A stylesheet that nests style rules thousands deep fails its load
+/// like unparseable CSS instead of overflowing lightningcss's recursive
+/// parser on the loader thread (review_0004 H02: ~1000 nested `a {`,
+/// 3 KB, aborted the whole process — the nesting pre-scan counted only
+/// parentheses).
+#[test]
+fn deeply_nested_style_rules_fail_the_load_instead_of_aborting() {
+    let sheet = format!("p {{ color: #ff0000; {} }}", "a {".repeat(20_000));
+    let mut ui = TestUi::new(
+        "nested_rules_css",
+        &[("page.html", "<p>Text</p>"), ("style.css", sheet.as_str())],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "Text" default 16px #ffffff
+"#,
+    );
+}
+
+/// Content can't reach Bevy's network asset sources (review_0003 G19): a
+/// remote `border-image` is skipped (the rest of the sheet applies — it
+/// used to be loaded, and its failed dependency kept the sheet from ever
+/// resolving), and a Fluent manifest naming a remote resource fails.
+#[test]
+fn remote_asset_sources_are_refused() {
+    let mut ui = TestUi::new(
+        "remote_sources",
+        &[
+            ("page.html", "<p>Text</p>"),
+            (
+                "style.css",
+                r#"html { color: #ff0000; border-image: url("https://evil.example/f.png") 4 stretch }"#,
+            ),
+            (
+                "locales/en-US/remote.ftl.ron",
+                r#"(locale: "en-US", resources: ["https://evil.example/ui.ftl"])"#,
+            ),
+        ],
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    let remote_bundle = ui.load::<bevy_markup::prelude::LocaleBundle>("locales/en-US/remote.ftl.ron");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  p
+    "Text" default 16px #ff0000
+"#,
+    );
+    let server = ui.world_mut().resource::<AssetServer>().clone();
+    for _ in 0..200 {
+        if server.load_state(remote_bundle.id()).is_failed() {
+            break;
+        }
+        ui.update(1);
+    }
+    assert!(server.load_state(remote_bundle.id()).is_failed());
+}
+
+/// `data-l10n-args` built by Tera as a map literal is JSON with its
+/// strings escaped: a value can't add arguments (review_0003 G20 — the
+/// documented `'{"name": "{{ player }}"}'` splice let a name holding `"`
+/// inject `"extra": …` once the entities were decoded).
+#[test]
+fn map_literal_args_cannot_be_injected() {
+    let mut ui = TestUi::new(
+        "args-injection",
+        &[
+            (
+                "page.html",
+                r#"<p data-l10n-id="greet" data-l10n-args='{{ {"name": player} }}'>x</p>"#,
+            ),
+            (
+                "locales/en-US/main.ftl.ron",
+                r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+            ),
+            ("locales/en-US/ui.ftl", "greet = Hi { $name }!"),
+        ],
+    )
+    .locale("locales/en-US/main.ftl.ron")
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("player", r#"Ada", "extra": "INJECTED"#),
+        Node::default(),
+    );
+    let dump = ui.settle().dump();
+    // The whole value is the name (an injection would cut it at `Ada`).
+    assert!(dump.contains("INJECTED!"), "the value was split into arguments: {dump}");
+}
+
+/// A Markdown template may indent its Tera blocks for readability: the
+/// indented page builds exactly what its flat twin builds (review_0004
+/// H11: the indented bodies rendered as code blocks).
+#[test]
+fn indented_markdown_templates_build_like_flat_ones() {
+    let flat = "# Party\n\n{% for unit in units %}\n{% if unit.hp > 0 %}\n- **{{ unit.name }}** is up\n{% else %}\n- *{{ unit.name }}* is down\n{% endif %}\n{% endfor %}\n\nEnd of list.\n";
+    let indented = "# Party\n\n{% for unit in units %}\n    {% if unit.hp > 0 %}\n        - **{{ unit.name }}** is up\n    {% else %}\n        - *{{ unit.name }}* is down\n    {% endif %}\n{% endfor %}\n\nEnd of list.\n";
+    let context = || {
+        TemplateContext::new().with(
+            "units",
+            &serde_json::json!([{"name": "Ada", "hp": 3}, {"name": "Brin", "hp": 0}]),
+        )
+    };
+    let dump = |name: &str, page: &str| {
+        TestUi::new(name, &[("page.md", page)])
+            .spawn("page.md", context(), Node::default())
+            .settle()
+            .dump()
+    };
+    let flat_dump = dump("md-flat", flat);
+    assert!(flat_dump.contains("Ada is up") && flat_dump.contains("Brin is down"), "{flat_dump}");
+    assert!(!flat_dump.contains("pre"), "{flat_dump}");
+    assert_eq!(dump("md-indented", indented), flat_dump);
+}
+
+/// Raw HTML containers in a Markdown template may indent their bodies too:
+/// the indented page builds what its flat twin builds (an indented `<div>`
+/// body after a blank line rendered as a code block).
+#[test]
+fn indented_html_containers_in_markdown_build_like_flat_ones() {
+    let flat = "<div class=\"card\">\n\n## Quest\n\nFind the **cat**.\n\n- north\n- east\n\n</div>\n";
+    let indented = "<div class=\"card\">\n\n    ## Quest\n\n    Find the **cat**.\n\n    - north\n    - east\n\n</div>\n";
+    let dump = |name: &str, page: &str| {
+        TestUi::new(name, &[("page.md", page)])
+            .spawn("page.md", TemplateContext::new(), Node::default())
+            .settle()
+            .dump()
+    };
+    let flat_dump = dump("md-div-flat", flat);
+    assert!(flat_dump.contains("h2") && flat_dump.contains("east"), "{flat_dump}");
+    assert_eq!(dump("md-div-indented", indented), flat_dump);
+}
+
 /// Runtime: mutating `TemplateContext` re-renders, switching `ActiveLocale`
 /// re-localizes, swapping `DefaultStylesheet` restyles — and dropping the
 /// `html` rule's box properties restores the app's own `Node` values.
@@ -716,8 +853,9 @@ fn reuse_with_inline_vars_forces_no_extra_restyles() {
             events.restyled += 1
         },
     );
-    // One content change: one build, at most one restyle (the reverted
-    // union produced built +1 restyled +2 per change).
+    // One content change: one build and no restyle (the reverted union
+    // produced built +1 restyled +2 per change; a skeleton-stripped twin
+    // restyles 0 times too — review_0004 H10 tightened `<= 1`).
     *reused.world_mut().resource_mut::<Events>() = Events::default();
     for ui in [&mut reused, &mut fresh] {
         let root = ui.root();
@@ -730,7 +868,7 @@ fn reuse_with_inline_vars_forces_no_extra_restyles() {
     fresh.settle();
     let events = reused.world_mut().resource::<Events>();
     assert!(
-        events.restyled <= 1,
+        events.restyled == 0,
         "spurious restyles: built={} restyled={}",
         events.built,
         events.restyled
@@ -2806,6 +2944,32 @@ html-ui
     );
 }
 
+/// HTML's `<input type>` defaults to `text` for a missing *and* an
+/// invalid value; only the other known types build no field
+/// (review_0003 G36: `type=""` and a misspelt type built nothing).
+#[cfg(feature = "text-input")]
+#[test]
+fn invalid_input_types_are_text_fields() {
+    for (kind, field) in [
+        ("", true),
+        ("txet", true),
+        ("TEXT", true),
+        ("checkbox", false),
+        ("Password", false),
+    ] {
+        let page = format!(r#"<input type="{kind}" value="v">"#);
+        let mut ui = TestUi::new("input-types", &[("page.html", page.as_str())])
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        ui.update(10);
+        let world = ui.world_mut();
+        let fields = world
+            .query::<&bevy::ui_widgets::TextInput>()
+            .iter(world)
+            .count();
+        assert_eq!(fields == 1, field, "type={kind:?}");
+    }
+}
+
 /// `type` values are ASCII case-insensitive (HTML enumerated attributes):
 /// `type="Text"` builds a field.
 #[cfg(feature = "text-input")]
@@ -3074,6 +3238,113 @@ fn root_calc_applies_and_stops() {
         Val::Auto,
         "the dropped calc() kept overwriting the width"
     );
+}
+
+/// `calc()` on a direct child of a top-level root resolves (review_0004
+/// H07: the pass required the parent to have a parent of its own, so
+/// every root-level element's `calc()` stayed at its `Auto` placeholder
+/// — containers, blocks and stylesheet rules alike).
+#[test]
+fn calc_resolves_on_direct_children_of_a_top_level_root() {
+    let page = r#"<div id="div" style="width: calc(50% - 10px); height: 5px"></div>
+        <p id="p" style="width: calc(50vw - 10px)">x</p><p id="rule" class="half">x</p>"#;
+    let mut ui = TestUi::with_layout(
+        "calc-root-children",
+        &[("page.html", page), ("style.css", ".half { width: calc(25% + 10px) }")],
+        UVec2::new(400, 300),
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new(),
+        Node {
+            width: Val::Px(400.0),
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+    );
+    ui.settle();
+    ui.update(3);
+    let root = ui.root();
+    let world = ui.world_mut();
+    for (id, width) in [("div", 190.0), ("p", 190.0), ("rule", 110.0)] {
+        let element = element_by_id(world, root, id);
+        assert_eq!(world.get::<Node>(element).unwrap().width, Val::Px(width), "#{id}");
+    }
+}
+
+/// Viewport units in a nested element's mixed `calc()` measure the
+/// viewport, not the top-level root's box (review_0004 H08: under a
+/// 100px root in a 400px viewport, `calc(50vw - 10px)` was 40px while a
+/// plain `50vw` — Bevy's `Vw` — was 200px).
+#[test]
+fn viewport_units_in_nested_calc_measure_the_viewport() {
+    let page = r#"<div><p id="calc" style="width: calc(50vw - 10px)">x</p>
+        <p id="plain" style="width: 50vw">x</p></div>"#;
+    let mut ui = TestUi::with_layout("calc-vw-nested", &[("page.html", page)], UVec2::new(400, 300))
+        .spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node {
+                width: Val::Px(100.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        );
+    ui.settle();
+    ui.update(3);
+    let root = ui.root();
+    let world = ui.world_mut();
+    let calc = element_by_id(world, root, "calc");
+    let plain = element_by_id(world, root, "plain");
+    assert_eq!(world.get::<Node>(calc).unwrap().width, Val::Px(190.0));
+    let plain_width = common::node_rect(world, plain).unwrap().width();
+    assert_eq!(plain_width, 200.0, "the control: Bevy's own Vw");
+}
+
+/// Without any `IsDefaultUiCamera` marker, the root's calc viewport is
+/// the window camera Bevy UI renders with (`DefaultUiCamera`), not the
+/// last camera iterated (review_0003 G10: a minimap camera spawned after
+/// the UI camera made `calc(50% - 20px)` resolve to 30px, not 300px).
+#[test]
+fn root_calc_without_a_marked_camera_uses_the_window_camera() {
+    let mut ui = TestUi::with_pointer(
+        "root-calc-unmarked",
+        &[
+            ("page.html", "<p>x</p>"),
+            ("a.css", "html { width: calc(50% - 20px) }"),
+        ],
+        UVec2::new(640, 480),
+    )
+    .stylesheet("a.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    let world = ui.world_mut();
+    let marked = world
+        .query_filtered::<Entity, With<bevy::ui::IsDefaultUiCamera>>()
+        .single(world)
+        .unwrap();
+    world.entity_mut(marked).remove::<bevy::ui::IsDefaultUiCamera>();
+    world.spawn((
+        bevy::camera::Camera2d,
+        bevy::camera::Camera {
+            computed: bevy::camera::ComputedCameraValues {
+                target_info: Some(bevy::camera::RenderTargetInfo {
+                    physical_size: UVec2::new(100, 100),
+                    scale_factor: 1.0,
+                }),
+                ..default()
+            },
+            ..default()
+        },
+        bevy::camera::RenderTarget::None {
+            size: UVec2::new(100, 100),
+        },
+    ));
+    ui.settle();
+    ui.update(3);
+    let root = ui.root();
+    let width = ui.world_mut().get::<Node>(root).unwrap().width;
+    assert_eq!(width, Val::Px(300.0), "the minimap camera became the viewport");
 }
 
 /// A second camera without the `IsDefaultUiCamera` marker must not
@@ -5710,17 +5981,9 @@ fn update_without_finish_drives_the_focus_systems() {
     app.register_asset_loader(bevy::image::ImageLoader::new(
         bevy::image::CompressedImageFormats::empty(),
     ));
-    // The text-input feature's widget systems read these (the harness's
-    // recipe; without them the autoscroll system's `Res<PointerState>`
-    // fails validation).
-    #[cfg(feature = "text-input")]
-    {
-        use bevy::picking::events::{PointerMove, PointerPress, PointerRelease, PointerState};
-        app.init_resource::<PointerState>()
-            .add_message::<PointerRelease>()
-            .add_message::<PointerPress>()
-            .add_message::<PointerMove>();
-    }
+    // Nothing else: the plugin itself registers what the text-input
+    // widget's systems read (review_0003 G11: `PointerState` was missing,
+    // and the first update failed validation).
     app.update();
     // `HtmlFocus` is app-driven (`run_system_once`): its navigator's
     // params must validate without `finish()`.

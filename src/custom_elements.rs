@@ -102,11 +102,15 @@ pub(crate) fn dataset(tag: &tl::HTMLTag) -> std::collections::BTreeMap<String, S
         .collect()
 }
 
+/// How many distinct undefined `is=` names are warned about (and
+/// remembered) before further ones are ignored without a warning.
+const MAX_WARNED_NAMES: usize = 256;
+
 /// The defined element names and their systems.
 #[derive(Resource, Default)]
 pub(crate) struct CustomElements {
     systems: HashMap<String, SystemId<In<ElementConnected>>>,
-    /// Undefined names already logged.
+    /// Undefined names already logged, up to `MAX_WARNED_NAMES`.
     warned: HashSet<String>,
 }
 
@@ -118,11 +122,22 @@ pub(crate) fn connect(world: &mut World, connected: ElementConnected) {
         .and_then(|elements| elements.systems.get(&connected.name).copied())
     else {
         let mut elements = world.get_resource_or_init::<CustomElements>();
-        if elements.warned.insert(connected.name.clone()) {
-            warn!(
-                "html custom elements: is=\"{}\" isn't defined (define_html_element); ignored",
-                connected.name
-            );
+        // Bounded: content can name any number of undefined elements, and
+        // the set grew by one entry per name for the app's lifetime
+        // (review_0003 G22).
+        if elements.warned.len() < MAX_WARNED_NAMES {
+            if elements.warned.insert(connected.name.clone()) {
+                warn!(
+                    "html custom elements: is=\"{}\" isn't defined (define_html_element); ignored",
+                    connected.name
+                );
+                if elements.warned.len() == MAX_WARNED_NAMES {
+                    warn!(
+                        "html custom elements: {MAX_WARNED_NAMES} undefined names reported; \
+                         further ones are ignored silently"
+                    );
+                }
+            }
         }
         return;
     };
@@ -200,5 +215,26 @@ mod tests {
         assert!(parse(r#"<div data-icon="x"></div>"#).is_none());
         assert!(parse(r#"<div is="  "></div>"#).is_none());
         assert!(parse(r#"<div is></div>"#).is_none());
+    }
+
+    /// Undefined names are remembered (to warn once each) only up to a
+    /// bound: content naming thousands of distinct undefined elements no
+    /// longer grows the set for the app's lifetime (review_0003 G22).
+    #[test]
+    fn undefined_name_warnings_are_bounded() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        for index in 0..1000 {
+            connect(
+                &mut world,
+                ElementConnected {
+                    entity,
+                    root: entity,
+                    name: format!("undefined-{index}"),
+                    dataset: HashMap::default(),
+                },
+            );
+        }
+        assert_eq!(world.resource::<CustomElements>().warned.len(), MAX_WARNED_NAMES);
     }
 }

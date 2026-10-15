@@ -994,8 +994,8 @@ pub(crate) struct Ancestor {
     pub tag: String,
     pub id: Option<String>,
     pub classes: Vec<String>,
-    /// Whether this element is a form with a non-empty submit hook (the
-    /// build's submit-button check reads it).
+    /// Whether this element is a form whose `data-on-submit` names a
+    /// signal (the build's submit-button check reads it).
     pub submit: bool,
     pub pseudo: Pseudo,
 }
@@ -1676,9 +1676,9 @@ fn apply_resolved(
         variables,
         context: &context.unwrap_or(&|_| None),
         resolved: HashMap::new(),
-        resolving: HashSet::new(),
+        resolving: Vec::new(),
         budget: VAR_BUDGET,
-        cycle: false,
+        cyclic: HashSet::new(),
         depth: 0,
         depth_failure: false,
     };
@@ -1721,30 +1721,81 @@ const VAR_BUDGET: usize = 64 * 1024;
 /// sheets must not abort the render thread.
 const MAX_VAR_DEPTH: usize = 64;
 /// The nesting pre-scan's bound (see `nesting_over_limit`): far beyond
-/// any authored CSS, but a few thousand parens are rejected before
-/// lightningcss's own unbounded parser sees them.
+/// any authored CSS (a nested rule inside `@media` inside `@supports`
+/// with a `calc(min(…))` value is ~6), but a few thousand blocks are
+/// rejected before lightningcss's own unbounded parser sees them.
 const MAX_CSS_NESTING: usize = 32;
 
-/// Whether `text` nests parentheses (functions included) deeper than
-/// `limit`: lightningcss's parser recurses per parenthesis with no
-/// bound, so a few KB of `((((` abort the app at parse time — sheet
+/// Whether `text` nests blocks — `(…)` (functions included), `[…]` and
+/// `{…}` (nested style rules) — deeper than `limit`. lightningcss's
+/// parser recurses once per block with no bound, so a few KB of `((((`
+/// or of nested rules `a { a { …` abort the app at parse time; sheet
 /// sources, `style=` attributes and substituted `var()` values are
-/// scanned before it (review_0003 G08). Parens in string literals count
-/// too: a rejected text is dropped (the sheet fails, the attribute or
-/// declaration is dropped), which is the same outcome as unparseable.
+/// scanned before it (review_0003 G08, review_0004 H02).
+///
+/// The scan mirrors cssparser's block matching, so it can't undercount:
+/// a closer only closes a block of its own kind (a mismatched one is a
+/// plain token, as in cssparser), and closers inside strings, comments,
+/// escapes and unquoted `url(…)` tokens close nothing. Where it can't
+/// tell, it counts (an opener is always a block). A rejected text is
+/// dropped — the sheet fails, the attribute or declaration is dropped —
+/// the same outcome as unparseable CSS.
 pub(crate) fn nesting_over_limit(text: &str, limit: usize) -> bool {
-    let mut depth = 0usize;
-    for byte in text.bytes() {
-        match byte {
-            b'(' => {
-                depth += 1;
-                if depth > limit {
+    let bytes = text.as_bytes();
+    // The open blocks' closers, innermost last.
+    let mut open: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1,
+            quote @ (b'"' | b'\'') => {
+                // A string ends at its quote, or (unterminated) at a newline.
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote && bytes[i] != b'\n' {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i = text[i + 2..].find("*/").map_or(bytes.len(), |end| i + 2 + end + 1);
+            }
+            b'(' if i >= 3
+                && bytes[i - 3..i].eq_ignore_ascii_case(b"url")
+                && !bytes.get(i.wrapping_sub(4)).is_some_and(|&b| {
+                    b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b >= 0x80
+                })
+                && !text[i + 1..].trim_start().starts_with(['"', '\'']) =>
+            {
+                // An unquoted URL is one token up to its `)` (escapes
+                // included): nothing inside opens or closes a block.
+                i += 1;
+                while i < bytes.len() && bytes[i] != b')' {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            opener @ (b'(' | b'[' | b'{') => {
+                open.push(match opener {
+                    b'(' => b')',
+                    b'[' => b']',
+                    _ => b'}',
+                });
+                if open.len() > limit {
                     return true;
                 }
             }
-            b')' => depth = depth.saturating_sub(1),
+            closer @ (b')' | b']' | b'}') => {
+                if open.last() == Some(&closer) {
+                    open.pop();
+                }
+            }
             _ => {}
         }
+        i += 1;
     }
     false
 }
@@ -1767,14 +1818,17 @@ struct Substitution<'a> {
     /// Resolved values by name; `None` = unresolvable (memoized). Keys
     /// are owned: the names borrow the tokens being substituted.
     resolved: HashMap<String, Option<String>>,
-    /// Names on the current resolution chain: re-entering one fails.
-    resolving: HashSet<String>,
+    /// Names on the current resolution chain, outermost first:
+    /// re-entering one closes a cycle.
+    resolving: Vec<String>,
     budget: usize,
-    /// Set when the resolution just hit a cycle: cycle members are
-    /// invalid at computed-value time *including their fallbacks*
-    /// (CSS Variables 1 §2.3) — the enclosing `var()` skips its
-    /// fallback instead of applying it.
-    cycle: bool,
+    /// Every name on a dependency cycle: invalid at computed-value time
+    /// *whatever its fallbacks* (CSS Variables 1 §2.3) — the whole cycle,
+    /// not only the reference that closes it (`--a: var(--b, 1px);
+    /// --b: var(--a, 2px)` made `--a` resolve to `1px`, review_0002
+    /// F25). A reference to a member from outside the cycle still takes
+    /// its own fallback.
+    cyclic: HashSet<String>,
     /// Recursion depth of `substitute`, against `MAX_SUBSTITUTE_DEPTH`.
     depth: usize,
     /// A failure was caused by the depth cap (not by the value): such a
@@ -1791,9 +1845,10 @@ impl<'a> Substitution<'a> {
         if let Some(value) = self.resolved.get(name) {
             return value.clone();
         }
-        if self.resolving.contains(name) {
-            // A cycle: invalid at computed-value time, fallbacks included.
-            self.cycle = true;
+        if let Some(at) = self.resolving.iter().position(|open| open == name) {
+            // A cycle: every name from the re-entered one to the current
+            // one is on it.
+            self.cyclic.extend(self.resolving[at..].iter().cloned());
             return None;
         }
         if self.resolving.len() >= MAX_VAR_DEPTH {
@@ -1807,13 +1862,15 @@ impl<'a> Substitution<'a> {
         let value = if let Some(value) = (self.context)(name) {
             Some(value)
         } else {
-            self.resolving.insert(name.to_owned());
+            self.resolving.push(name.to_owned());
             let value = self
                 .variables
                 .get(name)
                 .and_then(|tokens| self.substitute(tokens));
-            self.resolving.remove(name);
-            value
+            self.resolving.pop();
+            // A cycle member is invalid even when a fallback rescued its
+            // own text.
+            value.filter(|_| !self.cyclic.contains(name))
         };
         // Memoize even the failures: a name that doesn't resolve stays
         // unresolvable for this declaration — except a failure caused by
@@ -1847,10 +1904,13 @@ impl<'a> Substitution<'a> {
                     let name = variable.name.ident.as_ref();
                     match self.var(name) {
                         Some(value) => value,
-                        None if self.cycle => {
-                            // The cycle closes at *this* reference: its
-                            // fallback doesn't apply.
-                            self.cycle = false;
+                        // Inside a cycle member, nothing rescues the value
+                        // (it is discarded): skip the fallback.
+                        None if self
+                            .resolving
+                            .last()
+                            .is_some_and(|current| self.cyclic.contains(current)) =>
+                        {
                             return None;
                         }
                         None => match &variable.fallback {
@@ -1894,12 +1954,6 @@ impl<'a> Substitution<'a> {
     }
 }
 
-/// `initial`/`inherit`/`unset`/`revert` for one property: its field(s)
-/// return to the initial value (the `ElementStyle` default — the build's
-/// defaults). `inherit` and `unset`-on-inherited also resolve here: the
-/// cascade keeps no parent computed style to inherit from (a documented
-/// deviation; the earlier rule's value no longer shows through either
-/// way). Unknown properties are ignored.
 /// The calc-able properties a property name owns: a CSS-wide keyword
 /// drops the entries (the field and its calc reset together).
 fn calc_props(name: &str) -> &'static [CalcProp] {
@@ -1929,6 +1983,12 @@ fn calc_props(name: &str) -> &'static [CalcProp] {
     }
 }
 
+/// `initial`/`inherit`/`unset`/`revert` for one property: its field(s)
+/// return to the initial value (the `ElementStyle` default — the build's
+/// defaults). `inherit` and `unset`-on-inherited also resolve here: the
+/// cascade keeps no parent computed style to inherit from (a documented
+/// deviation; the earlier rule's value no longer shows through either
+/// way). Unknown properties are ignored.
 fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
     // Matched by name: `PropertyId`'s variants carry vendor prefixes for
     // some properties and not others; the names are stable.
@@ -2915,16 +2975,16 @@ fn justify_self(value: &css_align::JustifySelf) -> Option<JustifySelf> {
     })
 }
 
-/// `grid-template-rows`/`-columns`: `none` (no explicit tracks) or a track
-/// list; the `[name]` line names register on the container's name table
-/// (placements resolve against them). One unsupported track drops the
-/// whole declaration, as an invalid value would.
 /// The most tracks one axis may declare: beyond it the declaration drops
 /// (line numbers are `i16` — a `repeat(40000, …)` overflowed the
 /// arithmetic and a 32 767-row `grid-template-areas` overflowed the area
 /// bounds — and no authored grid needs a pathological count anyway).
 const MAX_GRID_TRACKS: usize = 1000;
 
+/// `grid-template-rows`/`-columns`: `none` (no explicit tracks) or a track
+/// list; the `[name]` line names register on the container's name table
+/// (placements resolve against them). One unsupported track drops the
+/// whole declaration, as an invalid value would.
 fn track_sizing(
     sizing: &TrackSizing,
     axis: Axis,
@@ -3068,20 +3128,23 @@ fn track_sizing(
 
 /// The total track count of a track list (repeats expanded); `auto-fill`/
 /// `auto-fit` repeats count as one track (their count is layout-dependent).
+/// Saturating: the caller caps the total at `MAX_GRID_TRACKS`, and a
+/// wrapped product on a 32-bit target (wasm32: `repeat(1431655766, 1px
+/// 1px 1px)` is 2³² + 2) slipped under that cap (review_0003 G38).
 fn total_lines(list: &css_grid::TrackList) -> usize {
     list.items
         .iter()
         .map(|item| match item {
             TrackListItem::TrackSize(_) => 1,
             TrackListItem::TrackRepeat(repeat) => {
-                repeat.track_sizes.len()
-                    * match &repeat.count {
-                        RepeatCount::Number(n) => *n as usize,
-                        _ => 1,
-                    }
+                let count = match &repeat.count {
+                    RepeatCount::Number(n) => usize::try_from(*n).unwrap_or(usize::MAX),
+                    _ => 1,
+                };
+                repeat.track_sizes.len().saturating_mul(count)
             }
         })
-        .sum()
+        .fold(0, usize::saturating_add)
 }
 
 /// `grid-auto-rows`/`-columns`.
@@ -3825,25 +3888,7 @@ mod tests {
             .into_owned()
     }
 
-    /// `p`'s declared style under one `p { declarations }` rule.
-    /// THROWAWAY: the demo's `.columns` rule, parsed.
-    #[test]
-    fn throwaway_columns_decl() {
-        let style = declared(
-            "flex-direction: row; gap: 16px; padding: 16px; flex-grow: 1; \
-             flex-shrink: 1; flex-basis: 0; min-height: 0;",
-        );
-        eprintln!(
-            "DECL grow={:?} shrink={:?} basis={:?} min_h={:?} dir={:?}",
-            style.layout.flex_grow,
-            style.layout.flex_shrink,
-            style.layout.flex_basis,
-            style.layout.min_height,
-            style.layout.flex_direction,
-        );
-    }
-
-    /// THROWAWAY-TO-KEEP: combinator matching.
+    /// Parses a selector the test expects to be supported.
     fn selector(text: &str) -> Selector {
         Selector::parse(text).expect(text)
     }
@@ -3994,7 +4039,6 @@ mod tests {
             "display: grid; grid-template-areas: \"logo nav\" \"main side\" \"main foot\";",
         );
         let names = style.layout.grid_names.clone().expect("areas");
-        eprintln!("AREAS: {:?}", names.areas);
         assert_eq!(names.implied_rows, 3);
         assert_eq!(names.implied_columns, 2);
         assert_eq!(names.areas["logo"], [1, 2, 1, 2]);
@@ -4274,6 +4318,14 @@ mod tests {
             ),
         );
         assert_eq!(style.layout.grid_template_rows, None);
+        // The count × tracks product saturates (review_0003 G38): this
+        // one is 2^32 + 2, which wrapped to 2 on 32-bit targets and
+        // slipped under the cap. (On 64-bit it never wrapped; the test
+        // pins the outcome on every target.)
+        let style = declared(
+            "display: grid; grid-template-columns: repeat(1431655766, [a] 1px 1px 1px)",
+        );
+        assert_eq!(style.layout.grid_template_columns, None);
         // A normal grid still resolves.
         let style = declared("display: grid; grid-template-columns: repeat(3, [a] 1fr)");
         assert!(
@@ -4326,6 +4378,19 @@ mod tests {
         // An indirect cycle: --a → --b → --a.
         let style = declared("--a: var(--b); --b: var(--a, 5px); width: var(--a)");
         assert_eq!(style.layout.width, None);
+        // Every member is invalid, not only the one closing the cycle:
+        // the declaration's own fallback applies (review_0002 F25: `--a`
+        // resolved to its fallback 1px, and the width became 1px).
+        let style = declared("--a: var(--b, 1px); --b: var(--a, 2px); width: var(--a, 7px)");
+        assert_eq!(style.layout.width, Some(Val::Px(7.0)));
+        let style = declared("--a: var(--b, 1px); --b: var(--a, 2px); width: var(--b, 8px)");
+        assert_eq!(style.layout.width, Some(Val::Px(8.0)));
+        // A name outside the cycle that references a member takes its own
+        // fallback: --x isn't on the cycle.
+        let style = declared(
+            "--a: var(--b, 1px); --b: var(--a, 2px); --x: var(--a, 3px); width: var(--x)",
+        );
+        assert_eq!(style.layout.width, Some(Val::Px(3.0)));
         // The cycle is local: an unrelated property still resolves.
         let style = declared("--a: var(--a, 5px); color: #00ff00; width: 10px");
         assert_eq!(style.color, Some(Color::srgb(0.0, 1.0, 0.0)));
@@ -4430,6 +4495,32 @@ mod tests {
         assert!(!nesting_over_limit(&deep(10), MAX_CSS_NESTING));
         // Unbalanced closing parens don't trip the scan.
         assert!(!nesting_over_limit("))))) width: 1px", MAX_CSS_NESTING));
+
+        // Every block kind counts (review_0004 H02: nested style rules
+        // weren't counted, and 1000 of them aborted the parser).
+        let rules = |count: usize| format!("p {{ {} }}", "a {".repeat(count));
+        assert!(nesting_over_limit(&rules(40), MAX_CSS_NESTING));
+        assert!(nesting_over_limit(&"[".repeat(40), MAX_CSS_NESTING));
+        // Closers that cssparser doesn't treat as closing this block
+        // can't hide the nesting: in a string, a comment, an escape, an
+        // unquoted URL, or of another kind.
+        for filler in [r#""}""#, "'}'", "/* } */", r"\}", "url(})", "]", ")"] {
+            let text = format!("a {{ {filler} ").repeat(40);
+            assert!(nesting_over_limit(&text, MAX_CSS_NESTING), "{filler}");
+        }
+        assert!(!nesting_over_limit(r#"(")")"#, MAX_CSS_NESTING));
+        assert!(nesting_over_limit(&r#"( ")" "#.repeat(40), MAX_CSS_NESTING));
+        // Real CSS: nested at-rules and rules, functions, quoted and
+        // unquoted URLs, strings and comments holding brackets, escapes.
+        let authored = r#"
+            @supports (display: grid) { @media (min-width: 600px) {
+                .panel { & > p { width: calc(min(100%, max(10px, 2em)) - 4px) } }
+            } }
+            .a::after { content: "{ ( [" }  /* } ) ] */
+            .b { background: url(img/a\).png); border-image: url("x{.png") 4 }
+            .c\{ { color: red }
+        "#;
+        assert!(!nesting_over_limit(authored, MAX_CSS_NESTING), "authored CSS passes");
 
         // The inline path drops the attribute instead of crashing.
         let html = format!(r#"<p style="width: {}">x</p>"#, deep(400));
@@ -5633,13 +5724,6 @@ mod tests {
         assert_eq!(layout("width: 3ch").width, None);
     }
 
-    #[test]
-    fn tmp_probe() {
-        eprintln!("PROBE plain: {:?}", declared("width: var(--missing, 1px)").layout.width);
-        eprintln!("PROBE fn-d1: {:?}", declared("width: var(--missing, f(1px))").layout.width);
-        eprintln!("PROBE fn-var: {:?}", declared("--f0: f(1px); width: var(--f0)").layout.width);
-        eprintln!("PROBE fn-direct: {:?}", declared("width: f(1px)").layout.width);
-    }
 
 }
 

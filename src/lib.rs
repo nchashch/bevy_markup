@@ -118,7 +118,15 @@
 //!   Conversion is per file: an `.html` partial included from a Markdown
 //!   page is never converted, a `.md` partial included from an HTML page
 //!   is. Raw HTML passes through, so a Markdown page can embed real UI
-//!   (`data-on-click` buttons, containers). Fluent bundles opt their
+//!   (`data-on-click` buttons, containers). Indent Tera blocks and HTML
+//!   containers freely: a block's body (`{% if %}`, `{% for %}`, … down to
+//!   its `{% end… %}`, or an own-line `<div …>` down to its `</div>`)
+//!   loses the indentation its lines share before conversion, so an
+//!   indented body is Markdown, not an indented code block; indentation
+//!   *within* the body (a nested list, code) keeps its meaning, and
+//!   `<pre>`/`<textarea>`/`<script>`/`<style>` keep theirs. (Markdown
+//!   inside an HTML element still needs blank lines around it, as in
+//!   CommonMark.) Fluent bundles opt their
 //!   message values into Markdown with the manifest's `markdown: bool`
 //!   (default off): each message's pattern converts once at bundle load
 //!   and the formatted arguments substitute into the cached HTML (the
@@ -331,8 +339,11 @@ impl Plugin for BevyMarkupPlugin {
                 app.add_plugins(bevy::ui_widgets::TextInputPlugin);
             }
             // The widget's systems read these; a real app has them via
-            // `WindowPlugin`/`UiScale`, but headless apps don't.
-            app.add_message::<bevy::input::keyboard::KeyboardInput>()
+            // `WindowPlugin`/`UiScale`/picking, but headless apps don't —
+            // without `PointerState` the autoscroll system failed
+            // validation on the first update (review_0003 G11).
+            app.init_resource::<bevy::picking::events::PointerState>()
+                .add_message::<bevy::input::keyboard::KeyboardInput>()
                 .add_message::<bevy::input::gamepad::GamepadButtonChangedEvent>()
                 .add_message::<bevy::input::mouse::MouseWheel>()
                 .add_message::<bevy::window::Ime>()

@@ -512,7 +512,24 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `{% … %}` there doesn't execute), and `separate_statements` puts a
   `{% … %}`/`{# … #}` on its own line only when it already owns the line
   (an inline statement and `{{ … }}` stay where they are) so statements
-  can't merge with Markdown content.
+  can't merge with Markdown content. Before that, `dedent_blocks` (ADR
+  0024) strips from each own-line Tera block body (`if`/`for`/`block`/
+  `component`/`filter`/`raw`/block `set`, per `elif`/`else` segment) the
+  indentation its lines share, recursively up to `MAX_DEDENT_DEPTH` (16):
+  authors indent Tera for readability, and the separated statement's blank
+  line made a 4-space body an indented code block (review_0004 H11).
+  Own-line raw HTML containers (`<div …>` … `</div>`, any non-void tag
+  alone on its line) are blocks too, nested with Tera blocks on one stack
+  (ADR 0025); `<pre>`/`<textarea>`/`<script>`/`<style>` bodies stay
+  verbatim. Lines inside code are content; `raw` bodies dedent but aren't
+  searched. *What is code* is pulldown's answer,
+  never a hand-written rule (`md::code_ranges` over the conversion's
+  options): `separate_statements` skips statements in the source's code,
+  and `resolve_references` skips includes in the code of the text the
+  conversion parses (`template_code_ranges`: after separation, mapped back
+  — its blank lines can make an indented line a code block). Hand-written
+  fence/indent/backtick rules disagreed with CommonMark in both directions
+  (review_0003 G13/G17, review_0004 H04).
   Fluent bundles set `markdown: true` in the manifest to pre-convert each
   cacheable message's pattern at bundle load; localization substitutes the
   formatted arguments into the cached HTML (the values were escaped once by
@@ -550,7 +567,12 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   data-l10n-args='{"n": 3}'>fallback</p>` on any element (block, container,
   inline, walked-through); the translation replaces the children, the
   element's own content is the fallback. Args are JSON (numbers stay numbers
-  for plurals); a whole map can be one Tera variable. Translations are markup
+  for plurals), built by Tera as a map literal (`'{{ {"name": player} }}'`)
+  or one map variable (`'{{ args }}'`) — Tera prints maps as JSON with the
+  strings escaped. Never splice a value into hand-written JSON
+  (`'{"name": "{{ player }}"}'`): `decode_entities` undoes Tera's `&quot;`,
+  so a value holding `"` adds its own arguments (review_0003 G20; the
+  examples and README use map literals). Translations are markup
   (`walk_translation` in `build.rs` parses them as a fragment): inline
   elements in them are styled; `data-l10n-name` elements take the
   same-named, same-tag source descendant's tag/id/classes (each usable once,
@@ -614,8 +636,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `fit-content()`, `repeat()` incl. `auto-fill`/`auto-fit`; one unsupported
   track drops the whole declaration — an earlier rule's tracks stand; a
   `repeat()` count and the computed track/area totals are capped
-  (`MAX_GRID_TRACKS` = 1000) against overflow on pathological counts like
-  `repeat(4000000000, auto)` — bug_0081),
+  (`MAX_GRID_TRACKS` = 1000, saturating arithmetic) against overflow on
+  pathological counts like `repeat(40000, [a] 1fr)` — bug_0081, bug_0121),
   `grid-auto-rows`/`-columns`/`-flow`, and line/`span` placement
   (`grid-row`/`-column` + longhands, `grid-area`; `GridLineDecl` pairs →
   `GridPlacement`) by number or by name: named lines (the `[name]`s in the
@@ -649,7 +671,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `gap`/`row-gap` on containers and the root rule, `background-color` also on
   blocks.
   `url()` resolves relative to the `.css`; the `Stylesheet` loader loads the
-  images as dependencies. Maps to Bevy's sliced `ImageNode`
+  images as dependencies — never from a network source: `template::is_remote`
+  (`http`/`https`) skips such a border-image and fails an include, a Fluent
+  resource or a 9-slice image (review_0003 G19). Maps to Bevy's sliced `ImageNode`
   (`VisualBox::BorderBox`) + `Node::border`/`padding`. Slice numbers = image px,
   `%` = of image size (needs the image loaded). `stretch` → Stretch, other
   repeats → `Tile`; one mode for all sides. Bevy always draws the center;
@@ -694,10 +718,13 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   continuations (`notes-body = The *bridge* is out.\n\n  - first item`),
   never start a line with `*`, and escape literal braces as `{"{"}` /
   `{"}"}` (a `{{ Tera }}` placeholder shown in the doc is exactly that).
-  The blank line makes the newline a Markdown paragraph break. Also:
-  string args are HTML-escaped (no markup injection) but their characters
-  are still Markdown — a value interpolating `{{ name }}` into emphasis
-  reads the name's `*`/`_` as syntax.
+  The blank line makes the newline a Markdown paragraph break. Fluent
+  string args are never Markdown or markup: HTML-escaped, and on the
+  per-value path (a message the cache can't take) their punctuation and
+  line breaks ride through the conversion as Private Use Area stand-ins
+  (`l10n.rs` `inert_markdown`; review_0004 H03 — `[x](url)` in a player
+  name became a real link). An identifier-shaped value (`two-handed`)
+  is left as is, so a select still matches it.
 
 - **App-written `Node` fields don't survive on elements, only on the root.**
   An in-place restyle or update writes an element's whole `Node` from its
@@ -771,6 +798,13 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `ImageLoader::new(CompressedImageFormats::empty())` yourself.
 - Bevy's `Query::iter_descendants` is breadth-first; use `iter_descendants_depth_first` for document order (`HtmlElements`).
 - HTML white-space collapsing covers ASCII whitespace only (space, `\t`, `\n`, `\f`, `\r`); `char::is_whitespace` would also eat NBSP/U+3000.
+- Performance guards assert *scaling*, not wall time, where they can:
+  best of three runs at N and 4N, the larger at most 8× the smaller
+  (`template::scanners_stay_linear_on_pathological_input`). A fixed
+  bound passed a quadratic scanner at 1.25 s of 2 s and flakes under
+  load (review_0004 H09, review_0003 G37). The remaining wall-clock
+  guards and their measured headroom are listed under H09 in review_0004;
+  convert one to a scaling test when you touch it.
 - Tests: `TestUi::settle()` demands a new build; for a change that legitimately rebuilds nothing (e.g. a `DefaultStylesheet` swap under a ready own `HtmlStylesheet`) use `settle_quiet()`.
 - API changes that touch `src/fuzz.rs`'s imports (`Styler`, `cascade`) need
   `cargo check --lib --features fuzzing`: the module only compiles under the

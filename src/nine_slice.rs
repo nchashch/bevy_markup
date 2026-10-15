@@ -145,6 +145,9 @@ impl AssetLoader for NineSliceLoader {
         }
 
         let image_path = load_context.path().resolve_embed_str(&desc.image)?;
+        if crate::template::is_remote(&image_path) {
+            return Err(format!("slice image names a remote source: {}", desc.image).into());
+        }
         let border = desc.border;
         Ok(NineSlice {
             image: load_context.load(image_path),
@@ -422,6 +425,9 @@ mod tests {
             r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), sides: Tile(0.0))"#,
             r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), center: Tile(-2.0))"#,
             r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), max_corner_scale: 0.0)"#,
+            // A network source: content must not reach it (review_0003
+            // G19; the manifest loaded and only its image failed).
+            r#"(image: "https://evil.example/frame.png", border: (left: 1, right: 1, top: 1, bottom: 1))"#,
         ] {
             assert!(matches!(load(bad), LoadState::Failed(_)), "{bad} must be rejected");
         }

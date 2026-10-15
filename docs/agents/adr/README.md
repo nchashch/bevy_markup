@@ -40,5 +40,7 @@ as `[INFERENCE]`.
 | [0021](./0021-per-element-dirty-tracking.md) | Per-element dirty tracking: dependency maps at load, slot-local updates per frame | Accepted (fully implemented) |
 | [0022](./0022-text-inputs-without-maxlength-or-placeholder.md) | Text inputs carry no `maxlength` or `placeholder` | Superseded in part (its `maxlength` half) by [0023](./0023-maxlength-maps-to-max-characters.md) |
 | [0023](./0023-maxlength-maps-to-max-characters.md) | `maxlength` maps to the widget's `max_characters` | Accepted |
+| [0024](./0024-tera-block-indentation-is-not-markdown.md) | Indentation inside Tera blocks is not Markdown | Accepted |
+| [0025](./0025-html-container-indentation-is-not-markdown.md) | Indentation inside raw HTML containers is not Markdown | Accepted |
 
 Add new records to this index in the same commit that adds the file.

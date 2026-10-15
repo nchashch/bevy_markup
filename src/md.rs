@@ -14,6 +14,7 @@
 //! [ADR 0014]: docs/agents/adr/0014-markdown-via-pulldown-cmark.md
 
 use std::collections::VecDeque;
+use std::ops::Range;
 
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd};
 
@@ -28,6 +29,14 @@ pub(crate) const MARKDOWN_CLASS: &str = "markdown";
 /// `to_html` rewrites `marker + <tag>` into the classed tag and drops the
 /// marker before the HTML reaches `tl`.
 const MARKER: &str = "\u{1}bevy-markup\u{1}";
+
+/// The dialect: CommonMark plus tables, strikethrough, task lists and
+/// footnotes. Shared by the conversion and the code-range scans
+/// ([`code_ranges`]), which must agree on what is code.
+const OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS)
+    .union(Options::ENABLE_FOOTNOTES);
 
 /// Converts Markdown `source` to the HTML `tl` parses. Not a round trip:
 /// the output is one `<p>` per paragraph etc., which the walk reads
@@ -46,217 +55,497 @@ pub(crate) fn to_html(source: &str) -> String {
 /// escaped text, like any Markdown code content.
 #[hotpath::measure]
 pub(crate) fn to_html_template(source: &str) -> String {
-    convert(&separate_statements(source), true)
+    convert(&separate_statements(&dedent_blocks(source).0), true)
+}
+
+/// The byte ranges of `text` that pulldown renders as code: inline code
+/// spans (backticks included) and code blocks — fenced (fence lines
+/// included) and indented — in document order. CommonMark's own rules
+/// decide (fence lengths, lazy continuations, tabs, escaped backticks,
+/// blocks inside lists and quotes), not a re-implementation of them
+/// (review_0003 G13/G17, review_0004 H04).
+fn code_ranges(text: &str) -> Vec<Range<usize>> {
+    Parser::new_ext(text, OPTIONS)
+        .into_offset_iter()
+        .filter(|(event, _)| matches!(event, Event::Code(_) | Event::Start(Tag::CodeBlock(_))))
+        .map(|(_, range)| range)
+        .collect()
+}
+
+/// The byte ranges of a `.md` template's `source` that its conversion
+/// ([`to_html_template`]) renders as code — where Tera is literal text,
+/// so an `{% include %}` there is no reference. Computed on the text the
+/// conversion actually parses (after [`dedent_blocks`] and
+/// [`separate_statements`], which change indentation and blank lines)
+/// and mapped back to `source` offsets.
+pub(crate) fn template_code_ranges(source: &str) -> Vec<Range<usize>> {
+    let (dedented, lines) = dedent_blocks(source);
+    let (separated, inserted) = separate_statements_mapped(&dedented);
+    // `inserted` holds the separated text's offsets of the added newlines.
+    let to_source = |at: usize| {
+        dedented_to_source(&lines, at - inserted.partition_point(|&added| added < at))
+    };
+    code_ranges(&separated)
+        .into_iter()
+        .map(|range| to_source(range.start)..to_source(range.end))
+        .collect()
+}
+
+/// Block bodies nested deeper than this keep their indentation: each
+/// level re-parses its body to tell code from structure, so the pass is
+/// O(size × depth) — 16 is far past authored nesting and keeps 600 KB of
+/// pathologically nested blocks at ~50 ms (release).
+const MAX_DEDENT_DEPTH: usize = 16;
+
+/// One source line during [`dedent_blocks`]: the text (its `\n`
+/// included) and the columns removed from its indentation so far.
+struct DedentLine<'a> {
+    text: &'a str,
+    cut: usize,
+}
+
+impl DedentLine<'_> {
+    /// The leading whitespace's width in columns (a tab advances to the
+    /// next multiple of four, as CommonMark counts it) and its length in
+    /// bytes.
+    fn lead(&self) -> (usize, usize) {
+        let mut width = 0;
+        for (at, byte) in self.text.bytes().enumerate() {
+            match byte {
+                b' ' => width += 1,
+                b'\t' => width += 4 - width % 4,
+                _ => return (width, at),
+            }
+        }
+        (width, self.text.len())
+    }
+
+    /// Whitespace only (or empty).
+    fn blank(&self) -> bool {
+        self.text.trim().is_empty()
+    }
+
+    /// The indentation as the current level sees it (outer levels' cuts
+    /// applied).
+    fn indent(&self) -> usize {
+        self.lead().0 - self.cut
+    }
+
+    /// The line as the current level sees it.
+    fn render(&self, out: &mut String) {
+        let (width, bytes) = self.lead();
+        if self.cut == 0 {
+            out.push_str(self.text);
+        } else {
+            out.extend(std::iter::repeat_n(' ', width - self.cut));
+            out.push_str(&self.text[bytes..]);
+        }
+    }
+}
+
+/// Which block an own-line opener or closer belongs to: a Tera statement
+/// keyword, or an HTML element name (lowercased).
+#[derive(Clone, PartialEq, Eq)]
+enum BlockKey<'a> {
+    Tera(&'a str),
+    Html(String),
+}
+
+/// What an own-line Tera statement or HTML tag does to the block structure.
+#[derive(Clone, PartialEq, Eq)]
+enum BlockTag<'a> {
+    Open(BlockKey<'a>),
+    /// `elif`/`else`: splits the innermost Tera block's body.
+    Middle,
+    Close(BlockKey<'a>),
+}
+
+impl BlockKey<'_> {
+    /// How the block's body is treated: `Some(true)` dedented and searched
+    /// for nested blocks, `Some(false)` dedented only (`{% raw %}`: Tera
+    /// reads its statements as text), `None` left verbatim (`<pre>`,
+    /// `<textarea>`, `<script>`, `<style>`: their whitespace is content).
+    fn body(&self) -> Option<bool> {
+        match self {
+            BlockKey::Tera("raw") => Some(false),
+            BlockKey::Tera(_) => Some(true),
+            BlockKey::Html(name) => {
+                (!matches!(name.as_str(), "pre" | "textarea" | "script" | "style")).then_some(true)
+            }
+        }
+    }
+
+    /// Whether only this block's own closer means anything inside it.
+    fn opaque(&self) -> bool {
+        self.body() != Some(true)
+    }
+}
+
+/// HTML elements that have no closing tag.
+const VOID_ELEMENTS: [&str; 14] = [
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+    "source", "track", "wbr",
+];
+
+/// The structural role of `line`: a Tera statement alone on its line
+/// (`if`/`for`/`block`/`component`/`filter`/`raw` and a block
+/// `set`/`set_global` — no `=` — open, `elif`/`else` split, `end…` close),
+/// or an HTML tag alone on its line (`<div class="card">` opens, `</div>`
+/// closes; void and self-closing tags, comments and lines holding more
+/// than one tag don't). Anything else (inline statements, `include`,
+/// `set x = …`, expressions, text, inline HTML) is content.
+fn block_tag(line: &str) -> Option<BlockTag<'_>> {
+    let trimmed = line.trim();
+    if trimmed.starts_with('<') {
+        return html_tag(trimmed);
+    }
+    let inner = trimmed.strip_prefix("{%")?.strip_suffix("%}")?;
+    // One statement: no second closer inside.
+    if inner.contains("%}") {
+        return None;
+    }
+    let inner = inner.trim_matches(['-', '+']).trim();
+    let keyword = inner.split(|c: char| c.is_whitespace() || c == '(').next()?;
+    match keyword {
+        "if" | "for" | "block" | "component" | "filter" | "raw" => {
+            Some(BlockTag::Open(BlockKey::Tera(keyword)))
+        }
+        "set" | "set_global" if !inner.contains('=') => Some(BlockTag::Open(BlockKey::Tera("set"))),
+        "elif" | "else" => Some(BlockTag::Middle),
+        _ => {
+            let closed = keyword.strip_prefix("end")?;
+            let closed = if closed == "set_global" { "set" } else { closed };
+            matches!(closed, "if" | "for" | "block" | "component" | "filter" | "raw" | "set")
+                .then_some(BlockTag::Close(BlockKey::Tera(closed)))
+        }
+    }
+}
+
+/// [`block_tag`] for a trimmed line starting with `<`.
+fn html_tag(trimmed: &str) -> Option<BlockTag<'static>> {
+    let valid = |name: &str| {
+        name.starts_with(|c: char| c.is_ascii_alphabetic())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    };
+    if let Some(rest) = trimmed.strip_prefix("</") {
+        let name = rest.strip_suffix('>')?.trim_end();
+        return valid(name).then(|| BlockTag::Close(BlockKey::Html(name.to_ascii_lowercase())));
+    }
+    let rest = trimmed.strip_prefix('<')?;
+    // One opening tag: it ends the line, and nothing else opens a tag.
+    if !rest.ends_with('>') || rest.ends_with("/>") || rest.contains('<') {
+        return None;
+    }
+    let name_end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .unwrap_or(rest.len());
+    let (name, after) = rest.split_at(name_end);
+    if !valid(name) || !after.starts_with(|c: char| c.is_whitespace() || c == '>') {
+        return None;
+    }
+    let name = name.to_ascii_lowercase();
+    (!VOID_ELEMENTS.contains(&name.as_str())).then(|| BlockTag::Open(BlockKey::Html(name)))
+}
+
+/// Removes, from the body of every own-line Tera block (`{% if %}`,
+/// `{% for %}`, `{% block %}`, … each segment between its opener, its
+/// `elif`/`else` and its closer) and every own-line HTML container
+/// (`<div>` … `</div>`; review_0004's H11 follow-up: an indented
+/// `<div>` body after a blank line was an indented code block too — not
+/// `<pre>`/`<textarea>`/`<script>`/`<style>`, whose whitespace is
+/// content), the indentation the body's lines share —
+/// recursively, outermost first, so nested bodies line up with their
+/// statements. Tera indentation is for the author's readability, not
+/// Markdown: without this, a body indented four spaces became an indented
+/// code block once separation put a blank line after its statement
+/// (review_0004 H11). A body's *relative* indentation (a nested list, an
+/// indented code block inside it) is kept. Statement lines that Markdown
+/// reads as code (a Tera sample in a fence) are content, not structure;
+/// a `{% raw %}` body is dedented but not searched for statements.
+///
+/// Returns the text and, per line, where its content starts in the
+/// output and in `source`, for mapping output offsets back.
+fn dedent_blocks(source: &str) -> (String, Vec<LineMap>) {
+    let mut lines: Vec<DedentLine<'_>> = source
+        .split_inclusive('\n')
+        .map(|text| DedentLine { text, cut: 0 })
+        .collect();
+    if source.contains("{%") || source.contains('<') {
+        dedent_level(&mut lines, 0);
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut map = Vec::with_capacity(lines.len());
+    let mut source_at = 0;
+    for line in &lines {
+        let line_start = out.len();
+        line.render(&mut out);
+        let (_, lead_bytes) = line.lead();
+        let content_len = line.text.len() - lead_bytes;
+        map.push(LineMap {
+            out_start: line_start,
+            out_content: out.len() - content_len,
+            source_start: source_at,
+            source_content: source_at + lead_bytes,
+        });
+        source_at += line.text.len();
+    }
+    (out, map)
+}
+
+/// Where one line's content starts in [`dedent_blocks`]' output and in
+/// its source (the removed part is leading whitespace only).
+struct LineMap {
+    out_start: usize,
+    out_content: usize,
+    source_start: usize,
+    source_content: usize,
+}
+
+/// A [`dedent_blocks`] output offset as a source offset.
+fn dedented_to_source(map: &[LineMap], at: usize) -> usize {
+    let Some(line) = map[..map.partition_point(|line| line.out_start <= at)].last() else {
+        return at;
+    };
+    if at >= line.out_content {
+        line.source_content + (at - line.out_content)
+    } else {
+        // Inside the (shortened) indentation: the same distance before the
+        // content, within the source line's own indentation.
+        line.source_content
+            .saturating_sub(line.out_content - at)
+            .max(line.source_start)
+    }
+}
+
+/// One level of [`dedent_blocks`]: finds the top-level blocks among
+/// `lines`, dedents each body segment, and recurses into it.
+fn dedent_level(lines: &mut [DedentLine<'_>], depth: usize) {
+    if depth > MAX_DEDENT_DEPTH {
+        return;
+    }
+    // The level as Markdown reads it, to tell code from structure.
+    let mut text = String::new();
+    let mut starts = Vec::with_capacity(lines.len());
+    for line in lines.iter() {
+        line.render(&mut text);
+        // Where the line's content starts (after its rendered indentation).
+        starts.push(text.len() - (line.text.len() - line.lead().1));
+    }
+    let code = code_ranges(&text);
+    let mut code_index = 0;
+    let mut in_code = |index: usize| {
+        let at = starts[index];
+        while code.get(code_index).is_some_and(|range| range.end <= at) {
+            code_index += 1;
+        }
+        code.get(code_index).is_some_and(|range| range.start <= at)
+    };
+
+    // The top-level blocks: their key, opener, `elif`/`else` and closer
+    // lines.
+    let mut blocks: Vec<(BlockKey<'_>, Vec<usize>)> = Vec::new();
+    let mut stack: Vec<(BlockKey<'_>, Vec<usize>)> = Vec::new();
+    // Inside an opaque block (`{% raw %}`, `<pre>`, …) only its own closer
+    // means anything.
+    let mut opaque: Option<BlockKey<'_>> = None;
+    for index in 0..lines.len() {
+        if lines[index].blank() || in_code(index) {
+            continue;
+        }
+        let Some(tag) = block_tag(lines[index].text) else {
+            continue;
+        };
+        if let Some(key) = &opaque {
+            if tag != BlockTag::Close(key.clone()) {
+                continue;
+            }
+        }
+        match tag {
+            BlockTag::Open(key) => {
+                if key.opaque() {
+                    opaque = Some(key.clone());
+                }
+                stack.push((key, vec![index]));
+            }
+            BlockTag::Middle => {
+                if let Some((BlockKey::Tera(_), marks)) = stack.last_mut() {
+                    marks.push(index);
+                }
+            }
+            BlockTag::Close(key) => {
+                opaque = None;
+                // An unclosed inner block is dropped (Tera would reject the
+                // template; HTML would close it implicitly); a closer with no
+                // opener is content.
+                let Some(open) = stack.iter().rposition(|(open, _)| *open == key) else {
+                    continue;
+                };
+                stack.truncate(open + 1);
+                let (key, mut marks) = stack.pop().expect("found above");
+                if stack.is_empty() {
+                    marks.push(index);
+                    blocks.push((key, marks));
+                }
+            }
+        }
+    }
+
+    for (key, marks) in blocks {
+        let Some(search) = key.body() else {
+            continue;
+        };
+        for pair in marks.windows(2) {
+            let body = &mut lines[pair[0] + 1..pair[1]];
+            dedent_segment(body);
+            if search {
+                dedent_level(body, depth + 1);
+            }
+        }
+    }
+}
+
+/// Removes the indentation `body`'s lines share. Blank lines don't count,
+/// nor do a fenced block's inner lines — their indentation is the code's,
+/// and CommonMark strips at most the fence's own indent from them — so a
+/// fence's content at column 0 doesn't pin the segment.
+fn dedent_segment(body: &mut [DedentLine<'_>]) {
+    let mut fence: Option<(u8, usize)> = None;
+    let mut shared = usize::MAX;
+    for line in body.iter() {
+        if line.blank() {
+            continue;
+        }
+        let trimmed = line.text.trim_start();
+        let run = |marker: u8| trimmed.bytes().take_while(|&byte| byte == marker).count();
+        match fence {
+            Some((marker, length)) => {
+                // The closer: the same marker, at least as long, nothing after.
+                if run(marker) >= length && trimmed[run(marker)..].trim().is_empty() {
+                    fence = None;
+                    shared = shared.min(line.indent());
+                }
+            }
+            None => {
+                shared = shared.min(line.indent());
+                for marker in [b'`', b'~'] {
+                    if run(marker) >= 3 {
+                        fence = Some((marker, run(marker)));
+                    }
+                }
+            }
+        }
+    }
+    if shared == 0 || shared == usize::MAX {
+        return;
+    }
+    for line in body.iter_mut() {
+        line.cut += line.indent().min(shared);
+    }
 }
 
 /// Puts Tera *statements* (`{% … %}`, `{# … #}`, including the `-`
 /// whitespace-control variants) on their own line when they have a line
 /// to themselves, so they cannot merge with neighbouring Markdown
 /// content into one block. A statement *inside* a line (an attribute
-/// value, a list item, a heading, a table cell) stays inline — the old
-/// pipeline expanded it in place, and the Tera rewrite (ADR 0020) handles
-/// inline runs. Statements inside fenced code blocks and inline code
-/// spans are left verbatim (they are code). Interpolations (`{{ … }}`)
-/// are inline content and stay where they are. Indented code (4 spaces,
-/// lazy continuations included) is not fence-tracked: statements inside
-/// it separate like any own-line statement.
-///
-/// The byte offset of the first fenced-code line in `rest[..limit]` that
-/// starts a line (3 spaces of indent at most; an opener or a closer):
-/// the main loop jumps to the first statement and would skip it.
-fn next_fence_line(rest: &str, limit: usize) -> Option<usize> {
-    let mut cursor = 0;
-    loop {
-        if cursor >= limit {
-            return None;
-        }
-        let line_start = cursor;
-        // Bounded by `limit`: past it, the statement's own line(s) — not
-        // ours to fence-scan.
-        let line_end = rest[cursor..limit].find('\n').map_or(limit, |at| cursor + at);
-        let line = &rest[line_start..line_end.min(limit)];
-        let trimmed = line.trim_start_matches(' ');
-        let indent = line.len() - trimmed.len();
-        if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
-            return Some(line_start);
-        }
-        cursor = line_end + 1;
-    }
+/// value, a list item, a heading, a table cell, or after other content
+/// on its line — inline Tera included, review_0003 G18) stays inline —
+/// the Tera rewrite (ADR 0020) handles inline runs. Statements inside
+/// code (code spans, fenced and indented code blocks, as pulldown reads
+/// the source) are left verbatim. Interpolations (`{{ … }}`) are inline
+/// content and stay where they are.
+pub(crate) fn separate_statements(source: &str) -> String {
+    separate_statements_mapped(source).0
 }
 
-pub(crate) fn separate_statements(source: &str) -> String {
+/// [`separate_statements`], plus the output offsets of the newlines it
+/// inserted (ascending), for mapping output offsets back to `source`.
+fn separate_statements_mapped(source: &str) -> (String, Vec<usize>) {
     if !source.contains("{%") && !source.contains("{#") {
-        return source.to_owned();
+        return (source.to_owned(), Vec::new());
     }
+    // Separation never moves code: its blank lines go around whole lines
+    // outside code, which can't open, close or split a fence or a span.
+    let code = code_ranges(source);
+    let mut code_index = 0;
     let mut out = String::with_capacity(source.len() + 16);
-    let mut rest = source;
-    let mut fence: Option<String> = None;
-    let mut at_line_start = true;
-    // Cached in absolute coordinates (`rest` is always a suffix of
-    // `source`): the two statement openers, and the newlines bounding the
-    // current line. Re-finding an opener, or re-scanning the line for
-    // its newline, per statement is what made this loop quadratic — a
-    // 1 MB single line of inline statements re-scanned up to a megabyte
-    // backward and forward per statement (review_0003 G14). A cached
-    // position is valid until the cursor passes it; a `None` stays
-    // `None` (the needle is absent from every suffix too).
-    let mut if_at = rest.find("{%");
-    let mut comment_at = rest.find("{#");
-    // The first newline at or after the cursor — the current line's end,
-    // without re-scanning the line. The line's start is cached per line
-    // (a backward scan runs once per line, not once per statement).
-    let mut next_newline: Option<usize> = rest.find('\n');
-    let mut line_start_cache: Option<usize> = None;
-    let mut line_dirty = true;
-    while !rest.is_empty() {
-        let base = source.len() - rest.len();
-        if if_at.is_some_and(|at| at < base) {
-            if_at = rest.find("{%").map(|at| base + at);
-        }
-        if comment_at.is_some_and(|at| at < base) {
-            comment_at = rest.find("{#").map(|at| base + at);
-        }
-        if next_newline.is_some_and(|at| at < base) {
-            next_newline = rest.find('\n').map(|at| base + at);
-        }
-        // Fenced code blocks, at a line start: an opener carries an info
-        // string (or is a bare ``` fence), a closer matches the open
-        // marker and has nothing but whitespace after it. The check runs
-        // while a fence is open too — the closer must be found or the
-        // rest of the document stays verbatim.
-        if at_line_start {
-            let trimmed = rest.trim_start_matches(' ');
-            let indent = rest.len() - trimmed.len();
-            if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
-                let marker = &trimmed[..3];
-                let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
-                let info = &rest[indent + 3..line_end.min(rest.len())];
-                let empty = info.trim().is_empty();
-                if fence.as_deref() == Some(marker) && empty {
-                    fence = None;
-                } else if fence.is_none() {
-                    fence = Some(marker.to_owned());
-                }
-                out.push_str(&rest[..line_end]);
-                rest = &rest[line_end..];
-                // A whole line was copied; the next one is at a line start.
-                at_line_start = true;
+    let mut inserted = Vec::new();
+    let bytes = source.as_bytes();
+    // Every scan moves forward from the cursor or covers only the bytes
+    // between the previous statement and this one, so the loop is linear
+    // (review_0003 G14: re-scanning a long line per statement was
+    // quadratic).
+    let mut cursor = 0;
+    // The start of the line holding the current statement.
+    let mut line_start = 0;
+    // The first newline at or after the current statement, else
+    // `source.len()` (cached for the statements sharing one long line: a
+    // missing newline must be remembered too, or every statement on a
+    // last line re-scans to the end).
+    let mut next_newline: Option<usize> = None;
+    let mut search = 0;
+    while let Some(found) = source[search..].find('{') {
+        let start = search + found;
+        let closer = match bytes.get(start + 1) {
+            Some(b'%') => "%}",
+            Some(b'#') => "#}",
+            _ => {
+                search = start + 1;
                 continue;
             }
+        };
+        // Inside code: skip to the code's end.
+        while code.get(code_index).is_some_and(|range| range.end <= start) {
+            code_index += 1;
         }
-        if fence.is_some() {
-            let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
-            out.push_str(&rest[..line_end]);
-            rest = &rest[line_end..];
-            at_line_start = true;
+        if let Some(range) = code.get(code_index).filter(|range| range.start <= start) {
+            search = range.end;
             continue;
         }
-        // The earliest statement opener (a `{#` before a `{%` is a
-        // comment, not the tail of a `{%`).
-        let if_start = if_at.map(|at| at - base);
-        let comment_start = comment_at.map(|at| at - base);
-        let start = match (if_start, comment_start) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        let Some(start) = start else {
-            out.push_str(rest);
-            return out;
-        };
-        // A fence line between the last processed point and the first
-        // statement is handled first (the statement jump would skip past
-        // it, and its line starts were never seen).
-        if let Some(fence_at) = next_fence_line(rest, start) {
-            out.push_str(&rest[..fence_at]);
-            rest = &rest[fence_at..];
-            at_line_start = true;
-            continue;
-        }
-        let opener = &rest[start..start + 2];
-        let closer = match opener {
-            "{%" => "%}",
-            _ => "#}",
-        };
-        // A lone `{%`/`{#` without its closer is text; leave it as is.
-        let Some(inner) = rest[start + 2..].find(closer) else {
-            out.push_str(rest);
-            return out;
+        // A lone `{%`/`{#` without its closer is text; so is the rest.
+        let Some(inner) = source[start + 2..].find(closer) else {
+            break;
         };
         let end = start + 2 + inner + closer.len();
-        // Inline code spans protect their content: a statement between
-        // backticks stays code. (A pragmatic backtick run: the span's
-        // closer is the next run of the same length.) Only a backtick
-        // run right before the opener opens a span — a bare `{# … #}`
-        // comment is a statement, and must make progress.
-        if rest[..start].ends_with('`') {
-            let ticks = rest[..start].len() - rest[..start].trim_end_matches('`').len();
-            // No closer: the span runs to the statement's end, so the
-            // loop always advances (the rest is processed normally).
-            let span_end = rest[start..]
-                .find(&"`".repeat(ticks))
-                .map_or(end, |at| (start + at + ticks).min(end));
-            out.push_str(&rest[..span_end]);
-            rest = &rest[span_end..];
-            at_line_start = false;
-            // A span can span lines: the line-start cache is stale.
-            line_dirty = true;
-            continue;
+        // The statement's line: everything before it on its line counts —
+        // an inline statement earlier on the line included (G18: the old
+        // line start was the cursor, mid-line after such a statement).
+        if let Some(newline) = source[cursor..start].rfind('\n') {
+            line_start = cursor + newline + 1;
         }
-        // Own line: whitespace-only before the statement and after its
-        // closer (on the same line). Inline statements stay where they
-        // are.
-        let line_start_rel = if !line_dirty && line_start_cache.is_some_and(|at| at >= base) {
-            line_start_cache.unwrap() - base
-        } else if next_newline.is_none_or(|at| at - base >= start) {
-            // No newline between the cursor and the statement: the line
-            // starts at the cursor.
-            line_start_cache = Some(base);
-            line_dirty = false;
-            0
+        if next_newline.is_none_or(|at| at < start) {
+            next_newline = Some(source[start..].find('\n').map_or(source.len(), |at| start + at));
+        }
+        let line_end = next_newline.unwrap_or(source.len());
+        let before = &source[line_start..start];
+        // A multi-line statement's closer is past its first line's end:
+        // nothing follows it on that line.
+        let after = if end <= line_end {
+            &source[end..line_end]
         } else {
-            // The exact line start: a backward scan, once per line.
-            let rel = rest[..start].rfind('\n').map_or(0, |at| at + 1);
-            line_start_cache = Some(base + rel);
-            line_dirty = false;
-            rel
+            ""
         };
-        // The own-line branch only fires when there is no newline before
-        // the statement on this line, so the first newline after the
-        // cursor is the line's end.
-        let line_end = next_newline.map_or(rest.len(), |at| at - base + 1);
-        let before = &rest[line_start_rel..start];
-        // A multi-line statement's closer is past this line's newline.
-        let after = if end < line_end { &rest[end..line_end] } else { "" };
+        out.push_str(&source[cursor..start]);
         if before.trim().is_empty() && after.trim().is_empty() {
-            out.push_str(&rest[..start]);
+            inserted.push(out.len());
             out.push('\n');
-            out.push_str(&rest[start..end]);
+            out.push_str(&source[start..end]);
+            inserted.push(out.len());
             out.push('\n');
-            rest = &rest[end..];
-            at_line_start = rest.starts_with('\n') || rest.is_empty();
         } else {
-            out.push_str(&rest[..end]);
-            rest = &rest[end..];
-            at_line_start = false;
-            // The statement can span lines: the cached line start is
-            // stale.
-            line_dirty = true;
+            out.push_str(&source[start..end]);
         }
+        cursor = end;
+        search = end;
     }
-    out
+    out.push_str(&source[cursor..]);
+    (out, inserted)
 }
 
 /// The shared conversion: `tera` selects whether Tera syntax passes
 /// through verbatim (ADR 0020) or converts as Markdown text.
 fn convert(source: &str, tera: bool) -> String {
     let mut html = String::with_capacity(source.len() * 2);
-    let parser = Parser::new_ext(
-        source,
-        Options::ENABLE_TABLES
-            | Options::ENABLE_STRIKETHROUGH
-            | Options::ENABLE_TASKLISTS
-            | Options::ENABLE_FOOTNOTES,
-    );
+    let parser = Parser::new_ext(source, OPTIONS);
     let marked = Marked {
         parser,
         pending: VecDeque::new(),
@@ -515,7 +804,6 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
             Event::Text(text) | Event::Html(text)
                 if text.contains("raw") && text.contains("%}") =>
             {
-                eprintln!("DBG count arm text={text:?} raw_before={raw}");
                 raw_depth_before(text, &mut raw);
                 let was_raw = raw > 0;
                 for (tera, part) in tera_runs(text) {
@@ -786,6 +1074,124 @@ mod tests {
         );
         assert!(html.contains("<p class=\"markdown\">tail</p>"), "{html}");
     }
+
+/// Statement separation reads code and lines as CommonMark does
+/// (review_0003 G17/G18): a longer fence closer closes (the statements
+/// after it separate instead of merging into a `<p>`), and a statement
+/// after inline Tera on its line stays inline (it was split off, cutting
+/// the paragraph in two).
+#[test]
+fn separation_follows_fences_and_lines() {
+    let html = to_html_template("```\ncode\n````\n{% if a %}\nShown\n{% endif %}\n");
+    assert!(html.contains("{% if a %}\n<p class=\"markdown\">Shown</p>"), "{html}");
+    let html = to_html_template("````\n```\n{% if a %}\n````\n");
+    assert!(html.contains("<code>```\n{{ \"{\" }}% if a %}"), "a shorter closer doesn't close: {html}");
+    let html = to_html_template("Hello {# c #} {% if a %}\nShown\n{% endif %}\n");
+    assert!(html.contains("<p class=\"markdown\">Hello {# c #} {% if a %}\nShown</p>"), "{html}");
+}
+
+/// Indentation inside Tera blocks is the author's, not Markdown's
+/// (review_0004 H11): an indented body converts like an unindented one —
+/// it became an indented code block once separation put a blank line
+/// after its statement. Relative indentation inside a body is kept, and
+/// Tera shown inside a fence is code, not structure.
+#[test]
+fn indented_tera_bodies_are_not_code() {
+    let html = to_html_template("{% if a %}\n    Some *text*\n{% endif %}\n");
+    assert!(html.contains(r#"<p class="markdown">Some <em class="markdown">text</em></p>"#), "{html}");
+    assert!(!html.contains("<pre"), "{html}");
+    // Nested blocks line up with their own statements.
+    let html = to_html_template(
+        "{% for x in xs %}\n    {% if x %}\n        - item {{ x }}\n    {% endif %}\n{% endfor %}\n",
+    );
+    assert!(html.contains(r#"<li class="markdown">item {{ x }}</li>"#), "{html}");
+    // Each `elif`/`else` segment dedents on its own.
+    let html = to_html_template("{% if a %}\n    A\n{% elif b %}\n      B\n{% else %}\n\tC\n{% endif %}\n");
+    for letter in ["A", "B", "C"] {
+        assert!(html.contains(&format!(r#"<p class="markdown">{letter}</p>"#)), "{letter}: {html}");
+    }
+    // Relative indentation inside the body is still Markdown's.
+    let html = to_html_template("{% if a %}\n    Example:\n\n        code here\n{% endif %}\n");
+    assert!(html.contains("<code>code here\n</code>"), "{html}");
+    // A fence's content at column 0 doesn't pin the body's indentation.
+    let html = to_html_template("{% if a %}\n    ```\ncode at 0\n    ```\n{% endif %}\n");
+    assert!(html.contains("<code>code at 0\n</code>"), "{html}");
+    // Tera inside a fence is a sample: untouched, still literal.
+    let sample = "```\n{% if a %}\n    sample\n{% endif %}\n```\n";
+    assert_eq!(dedent_blocks(sample).0, sample);
+    // A raw body dedents, but its statements are text.
+    let raw = "{% raw %}\n    {% if a %}\n        x\n    {% endif %}\n{% endraw %}\n";
+    assert_eq!(
+        dedent_blocks(raw).0,
+        "{% raw %}\n{% if a %}\n    x\n{% endif %}\n{% endraw %}\n"
+    );
+}
+
+/// Random token soup of Tera blocks, fences, backticks, tabs and
+/// multi-byte text never panics the dedent or the conversion, and every
+/// mapped code range is an ordered, in-bounds slice of the source on
+/// character boundaries.
+#[test]
+fn dedent_survives_token_soup() {
+    const TOKENS: [&str; 23] = [
+        "{% if a %}", "{% endif %}", "{% else %}", "{% for x in y %}", "{% endfor %}",
+        "{% raw %}", "{% endraw %}", "{% set x %}", "{% endset %}", "```", "~~~", "`",
+        "    ", "\t", "\n", "\n\n", "é x", "{{ x }}", "<div class=\"a\">", "</div>",
+        "<pre>", "</pre>", "<br>",
+    ];
+    let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for _ in 0..3000 {
+        let length = (next() % 40) as usize;
+        let source: String = (0..length).map(|_| TOKENS[(next() % 23) as usize]).collect();
+        let _ = to_html_template(&source);
+        let mut last = 0;
+        for range in template_code_ranges(&source) {
+            assert!(range.start <= range.end && range.end <= source.len(), "{source:?}");
+            assert!(range.start >= last, "unordered: {source:?}");
+            assert!(source.is_char_boundary(range.start) && source.is_char_boundary(range.end), "{source:?}");
+            last = range.start;
+        }
+    }
+}
+
+/// Raw HTML containers dedent like Tera blocks (review_0004 H11
+/// follow-up, ADR 0025): an indented `<div>` body after a blank line was
+/// an indented code block. Containers and Tera blocks nest in any order;
+/// `<pre>`-like elements, void and self-closing tags, and lines holding
+/// more than one tag aren't containers.
+#[test]
+fn indented_html_container_bodies_are_not_code() {
+    let html = to_html_template("<div class=\"card\">\n\n    Some **text**\n\n</div>\n");
+    assert!(html.contains(r#"<p class="markdown">Some <strong class="markdown">text</strong></p>"#), "{html}");
+    let html = to_html_template(
+        "<section>\n\n    {% if a %}\n        <DIV class=\"x\">\n\n            - item\n\n        </div>\n    {% endif %}\n\n</section>\n",
+    );
+    assert!(html.contains(r#"<li class="markdown">item</li>"#), "{html}");
+    assert!(!html.contains("<pre"), "{html}");
+    // Whitespace is content in a <pre> (and its lines aren't structure).
+    let pre = "<pre>\n    <div>\n        keep\n    </div>\n</pre>\n";
+    assert_eq!(dedent_blocks(pre).0, pre);
+    // Not containers: void, self-closing, comment, two tags on a line.
+    for line in ["<br>", "<img src=\"a.png\">", "<x-icon />", "<!-- note -->", "<p>hi</p>"] {
+        assert!(block_tag(line).is_none(), "{line}");
+    }
+}
+
+/// Offsets map back through the dedent: a code range found in the
+/// dedented text lands on the same characters of the source.
+#[test]
+fn dedent_maps_offsets_back() {
+    let source = "{% if a %}\n    text `code` here\n\t\tdeep `x`\n{% endif %}\n";
+    let ranges = template_code_ranges(source);
+    let texts: Vec<&str> = ranges.iter().map(|range| &source[range.clone()]).collect();
+    assert_eq!(texts, ["`code`", "`x`"]);
+}
 
 /// Content can supply `MARKER` (plain U+0001-delimited text): a class-like
 /// run inside another attribute's value with no closing `"` used to slice

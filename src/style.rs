@@ -303,6 +303,12 @@ impl AssetLoader for StylesheetLoader {
         let mut images = HashMap::with_capacity(border_urls.len() + custom_urls.len());
         for url in &border_urls {
             let path = load_context.path().resolve_embed_str(url)?;
+            // A remote image is skipped like a custom property's schemed
+            // URL: the frame isn't drawn, the rest of the sheet applies.
+            if crate::template::is_remote(&path) {
+                warn!("stylesheet {}: remote border-image skipped: {url}", load_context.path());
+                continue;
+            }
             images.insert(url.clone(), load_context.load(path));
         }
         for url in &custom_urls {

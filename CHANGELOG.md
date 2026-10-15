@@ -39,12 +39,71 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   font-size no longer queues a restyle — Bevy's layout re-resolves every
   `Val::Rem` itself when the resource changes. If your UIs have different
   root `font-size`s, the extra restyled frame you used to get on a
-  `RemSize` flip is gone (the values resolve the same frame); apps that
+  `RemSize` flip is gone (plain `rem` values resolve the same frame; a
+  `calc()` mixing `rem` reads the new size the next frame); apps that
   observed `HtmlUiRestyled` after a `RemSize` change no longer see it.
   This also removes the spurious `HtmlUiRestyled` every UI fired on its
   first build (Bevy's default 20 px vs the CSS default 16 px).
+- **Content can't load assets from network sources:** a `{% include %}`,
+  a `.ftl.ron` resource or a 9-slice image naming `http://`/`https://`
+  fails its load, and such a `border-image` URL is skipped (with a
+  warning) — with Bevy's web asset features enabled, a mod's or user's
+  template reached the network. Other asset sources (`embedded://`, your
+  own) still work.
+- **Build `data-l10n-args` with Tera, not by hand:** the docs, README and
+  examples now write `data-l10n-args='{{ {"name": player} }}'` (a map
+  literal Tera prints as JSON with its strings escaped). The old
+  `'{"name": "{{ player }}"}'` pattern let a value holding `"` add
+  arguments of its own; update templates that copied it.
+- Fluent string arguments are never Markdown, on either path: on a
+  `markdown: true` message the cache can't take (selectors, references),
+  an argument like `[x](url)` or `![x](path)` became a real link or image;
+  it now shows as text, as it did for cacheable messages.
+- **Indent Tera blocks in Markdown templates freely:** an indented
+  `{% if %}`/`{% for %}`/`{% block %}` body (down to its `{% end… %}`, each
+  `elif`/`else` part separately) loses its shared indentation before
+  conversion, so it's Markdown — it used to become an indented code block.
+  Indentation within the body keeps its meaning. If you relied on an
+  indented body rendering as code, use a fence (ADR 0024). The same goes
+  for raw HTML containers in Markdown: an indented `<div>` body (between
+  blank lines) is Markdown, not a code block; `<pre>`, `<textarea>`,
+  `<script>` and `<style>` keep their whitespace (ADR 0025).
+- `<button type>` and `<input type>` follow HTML's invalid-value defaults:
+  a misspelt or empty `type` is a submit button / a text field (it did
+  nothing / built no field); only `button`/`reset` don't submit, and only
+  the other known input types build no field.
 
 ### Fixed
+- **A stylesheet with a few KB of nested rules aborted the app** at load
+  (`a { a { …` — lightningcss's parser recurses per block); deep nesting
+  of any bracket kind now fails the sheet's load like unparseable CSS.
+- **`calc()` on an element directly under a top-level `HtmlUi` never
+  resolved** (it stayed `auto`); nested elements' viewport units in a
+  `calc()` (`calc(50vw - 10px)`) measured the root's box instead of the
+  viewport; and with no `IsDefaultUiCamera`, a root's `calc()` used the
+  last camera spawned (a minimap) instead of the window camera.
+- **Headless apps with the `text-input` feature panicked on the first
+  update** (`Res<PointerState>` missing).
+- **Markdown templates: what counts as code now follows CommonMark
+  exactly** — includes in code samples (tab-indented code, fences in
+  quotes and lists, a shorter fence closer) no longer fail the load, and
+  real includes (after a longer fence closer, on a lazy paragraph line, in
+  a list paragraph, between escaped backticks) are no longer dropped;
+  a statement after inline Tera on its line no longer splits the
+  paragraph, and statements after a longer fence closer no longer merge
+  into a paragraph.
+- **Debug lines on stderr:** loading a `.md` template printed one line
+  per indented line, and Markdown with raw tags printed one per text run.
+- An empty `data-on-submit=""` made the form's buttons swallow an
+  enclosing element's click while emitting nothing.
+- A `var()` cycle invalidated only the reference closing it, so a cycle
+  member resolved to its own fallback; every member is now invalid (CSS
+  Variables), and a reference from outside takes its own fallback.
+- A `.ftl.ron` listing a resource twice parsed it twice and warned about
+  every message; warnings for undefined `is=` names are capped (256
+  names) instead of remembering every name forever.
+- A huge `repeat()` track count could wrap past the track cap on 32-bit
+  targets (wasm32).
 - **Context `var()` changes in an inline `style` attribute never
   triggered a restyle.** `--brand: red` in `TemplateContext`, then
   changed to `blue`, left `style="color: var(--brand)"` showing the old

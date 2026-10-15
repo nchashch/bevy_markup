@@ -440,12 +440,34 @@ fn context_vars_hash(
         .chain(inline_names)
     {
         name.hash(&mut hasher);
-        context
-            .and_then(|context| context.get(name))
-            .and_then(css_value)
-            .hash(&mut hasher);
+        match context.and_then(|context| context.get(name)) {
+            Some(value) => hash_css_value(value, &mut hasher),
+            None => 0u8.hash(&mut hasher),
+        }
     }
     hasher.finish()
+}
+
+/// Hashes what `css_value` would make of `value`, without building the
+/// string: this runs per tracked name, per UI, per frame (it cloned a
+/// `String` each time, review_0003 G22). Distinct `css_value` results hash
+/// apart; the hash only signals change.
+fn hash_css_value(value: &tera::Value, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    if let Some(text) = value.as_str() {
+        (1u8, text).hash(hasher);
+    } else if let Some(number) = value.as_i64() {
+        (2u8, number).hash(hasher);
+    } else if let Some(number) = value.as_u64() {
+        (3u8, number).hash(hasher);
+    } else if let Some(number) = value.as_f64() {
+        (4u8, number.to_bits()).hash(hasher);
+    } else if let Some(flag) = value.as_bool() {
+        (5u8, flag).hash(hasher);
+    } else {
+        // Arrays, objects, `null`: unresolvable, like a missing value.
+        0u8.hash(hasher);
+    }
 }
 
 /// A `TemplateContext` value as a CSS `var()` replacement: strings as
@@ -3051,36 +3073,33 @@ pub(crate) fn resolve_calc(
     boxes: Query<&ComputedNode>,
     parents: Query<&ChildOf>,
     rem: Res<RemSize>,
-    cameras: Query<(&Camera, Option<&IsDefaultUiCamera>)>,
+    cameras: Query<&Camera>,
+    default_camera: DefaultUiCamera,
     target_cameras: Query<&UiTargetCamera>,
 ) {
-    // The viewport for a top-level root (no parent): the camera the root
-    // itself targets (`UiTargetCamera`), else the default UI camera. A
-    // root's own box is *not* the viewport — an auto-sized root shrinks
-    // to its content.
-    let viewport_of_camera = |root: Entity| {
+    // The viewport of a UI tree: the camera its top-level root targets
+    // (`UiTargetCamera`), else the default UI camera (`IsDefaultUiCamera`,
+    // else the window camera Bevy UI renders with — not the last camera
+    // spawned, review_0003 G10). A root's own box is *not* the viewport:
+    // an auto-sized root shrinks to its content, and a tooltip or HUD
+    // root is smaller than the window (review_0004 H08). Without any
+    // camera (a headless edge) the root's own box is the only reference.
+    let viewport_of = |top: Entity| {
         target_cameras
-            .get(root)
+            .get(top)
+            .map(|target| target.0)
             .ok()
-            .and_then(|target| cameras.get(target.0).ok())
-            .map(|(camera, _)| camera)
-            .or_else(|| {
-                // A camera with the default marker sorts last: with
-                // several cameras the UI camera is the viewport.
-                cameras
-                    .iter()
-                    .max_by_key(|(_, default)| default.is_some())
-                    .map(|(camera, _)| camera)
-            })
-            .and_then(|camera| camera.logical_viewport_size())
+            .or_else(|| default_camera.get())
+            .and_then(|camera| cameras.get(camera).ok())
+            .and_then(Camera::logical_viewport_size)
+            .or_else(|| boxes.get(top).ok().map(|box_| box_.size))
+            .unwrap_or_default()
     };
     for (entity, child_of, mut node, calc) in &mut sized {
         let (content, viewport) = match child_of {
             Some(child_of) => {
-                let (Ok(parent_box), Ok(parent)) = (
-                    boxes.get(child_of.parent()),
-                    parents.get(child_of.parent()).map(|p| p.0),
-                ) else {
+                let parent = child_of.parent();
+                let Ok(parent_box) = boxes.get(parent) else {
                     continue;
                 };
                 let inset = parent_box.border + parent_box.padding;
@@ -3088,23 +3107,20 @@ pub(crate) fn resolve_calc(
                     (parent_box.size.x - inset.min_inset.x - inset.max_inset.x).max(0.0),
                     (parent_box.size.y - inset.min_inset.y - inset.max_inset.y).max(0.0),
                 );
-                // The viewport: the topmost node's box (a UI root measures
-                // the window; deeper roots measure their own layout, which
-                // is not the viewport — walk past them).
+                // The tree's top-level root (the parent itself for a
+                // root's direct child — requiring a grandparent skipped
+                // those every frame, review_0004 H07); nested `HtmlUi`
+                // roots are walked past.
                 let mut top = parent;
                 while let Ok(ancestor) = parents.get(top).map(|p| p.0) {
                     top = ancestor;
                 }
-                let viewport = boxes.get(top).map(|box_| box_.size).unwrap_or_default();
-                (content, viewport)
+                (content, viewport_of(top))
             }
             // A top-level `HtmlUi` root has no parent: its containing
-            // block is the viewport. Without any camera (a headless edge),
-            // the root's own box is the only reference available.
+            // block is the viewport.
             None => {
-                let size = viewport_of_camera(entity)
-                    .or_else(|| boxes.get(entity).ok().map(|box_| box_.size))
-                    .unwrap_or_default();
+                let size = viewport_of(entity);
                 (size, size)
             }
         };
@@ -3833,6 +3849,50 @@ fn remap_spec_handles(specs: &mut [SpecNode], reverse: &HashMap<tl::NodeHandle, 
 const MAX_DOM_DEPTH: usize = 100;
 
 /// Warns once per process when content is dropped for its depth.
+/// Whether `element` is a form whose `data-on-submit` names a signal. A
+/// blank name binds nothing (`signal_bindings` skips it), so its buttons
+/// must not become submit buttons — they swallowed the enclosing
+/// wrapper's click and emitted nothing (review_0003 G12).
+fn form_submits(element: &HtmlElement) -> bool {
+    element.tag == "form"
+        && element
+            .data("on-submit")
+            .is_some_and(|name| !name.trim().is_empty())
+}
+
+/// Whether a `<button>` submits its form: HTML's `type` is an enumerated
+/// attribute whose missing *and* invalid value default is `submit`, so
+/// every value but `button` and `reset` submits (review_0003 G16: a
+/// misspelt `type="sbumit"` did nothing).
+fn button_submits(tag: &tl::HTMLTag) -> bool {
+    tag.attributes()
+        .get("type")
+        .flatten()
+        .map(|kind| kind.as_utf8_str())
+        .is_none_or(|kind| {
+            !(kind.eq_ignore_ascii_case("button") || kind.eq_ignore_ascii_case("reset"))
+        })
+}
+
+/// Whether an `<input>` is a text field: HTML's missing *and* invalid
+/// `type` default is `text`, so only the other known types build no field
+/// (review_0003 G36: `type=""` or a misspelt type built nothing).
+#[cfg(feature = "text-input")]
+fn input_is_text(tag: &tl::HTMLTag) -> bool {
+    const OTHER_TYPES: [&str; 21] = [
+        "hidden", "search", "tel", "url", "email", "password", "date", "month", "week", "time",
+        "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "submit",
+        "image", "reset", "button",
+    ];
+    tag.attributes()
+        .get("type")
+        .flatten()
+        .is_none_or(|kind| {
+            let kind = kind.as_utf8_str();
+            !OTHER_TYPES.iter().any(|other| kind.eq_ignore_ascii_case(other))
+        })
+}
+
 fn warn_overdepth() {
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -4034,7 +4094,7 @@ fn collect_node(
             tag: element.tag.clone(),
             id: element.id.clone(),
             classes: element.classes.clone(),
-            submit: element.tag == "form" && element.data("on-submit").is_some(),
+            submit: form_submits(&element),
             pseudo: state,
         };
         // The child chain is shared with every child task (an Rc clone is
@@ -4063,14 +4123,7 @@ fn collect_node(
         boxed.drawn_outline = boxed.outline(style.color);
         boxed.fade(style.opacity);
         #[cfg(feature = "text-input")]
-        if element.tag == "input"
-            && tag
-                .attributes()
-                .get("type")
-                .flatten()
-                .map(|kind| kind.as_utf8_str().eq_ignore_ascii_case("text"))
-                .unwrap_or(true)
-        {
+        if element.tag == "input" && input_is_text(tag) {
             // An editable text field (ADR 0016): a block with the widget's
             // components; its content is the field's state, not walked markup.
             // Other `type`s stay unsupported (the field is not built). An
@@ -4237,12 +4290,7 @@ fn collect_node(
         // counts the button as bound, which would swallow the enclosing
         // wrapper's click.
         let submit = is_button
-            && tag
-                .attributes()
-                .get("type")
-                .flatten()
-                .map(|kind| kind.as_utf8_str())
-                .is_none_or(|kind| kind.eq_ignore_ascii_case("submit"))
+            && button_submits(tag)
             && chain
                 .iter()
                 .any(|ancestor| ancestor.submit);
@@ -4429,9 +4477,7 @@ fn run_walk<'a>(
                             .as_ref()
                             .map(|e| e.classes.clone())
                             .unwrap_or_default(),
-                        submit: owned
-                            .as_ref()
-                            .is_some_and(|e| e.tag == "form" && e.data("on-submit").is_some()),
+                        submit: owned.as_ref().is_some_and(form_submits),
                         pseudo: state,
                     });
                     child_chain.extend(chain.iter().cloned());

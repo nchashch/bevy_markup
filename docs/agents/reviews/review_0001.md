@@ -10,9 +10,11 @@
 | Discovery agent | omp session, `anthropic/claude-opus-5-5:high` |
 
 A full-crate code review at `b224619` (0.6.0 + the bounded-run commit).
-Findings are **open** — none has a fix yet; a fix session the same day was
-cut off by a provider rate limit (worktrees `../bm-wt/<slice>`, branches
-`fix/<slice>`, hold no changes). Individual `bug_NNNN.md` entries will be
+Status: the findings were fixed by later sessions — see
+[review_0002](review_0002.md) (the first fix session's audit),
+[review_0003](review_0003.md) and [review_0004](review_0004.md), and the
+bug reports they name. (When this review was written, a same-day fix
+session had been cut off by a provider rate limit and held no changes.) Individual `bug_NNNN.md` entries will be
 filed here as the fixes land; this file is the session's record. It contains
 80 numbered findings; the IDs (`R01`…) are stable references.
 

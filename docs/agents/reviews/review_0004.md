@@ -9,7 +9,9 @@
 | Findings | verdicts on review_0003's `G01`–`G44` (plus F25, R64); new defects `H01`… (stable ids) |
 | Discovery agent | Claude Code session, `claude-opus-5-5` |
 
-Nothing in this review is fixed yet.
+Status: fixed by the same-day fix session (same model); H11 after the
+user chose the dedent (ADR 0024) — see **Fix session** at the end for
+every item's outcome, report and guard.
 
 ## Coverage — read this first
 
@@ -235,6 +237,26 @@ The fuzzing step is CI's second-to-last step, so the job fails there.
 - `Ancestor::submit`'s doc ("a non-empty submit hook") describes G12's fix, which was never made.
 - `l10n.rs` comments still name the removed `to_html_value` (G01 row).
 
+**H11 · low (design) · Indented content inside an own-line Tera block becomes a code block** — found by the fix session [probe]
+- `md::to_html_template("{% if a %}\n    Some *text*\n{% endif %}\n")`
+  → `{% if a %}\n<pre class="markdown"><code>Some *text*\n</code></pre>\n{% endif %}`
+  (`*text*` shows literally, in a code block).
+- `separate_statements` gives an own-line statement its own lines, with a
+  blank line after it, and after a blank line CommonMark reads a 4-space
+  line as indented code. Without the statement the line would be a lazy
+  paragraph continuation. Indenting inside `{% if %}`/`{% for %}` is the
+  usual Tera/Jinja habit, so templates written that way render code
+  blocks.
+- The include scanner agrees with the conversion here (bug_0108: an
+  `{% include %}` on such a line is code, not a reference), so nothing
+  fails. It's a rendering surprise, not a crash.
+- **Options:** (a) keep it and document "don't indent Markdown inside
+  Tera blocks"; (b) dedent the lines between a statement pair before the
+  conversion; (c) separate with a single newline where the next line is
+  indented (a paragraph continuation, so the statement would merge into
+  the paragraph, which is the case separation exists to prevent). Needs a
+  decision, and an ADR if not (a).
+
 ## Refuted or unconfirmed
 
 - **Exponential `var()` evaluation after G34's change** ([probe], release). Once a declaration has hit the depth cap, `depth_failure` stays set and later failures aren't memoized. Empty fallbacks (`var(--x,)`) consume no budget, so a doubling chain `--aᵢ: var(--aᵢ₊₁,) var(--aᵢ₊₁,) var(--missing)` looked like 2ⁿ work. Measured after a 70-link depth-failing chain: n = 12: 1.2 ms, n = 16: 3.5 ms, n = 20: 4.8 ms (control without the deep chain: 0.11–0.14 ms). It grows, but not exponentially. Not filed.
@@ -257,3 +279,61 @@ The fuzzing step is CI's second-to-last step, so the job fails there.
 3. **Correctness:** H07 (any root-level `calc()` is dead), H04, then the open G10/G12/G16/G36/G17/G18.
 4. **Records:** H06 and H10, in the same change as the fixes. Add the H-series fixes to `INDEX.md` as their reports land.
 5. **Tests:** H09. Tighten G27's assertion. Finish G39/G41's detached docs.
+
+## Fix session (2026-10-15, Claude Code `claude-opus-5-5`)
+
+The model that wrote this review also fixed it; the changes were
+uncommitted at filing. Each fix's regression test was checked by
+reverting exactly that fix and watching the test fail, unless the row
+says "unguarded" or notes otherwise. Reports are in `docs/agents/bugs/`.
+
+| ID | outcome | report | guard (fails on revert) |
+|---|---|---|---|
+| H01 | fixed by the user's session (`ce19a69`); CI now checks `--features fuzzing` early | bug_0105 (severity corrected to high) | CI's feature check |
+| H02 | fixed: the pre-scan mirrors cssparser's block matching for `(`, `[`, `{` (a `)` inside a string had also hidden paren nesting) | bug_0106 | `deeply_nested_style_rules_fail_the_load_instead_of_aborting` (old scanner: `IO Task Pool` overflow, SIGABRT); `pathological_nesting_is_rejected_before_the_parser` |
+| H03 | fixed: string args ride the per-value conversion as Private Use Area stand-ins | bug_0107 | `string_args_cannot_inject_markdown_on_the_per_value_path` |
+| H04 + G17 + G18 | fixed: pulldown's code ranges replace both scanners' hand-written rules | bug_0108 | `scanner_code_is_commonmark_code`, `separation_follows_fences_and_lines` |
+| H05 | fixed: prints and assertion-less tests removed | bug_0109 | none (grep) |
+| H06 | fixed: bug_0088–0095 written; bug_0096–0104's coverage corrected; review_0001's and review_0003's status lines updated | — | — |
+| H07 | fixed | bug_0110 | `calc_resolves_on_direct_children_of_a_top_level_root` |
+| H08 | fixed | bug_0111 | `viewport_units_in_nested_calc_measure_the_viewport` |
+| H09 | fixed for the scanner guard (see below) | bug_0094 | `scanners_stay_linear_on_pathological_input` |
+| H10 | fixed: G27's guard asserts 0 restyles; `Ancestor::submit`'s doc and the `to_html_value` comments corrected. G35's record (that the Wait test guards nothing) stands corrected here | bug_0098 | — |
+| H11 | fixed as the user chose (option b, dedent): `md::dedent_blocks`, ADR 0024; extended to raw HTML containers, ADR 0025 (bug_0127) | bug_0126 | `indented_tera_bodies_are_not_code`, `indented_markdown_templates_build_like_flat_ones`, `dedent_maps_offsets_back`, `dedent_survives_token_soup` |
+| G10 | fixed (`DefaultUiCamera`) | bug_0112 | `root_calc_without_a_marked_camera_uses_the_window_camera` |
+| G11 | fixed; the harness and test workarounds removed | bug_0113 | `update_without_finish_drives_the_focus_systems` (the original error on revert) |
+| G12 | fixed | bug_0114 | `an_empty_submit_hook_does_not_swallow_clicks` |
+| G16 | fixed | bug_0115 | `invalid_button_types_submit` |
+| G19 | fixed (`http`/`https` sources refused) | bug_0118 | `remote_includes_are_refused`, `manifests_validate_values`, `remote_asset_sources_are_refused` |
+| G20 | fixed: map-literal args in the README, the crate docs and 15 example templates | bug_0119 | `map_literal_args_cannot_be_injected`; `content_lint` |
+| G22 | fixed | bug_0120 | `undefined_name_warnings_are_bounded` (the FTL dedupe and the allocation-free hash are unguarded) |
+| G24 | fixed: AGENTS.md's overflow example | — | — |
+| G25 | fixed: review_0001's header, CHANGELOG's RemSize line | — | — |
+| G36 | fixed | bug_0116 | `invalid_input_types_are_text_fields` |
+| G38 | fixed (saturating arithmetic) | bug_0121 | pinned only; it can't wrap on 64-bit |
+| G39 | fixed: `apply_keyword`'s and `track_sizing`'s docs, plus `resolve_references`', `tera_raw_end`'s and `separate_statements`' docs, which were detached the same way | — | — |
+| G40 + G41 | fixed (`walk_roots` extracted) | bug_0122 | `linear_walk_confines_to_the_topmost_visible_modal` |
+| G42 | fixed | bug_0123 | unguarded (example code); a bounded headless run exits 0 |
+| G43 | fixed (crash files counted before and after) | bug_0124 | unguarded; the counting was checked with a planted crash file |
+| G44 | not re-checked (as in the review) | — | — |
+| F25 | fixed (every cycle member is invalid) | bug_0117 | `var_cycle_fallbacks_dont_apply` (old logic gives `Px(1)`) |
+| R64 | fixed (`test = true` on grid-names) | bug_0125 | the example's tests run under `cargo test` |
+
+**H09 in detail.** The scanner guard is now a scaling test: 4× the input
+may cost at most 8× the time, best of three runs. It passed 8/8 under 4×
+parallel load. It caught a quadratic regression in this session's own
+`separate_statements` rewrite (1.25 s on the 1 MB line), which the old
+2 s bound let through. The remaining wall-clock guards, measured under 4×
+parallel load:
+
+| guard | bound | measured |
+|---|---|---|
+| `var_names_closure_is_linear` | 2 s | 0.09 s (whole test) |
+| `name_heavy_repeats_stay_linear` | 2 s | 0.16 s (whole test) |
+| `consumed_custom_declarations_arent_substituted_either` | 150 ms on the chain | 0.08 s (whole test); the tightest, so convert it next |
+| `deep_inline_nesting_chain_is_bounded` | 10 s | 0.7 s (both html_ui tests together) |
+| `attribute_heavy_pages_stay_bounded` | 20 s | (included above) |
+
+**Gate:** CI's command list (`-D warnings`, debug info off) plus
+`cargo check --lib --features fuzzing`, run on the working tree. The
+session's final report has the exit codes.

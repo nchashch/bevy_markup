@@ -19,10 +19,23 @@ export HFUZZ_BUILD_ARGS='--manifest-path honggfuzz/Cargo.toml --config target.x8
 # timeout then bounds only the run. `timeout` exits 124 when the budget
 # elapses — that is a normal, successful end for a fuzz campaign.
 cargo +nightly hfuzz build --bin "$target"
+# honggfuzz keeps fuzzing after a crash and writes each one as a `*.fuzz`
+# file in the target's workspace, so the exit status says nothing about
+# crashes: count the files before and after (earlier runs' crashes are
+# not this run's; review_0003 G43).
+crashes() {
+    find "hfuzz_workspace/$target" -maxdepth 1 -name '*.fuzz' 2>/dev/null | wc -l
+}
+before=$(crashes)
 set +e
 timeout "$duration" cargo +nightly hfuzz run "$target"
 status=$?
 set -e
+after=$(crashes)
+if [ "$after" -gt "$before" ]; then
+    echo "honggfuzz found $((after - before)) new crash(es) in hfuzz_workspace/$target/" >&2
+    exit 1
+fi
 case $status in
     0 | 124) exit 0 ;;
     *) exit $status ;;

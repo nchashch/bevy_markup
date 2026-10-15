@@ -329,25 +329,41 @@ fn answer_dialog(
             ..default()
         };
     }
-    for dialog in &dialogs {
+    close_dialog(&dialogs, &menus, &elements, &mut focus, &mut commands);
+}
+
+/// Despawns the open dialog and puts focus back on the Reset button that
+/// opened it. Focus repair alone would fall back to the menu's autofocus
+/// (Volume), not Reset (review_0003 G42).
+fn close_dialog(
+    dialogs: &Query<Entity, With<Dialog>>,
+    menus: &Query<Entity, With<Menu>>,
+    elements: &HtmlElements,
+    focus: &mut InputFocus,
+    commands: &mut Commands,
+) {
+    if dialogs.is_empty() {
+        return;
+    }
+    for dialog in dialogs {
         commands.entity(dialog).despawn();
     }
-    // Back to the button that opened it.
     if let Some(reset) = menus.iter().find_map(|menu| elements.by_id(menu, "reset")) {
         focus.set(reset, FocusCause::Navigated);
     }
 }
 
-/// Esc / B: cancel the dialog (focus returns to the menu by itself).
+/// Esc / B: cancel the dialog; focus returns to Reset, as an answer's does.
 fn close_dialog_on_escape(
     hotkeys: Hotkeys,
     dialogs: Query<Entity, With<Dialog>>,
+    menus: Query<Entity, With<Menu>>,
+    elements: HtmlElements,
+    mut focus: ResMut<InputFocus>,
     mut commands: Commands,
 ) {
     if hotkeys.just_pressed(KeyCode::Escape, GamepadButton::East) {
-        for dialog in &dialogs {
-            commands.entity(dialog).despawn();
-        }
+        close_dialog(&dialogs, &menus, &elements, &mut focus, &mut commands);
     }
 }
 

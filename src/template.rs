@@ -191,16 +191,48 @@ fn write_node(
     }
 }
 
+/// Whether `path` names one of Bevy's network asset sources (`http://`,
+/// `https://`, with Bevy's `http`/`https` features): content must not
+/// fetch remote files — a template include, a Fluent resource, a
+/// stylesheet or 9-slice image from a mod or a user would reach the
+/// network (review_0003 G19). `<img>` already refused any `://`; other
+/// sources (`embedded://`, an app's own named sources) stay usable.
+pub(crate) fn is_remote(path: &AssetPath<'_>) -> bool {
+    match path.source() {
+        bevy::asset::io::AssetSourceId::Name(name) => {
+            name.eq_ignore_ascii_case("http") || name.eq_ignore_ascii_case("https")
+        }
+        bevy::asset::io::AssetSourceId::Default => false,
+    }
+}
+
 /// The keywords of the tags naming another template.
 const REFERENCE_TAGS: [&str; 2] = ["include", "extends"];
 
-/// Finds the templates `source` (the template at `path`) includes or extends
-/// — `{% include "x.html" %}`, `{% extends "base.html" %}`, with either
-/// quote — resolves each
-/// relative to `path`'s directory (like a URL; `/x` is from the asset root,
-/// `embedded://…` keeps its source), and rewrites the reference to the
-/// resolved path, which is the name it's registered under. Returns the
-/// rewritten source and the resolved paths.
+/// The index just past the `{% endraw %}` group closing the raw block
+/// whose opener ends at `after`; `None` when there is none.
+fn tera_raw_end(source: &str, after: usize) -> Option<usize> {
+    // Plain scan: raw content is verbatim (no strings to respect — a
+    // quote inside used to swallow the endraw and drop every later
+    // include, review_0003 G13).
+    let mut cursor = after;
+    while let Some(next) = source[cursor..].find("{%") {
+        let at = cursor + next;
+        let end = source[at..]
+            .find("%}")
+            .map_or(source.len(), |offset| at + offset + 2);
+        let body = source[at + 2..end - 2]
+            .trim()
+            .trim_matches(['-', '+'])
+            .trim();
+        if body == "endraw" {
+            return Some(end);
+        }
+        cursor = end;
+    }
+    None
+}
+
 /// The index just past the closer (`%}` for a tag, `}}` for an
 /// expression) of the Tera span at `source` (which starts with its
 /// two-byte opener); quoted strings inside are skipped.
@@ -229,97 +261,44 @@ fn tera_span_end(source: &str, closer: [u8; 2]) -> Option<usize> {
     None
 }
 
-/// The index just past the `{% endraw %}` group closing the raw block
-/// whose opener ends at `after`; `None` when there is none.
-/// The byte offset of the first *protected* line in `rest[..limit]` that
-/// starts a line: a fenced-code line (up to 3 spaces of indent, an opener
-/// or a closer) or — for Markdown — an indented-code line (4+ spaces).
-/// The statement jump would skip such a line, so it must be handled
-/// first; pulldown treats its content as code, so its `{% … %}` is not a
-/// reference (review_0003 G13).
-fn next_protected_line(
-    rest: &str,
-    base: usize,
-    limit: usize,
-    markdown: bool,
-    scanned: &mut usize,
-) -> Option<(usize, usize)> {
-    // Absolute coordinates: `limit` is the absolute first-stop position;
-    // the scan resumes at `scanned` (lines before it were checked on an
-    // earlier call — re-scanning them per statement was quadratic again,
-    // the G14 regression class). A line STARTING before the limit is
-    // checked with its full content (the limit bounds the scan, not the
-    // line — a statement's `{%` cuts the line short, so its indent would
-    // read as blank).
-    let mut line_start = (*scanned).max(base).min(limit);
-    while line_start < limit {
-        // `line_start` is absolute; `rest` is the suffix at `base`.
-        let rel = line_start - base;
-        let line_end = rest[rel..]
-            .find('\n')
-            .map_or(base + rest.len(), |at| base + rel + at + 1);
-        let line = &rest[rel..line_end - base];
-        let trimmed = line.trim_start_matches(' ');
-        let indent = line.len() - trimmed.len();
-        let fence = indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~"));
-        let indented = markdown && indent >= 4 && !trimmed.is_empty();
-        if fence || indented {
-            return Some((line_start - base, line_end));
-        }
-        line_start = line_end;
-    }
-    // Every line up to the first stop was checked.
-    *scanned = limit;
-    None
-}
-
-fn tera_raw_end(source: &str, after: usize) -> Option<usize> {
-    // Plain scan: raw content is verbatim (no strings to respect — a
-    // quote inside used to swallow the endraw and drop every later
-    // include, review_0003 G13).
-    let mut cursor = after;
-    while let Some(next) = source[cursor..].find("{%") {
-        let at = cursor + next;
-        let end = source[at..]
-            .find("%}")
-            .map_or(source.len(), |offset| at + offset + 2);
-        let body = source[at + 2..end - 2]
-            .trim()
-            .trim_matches(['-', '+'])
-            .trim();
-        if body == "endraw" {
-            return Some(end);
-        }
-        cursor = end;
-    }
-    None
-}
-
+/// Finds the templates `source` (the template at `path`) includes or
+/// extends — `{% include "x.html" %}`, `{% extends "base.html" %}`, with
+/// either quote — resolves each relative to `path`'s directory (like a
+/// URL; `/x` is from the asset root, `embedded://…` keeps its source),
+/// and rewrites the reference to the resolved path, which is the name
+/// it's registered under. Returns the rewritten source and the resolved
+/// paths. In a Markdown template, code (as its conversion reads it:
+/// [`md::template_code_ranges`]) is literal text, so a reference there
+/// is none.
 #[hotpath::measure]
 pub(crate) fn resolve_references(
     path: &AssetPath<'static>,
     source: &str,
 ) -> Result<(String, Vec<AssetPath<'static>>), BevyError> {
-    let is_markdown = md::is_markdown(&path.to_string());
     let mut out = String::with_capacity(source.len());
     let mut references = Vec::new();
     let mut rest = source;
-    // Markdown code fences and inline code spans protect their content: a
-    // code sample showing `{% include %}` syntax isn't a reference.
-    let mut fence: Option<String> = None;
-    let mut at_line_start = true;
-    // The four stop positions, cached in absolute coordinates: `rest` is
+    // Markdown code (code spans, fenced and indented blocks) protects its
+    // content: a code sample showing `{% include %}` syntax isn't a
+    // reference. pulldown decides what is code (review_0003 G13/G17,
+    // review_0004 H04 — the hand-written fence, indent and backtick rules
+    // disagreed with it both ways).
+    let code = if md::is_markdown(&path.to_string()) {
+        md::template_code_ranges(source)
+    } else {
+        Vec::new()
+    };
+    let mut code_index = 0;
+    // The three stop positions, cached in absolute coordinates: `rest` is
     // always a suffix of `source`, and re-finding a needle that was
     // already located (or one that never occurs) is what made this loop
     // quadratic — 40k `{{ x }}` lines scanned 320 KB twenty times over
     // (review_0003 G14). A cached position is valid until the cursor
     // passes it; a `None` stays `None` (the needle is absent from every
     // suffix too).
-    let mut tag_at = rest.find("{%").map(|at| at);
+    let mut tag_at = rest.find("{%");
     let mut expression_at = rest.find("{{");
     let mut comment_at = rest.find("{#");
-    let mut code_at = if is_markdown { rest.find('`') } else { None };
-    let mut protected_scanned: usize = 0;
     while !rest.is_empty() {
         let base = source.len() - rest.len();
         let refresh = |cached: &mut Option<usize>, needle: &str| {
@@ -330,55 +309,14 @@ pub(crate) fn resolve_references(
         refresh(&mut tag_at, "{%");
         refresh(&mut expression_at, "{{");
         refresh(&mut comment_at, "{#");
-        if is_markdown {
-            refresh(&mut code_at, "`");
-        }
         let tag_start = tag_at.map(|at| at - base);
         let expression_start = expression_at.map(|at| at - base);
         let comment_start = comment_at.map(|at| at - base);
-        let code_start = code_at.map(|at| at - base);
-        if is_markdown && at_line_start {
-            let trimmed = rest.trim_start_matches(' ');
-            let indent = rest.len() - trimmed.len();
-            // An indented-code line: pulldown treats its content as code
-            // (CommonMark), so its `{% … %}` is not a reference.
-            if indent >= 4 && !trimmed.is_empty() {
-                eprintln!("G13 DBG indented line taken: {trimmed:?}");
-                let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
-                out.push_str(&rest[..line_end]);
-                rest = &rest[line_end..];
-                at_line_start = true;
-                continue;
-            }
-            if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
-                let marker = &trimmed[..3];
-                let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
-                let info = &rest[indent + 3..line_end.min(rest.len())];
-                if fence.as_deref() == Some(marker) && info.trim().is_empty() {
-                    fence = None;
-                } else if fence.is_none() {
-                    fence = Some(marker.to_owned());
-                }
-                out.push_str(&rest[..line_end]);
-                rest = &rest[line_end..];
-                // A whole line was copied; the next one is at a line start
-                // (a fence at the file's start must close).
-                at_line_start = true;
-                continue;
-            }
-        }
-        if fence.is_some() {
-            let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
-            out.push_str(&rest[..line_end]);
-            rest = &rest[line_end..];
-            at_line_start = true;
-            continue;
-        }
-        // The earliest of: a code span opener, a comment (its examples are
-        // commented out, not references), or a Tera tag/expression —
-        // copied as a unit (its quoted strings can contain `{#`, `{%` or
-        // `{{`), with a reference tag resolved and a raw block verbatim.
-        let start = [tag_start, expression_start, comment_start, code_start]
+        // The earliest of: a comment (its examples are commented out, not
+        // references), or a Tera tag/expression — copied as a unit (its
+        // quoted strings can contain `{#`, `{%` or `{{`), with a
+        // reference tag resolved and a raw block verbatim.
+        let start = [tag_start, expression_start, comment_start]
             .into_iter()
             .flatten()
             .min();
@@ -386,63 +324,14 @@ pub(crate) fn resolve_references(
             out.push_str(rest);
             return Ok((out, references));
         };
-        // A protected line between the cursor and the first stop (a fence
-        // after prose, indented code): the statement jump would skip it,
-        // and pulldown treats its content as code (review_0003 G13).
-        if is_markdown
-            && let Some((protected_at, scanned_to)) =
-                next_protected_line(rest, base, base + start, true, &mut protected_scanned)
-        {
-            protected_scanned = scanned_to;
-            if protected_at > 0 {
-                // Jump to the line start: the top-of-loop fence check
-                // processes it next (its own state is updated there).
-                out.push_str(&rest[..protected_at]);
-                rest = &rest[protected_at..];
-                at_line_start = true;
-                continue;
-            }
-            // The cursor is AT a protected line (at_line_start was
-            // false): process it like the top-of-loop check would.
-            let line_end = rest.find('\n').map_or(rest.len(), |at| at + 1);
-            protected_scanned = base + line_end;
-            let line = &rest[..line_end];
-            let trimmed = line.trim_start_matches(' ');
-            let indent = line.len() - trimmed.len();
-            if indent <= 3 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
-                let marker = &trimmed[..3];
-                let info = &rest[indent + 3..line_end.min(rest.len())];
-                let empty = info.trim().is_empty();
-                if fence.as_deref() == Some(marker) && empty {
-                    fence = None;
-                } else if fence.is_none() {
-                    fence = Some(marker.to_owned());
-                }
-            }
-            out.push_str(line);
-            rest = &rest[line_end..];
-            at_line_start = true;
-            continue;
+        // A stop inside code: copied verbatim through the code's end.
+        while code.get(code_index).is_some_and(|range| range.end <= base + start) {
+            code_index += 1;
         }
-        if Some(start) == code_start && Some(start) != tag_start {
-            // An inline code span: copy through its closing backtick run.
-            // An unmatched run is text: advance past it (skipping to EOF
-            // would drop every later include).
-            let ticks = rest[start..].len() - rest[start..].trim_start_matches('`').len();
-            let closer = "`".repeat(ticks);
-            // A code span cannot span a blank line (CommonMark): a closer
-            // past one doesn't close — the run is text, and its content
-            // is scanned normally (review_0003 G13).
-            let tail = &rest[start + ticks..];
-            let closer_found = tail
-                .find("\n\n")
-                .map_or(tail.find(&closer), |blank| {
-                    tail[..blank].find(&closer)
-                });
-            let end = closer_found.map_or(start + ticks, |at| start + ticks + at + ticks);
+        if let Some(range) = code.get(code_index).filter(|range| range.start <= base + start) {
+            let end = range.end - base;
             out.push_str(&rest[..end]);
             rest = &rest[end..];
-            at_line_start = false;
             continue;
         }
         if Some(start) == comment_start {
@@ -454,7 +343,6 @@ pub(crate) fn resolve_references(
             let end = start + end + 2;
             out.push_str(&rest[..end]);
             rest = &rest[end..];
-            at_line_start = false;
             continue;
         }
         // A Tera tag or expression; the text before it is copied as is.
@@ -465,19 +353,16 @@ pub(crate) fn resolve_references(
             let Some(span_len) = tera_span_end(&rest[start..], *b"}}") else {
                 out.push_str(&rest[start..start + 2]);
                 rest = &rest[start + 2..];
-                at_line_start = false;
-                continue;
+                    continue;
             };
             out.push_str(&rest[start..start + span_len]);
             rest = &rest[start + span_len..];
-            at_line_start = false;
             continue;
         }
         let Some(tag_len) = tera_span_end(&rest[start..], *b"%}") else {
             // A lone `{%` without its closer: text; keep scanning after it.
             out.push_str(&rest[start..start + 2]);
             rest = &rest[start + 2..];
-            at_line_start = false;
             continue;
         };
         let tag = &rest[start..start + tag_len];
@@ -511,10 +396,12 @@ pub(crate) fn resolve_references(
                 out.push_str(tag);
                 rest = &rest[start + tag_len..];
             }
-            at_line_start = false;
             continue;
         };
         let resolved = path.resolve_embed_str(literal)?;
+        if is_remote(&resolved) {
+            return Err(format!("template include names a remote source: {literal}").into());
+        }
         // `read_asset_bytes` skips Bevy's own unapproved-path check
         // (`../..` out of the asset root would load): enforce it here.
         // The mode is Bevy's DEFAULT (`Forbid`) and is not consulted:
@@ -537,7 +424,6 @@ pub(crate) fn resolve_references(
         out.push_str(&resolved.to_string());
         out.push_str(&tag[quote_offset + 1 + literal.len()..]);
         rest = &rest[start + tag_len..];
-        at_line_start = false;
         references.push(resolved);
     }
     out.push_str(rest);
@@ -645,6 +531,55 @@ async fn load_template(
 
 
 
+/// Includes naming a network source fail the load (review_0003 G19:
+/// with Bevy's `http`/`https` features a template reached the network);
+/// other sources stay usable.
+#[test]
+fn remote_includes_are_refused() {
+    let path = AssetPath::from("page.html");
+    for remote in ["https://evil.example/x.html", "HTTP://evil.example/x.html"] {
+        let source = format!(r#"{{% include "{remote}" %}}"#);
+        assert!(resolve_references(&path, &source).is_err(), "{remote}");
+    }
+    let (_, references) =
+        resolve_references(&path, r#"{% include "embedded://crate/part.html" %}"#).unwrap();
+    assert_eq!(references[0].to_string(), "embedded://crate/part.html");
+}
+
+/// The scanner's code protection is pulldown's: the shapes the
+/// hand-written fence/indent/backtick rules got wrong (review_0003 G17,
+/// review_0004 H04) — a dropped real include fails the render ("Unknown
+/// template"), a code sample taken for a reference fails the load
+/// (NotFound). Each case states what CommonMark makes of the include.
+#[test]
+fn scanner_code_is_commonmark_code() {
+    let path = AssetPath::from("page.md");
+    let resolve = |source: &str| {
+        resolve_references(&path, source)
+            .map(|(_, refs)| refs.iter().map(|r| r.to_string()).collect::<Vec<_>>())
+            .unwrap()
+    };
+    let real = vec!["real.md".to_owned()];
+    let none = Vec::<String>::new();
+    for (shape, source, expected) in [
+        ("lazy continuation", "Intro\n    {% include \"real.md\" %}\n", &real),
+        ("list item paragraph", "- item\n\n    {% include \"real.md\" %}\n", &real),
+        ("tab-indented code", "Intro\n\n\t{% include \"gone.md\" %}\n", &none),
+        ("escaped backticks", "\\`{% include \"real.md\" %}\\`\n", &real),
+        ("longer fence closer", "```\ncode\n````\n\n{% include \"real.md\" %}\n", &real),
+        ("shorter fence closer", "````\n```\n{% include \"gone.md\" %}\n````\n", &none),
+        ("fence in a quote", "> ```\n> {% include \"gone.md\" %}\n> ```\n", &none),
+        ("fence in a list", "- item\n\n  ```\n  {% include \"gone.md\" %}\n  ```\n", &none),
+        ("double-backtick span", "``a ` {% include \"gone.md\" %} ``\n", &none),
+        ("unclosed span", "a ` b\n\n{% include \"real.md\" %}\n", &real),
+        // Indentation inside a Tera block isn't Markdown (review_0004
+        // H11): this body line is a paragraph, so the include runs.
+        ("indented block body", "{% if a %}\n    see {% include \"real.md\" %}\n{% endif %}\n", &real),
+    ] {
+        assert_eq!(&resolve(source), expected, "{shape}");
+    }
+}
+
 /// The scanner's code protection agrees with pulldown on the shapes G13
 /// found: a fence after prose, indented code, whitespace-control raw
 /// variants, code spans across blank lines (their content is scanned),
@@ -689,34 +624,56 @@ fn scanner_protects_code_like_pulldown() {
 mod tests {
 /// The scanners are linear (review_0003 G14: they used to re-find each
 /// stop needle, or re-scan the line, per statement — a 320 KB template
-/// cost seconds to load). The bounds leave ~10x headroom over the fixed
-/// cost while failing the old quadratic behavior by 10-50x.
+/// cost seconds to load). Asserted as *scaling*, not wall time (review_0004
+/// H09: a 2 s bound passed a quadratic rewrite at 1.25 s): 4× the input
+/// may cost at most 8× the time — linear is ~4×, quadratic ~16× — best of
+/// three runs each, so machine speed and load cancel out.
 #[test]
 fn scanners_stay_linear_on_pathological_input() {
-    use std::time::Instant;
-    let bound = std::time::Duration::from_secs(2);
-
-    let big_expr = "{{ x }}\n".repeat(40_000);
-    let t = Instant::now();
+    use std::time::{Duration, Instant};
     let path = AssetPath::from("p.md");
-    let _ = resolve_references(&path, &big_expr);
-    eprintln!("G14 DBG expr: {:?}", t.elapsed());
-    let big_code = "`c`\n".repeat(40_000);
-    let t = Instant::now();
-    let _ = resolve_references(&path, &big_code);
-    eprintln!("G14 DBG code: {:?}", t.elapsed());
-
-    let big_own = "{% if a %}x{% endif %}\n".repeat(40_000);
-    let t = Instant::now();
-    let _ = md::separate_statements(&big_own);
-    let elapsed = t.elapsed();
-    assert!(elapsed < bound, "separate_statements is quadratic again: {elapsed:?}");
-
-    let big_inline = "{% if a %}x{% endif %} ".repeat(40_000);
-    let t = Instant::now();
-    let _ = md::separate_statements(&big_inline);
-    let elapsed = t.elapsed();
-    assert!(elapsed < bound, "separate_statements is quadratic again: {elapsed:?}");
+    let best = |text: &str, run: &dyn Fn(&str)| -> Duration {
+        (0..3)
+            .map(|_| {
+                let start = Instant::now();
+                run(text);
+                start.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+    let resolve = |text: &str| drop(resolve_references(&path, text));
+    let separate = |text: &str| drop(md::separate_statements(text));
+    // Deeply nested, indented blocks: the dedent re-reads each body per
+    // level (review_0004 H11), bounded by its depth cap.
+    let nested = |count: usize| {
+        let open: String = (0..count).map(|depth| format!("{}{{% if a %}}\n", " ".repeat(depth % 40))).collect();
+        let close: String = (0..count).rev().map(|depth| format!("{}{{% endif %}}\n", " ".repeat(depth % 40))).collect();
+        format!("{open}text\n{close}")
+    };
+    for (shape, small, large) in [
+        ("expressions", "{{ x }}\n".repeat(10_000), "{{ x }}\n".repeat(40_000)),
+        ("code spans", "`c`\n".repeat(10_000), "`c`\n".repeat(40_000)),
+        (
+            "own-line statements",
+            "{% if a %}x{% endif %}\n".repeat(10_000),
+            "{% if a %}x{% endif %}\n".repeat(40_000),
+        ),
+        (
+            "one line of inline statements",
+            "{% if a %}x{% endif %} ".repeat(10_000),
+            "{% if a %}x{% endif %} ".repeat(40_000),
+        ),
+        ("deeply nested indented blocks", nested(1_000), nested(4_000)),
+    ] {
+        for (scanner, run) in [("resolve_references", &resolve as &dyn Fn(&str)), ("separate_statements", &separate)] {
+            let (small_time, large_time) = (best(&small, run), best(&large, run));
+            assert!(
+                large_time < small_time * 8 + Duration::from_millis(20),
+                "{scanner} scales superlinearly on {shape}: 10k {small_time:?}, 40k {large_time:?}"
+            );
+        }
+    }
 }
 
     use super::*;

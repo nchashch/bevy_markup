@@ -10,8 +10,12 @@
 //! message's formatted value as its content, replacing its children; its own
 //! content is the fallback when the message is missing or no [`ActiveLocale`]
 //! is set. `data-l10n-args` is a JSON object of Fluent variables (numbers stay
-//! numbers, so plural selectors work); a whole map can come from one Tera
-//! variable: `data-l10n-args='{{ args }}'`.
+//! numbers, so plural selectors work). Build it with Tera, which prints a
+//! map as JSON with its strings escaped — a map literal,
+//! `data-l10n-args='{{ {"name": player, "coins": coins} }}'`, or a whole
+//! map from one variable, `data-l10n-args='{{ args }}'`. Don't splice a
+//! value into hand-written JSON (`'{"name": "{{ player }}"}'`): a value
+//! holding `"` then adds arguments of its own.
 //!
 //! Translations are markup, like fluent-dom's "DOM overlays": a value may
 //! contain inline elements (`Press <kbd>Ctrl</kbd>…`), styled by the CSS like
@@ -173,8 +177,18 @@ impl AssetLoader for LocaleBundleLoader {
 
         let mut bundle = ConcurrentBundle::new_concurrent(vec![manifest.locale]);
         let mut sources = Vec::new();
+        // A path listed twice is read once: repeating it only re-parsed the
+        // file and warned about every message id as a duplicate (review_0003
+        // G22).
+        let mut seen = std::collections::HashSet::new();
         for name in manifest.resources {
             let path = load_context.path().resolve_embed_str(&name)?;
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            if crate::template::is_remote(&path) {
+                return Err(format!("resource names a remote source: {name}").into());
+            }
             // `read_asset_bytes` skips Bevy's own unapproved-path check:
             // enforce it (the mode is Bevy's DEFAULT, `Forbid`;
             // `LoadContext` exposes no read of
@@ -336,24 +350,17 @@ fn resolve_all(
                             // The cache is an accelerator: a text that
                             // doesn't split (an argument swallowing a
                             // literal part) falls back to converting the
-                            // formatted text directly. The values were
-                            // escaped by `parse_args`: pulldown decodes
-                            // the entities and push_html escapes them
-                            // back, so a value's `<` stays text — raw
-                            // values injected markup there (an arg's
-                            // `<a … data-on-click>` became a real
-                            // element, review_0003 G01).
-                            text.map(|text| {
-                                substitute(entry, &text).unwrap_or_else(|| {
-                                    md::to_html(&translate(bundle, &id, args.as_deref()).unwrap_or(text))
-                                })
+                            // formatted text per value.
+                            text.and_then(|text| {
+                                substitute(entry, &text).map_or_else(
+                                    || markdown_per_value(bundle, &id, args.as_deref()),
+                                    Ok,
+                                )
                             })
                         }
-                        None if markdown.is_some() => text.map(|_| {
-                            md::to_html(
-                                &translate(bundle, &id, args.as_deref()).unwrap_or_default(),
-                            )
-                        }),
+                        None if markdown.is_some() => {
+                            text.and_then(|_| markdown_per_value(bundle, &id, args.as_deref()))
+                        }
                         None => text,
                     },
                 );
@@ -375,13 +382,86 @@ where
     R: Borrow<FluentResource>,
     M: MemoizerKind,
 {
-    translate_with(bundle, id, args_json)
+    translate_with(bundle, id, args_json, false)
+}
+
+/// A `markdown: true` message the cache can't take, converted per value:
+/// the formatted text goes through pulldown, so the string arguments'
+/// characters must not be Markdown. They are escaped by `parse_args`
+/// (HTML: an arg's `<a … data-on-click>` stays text, review_0003 G01)
+/// *and* made inert (`inert_markdown`: an arg's `[x](url)` or `![x](p)`
+/// became a real link or image here while the cached path showed it as
+/// text, review_0004 H03); the stand-ins are restored after conversion.
+fn markdown_per_value<R, M>(
+    bundle: &FluentBundle<R, M>,
+    id: &str,
+    args_json: Option<&str>,
+) -> Result<String, String>
+where
+    R: Borrow<FluentResource>,
+    M: MemoizerKind,
+{
+    translate_with(bundle, id, args_json, true).map(|text| restore_inert(&md::to_html(&text)))
+}
+
+/// The first Private Use Area code point of the stand-ins: an inert
+/// ASCII character `c` is carried through the conversion as
+/// `INERT_BASE + c`, which means nothing to Markdown in text or code.
+const INERT_BASE: u32 = 0xF700;
+
+/// The characters a string argument must not contribute as Markdown:
+/// ASCII punctuation (links, images, emphasis, code, headings, lists,
+/// tables, footnotes, escapes) and line breaks (block structure). `&`,
+/// `<`, `>`, `"` and `'` are left to `escape_html`, whose entities need
+/// their `&#;` — and restoring a stand-in to one of those would forge
+/// markup.
+fn is_inert(c: char) -> bool {
+    (c.is_ascii_punctuation() && !matches!(c, '&' | '<' | '>' | '"' | '\''))
+        || matches!(c, '\n' | '\r' | '\t')
+}
+
+/// `text` with its Markdown-significant characters swapped for their
+/// stand-ins — unless it is shaped like a Fluent identifier (letters,
+/// digits, `-`, `_`, starting with a letter): such a value may be a
+/// select's variant key (`[two-handed]`), which a swapped `-` would no
+/// longer match, and it can't start a link, image, list or heading.
+fn inert_markdown(text: &str) -> String {
+    let identifier = text.starts_with(|c: char| c.is_ascii_alphabetic())
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if identifier {
+        return text.to_owned();
+    }
+    text.chars()
+        .map(|c| {
+            if is_inert(c) {
+                char::from_u32(INERT_BASE + c as u32).unwrap_or(c)
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// The converted HTML with the stand-ins back as their characters. Only
+/// stand-ins of inert characters are restored: a value carrying, say,
+/// the stand-in of `<` keeps it as that private-use character.
+fn restore_inert(html: &str) -> String {
+    html.chars()
+        .map(|c| {
+            let original = (c as u32)
+                .checked_sub(INERT_BASE)
+                .and_then(char::from_u32)
+                .filter(|original| original.is_ascii() && is_inert(*original));
+            original.unwrap_or(c)
+        })
+        .collect()
 }
 
 fn translate_with<R, M>(
     bundle: &FluentBundle<R, M>,
     id: &str,
     args_json: Option<&str>,
+    inert: bool,
 ) -> Result<String, String>
 where
     R: Borrow<FluentResource>,
@@ -395,7 +475,9 @@ where
         .ok_or_else(|| format!("message `{id}` has no value"))?;
 
     let args = args_json
-        .map(|json| parse_args(json).map_err(|err| format!("`{id}` data-l10n-args: {err}")))
+        .map(|json| {
+            parse_args(json, inert).map_err(|err| format!("`{id}` data-l10n-args: {err}"))
+        })
         .transpose()?;
 
     let mut errors = Vec::new();
@@ -669,7 +751,9 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
 }
 
 #[allow(clippy::needless_continue)]
-fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
+/// `inert`: string values are also made inert for a Markdown conversion
+/// (`inert_markdown`, the per-value path).
+fn parse_args(json: &str, inert: bool) -> Result<FluentArgs<'static>, String> {
     let serde_json::Value::Object(map) =
         serde_json::from_str(json).map_err(|err| err.to_string())?
     else {
@@ -683,11 +767,14 @@ fn parse_args(json: &str) -> Result<FluentArgs<'static>, String> {
                 None => return Err(format!("`{key}`: number out of range")),
             },
             // Translations are parsed as markup: escape the value, so
-            // its characters are text. The Markdown per-value path
-            // decodes the conversion's second escape (to_html_value);
-            // raw values injected markup there (review_0003 G01).
+            // its characters are text (raw values injected markup on
+            // the Markdown per-value path, review_0003 G01).
             serde_json::Value::String(string) => {
-                args.set(key, escape_html(&string));
+                if inert {
+                    args.set(key, escape_html(&inert_markdown(&string)));
+                } else {
+                    args.set(key, escape_html(&string));
+                }
             }
             serde_json::Value::Bool(flag) => args.set(key, flag.to_string()),
             _ => {
@@ -921,9 +1008,10 @@ mod tests {
         );
     }
 
-    /// The per-value path (a message the cache can't take) keeps an `&`
-    /// an `&` in a code span: `to_html_value` decodes the conversion's
-    /// conversion — the cached and per-value outputs agree.
+    /// The per-value path (a message the cache can't take) shows an `&`
+    /// in a code span as `&`, escaped once: the conversion decodes the
+    /// five entities in code (`decode_code_entities`) — the cached and
+    /// per-value outputs agree.
     #[test]
     fn code_span_args_escape_once_per_value() {
         // A select makes the message uncacheable: the per-value path.
@@ -934,9 +1022,8 @@ mod tests {
         );
         // The production per-value output (resolve_all's fallback): the
         // `&` in the code span is escaped once (parse_args escapes the
-        // value and pulldown escapes the conversion; `to_html_value`
-        // decodes that second escape — raw values injected markup,
-        // review_0003 G01).
+        // value, the conversion decodes it in code and push_html escapes
+        // it again; raw values injected markup, review_0003 G01).
         let dom = crate::template::HtmlDocument::parse(
             r#"<p data-l10n-id="cmd" data-l10n-args='{"cmd":"a & b","os":"linux"}'></p>"#.to_owned(),
         )
@@ -951,12 +1038,68 @@ mod tests {
         assert!(!html.contains("&amp;amp;"), "double-escaped: {html}");
     }
 
+/// String arguments cannot inject *Markdown* on the per-value path
+/// either: escaping HTML left `[x](url)` and `![x](path)` to pulldown,
+/// so a player name became a real link (an `open` signal with the
+/// attacker's href) or image there, while the cached path showed the
+/// same value as text (review_0004 H03). Every Markdown-significant
+/// character of a value is inert; the output matches the cached path's.
+#[test]
+fn string_args_cannot_inject_markdown_on_the_per_value_path() {
+    let run = |source: &str, id: &str, args: &str| {
+        // The attribute is escaped as Tera's autoescape would.
+        let args = args.replace('&', "&amp;").replace('\'', "&#39;");
+        let page = format!("<p data-l10n-id=\"{id}\" data-l10n-args='{args}'></p>");
+        let dom = crate::template::HtmlDocument::parse(page).unwrap();
+        let resource =
+            std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
+        let mut concurrent =
+            fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
+        concurrent.add_resource(resource).unwrap();
+        let localized = resolve_all(
+            dom.dom(),
+            &concurrent,
+            Some(&markdown_cache(&[source.to_owned()])),
+        );
+        localized.values().next().unwrap().as_ref().unwrap().clone()
+    };
+    let source = "hi = Hello { $who }!\n\
+                  sel = { $n ->\n    [one] Hello { $who }!\n   *[other] Hello { $who }!\n}\n\
+                  kind = { $k ->\n    [two-handed] Heavy *{ $k }*\n   *[other] Light\n}\n";
+    for who in [
+        "[Continue](https://evil.example) ![x](../../save.png)",
+        "*bold* _it_ `code` ~~gone~~ \\* | a | b |",
+        "line\n\n# Heading\n\n- item\n\n    code\n1. one",
+        "<b>tag</b> & \"quoted\" 'single'",
+        "[^1]\n\n[^1]: note",
+    ] {
+        let args = serde_json::json!({ "n": 2, "who": who }).to_string();
+        let per_value = run(source, "sel", &args);
+        for forged in ["<a ", "<img", "<em", "<strong", "<code", "<del", "<h1", "<ul", "<ol",
+            "<pre", "<table", "<b>", "<sup", "<section", "<li"] {
+            assert!(!per_value.contains(forged), "{who:?} forged {forged}: {per_value}");
+        }
+        // The cached path's rendering of the same text: the two agree
+        // (as the build reads them — pulldown leaves quotes unescaped
+        // in text, the cache keeps `&quot;`).
+        let cached = run(source, "hi", &args);
+        assert_eq!(decode_entities(&per_value), decode_entities(&cached), "{who:?}");
+    }
+    // An identifier-shaped value still selects its variant, and the
+    // author's own Markdown around it still converts.
+    let html = run(source, "kind", r#"{"k": "two-handed"}"#);
+    assert!(html.contains(r#"Heavy <em class="markdown">two-handed</em>"#), "{html}");
+    // A value can't smuggle the stand-in of `<` past the restore.
+    let html = run(source, "sel", r#"{"n": 2, "who": "\uf73cb\uf73e"}"#);
+    assert!(!html.contains("<b"), "{html}");
+}
+
 /// String arguments cannot inject markup on the per-value path: a
-/// crafted value stayed raw through `translate_raw` and pulldown passed
-/// its HTML through, so a player name could forge a clickable element
-/// carrying `data-on-*` bindings (review_0003 G01). Both shapes that
-/// reach the per-value path are pinned: a selector, and an ambiguous
-/// split falling out of `substitute`.
+/// crafted value stayed raw (the former `translate_raw`) and pulldown
+/// passed its HTML through, so a player name could forge a clickable
+/// element carrying `data-on-*` bindings (review_0003 G01). Both shapes
+/// that reach the per-value path are pinned: a selector, and an
+/// ambiguous split falling out of `substitute`.
 #[test]
 fn string_args_cannot_inject_markup_on_the_per_value_path() {
     let run = |source: &str, page: &str| {
