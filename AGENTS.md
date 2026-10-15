@@ -436,12 +436,20 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   already match; the one queued write refreshes the `DomNode` handle,
   remapped up front while the `Arc`s are exclusively held), skipping the
   cascade, the run construction and all copying for them. Reuse is
-  content-only: a pending style-side change (`RebuildState::style_pending` —
-  set on any style signal, surviving a `Wait` until an update applies it)
-  skips reuse, since the cached specs' styles would be stale. `:hover`/`:active`,
-  `var()` values, font or image changes rebuild fully, translated elements
-  never reuse, and an all-dirty workload turns the pairing off (retried
-  every 16th build). Per sibling list, an element whose `id` is unique among the old *and* new
+  content-only — except for scoped restyles (ADR 0029): a pure
+  `PseudoState` change pairs too, and reuses everything outside the
+  flipped elements' paths to the root; a re-collected element's children
+  re-cascade only where its fresh inherited style differs from the cached
+  spec's (`NodeSpec::style`), so a `:hover` flip that changes only a
+  background leaves the children cached while one that changes `color`
+  re-cascades them. Other style-side changes (`var()` values, font,
+  image or stylesheet changes) still rebuild fully
+  (`RebuildState::style_pending` — set on
+  any style signal, surviving a `Wait` until an update applies it — and
+  `full_style` in the pass gate), translated elements never reuse, and an
+  all-dirty workload turns the pairing off (retried every 16th build;
+  restyle passes preserve the strike counters — their reuse rate says
+  nothing about content-pairing utility). Per sibling list, an element whose `id` is unique among the old *and* new
   siblings is matched by it, the rest by position among themselves (a
   duplicated `id` keys nothing — keying it looped: the second copy was
   respawned on every restyle its `PseudoState` triggered). A match with the

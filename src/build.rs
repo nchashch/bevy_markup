@@ -281,9 +281,12 @@ enum Item {
         pointer_events: bool,
         /// The element's computed font-size (for `EmSize`).
         font_size: f32,
+        /// The element's computed style: the children's inherited base
+        /// (ADR 0029's scoping compares it with the cached spec's).
+        style: Style,
         children: Vec<Item>,
     },
-    /// An `<input type="text">` (the `text-input` feature).
+    /// A `<input type="text">` (the `text-input` feature).
     #[cfg(feature = "text-input")]
     TextInput {
         element: HtmlElement,
@@ -294,10 +297,13 @@ enum Item {
         boxed: BoxStyle,
         pointer_events: bool,
         font_size: f32,
+        /// The element's computed style: the children's inherited base
+        /// (ADR 0029's scoping compares it with the cached spec's).
+        style: Style,
         value: TextInputSpec,
     },
     /// ADR 0021: a reused subtree — the previous build's spec, handed to
-    /// the diff by refcount (its handles were remapped up front).
+    /// the diff by refcount (its entities already match it).
     Cached(Arc<NodeSpec>),
 }
 
@@ -898,15 +904,34 @@ pub(crate) fn build_html_ui(
 
     // UIs with an element whose `:hover`/`:active` state changed: the state
     // change restyles that UI (the owning `HtmlUi` is the walk's first hit).
-    let mut state_restyle: HashSet<Entity> = HashSet::new();
+    // ADR 0029: the walk also records, per owning UI, the flipped
+    // elements' handles and every handle on their path up to the root, in
+    // the last build's handle space. The scoping that turns this into the
+    // reuse-blocking set runs at the pass (it needs the old document).
+    let mut state_restyle: HashMap<Entity, (Vec<tl::NodeHandle>, HashSet<tl::NodeHandle>)> =
+        HashMap::new();
     for entity in pseudo_changed.iter() {
+        let mut path = Vec::new();
         let mut current = Some(entity);
+        let mut owner = None;
         while let Some(node) = current {
             if views.contains(node) {
-                state_restyle.insert(node);
+                owner = Some(node);
                 break;
             }
+            path.push(node);
             current = parents.get(node).ok().map(|parent| parent.0);
+        }
+        if let Some(owner) = owner {
+            let (flips, blocked) = state_restyle.entry(owner).or_default();
+            if let Ok((handle, _)) = dom_nodes.get(entity) {
+                flips.push(**handle);
+            }
+            for node in path {
+                if let Ok((handle, _)) = dom_nodes.get(node) {
+                    blocked.insert(**handle);
+                }
+            }
         }
     }
 
@@ -948,7 +973,7 @@ pub(crate) fn build_html_ui(
                     .is_some_and(|own| own.is_changed() || refreshed(&own.0)),
             default_changed,
             fonts_changed: fonts.is_changed(),
-            state_changed: state_restyle.contains(&entity),
+            state_changed: state_restyle.contains_key(&entity),
             vars_changed: vars_hash != rebuild.vars,
             images_changed: used_images.is_some_and(|images| {
                 images
@@ -976,7 +1001,7 @@ pub(crate) fn build_html_ui(
     let depth = |entity: Entity| parents.iter_ancestors(entity).count();
     decisions.sort_by_key(|(entity, ..)| std::cmp::Reverse(depth(*entity)));
 
-    for (entity, decision, _frame, style_pending) in decisions {
+    for (entity, decision, frame, style_pending) in decisions {
         let (source, restyle) = match decision {
             Decision::Wait | Decision::Skip => continue,
             Decision::Build(source) => (source, false),
@@ -1065,21 +1090,27 @@ pub(crate) fn build_html_ui(
         // ADR 0021: pair the fresh document with the previous build's when
         // only the template's rendered content changed; unchanged subtrees
         // reuse their items, so the cascade and run construction skip
-        // them. Style-side changes rebuild fully — the reused items' styles
-        // would be stale. `style_pending` covers every kind: a stylesheet
-        // swap or reload, its images, state, `var()`s, fonts — including a
-        // change that arrived while a needed sheet loaded and was merged
-        // into this build's pending update.
+        // them. ADR 0029: a restyle pairs too. Its document is the
+        // previous one (re-parsed — identical sources parse to identical
+        // handle numbering), so every subtree pairs clean content-wise,
+        // and the pass scopes which of them may reuse: a `PseudoState`
+        // flip only affects the flipped element's subtree (no `:has` —
+        // rules match an element by its own and its ancestors' pseudo
+        // states), while a stylesheet, font, image or `var()` change can
+        // touch any element (`full_style`: no reuse, as before this ADR).
+        // A build carrying style changes (`style_pending`) still rebuilds
+        // fully: its content pairing would hand out stale styles.
         // A localization change doesn't block reuse: only translated
         // elements depend on it, and those are excluded from the pairing
         // (their items come from per-build fragments).
         const SKELETON: bool = true;
+        let document_ready = !matches!(*rendered, RenderedHtml::Pending);
         let skeleton_eligible = SKELETON
-            && matches!(decision, Decision::Build(_))
             && outline.is_none()
             && !removed_outlines.contains(&entity)
-            && rendered.is_changed()
-            && !style_pending;
+            && document_ready
+            && (rendered.is_changed() || restyle)
+            && (!style_pending || restyle);
         let (previous_useful, previous_since_try, previous_strike, had_skeleton) = skeletons
             .get(entity)
             .map_or((true, 0, 0, false), |skeleton| {
@@ -1107,6 +1138,23 @@ pub(crate) fn build_html_ui(
             let RenderedHtml::Ready(document) = &*rendered else {
                 break 'pass None;
             };
+            // ADR 0029: which cached subtrees may reuse. A restyle from a
+            // sheet, font, image or `var()` change can restyle anything —
+            // nothing reuses. A pure `PseudoState` restyle reuses
+            // everything outside the flipped elements' paths to the root:
+            // a flip restyles its own element (if a rule matches its
+            // state) and — through inheritance — its subtree, and the
+            // walk must *reach* the flip through its ancestors, so those
+            // re-collect; the descendants re-collect only where the
+            // re-collected ancestor's inherited style actually changed
+            // (the walk compares it against the cached spec's).
+            let full_style = restyle
+                && (frame.own_changed
+                    || frame.default_changed
+                    || frame.fonts_changed
+                    || frame.images_changed
+                    || frame.vars_changed);
+            let (_, blocked) = state_restyle.remove(&entity).unwrap_or_default();
             pair_trees_into(
                 old_document.dom(),
                 document.dom(),
@@ -1125,6 +1173,8 @@ pub(crate) fn build_html_ui(
                 specs: &skeleton.specs,
                 table: &skeleton.table,
                 reused: Cell::new(0),
+                full_style,
+                flipped: blocked,
             });
         };
 
@@ -1337,19 +1387,59 @@ pub(crate) fn build_html_ui(
             match pass.as_ref() {
                 Some(pass) => {
                     let total = spec_count(&specs);
-                    let useful = pass.reused.get() > 0 && pass.reused.get() * 2 >= total;
+                    // ADR 0029: a restyle's reuse rate says nothing about
+                    // content-pairing utility (a scoped pseudo restyle
+                    // reuses most of the page; a sheet-driven one reuses
+                    // nothing by design) — a restyle pass preserves the
+                    // content path's adaptive state instead of striking.
+                    let content_build = matches!(decision, Decision::Build(_));
+                    let useful = content_build
+                        && pass.reused.get() > 0
+                        && pass.reused.get() * 2 >= total;
                     // A useless retry backs the next one off; a useful one
                     // (or the first) restores the short cadence.
-                    let strike = if useful { 0 } else { previous_strike + 1 };
+                    let strike = if !content_build {
+                        previous_strike
+                    } else if useful {
+                        0
+                    } else {
+                        previous_strike + 1
+                    };
                     let table = spec_table(&specs);
-                    let document = current_source.and_then(|source| parse(source));
-                    commands.entity(entity).insert(Skeleton {
-                        document,
-                        specs,
-                        table,
-                        useful,
-                        since_try: 0,
-                        strike,
+                    let current_source = current_source.clone();
+                    // The stored document must be the render the specs
+                    // were collected from — but a re-parse per build is
+                    // the cost of owning it. Identical sources parse to
+                    // identical handle numbering, so an unchanged source
+                    // keeps the stored document (the common restyle: the
+                    // per-frame `var()` storm re-parses nothing).
+                    commands.queue(move |world: &mut World| {
+                        let Some(mut skeleton) = world.get_mut::<Skeleton>(entity) else {
+                            let document = current_source.and_then(|source| parse(source));
+                            world.entity_mut(entity).insert(Skeleton {
+                                document,
+                                specs,
+                                table,
+                                useful,
+                                since_try: 0,
+                                strike,
+                            });
+                            return;
+                        };
+                        skeleton.specs = specs;
+                        skeleton.table = table;
+                        let unchanged = match (&skeleton.document, &current_source) {
+                            (Some(old), Some(new)) => old.source() == new.as_str(),
+                            (None, None) => true,
+                            _ => false,
+                        };
+                        if !unchanged {
+                            skeleton.document =
+                                current_source.and_then(|source| parse(source));
+                        }
+                        skeleton.useful = useful;
+                        skeleton.since_try = 0;
+                        skeleton.strike = strike;
                     });
                 }
                 None if !had_skeleton => {
@@ -1433,6 +1523,11 @@ struct NodeSpec {
     custom: Option<CustomElement>,
     /// The DOM node, for `:hover`/`:active` restyles.
     handle: Option<tl::NodeHandle>,
+    /// The element's computed (inherited) style: what its subtree's
+    /// inheritance base was at collection (ADR 0029's scoping compares a
+    /// re-collected element's fresh style with this to decide whether its
+    /// children must re-cascade).
+    style: Style,
     background: Option<Color>,
     image: Option<ImageNode>,
     border_color: Option<BorderColor>,
@@ -1508,6 +1603,19 @@ impl NodeSpec {
             focus: None,
             custom: None,
             handle: None,
+            // Overwritten by every construction site (`item_spec`'s arms
+            // and the tests) with the element's computed style; this
+            // placeholder only fills the field for the arms that set it
+            // through the spread.
+            style: Style {
+                color: DEFAULT_COLOR,
+                family: None,
+                size: DEFAULT_FONT_SIZE,
+                bold: false,
+                italic: false,
+                pointer_events: true,
+                opacity: 1.0,
+            },
             background: None,
             image: None,
             border_color: None,
@@ -1994,7 +2102,7 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
 /// with its child items for [`item_spec`] to build (and its `children`
 /// and `images` still empty).
 fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpec, Option<&'a [Item]>) {
-    let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children) =
+    let (element, handle, signals, focus, custom, boxed, pointer_events, font_size, children, style) =
         match item {
             // A reused subtree's spec comes out by refcount in the caller;
             // this path only builds fresh items.
@@ -2010,6 +2118,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 boxed,
                 pointer_events,
                 font_size,
+                style,
                 value,
             } => {
                 // Returns directly: the other arms feed the shared tuple tail.
@@ -2022,6 +2131,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 let font_size = *font_size;
                 let handle = *handle;
                 let pointer_events = *pointer_events;
+                let style = style.clone();
                 let mut node = Node {
                     flex_direction: FlexDirection::Column,
                     flex_shrink: 0.0,
@@ -2049,6 +2159,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                         .visibility
                         .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
                     font_size,
+                    style,
                     #[cfg(feature = "text-input")]
                     text_input: Some(value),
                     children: Vec::new(),
@@ -2066,6 +2177,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 boxed,
                 pointer_events,
                 font_size,
+                style,
                 children,
             } => (
                 element.clone(),
@@ -2079,6 +2191,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 // Only iterated: borrowing avoids a deep copy of the whole
                 // subtree per container.
                 children,
+                style.clone(),
             ),
         };
     let mut node = Node {
@@ -2110,6 +2223,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
             .visibility
             .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
         font_size,
+        style,
         calc: boxed.calc.clone(),
         transitions: boxed.transitions.clone(),
         ..NodeSpec::new(node)
@@ -2217,6 +2331,7 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
                 .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
             submit: block.submit,
             font_size: block.style.size,
+            style: block.style.clone(),
             images,
             text: Some(text),
             calc: boxed.calc.clone(),
@@ -2258,9 +2373,13 @@ fn block_spec(styler: &Styler, block: &Block) -> NodeSpec {
             .map(|visible| if visible { Visibility::Visible } else { Visibility::Hidden }),
         submit: block.submit,
         font_size: block.style.size,
+        style: block.style.clone(),
         images,
         children: vec![SpecNode::Fresh(Arc::new(NodeSpec {
             pickable: block.style.pointer_events,
+            // The inner text node's inherited base is the block's: its
+            // runs styled from it (ADR 0029's scoping reads it).
+            style: block.style.clone(),
             text: Some(text),
             ..NodeSpec::new(text_node)
         }))],
@@ -3540,6 +3659,16 @@ struct SkeletonPass<'a> {
     table: &'a HashMap<tl::NodeHandle, Vec<usize>>,
     /// How many specs the build reused.
     reused: Cell<usize>,
+    /// ADR 0029: a style-side change that scopes to nothing (a sheet,
+    /// font, image or `var()` change): no cached subtree's style is known
+    /// unchanged, so nothing reuses and every element re-cascades.
+    full_style: bool,
+    /// ADR 0029: old-document handles whose `PseudoState` changed this
+    /// build — each flipped element, its ancestors up to the UI root, and
+    /// its descendants. A flip restyles exactly the flipped element's
+    /// subtree (no `:has`), so a node in that set must not reuse;
+    /// everything else's style is unchanged.
+    flipped: HashSet<tl::NodeHandle>,
 }
 
 /// Pairs the two documents' trees and records which old subtrees are
@@ -3790,6 +3919,14 @@ impl SkeletonPass<'_> {
         items.push(Item::Cached(Arc::clone(spec)));
         true
     }
+
+    /// The cached spec of a paired old node, without reusing it: ADR
+    /// 0029's scoping reads its stored inherited style to decide whether
+    /// a re-collected element's children must re-cascade.
+    fn cached_spec(&self, old: tl::NodeHandle) -> Option<&Arc<NodeSpec>> {
+        let path = self.table.get(&old)?;
+        spec_rc_at(self.specs, path)
+    }
 }
 
 /// The spec at `path`: the first index addresses a top-level spec, each
@@ -3951,6 +4088,7 @@ fn collect_node(
         pointer_events: bool,
         font_size: f32,
         start: usize,
+        style: Style,
     }
     enum Task {
         Node {
@@ -3959,6 +4097,11 @@ fn collect_node(
             chain: Rc<Vec<Ancestor>>,
             grid: Option<GridNames>,
             depth: usize,
+            /// The node's inherited base changed against what its cached
+            /// spec was collected with (ADR 0029): its own cascade output
+            /// may differ, so it may not reuse (its children re-decide
+            /// from its fresh inherited style).
+            inherited_changed: bool,
         },
         Complete(Box<Open>),
     }
@@ -3968,9 +4111,13 @@ fn collect_node(
         chain: Rc::new(chain.to_vec()),
         grid: grid.cloned(),
         depth,
+        // The root style's only inputs are the sheet, the fonts and the
+        // inline images — every one of them a `full_style` signal — so a
+        // build that reuses at all has an unchanged root base.
+        inherited_changed: false,
     }];
     while let Some(task) = stack.pop() {
-        let (handle, inherited, chain, grid, depth) = match task {
+        let (handle, inherited, chain, grid, depth, inherited_changed) = match task {
             Task::Complete(open) => {
                 let Open {
                     element,
@@ -3982,6 +4129,7 @@ fn collect_node(
                     pointer_events,
                     font_size,
                     start,
+                    style,
                 } = *open;
                 let children = items.drain(start..).collect();
                 items.push(Item::Container {
@@ -3993,6 +4141,7 @@ fn collect_node(
                     boxed,
                     pointer_events,
                     font_size,
+                    style,
                     children,
                 });
                 continue;
@@ -4003,7 +4152,8 @@ fn collect_node(
                 chain,
                 grid,
                 depth,
-            } => (handle, inherited, chain, grid, depth),
+                inherited_changed,
+            } => (handle, inherited, chain, grid, depth, inherited_changed),
         };
         if depth >= MAX_DOM_DEPTH {
             warn_overdepth();
@@ -4051,9 +4201,17 @@ fn collect_node(
         // `span`/`body` whose content makes anonymous items, raw text,
         // translations) falls through to the normal collection — returning
         // here would drop the subtree's content entirely.
+        // ADR 0029: on a scoped restyle, a node on a flipped element's path
+        // (itself or an ancestor flipped) re-cascades — its rules may now
+        // match differently, or its inherited base moved — while every
+        // other clean node's style comes out identical and reuses. So does
+        // a node whose inherited base is unchanged (the parent's flag).
         if let Some(skeleton) = ctx.skeleton
+            && !skeleton.full_style
+            && !inherited_changed
             && let Some(&old) = skeleton.pairing.get(&handle)
             && skeleton.clean.contains(&old)
+            && !skeleton.flipped.contains(&old)
             && skeleton.reuse(old, items)
         {
             continue;
@@ -4078,6 +4236,7 @@ fn collect_node(
                     chain: chain.clone(),
                     grid: None,
                     depth: depth + 1,
+                    inherited_changed,
                 });
             }
             continue;
@@ -4114,6 +4273,18 @@ fn collect_node(
         } else {
             ctx.styler
                 .style_of(&element, &inherited, state, inline.as_ref(), &chain)
+        };
+        // ADR 0029: the children's inherited base is this element's fresh
+        // computed style; it changed when it differs from the cached
+        // spec's (the one being replaced — a node without one has no
+        // cached children either, so the flag's value is moot).
+        let children_inherited_changed = match ctx.skeleton {
+            Some(skeleton) => skeleton
+                .pairing
+                .get(&handle)
+                .and_then(|&old| skeleton.cached_spec(old))
+                .is_none_or(|cached| cached.style != style),
+            None => true,
         };
         let mut boxed = ctx.styler.box_of(&element, state, inline.as_ref(), &chain);
         // This element's own placement resolves against its parent's grid
@@ -4153,6 +4324,7 @@ fn collect_node(
                 boxed,
                 pointer_events: style.pointer_events,
                 font_size: style.size,
+                style: style.clone(),
                 value: TextInputSpec {
                     initial: value.unwrap_or_default(),
                     font: ctx.styler.text_font(&style),
@@ -4244,6 +4416,7 @@ fn collect_node(
                         pointer_events: style.pointer_events,
                         font_size: style.size,
                         start,
+                        style: style.clone(),
                     })));
                 }
                 let translated = walk_translation(ctx, handle, tag, |fragment, nodes| {
@@ -4276,6 +4449,7 @@ fn collect_node(
                             chain: child_chain.clone(),
                             grid: grid_of_own.clone(),
                             depth: depth + 1,
+                            inherited_changed: children_inherited_changed,
                         });
                     }
                 }

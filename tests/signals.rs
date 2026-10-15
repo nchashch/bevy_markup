@@ -522,6 +522,75 @@ fn hover_survives_a_rebuild_around_a_nested_ui_root() {
     assert!(pseudo(fresh.world_mut(), ftarget).hovered, "fresh hovered");
 }
 
+/// ADR 0029: a scoped restyle (`:hover` flip) restyles the flipped
+/// element's subtree and nothing else. The hovered UI's dump must equal a
+/// fresh build of the same state, and an unhover must return the UI to
+/// exactly its starting dump.
+#[test]
+fn hover_restyles_scoped_like_a_fresh_build() {
+    let page = r#"<div id="wrap">
+        <div class="row" id="row-1"><p class="label" id="label-1">one</p></div>
+        <div class="row hover-target" id="row-2" data-on-enter="e2" data-on-leave="l2"><p class="label" id="label-2">two</p></div>
+        <div class="row" id="row-3"><p class="label" id="label-3">three</p></div>
+        <div class="bump-holder" data-bump="{{ bump }}"></div>
+    </div>"#;
+    // The ancestor rule (`.row:hover .label`) is the subtree case: the
+    // label restyles because an *ancestor* flipped.
+    let css = r#"
+        .hover-target:hover { color: #ff0000; background-color: #200000; }
+        .row:hover .label { color: #00ff00; }
+    "#;
+    let spawn = |name: &str| page_ui(name, page, css, TemplateContext::new().with("bump", &0));
+    let mut hovered = spawn("scoped-hover-reused");
+    let mut fresh = spawn("scoped-hover-fresh");
+    hovered.settle();
+    fresh.settle();
+    let before = hovered.dump();
+
+    // Hover row-2 through the real pointer path: a scoped restyle.
+    let (target, at) = {
+        let root = hovered.root();
+        let world = hovered.world_mut();
+        center(world, root, "row-2")
+    };
+    hovered.move_pointer(at);
+    assert!(pseudo(hovered.world_mut(), target).hovered, "hovered");
+    hovered.settle();
+    let after_hover = hovered.dump();
+    assert_ne!(after_hover, before, "the hover restyled the row");
+
+    // The reference: the same hover applied to a *full* rebuild — hover
+    // it too, then a content change (the `bump` attribute) makes the next
+    // build a content build with a pending style change, which reuses
+    // nothing (the pre-ADR-0029 path). The dumps differ nowhere (the
+    // attribute is invisible to the dump).
+    let froot = fresh.root();
+    let (_, fat) = {
+        let world = fresh.world_mut();
+        center(world, froot, "row-2")
+    };
+    fresh.move_pointer(fat);
+    fresh
+        .world_mut()
+        .get_mut::<TemplateContext>(froot)
+        .unwrap()
+        .insert("bump", &1);
+    fresh.settle();
+    assert_eq!(
+        after_hover,
+        fresh.dump(),
+        "the scoped restyle matches a fresh build of the hovered state"
+    );
+
+    // Unhover: the scoped restyle returns the UI to its starting dump.
+    // The point is off the viewport (inside it, any point hovers a row —
+    // the page fills the window).
+    hovered.move_pointer(Vec2::new(320.0, 600.0));
+    assert!(!pseudo(hovered.world_mut(), target).hovered, "unhovered");
+    hovered.settle();
+    assert_eq!(hovered.dump(), before, "the unhover restored the start");
+}
+
 /// `enter`/`leave` count for a whole element subtree (like CSS `:hover`),
 /// and each bound element on the way enters and leaves.
 #[test]
