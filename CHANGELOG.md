@@ -48,6 +48,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   the C1 Windows-1252 replacements and U+FFFD for invalid code points,
   longest-match, one-level (`&amp;lt;` reads `&lt;`), unknown references
   verbatim.
+- **Attribute selectors** for `data-*` attributes (ADR 0028):
+  `[data-kind]` (presence) and `[data-kind="value"]` (the value; single
+  or double quotes). The crate's element model carries only `data-*`
+  attributes, so the selector must name one with its prefix — a
+  non-data attribute drops the rule. An attribute counts as a class
+  for specificity.
 - **`<table>` maps onto the flex model** (ADR 0028): the
   `table`/`tbody`/`thead`/`tfoot`/`caption` tags are column containers,
   a `tr` lays its cells in a row (the UA-sheet default; a

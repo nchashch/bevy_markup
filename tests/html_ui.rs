@@ -6850,3 +6850,42 @@ html-ui
 "#,
     );
 }
+
+/// ADR 0028's attribute selectors through the pipeline: `[data-kind]`
+/// presence and value, the `data-` prefix required, the element's own
+/// dataset as the input.
+#[test]
+fn attribute_selectors_through_the_pipeline() {
+    let ui = TestUi::new(
+        "attribute-selectors",
+        &[
+            (
+                "page.html",
+                r#"<p data-kind="magic" id="magic">magic</p>
+                    <p data-kind="plain" id="plain">plain</p>
+                    <p id="bare">bare</p>"#,
+            ),
+            (
+                "style.css",
+                "html { color: #ffffff } p { color: #ffffff } \
+                 [data-kind=\"magic\"] { color: #00ff00 } \
+                 p[data-kind] { font-weight: bold }",
+            ),
+        ],
+    );
+    let mut ui = ui
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    let dump = ui.dump();
+    assert!(
+        dump.contains("\"magic\" default 16px #00ff00"),
+        "the value-matched p: {dump}"
+    );
+    assert!(
+        dump.contains("\"plain\" default 16px #ffffff"),
+        "the unmatched color stands (the bold's weight is invisible in the \
+         dump with a handle font — the match is unit-tested)"
+    );
+    assert!(dump.contains("\"bare\" default 16px #ffffff"));
+}

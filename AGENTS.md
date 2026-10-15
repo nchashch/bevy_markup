@@ -1437,7 +1437,9 @@ Known limits (each skipped/ignored value is logged at `debug`):
   indent is CSS-overridable per side. A nested list inside an `li`
   renders as inline content (containers inside blocks are inline — the
   mixed-content rule).
-- **Selectors:** compound selectors (type/`*` + `.class` + `#id`) joined by
+- **Selectors:** compound selectors (type/`*` + `.class` + `#id` +
+  `[data-x]`/`[data-x="v"]` — the element model carries only `data-*`
+  attributes, so a non-data attribute selector drops the rule) joined by
   descendant/child combinators (`.panel p`, `.panel > p` — matched against
   the ancestor chain the walk threads through the cascade; the
   per-element style cache folds a chain hash into its key; specificity
@@ -1479,7 +1481,13 @@ Known limits (each skipped/ignored value is logged at `debug`):
   entity, so `HtmlElements` can't find it (only blocks/containers and
   link spans), and `display: inline-block` with widget children isn't
   supported (Bevy reserves the space but doesn't place content in it).
-- **Interactivity:** text input behind the `text-input` feature
+- **Interactivity:** no `position: sticky` (bevy has no sticky position;
+  a layout-time scroll-aware component would be a new feature with its
+  own ADR), no `<textarea>` (bevy's `TextInput` widget is single-line
+  only), no built-in `<input type="checkbox">`/`<input type="radio">`
+  widgets (bevy has no checkbox; build one with the custom-elements
+  mechanism — `is="checkbox"` + a click handler). Text input behind the
+  `text-input` feature
   (`<input type="text">` — a missing `type` counts as `text`; other types
   don't become fields — → Bevy 0.20's `EditableText` +
   `TextInput`; the value is app state — read the entity's `EditableText`, a

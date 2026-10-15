@@ -976,6 +976,25 @@ impl AnB {
     }
 }
 
+/// An attribute selector's parts (ADR 0028): `[data-x]` or
+/// `[data-x="value"]`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AttributeSelector {
+    /// The dataset key (the `data-` prefix stripped).
+    pub name: String,
+    pub value: Option<String>,
+}
+
+impl AttributeSelector {
+    fn matches(&self, element: &HtmlElement) -> bool {
+        let value = element.data(&self.name);
+        match &self.value {
+            Some(expected) => value == Some(expected.as_str()),
+            None => value.is_some(),
+        }
+    }
+}
+
 /// A compound's structural pseudo-class (ADR 0028): evaluated against the
 /// element's [`ElementState`].
 #[derive(Clone, Debug, PartialEq)]
@@ -1530,6 +1549,12 @@ struct Compound {
     pseudo: Pseudo,
     /// The structural pseudo-classes (ADR 0028); ALL must hold.
     structural: Vec<StructuralPseudo>,
+    /// The attribute selectors (ADR 0028): `[data-x]`, `[data-x="v"]` —
+    /// the crate's element model carries only `data-*` attributes (the
+    /// `data-` prefix stripped in the dataset), so the selector's name
+    /// loses its `data-` prefix too; a non-data attribute drops the
+    /// rule. ALL must hold.
+    attributes: Vec<AttributeSelector>,
 }
 
 impl Compound {
@@ -1551,6 +1576,7 @@ impl Compound {
         let mut ids = Vec::new();
         let mut classes = Vec::new();
         let mut structural = Vec::new();
+        let mut attributes = Vec::new();
         let mut pseudo = Pseudo::default();
         while let Some((_, kind)) = rest.char_indices().next() {
             // Only `.class`, `#id` and `:pseudo` parts continue the selector;
@@ -1559,6 +1585,48 @@ impl Compound {
             // may be > 1.
             let body = match kind {
                 '.' | '#' => &rest[kind.len_utf8()..],
+                '[' => {
+                    // ADR 0028: an attribute selector — `[data-x]`,
+                    // `[data-x="v"]` (single or double quotes). The
+                    // crate's element model carries only `data-*`
+                    // attributes: a selector naming a non-data attribute
+                    // drops the rule.
+                    let close = rest.find(']')?;
+                    let inner = rest[1..close].trim();
+                    let (name, value) = match inner.split_once('=') {
+                        Some((name, value)) => {
+                            let value = value.trim();
+                            let value = value
+                                .strip_prefix('"')
+                                .and_then(|v| v.strip_suffix('"'))
+                                .or_else(|| {
+                                    value
+                                        .strip_prefix('\'')
+                                        .and_then(|v| v.strip_suffix('\''))
+                                })
+                                .unwrap_or(value);
+                            (name.trim(), Some(value.to_owned()))
+                        }
+                        None => (inner, None),
+                    };
+                    // The crate's elements carry only `data-*` attributes:
+                    // the selector must name one with its prefix (a bare
+                    // `[kind]` or a non-data attribute drops the rule).
+                    let Some(name) = name.strip_prefix("data-") else {
+                        return None;
+                    };
+                    if name.is_empty()
+                        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    {
+                        return None;
+                    }
+                    attributes.push(AttributeSelector {
+                        name: name.to_owned(),
+                        value,
+                    });
+                    rest = &rest[close + 1..];
+                    continue;
+                }
                 ':' => {
                     let body = &rest[1..];
                     let end = body.find(|c| !is_ident(c)).unwrap_or(body.len());
@@ -1631,6 +1699,7 @@ impl Compound {
             && ids.is_empty()
             && classes.is_empty()
             && structural.is_empty()
+            && attributes.is_empty()
             && selector != "*"
             && pseudo == Pseudo::default()
         {
@@ -1642,6 +1711,7 @@ impl Compound {
             classes,
             pseudo,
             structural,
+            attributes,
         })
     }
 
@@ -1649,6 +1719,7 @@ impl Compound {
     /// classes.
     fn specificity(&self) -> (u32, u32, u32) {
         let classes = self.classes.len()
+            + self.attributes.len()
             + usize::from(self.pseudo.hover)
             + usize::from(self.pseudo.active)
             + usize::from(self.pseudo.focus)
@@ -1681,6 +1752,10 @@ impl Compound {
                 .structural
                 .iter()
                 .all(|part| part.matches(element, state))
+            && self
+                .attributes
+                .iter()
+                .all(|attribute| attribute.matches(element))
     }
 
     /// [`matches`](Self::matches) against a slimmed ancestor: the same
@@ -4885,6 +4960,35 @@ mod tests {
                 &state
             )
         );
+    }
+
+    #[test]
+    fn attribute_selectors_match_data_attributes() {
+        let element = element("p", None, &[]);
+        let mut element = element;
+        element.dataset.insert("kind".to_owned(), "magic".to_owned());
+        let state = ElementState::default();
+        // Presence.
+        assert!(selector("p[data-kind]").matches(&element, Pseudo::default(), &[], &state));
+        assert!(!selector("p[data-missing]").matches(&element, Pseudo::default(), &[], &state));
+        // Value.
+        assert!(selector("p[data-kind=\"magic\"]").matches(&element, Pseudo::default(), &[], &state));
+        assert!(!selector("p[data-kind=\"other\"]").matches(&element, Pseudo::default(), &[], &state));
+        // Single quotes.
+        assert!(selector("p[data-kind='magic']").matches(&element, Pseudo::default(), &[], &state));
+        // A non-data attribute drops the rule (the crate's element model
+        // carries only data-* attributes).
+        assert!(Selector::parse("p[href]").is_none());
+        // The specificity: an attribute counts as a class (a data rule
+        // beats a type rule).
+        let sheet = owned_sheet("p { color: #ffffff } p[data-kind] { color: #00ff00 }");
+        let style = HtmlStyles::from_sheet(&sheet).get(
+            &element,
+            Pseudo::default(),
+            &[],
+            &state,
+        );
+        assert_eq!(style.color, Some(Color::srgb(0.0, 1.0, 0.0)));
     }
 
     #[test]
