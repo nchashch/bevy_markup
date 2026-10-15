@@ -48,6 +48,13 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   the C1 Windows-1252 replacements and U+FFFD for invalid code points,
   longest-match, one-level (`&amp;lt;` reads `&lt;`), unknown references
   verbatim.
+- **Sibling combinators** (`+` and `~`, ADR 0028): `.hot + p` colors the
+  immediately following sibling, `.a ~ p` every following one. Supported
+  adjacent to the subject; a sibling combinator deeper in a chain
+  (`.x .a + b`) doesn't match (the sibling's own siblings aren't
+  threaded — the same documented limit as a structural pseudo in an
+  ancestor position). An interaction flip on a sibling restyles its
+  following siblings' matches.
 - **`overflow: auto`** scrolls if needed (ADR 0027): the axis clips
   (`hidden`), and a promotion system — running after layout — promotes
   it to scrolling when the laid-out content overflows the box and demotes

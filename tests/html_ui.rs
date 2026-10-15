@@ -6742,3 +6742,75 @@ fn focus_within_restyles_the_focused_chain() {
     target.settle();
     assert_eq!(target.dump(), before, "the cleared focus restored");
 }
+
+/// ADR 0028's sibling combinators, against the browser: `+` colors only
+/// the immediately following sibling; `~` colors every following one; a
+/// standalone element with the same classes stays unstyled.
+#[test]
+fn sibling_combinators_vector() {
+    let mut ui = TestUi::from_vector("sibling_combinators");
+    ui.settle().assert_dump(
+        r#"
+html-ui
+  div.hot
+    -
+      "hot" default 16px #ffffff
+  p.after-hot
+    "after hot" default 16px #00ff00
+  p.far-after
+    "far after" default 16px #00ff00
+  div.checked
+    -
+      "checked" default 16px #ffffff
+  p.after-checked
+    "after checked" default 16px #00ff00
+  p.no-sibling
+    "standalone" default 16px #00ff00
+"#,
+    );
+}
+
+/// ADR 0028: a sibling's interaction flip restyles its FOLLOWING siblings
+/// that a sibling combinator keys on (`.hot:hover + p`) — scoped: the
+/// flip's blocked set covers the following siblings, everything else
+/// keeps its cached build, and the result matches a fresh build.
+#[test]
+fn sibling_flip_restyles_the_following_sibling() {
+    let page = r#"<div class="hot" id="hot"><p>hot</p></div>
+        <p class="after" id="after">after</p>
+        <p class="unrelated" id="unrelated">unrelated</p>"#;
+    let css = "html { color: #ffffff } .hot:hover + .after { color: #00ff00 }";
+    let mut target = TestUi::with_layout(
+        "sibling-flip-target",
+        &[("page.html", page), ("style.css", css)],
+        UVec2::new(320, 240),
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    target.settle();
+    let before = target.dump();
+    let root = target.root();
+    let hot = element_by_id(target.world_mut(), root, "hot");
+    // Flip the hot div (direct state: the scoping's input).
+    target.world_mut().entity_mut(hot).insert(PseudoState {
+        hovered: true,
+        ..default()
+    });
+    target.settle();
+    let after = target.dump();
+    assert!(
+        after.contains("\"after\" default 16px #00ff00"),
+        "the following sibling restyled: {after}"
+    );
+    assert!(
+        after.contains("\"unrelated\" default 16px #ffffff"),
+        "the unrelated p untouched: {after}"
+    );
+    // The unhover restores the start.
+    target.world_mut().entity_mut(hot).insert(PseudoState {
+        hovered: false,
+        ..default()
+    });
+    target.settle();
+    assert_eq!(target.dump(), before, "the unhover restored the start");
+}

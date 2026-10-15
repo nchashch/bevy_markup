@@ -1437,8 +1437,10 @@ Known limits (each skipped/ignored value is logged at `debug`):
   the ancestor chain the walk threads through the cascade; the
   per-element style cache folds a chain hash into its key; specificity
   sums over the compounds), plus the interaction pseudo-classes
-  (`:hover`/`:active`/`:focus`/`:focus-visible`, on ancestors too); no
-  sibling combinators (`+`, `~`), attribute selectors, other
+  (`:hover`/`:active`/`:focus`/`:focus-visible`, on ancestors too) and
+  the sibling combinators (`+`/`~`, ADR 0028: adjacent to the subject; a
+  sibling's interaction flip restyles its following siblings' matches);
+  no attribute selectors, other
   pseudo-classes or pseudo-elements (a selector with one skips the rule).
 - **Properties:** `text-align`/`line-height`/`letter-spacing` and
   `list-style-type` work (ADR 0027); `text-decoration`'s

@@ -886,7 +886,7 @@ pub(crate) struct BackgroundImageDecl {
 /// parent's element children and the count (of all, and of the same
 /// tag), plus whether the element or a descendant holds the focus
 /// (`:focus-within`).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ElementState {
     pub tag_index: usize,
     pub tag_count: usize,
@@ -896,6 +896,27 @@ pub(crate) struct ElementState {
     /// No content at all (no element or text children; comments don't
     /// count): `:empty`.
     pub empty: bool,
+    /// ADR 0028: the element's PRECEDING element siblings, nearest first
+    /// (the last entry is the immediately preceding one) — the sibling
+    /// combinators' input. Shared per parent.
+    pub previous_siblings: Option<std::rc::Rc<Vec<Ancestor>>>,
+}
+
+impl PartialEq for ElementState {
+    fn eq(&self, other: &Self) -> bool {
+        self.tag_index == other.tag_index
+            && self.tag_count == other.tag_count
+            && self.type_index == other.type_index
+            && self.type_count == other.type_count
+            && self.focus_within == other.focus_within
+            && self.empty == other.empty
+            // The siblings' CONTENT (the Rc sharing doesn't matter).
+            && match (&self.previous_siblings, &other.previous_siblings) {
+                (Some(a), Some(b)) => a.as_ref() == b.as_ref(),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 /// An `An+B` pattern (`:nth-child(2)`, `(2n+1)`, `(-n+3)`, `odd`, `even`):
@@ -1227,7 +1248,8 @@ pub(crate) struct Pseudo {
 
 /// An ancestor for selector matching: its identity plus its interaction
 /// state (for pseudo-classes in a compound selector), nearest first.
-#[derive(Clone, Debug)]
+/// Also a sibling list's entry (ADR 0028), so it compares by content.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Ancestor {
     /// The tag/id/classes a compound selector reads. The dataset is
     /// deliberately absent: selectors never read it, and carrying it made
@@ -1249,6 +1271,12 @@ enum Combinator {
     Descendant,
     /// `>`: the direct parent.
     Child,
+    /// `+`: the immediately preceding element sibling. Supported only
+    /// adjacent to the subject (a deeper one never matches: the sibling's
+    /// own siblings aren't threaded).
+    AdjacentSibling,
+    /// `~`: any preceding element sibling. Same depth limit.
+    GeneralSibling,
 }
 
 /// A selector: compound selectors joined by combinators (only descendant
@@ -1272,7 +1300,7 @@ impl Selector {
         let mut rest = selector.trim();
         while !rest.is_empty() {
             let end = rest
-                .find(|c: char| c.is_whitespace() || c == '>')
+                .find(|c: char| c.is_whitespace() || c == '>' || c == '+' || c == '~')
                 .unwrap_or(rest.len());
             compounds.push(Compound::parse(&rest[..end])?);
             if !combinators.is_empty() || compounds.len() > 1 {
@@ -1283,6 +1311,14 @@ impl Selector {
             rest = &rest[whitespace..];
             if rest.starts_with('>') {
                 pending = Combinator::Child;
+                rest = &rest[1..];
+                rest = &rest[rest.len() - rest.trim_start().len()..];
+            } else if rest.starts_with('+') {
+                pending = Combinator::AdjacentSibling;
+                rest = &rest[1..];
+                rest = &rest[rest.len() - rest.trim_start().len()..];
+            } else if rest.starts_with('~') {
+                pending = Combinator::GeneralSibling;
                 rest = &rest[1..];
                 rest = &rest[rest.len() - rest.trim_start().len()..];
             } else if !rest.is_empty() {
@@ -1325,7 +1361,36 @@ impl Selector {
         if !last.matches(element, pseudo, state) {
             return false;
         }
-        self.matches_rest(self.compounds.len() - 1, ancestors)
+        let Some(last_combinator) = self.combinators.last().copied() else {
+            return true;
+        };
+        match last_combinator {
+            // ADR 0028: the sibling combinators, supported only adjacent
+            // to the subject: the compound before the combinator matches
+            // a PRECEDING element sibling's parts; the rest continues
+            // against the element's own ancestors (the shared-parent
+            // shapes: `a b + c` — a is in c's chain too).
+            Combinator::AdjacentSibling | Combinator::GeneralSibling => {
+                let Some(siblings) = state.previous_siblings.as_ref() else {
+                    return false;
+                };
+                let parts = &self.compounds[self.compounds.len() - 2];
+                // Nearest first: the immediately preceding sibling is the
+                // FIRST entry.
+                let matched_sibling = match last_combinator {
+                    Combinator::AdjacentSibling => {
+                        siblings.first().filter(|sibling| sibling_parts_match(parts, sibling))
+                    }
+                    _ => siblings
+                        .iter()
+                        .find(|sibling| sibling_parts_match(parts, sibling)),
+                };
+                matched_sibling.is_some()
+                    && (self.compounds.len() == 2
+                        || self.matches_rest(self.compounds.len() - 2, ancestors))
+            }
+            _ => self.matches_rest(self.compounds.len() - 1, ancestors),
+        }
     }
 
     /// Whether any compound in the selector tests a pseudo-class: its
@@ -1350,6 +1415,25 @@ impl Selector {
         };
         if !last.matches_parts(element, state) {
             return false;
+        }
+        // ADR 0028: the sibling combinator's reactivity — the sibling's
+        // pseudo wildcarded (a flip on it may change this element).
+        if self.combinators.last() == Some(&Combinator::AdjacentSibling)
+            || self.combinators.last() == Some(&Combinator::GeneralSibling)
+        {
+            let Some(siblings) = state.previous_siblings.as_ref() else {
+                return false;
+            };
+            let parts = &self.compounds[self.compounds.len() - 2];
+            let reactive = match self.combinators.last() {
+                Some(&Combinator::AdjacentSibling) => siblings
+                    .first()
+                    .is_some_and(|sibling| sibling_parts_match(parts, sibling)),
+                _ => siblings.iter().any(|sibling| sibling_parts_match(parts, sibling)),
+            };
+            return reactive
+                && (self.compounds.len() == 2
+                    || self.matches_rest(self.compounds.len() - 2, ancestors));
         }
         self.matches_from(
             self.compounds.len() - 1,
@@ -1388,9 +1472,18 @@ impl Selector {
             return false;
         }
         let combinator = self.combinators[index - 1];
+        // A sibling combinator at a non-subject position: the related
+        // element's own siblings aren't threaded — never matches.
+        if matches!(combinator, Combinator::AdjacentSibling | Combinator::GeneralSibling) {
+            return false;
+        }
         let compound = &self.compounds[index - 1];
         let parts_only = |ancestor: &Ancestor| compound.matches_parts_ancestor(ancestor);
         let matched = match combinator {
+            // A sibling combinator at a non-subject position: never
+            // matches (the related element's own siblings aren't
+            // threaded).
+            Combinator::AdjacentSibling | Combinator::GeneralSibling => false,
             Combinator::Child => ancestors.get(offset).is_some_and(|parent| {
                 (if ignore_pseudo {
                     parts_only(parent)
@@ -1923,6 +2016,21 @@ fn bevy_overflow(axis: OverflowAxisDecl) -> OverflowAxis {
         OverflowAxisDecl::Clip => OverflowAxis::Clip,
         OverflowAxisDecl::Scroll => OverflowAxis::Scroll,
     }
+}
+
+/// ADR 0028: a sibling's parts against a compound — the tag/id/classes
+/// plus its structural parts (evaluated against the SIBLING's state,
+/// which isn't threaded: only the compound's own structural parts'
+/// outcome could depend on it — so the sibling's structural parts are
+/// taken from the compound itself, evaluated against the SUBJECT's
+/// state, a conservative approximation).
+fn sibling_parts_match(compound: &Compound, sibling: &Ancestor) -> bool {
+    compound.tag.as_ref().is_none_or(|tag| *tag == sibling.tag)
+        && compound.ids.iter().all(|id| sibling.id.as_ref() == Some(id))
+        && compound
+            .classes
+            .iter()
+            .all(|class| sibling.classes.iter().any(|own| own == class))
 }
 
 /// `text-transform` (ADR 0028): the four case mappings; lightningcss's
@@ -4691,26 +4799,111 @@ mod tests {
     /// Unsupported selectors skip the whole rule: sibling combinators,
     /// attributes, and other pseudo-classes.
     #[test]
+    fn sibling_combinators_match_preceding_siblings() {
+        let prev = vec![ancestor("div", &["hot"]), ancestor("section", &["page"])];
+        let state = ElementState {
+            previous_siblings: Some(std::rc::Rc::new(prev.clone())),
+            ..ElementState::default()
+        };
+        // `+`: the immediately preceding sibling.
+        assert!(
+            selector(".hot + p").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &state
+            ),
+            "the hot div is the immediately preceding sibling"
+        );
+        // `~`: any preceding sibling.
+        assert!(
+            selector(".page ~ p").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &state
+            ),
+            "the page section precedes"
+        );
+        // The wrong sibling.
+        assert!(
+            !selector(".cold + p").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &state
+            )
+        );
+        // The first element has no preceding siblings.
+        assert!(
+            !selector(".hot + p").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default()
+            )
+        );
+        // A sibling combinator at a NON-subject position never matches
+        // (the sibling's own siblings aren't threaded).
+        assert!(
+            !selector(".hot + div p").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[ancestor("div", &[])],
+                &state
+            )
+        );
+        // The sibling's parts still combine with the rest's ancestors
+        // (`a b + c`: a is in c's chain, above the shared parent).
+        assert!(
+            selector(".page .hot + p").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[ancestor("div", &["hot"]), ancestor("section", &["page"])],
+                &state
+            ),
+            "the shared parent's chain backs the rest"
+        );
+        // The reactivity: a selector testing the SIBLING's pseudo state
+        // (`:hover` on it) — a flip on the sibling may change this
+        // element (the sibling's parts wildcarded).
+        let sheet = owned_sheet(".hot:hover + p { color: #00ff00 }");
+        assert!(
+            HtmlStyles::from_sheet(&sheet).pseudo_reactive(
+                &element("p", None, &[]),
+                &[],
+                &state
+            )
+        );
+        // A sibling keyed by class only (no pseudo) isn't: a flip on the
+        // sibling can't change the match.
+        let sheet = owned_sheet(".hot + p { color: #00ff00 }");
+        assert!(
+            !HtmlStyles::from_sheet(&sheet).pseudo_reactive(
+                &element("p", None, &[]),
+                &[],
+                &state
+            )
+        );
+    }
+
+    #[test]
     fn unsupported_selectors_are_skipped() {
-        assert!(Selector::parse(".a + p").is_none());
-        assert!(Selector::parse(".a ~ p").is_none());
+        // The sibling combinators are SUPPORTED now (ADR 0028, chunk E);
+        // attributes stay unsupported. A structural pseudo in an ANCESTOR
+        // position parses but never matches (the ancestor's own position
+        // isn't threaded — a documented limit).
         assert!(Selector::parse("p[attr]").is_none());
-        // `:focus-within` is SUPPORTED now (ADR 0028); a structural
-        // pseudo in an ANCESTOR position parses but never matches (the
-        // ancestor's own position isn't threaded — a documented limit).
         assert!(Selector::parse("div:nth-child(2) p").is_some());
-        {
-            let subject = selector("div:nth-child(2) p");
-            assert!(
-                !subject.matches(
-                    &element("p", None, &[]),
-                    Pseudo::default(),
-                    &[ancestor("div", &[])],
-                    &ElementState::default()
-                ),
-                "the ancestor's structural pseudo can't evaluate"
-            );
-        }
+        assert!(
+            !selector("div:nth-child(2) p").matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[ancestor("div", &[])],
+                &ElementState::default()
+            ),
+            "the ancestor's structural pseudo can't evaluate"
+        );
         assert!(
             Selector::parse(".a > p b").is_some(),
             "chains of any length"
