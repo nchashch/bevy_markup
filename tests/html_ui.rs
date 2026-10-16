@@ -7998,3 +7998,97 @@ mod mutation_gaps {
     }
 
 }
+
+/// ADR 0031: a windowed UI materializes the scroll window's band and
+/// replaces the culled subtrees with height-preserving spacers — above
+/// and below the fold — so the document's total height (the scroll
+/// range) is unchanged. Scrolling moves the band.
+#[test]
+fn windowed_build_materializes_the_band_and_spacers_the_rest() {
+    let page: String = (1..=60)
+        .map(|i| format!("<p id=\"p{i}\">Paragraph {i}</p>"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut ui = TestUi::with_layout(
+        "windowed",
+        &[
+            ("page.html", &page),
+            ("style.css", "html { flex-direction: column }"),
+        ],
+        UVec2::new(300, 200),
+    )
+    .stylesheet("style.css")
+    // A scrolling viewport: the root is a fixed-height clipped column
+    // (a content-sized root grows to its content — taffy's root minimum —
+    // and the band would cover the whole document).
+    .spawn(
+        "page.html",
+        TemplateContext::new(),
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Px(200.0),
+            flex_direction: FlexDirection::Column,
+            overflow: Overflow {
+                x: OverflowAxis::Visible,
+                y: OverflowAxis::Scroll,
+            },
+            ..default()
+        },
+    );
+    let root = ui.root();
+    ui.world_mut().entity_mut(root).insert(HtmlWindowed::default());
+    // Build 1: the model is empty, so the whole document materializes and
+    // is measured.
+    ui.settle();
+    let full = ui.dump();
+    assert_eq!(full.matches("\n  p#p").count(), 60, "{full}");
+
+    // Scroll: the band is [offset, offset + viewport] grown by one
+    // viewport on each side. Each paragraph is one 20px line (16px text
+    // at 1.2, ceiled), so paragraph i's margin box is [(i-1)*20, i*20].
+    let offset = 300.0;
+    ui.world_mut()
+        .entity_mut(root)
+        .insert(ScrollPosition(Vec2::new(0.0, offset)));
+    ui.settle();
+    let dump = ui.dump();
+
+    // Materialized: the paragraphs intersecting the half-open band
+    // [100, 700) — p6 (y=100) through p35 (y=680..700). The band's edge
+    // is exclusive: a block ending exactly at band.0 or starting at
+    // band.1 is out.
+    for i in 6..=35 {
+        assert!(
+            dump.contains(&format!("p#p{i}\n")),
+            "paragraph {i} must be materialized: {dump}"
+        );
+    }
+    // Culled: everything else, replaced by spacers preserving the
+    // document's height (5 paragraphs above, 25 below).
+    for i in [1, 2, 3, 4, 5, 36, 45, 60] {
+        assert!(
+            !dump.contains(&format!("p#p{i}\n")),
+            "paragraph {i} must be culled: {dump}"
+        );
+    }
+    // The culled runs coalesce: one spacer above (5 paragraphs = 100px),
+    // one below (25 = 500px) — a flat culled document costs taffy one
+    // node per run, not one per block.
+    assert_eq!(dump.matches("spacer h=100").count(), 1, "{dump}");
+    assert_eq!(dump.matches("spacer h=500").count(), 1, "{dump}");
+    // The height invariant: the spacers plus the materialized content
+    // equal the full document's height (5 + 30 + 25 paragraphs at 20px).
+    assert_eq!(100.0 + 500.0 + 30.0 * 20.0, 60.0 * 20.0);
+
+    // Scrolling further moves the band; the top part culled, the bottom
+    // part materialized.
+    ui.world_mut()
+        .entity_mut(root)
+        .insert(ScrollPosition(Vec2::new(0.0, 900.0)));
+    ui.settle();
+    let dump = ui.dump();
+    // The band is [offset − margin, offset + viewport + margin] =
+    // [700, 1300): p36 (y=700) through p60.
+    assert!(dump.contains("p#p36\n") && dump.contains("p#p60\n"), "{dump}");
+    assert!(!dump.contains("p#p1\n") && !dump.contains("p#p35\n"), "{dump}");
+}

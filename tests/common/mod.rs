@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource, InlineBox};
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent, WindowRef};
 use bevy_markup::prelude::*;
+use bevy_markup::{WindowSpacer};
 
 pub const FRAME_PNG: &[u8] = include_bytes!("../fixtures/frame.png"); // 32×24
 
@@ -821,6 +822,10 @@ pub fn dump_entity(world: &mut World, entity: Entity, depth: usize, out: &mut St
     let indent = "  ".repeat(depth);
     let mut line = match (depth, entity_ref.get::<HtmlElement>()) {
         (0, _) => "html-ui".to_owned(),
+        // ADR 0031: a culled subtree's height-preserving spacer.
+        (_, None) if entity_ref.get::<WindowSpacer>().is_some() => {
+            format!("spacer h={}", entity_ref.get::<WindowSpacer>().unwrap().0)
+        }
         (_, Some(element)) => element_label(element),
         (_, None) => "-".to_owned(),
     };

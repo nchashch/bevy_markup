@@ -136,6 +136,10 @@ struct Bench {
     worst_ms: f32,
     /// The scenario's UIs sit side by side (the stage's `row` class).
     row: bool,
+    /// ADR 0031: `--windowed` — the workloads build only their scroll
+    /// window (the big-document/restyle classes of scenarios show the
+    /// win).
+    windowed: bool,
 }
 
 impl Bench {
@@ -166,6 +170,7 @@ impl Bench {
             active,
             size,
             churn: !args.iter().any(|arg| arg == "--no-churn"),
+            windowed: args.iter().any(|arg| arg == "--windowed"),
             pinned: pinned.is_some(),
             restart: false,
             generation: 0,
@@ -533,14 +538,33 @@ fn start_scenario(
                 .context
                 .clone()
                 .unwrap_or_else(|| scenarios::context(id, &bench.model, role));
-            let node = Node {
-                width: match role {
-                    Role::Card(_) => Val::Px(110.0),
-                    _ if plan.row => Val::Percent(49.0),
-                    _ => Val::Percent(100.0),
-                },
-                flex_direction: FlexDirection::Column,
-                ..default()
+            // `--windowed`: a fixed-height scrolling viewport so the
+            // windowed build has something to window (ADR 0031).
+            let node = if bench.windowed {
+                Node {
+                    width: match role {
+                        Role::Card(_) => Val::Px(110.0),
+                        _ if plan.row => Val::Percent(49.0),
+                        _ => Val::Percent(100.0),
+                    },
+                    height: Val::Px(600.0),
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow {
+                        x: OverflowAxis::Visible,
+                        y: OverflowAxis::Scroll,
+                    },
+                    ..default()
+                }
+            } else {
+                Node {
+                    width: match role {
+                        Role::Card(_) => Val::Px(110.0),
+                        _ if plan.row => Val::Percent(49.0),
+                        _ => Val::Percent(100.0),
+                    },
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                }
             };
             let mut ui = commands.spawn((
                 HtmlUi::new(template.clone()),
@@ -555,6 +579,9 @@ fn start_scenario(
             ));
             if let Some(sheet) = sheet {
                 ui.insert(HtmlStylesheet(sheet));
+            }
+            if bench.windowed {
+                ui.insert(HtmlWindowed::default());
             }
             // The focus scenario's rows take the focus (the churn moves
             // it); every other workload stays out of the shell's

@@ -877,6 +877,21 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `content_lint` does).
 - A pseudo-locale opening marker must not be a text `[` at the start of a
   line (FTL reads a variant key); use a string-literal placeable `{"["}`.
+- **Windowed UIs (ADR 0031)**: only materialized elements have entities.
+  The model's heights are measured per frame from the *newly* added
+  `WindowKey` entities (`measure_window_heights`, `PostLayout`, after
+  `Build` — which inserts a missing `WindowModel` the same frame); a
+  kept entity keeps its sticky height. Coalesced spacers carry no
+  `WindowKey` (their height = a derived sum; keying them would
+  overwrite the run's first member and drift the cursor). The reuse
+  check runs before the cull and requires the cached spec's spacerness
+  to agree with the current decision; a coalesced spacer never reuses
+  (its run shifts). Translated subtrees are never culled (their
+  fragments are windowless); whitespace-only raw roots advance the
+  cursor by zero without invalidating it (they produce no item); any
+  other unknown-height child invalidates it (culled = nothing below
+  culls). Scrolling rebuilds at band cost (no pairing on scroll-only
+  frames — the document is unchanged, the model stays keyed).
 - Bevy/taffy size the border box by default; bevy_markup nodes set
   `BoxSizing::ContentBox` (CSS initial); `box-sizing` overrides.
 - `cargo mutants` copies the source tree and ignores nested `.gitignore`s:

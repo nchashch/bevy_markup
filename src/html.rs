@@ -119,6 +119,38 @@ pub enum RenderedHtml {
 #[reflect(Component, Default)]
 pub struct HtmlDebugOutline;
 
+/// On an `HtmlUi` root (ADR 0031): build only the part of the document in
+/// the scroll window — materialized blocks between two spacers, the
+/// culled subtrees replaced by their last measured height.
+///
+/// The window is a band `scroll_offset − margin … scroll_offset + viewport
+/// + margin` in the root's content coordinates, refreshed every time the
+/// root's scroll position or viewport width changes; the margin defaults
+/// to one viewport in each direction.
+///
+/// With this component, apps must not assume every DOM element has an
+/// entity: only materialized elements exist. [`HtmlElements`] and the
+/// signal/focus machinery see materialized elements only (focus
+/// navigation stays inside the window; scrolling an element out of it
+/// despawns it and the focus repair refocuses). Translated subtrees and
+/// containers laid out as rows or grids are never culled inside.
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, Default)]
+pub struct HtmlWindowed {
+    /// Extra materialized height on each side of the viewport, in
+    /// viewports (the band extends this far past both edges). 0 means
+    /// exactly the viewport.
+    pub margin_viewports: f32,
+}
+
+impl Default for HtmlWindowed {
+    fn default() -> Self {
+        Self {
+            margin_viewports: 1.0,
+        }
+    }
+}
+
 /// The HTML element a spawned block node came from.
 #[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component, Default)]

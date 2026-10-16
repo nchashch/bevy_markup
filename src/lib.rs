@@ -231,7 +231,7 @@ pub mod fuzz;
 pub mod anchor;
 mod build;
 #[doc(hidden)]
-pub use build::Skeleton;
+pub use build::{Skeleton, WindowKey, WindowModel, WindowSpacer};
 mod cascade;
 pub mod custom_elements;
 pub mod focus;
@@ -259,7 +259,7 @@ pub mod prelude {
     pub use crate::fonts::{FontFaces, FontFamilies, GenericFamily};
     pub use crate::html::{
         HtmlDebugOutline, HtmlElement, HtmlElements, HtmlUi, HtmlUiBuilt, HtmlUiRestyled,
-        RenderedHtml, TemplateContext,
+        HtmlWindowed, RenderedHtml, TemplateContext,
     };
     pub use crate::l10n::{ActiveLocale, LocaleBundle};
     pub use crate::nine_slice::{NineSlice, NineSliceFrame};
@@ -397,6 +397,11 @@ impl Plugin for BevyMarkupPlugin {
                     // re-layouts the next frame, like the calc resolver's
                     // one-frame model).
                     build::promote_auto_scroll.in_set(UiSystems::PostLayout),
+                    // ADR 0031: record the materialized heights after
+                    // layout (the model the windowed builds cull by).
+                    build::measure_window_heights
+                        .in_set(UiSystems::PostLayout)
+                        .after(HtmlUiSystems::Build),
                 ),
             );
         focus::plugin(app);

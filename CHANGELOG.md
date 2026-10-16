@@ -55,6 +55,18 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `background-clip` (`border-box` default, `padding-box`). The image
   draws over `background-color`. `background-size` is unsupported and
   drops its declaration (bevy's `ImageNode` cannot crop).
+- **Windowed build** (ADR 0031, opt-in): `HtmlWindowed` on an `HtmlUi`
+  root makes it build only the document's scroll window — materialized
+  blocks between coalesced height-preserving spacers, above and below
+  the fold. A long scrolling document costs about a viewport of layout:
+  the testbench's big-document scenario at 2000 rows builds a worst
+  frame of 17.2 ms windowed vs 77.9 ms unwindowed (release, `--no-render`,
+  hotpath), and churns at parity. Scrolling rebuilds the band at the
+  band's cost; the model's heights are sticky (a culled subtree keeps
+  its last measured height until a signal invalidates it). With the
+  component, only materialized elements have entities — `HtmlElements`,
+  signals, focus and custom elements see the window; translated subtrees
+  and row/grid interiors are never culled.
 - **Attribute selectors** for `data-*` attributes (ADR 0028):
   `[data-kind]` (presence) and `[data-kind="value"]` (the value; single
   or double quotes). The crate's element model carries only `data-*`
