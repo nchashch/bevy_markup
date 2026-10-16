@@ -12,8 +12,8 @@ mod common;
 use common::TestUi;
 
 use bevy::prelude::*;
-use bevy_markup::prelude::*;
 use bevy_markup::Skeleton;
+use bevy_markup::prelude::*;
 use proptest::strategy::Strategy;
 use proptest::{prop_assert, prop_assert_eq};
 use test_strategy::proptest;
@@ -707,33 +707,21 @@ html { color: #ffff88; font-size: 24px; flex-direction: column }
 .panel { padding: 3px }
 :hover { color: #88ff88 }
 "#;
-    let files = [
-        ("page.html", page),
-        ("a.css", sheet_a),
-        ("b.css", sheet_b),
-    ];
-    let mut reused = TestUi::with_pointer(
-        "prop-skeleton-reused",
-        &files,
-        UVec2::new(640, 480),
-    )
-    .stylesheet("a.css")
-    .spawn(
-        "page.html",
-        TemplateContext::new().with("a", &1).with("b", &"x"),
-        Node::default(),
-    );
-    let mut fresh = TestUi::with_pointer(
-        "prop-skeleton-fresh",
-        &files,
-        UVec2::new(640, 480),
-    )
-    .stylesheet("a.css")
-    .spawn(
-        "page.html",
-        TemplateContext::new().with("a", &1).with("b", &"x"),
-        Node::default(),
-    );
+    let files = [("page.html", page), ("a.css", sheet_a), ("b.css", sheet_b)];
+    let mut reused = TestUi::with_pointer("prop-skeleton-reused", &files, UVec2::new(640, 480))
+        .stylesheet("a.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("a", &1).with("b", &"x"),
+            Node::default(),
+        );
+    let mut fresh = TestUi::with_pointer("prop-skeleton-fresh", &files, UVec2::new(640, 480))
+        .stylesheet("a.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("a", &1).with("b", &"x"),
+            Node::default(),
+        );
     reused.settle();
     fresh.settle();
     prop_assert_eq!(reused.dump(), fresh.dump());
@@ -788,7 +776,9 @@ html { color: #ffff88; font-size: 24px; flex-direction: column }
                 } else {
                     ui.load("a.css")
                 };
-                ui.world_mut().entity_mut(root).insert(HtmlStylesheet(handle));
+                ui.world_mut()
+                    .entity_mut(root)
+                    .insert(HtmlStylesheet(handle));
             }
             if outlined != prev_outlined {
                 let mut entity = ui.world_mut().entity_mut(root);

@@ -127,8 +127,8 @@ Pitfalls:
 - `settle()` never returns if a stylesheet's `url()` image is missing (the
   sheet loads, its dependency fails). Check the sheet first, as
   `content_lint` does.
-- Don't run `rustfmt` on a test file: it follows `mod common;` and
-  reformats the shared harness. Use `--config skip_children=true`.
+- Formatting: `cargo fmt` before committing (AGENTS.md, Conventions);
+  it formats the shared harness too, which is fine.
 - Each file in `tests/` is its own test binary and can't see the others'
   code: shared helpers go in `tests/common/mod.rs`, marked
   `#[allow(dead_code)]` (not every binary uses every helper).
@@ -254,6 +254,40 @@ To add an operation:
 Shrinking only removes operations; it doesn't shrink values inside one.
 Some failures are timing-dependent (one was 1 in 3): stress-run with
 `PROPTEST_CASES=200 cargo test --test stateful` a few times.
+
+### The windowing property (`tests/windowing_model.rs`)
+
+A windowed build (`HtmlWindowed`) against an unwindowed build of the same
+document, the crate's own full build as the oracle. `Pair` drives both
+in lockstep: `flag` flips the `{% if f %}` rows, `value` sets `{{ v }}`
+(short, or long enough to wrap), and `scroll` scrolls both and checks
+every one of the next six frames:
+- placement: built id'd elements sit where the full build has them (1 px);
+- coverage: the viewport's elements are built (exempt: the first frame
+  after a content change, bug_0170's known limit; `lag_exempt = false`
+  for a test whose change leaves every known height true);
+- unique `WindowKey`s;
+- tightness, at the last frame: nothing built outside the band
+  (`tight = false` where a grid or row is never culled inside by design;
+  `tight_px`, default 31 — the largest generated margin plus 1 px — is
+  1 for margin-less pages, where a row left behind by one step shows).
+
+`tests/html_ui.rs`'s `tightness_errors` is the same check for the
+`review_0006` helpers (margin 0 only).
+
+`case(seed)` generates a document and eight steps from a seed (xorshift,
+so a seed reproduces). For a failure, take the seed's page and steps from
+the panic message and minimize them. Make the page a file the test reads,
+and let a script remove top-level and section-level chunks while the
+failure persists (no rebuild per try). The minimized case becomes a named
+`Pair` test. Run it widely after windowing changes:
+`PROPTEST_CASES=400 cargo test --release --test windowing_model` (~85 s).
+The mutation run over the windowing diff (review_0006's follow-up) is
+`scripts/mutants.sh` with `--cargo-arg=--test=windowing_model` in place
+of `stateful` and `--in-diff` of `git diff 902d81c -- src/build.rs`, at
+`PROPTEST_CASES=16` (~30 min, 4 jobs).
+`one_inserted_row_builds_only_the_band` is `#[ignore]`d until bug_0168 is
+fixed.
 
 ### Unit tests and the rebuild state machine
 

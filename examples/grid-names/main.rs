@@ -224,6 +224,10 @@ mod tests {
 
         click(&mut app, "pick-stats");
         let picks = app.world().resource::<Picks>().clone();
-        assert_eq!(picks.0, [false, true, false, false], "checking another keeps the first");
+        assert_eq!(
+            picks.0,
+            [false, true, false, false],
+            "checking another keeps the first"
+        );
     }
 }

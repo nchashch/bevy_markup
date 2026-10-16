@@ -216,9 +216,103 @@ Each fix part was falsified against its test. The J03 HiDPI test runs
 the harness's camera at scale 2. `windowed_build_materializes_the_band_and_spacers_the_rest`
 now expects the first build to cull (J08).
 
-J05's `note_reused` (the slack around a subtree reused whole) has no
-isolating test. The reused subtree's predecessor in the band is always
-at least as tight a constraint, and without the note the cost is bounded
-over-building, never a missing row.
+J05's `note_reused` (the slack around a subtree reused whole) binds only
+when nothing sits between the band's edge and the subtree in its column.
+Any neighbour there is tighter by one gap. Its test uses the first child
+of a container whose top padding holds the band's edge
+(`a_reused_section_culls_its_rows_once_they_leave_the_band`). It fails
+without the note: the section's first row stays built above the band.
 
 All findings are fixed; the design changes are recorded in ADR 0032.
+
+## Follow-up: the windowing property (2026-10-16, same model)
+
+`tests/windowing_model.rs` compares a windowed build with an unwindowed
+one of the same document, as a property: random documents (paragraphs
+of three heights with optional margins, nested padded and bordered
+sections, loose text, tall blocks, rows under `{% if f %}`) × random
+steps (text changes that may wrap, row flips, scrolls). Both are stepped
+in lockstep and checked in every frame: placement within 1 px, coverage
+of the viewport, no two entities sharing a `WindowKey`. Tightness (nothing
+built outside the band) is checked once settled. Text changes only, then
+row flips, then per-frame checks each found new defects:
+
+| Bug | Found by | Fix |
+|---|---|---|
+| bug_0160 | text changes | raw text pairs recorded in `pairing`/`reverse`/`clean` |
+| bug_0161 | text changes | `Ctx::cull` culls only subtrees clean in this build's pairing |
+| bug_0162 | text changes | a refused cull flags the band stale: one rebuild |
+| bug_0163 | text changes | `WindowModel::clear` sets `remeasure` |
+| bug_0164 | row flips | `visible_scroll` clamps the offset to the last layout's range |
+| bug_0165 | row flips | the nested cursor borrows its frame (`CursorFrame` not `Clone`) |
+| bug_0166 | row flips | a remap that drops heights sets `remeasure` |
+| bug_0167 | tracing bug_0166 | a windowed UI always pairs (the adaptive gate skips it) |
+| bug_0168 | measuring bug_0166 | open: one inserted row builds the rest of its list for a frame (sibling alignment) |
+| bug_0169 | per-frame checks | the cached skip refreshes the `WindowKey` with the `DomNode` |
+| bug_0170 | per-frame checks | open (known limit): rows above the band that change height shift the view for one frame |
+| bug_0171 | the bug_0169 audit | opaque marks kept in step both ways, a flip is news, `Changed<Node>` re-measures |
+
+| bug_0172 | the mutation run | no root unwrap: `<body>` keeps its style and selectors (every UI) |
+| bug_0173 | the mutation run | the measurement clears the model on a width change |
+| bug_0174 | the mutation run | `%` margins read the parent width without requiring `ChildOf` |
+| bug_0175 | the mutation run | walked-through elements advance the cursor by their children (`column_height`); itemless nodes by zero |
+| bug_0176 | the property (new `%` margins) | heights from `unrounded_size` |
+| bug_0177 | the mutation rerun | one `children_are_opaque` predicate on the declared `Node` (reversed directions count), the root checked too; the measured opaque marks removed |
+
+The mutation run (cargo-mutants over `git diff 902d81c` of `src/build.rs`,
+323 mutants; lib + html_ui + windowing_model at 16 cases) caught 211,
+timed out 20 (rebuild-every-frame mutants: `settle` never stabilizes) and
+missed 70. Each missed group got a test or a reason:
+- new tests: the root's box, scale and scrollbars at margin 0 with a
+  tightness check (`the_root_box_and_scale_bound_the_band_exactly`, which
+  also caught bug_0164's first scrollbar term), a width change (bug_0173),
+  `%` margins and boxed paragraphs in the property's generator (bug_0174,
+  bug_0176), a shrinking visible row, table rows (a `tr` is a row without
+  CSS saying so), a whole document (bug_0172, bug_0175), a restyle into a
+  grid or a row (frame-0 coverage);
+- dead code removed: `frame_for`'s `margin_top`/`border_padding_top`
+  (every caller passed constants);
+- equivalent: `WindowModel::probe` (testbench diagnostics); the adaptive
+  gate's arithmetic (non-windowed performance only); the
+  `rendered.is_changed()` remap/clear guards (redundant since a windowed
+  UI always pairs and raw text pairs); `> 0.5` → `>=` thresholds; the
+  spacer's `pickable` field; the remap's `<` → `<=`; the slack's `-` → `/`
+  (a smaller slack only rebuilds earlier); the declared-layout opaque
+  checks for wrap (the measurement's mark covers it a frame later);
+  dropping the clamp's horizontal-scrollbar term (it moves the band's
+  edge only under that scrollbar); the text-input item's key (needs
+  `--features text-input`; not windowed in any test).
+
+A rerun on the fixed code (330 mutants: 215 caught, 24 timeouts, 24
+unviable, 67 missed) showed which new tests didn't reach: the table test
+passed with the opaque marks off (bug_0177's two checks duplicated each
+other), bug_0166's regression had gone quiet (re-minimized from a new
+seed), kept elements could be replaced on every build unnoticed (now
+`rows_that_stay_in_the_band_keep_their_entities`), `note_reused`'s bottom
+term (`a_reused_section_culls_its_rows_once_they_leave_the_band_bottom`),
+the clamp's and the visible region's top-border terms (the root-box test
+now has a 20 px top border) and the walk-through sum (a walked-through
+group with rows after it). The build-side width check, redundant with the
+measurement's (bug_0173), was removed. Also equivalent: a one-sided
+`auto` margin's `&&` → `||` (auto margins are 0 in an overflowing column),
+`item_shell_reactive` (ADR 0029's restyle scoping, in the diff's context
+only), `column_height`'s depth arithmetic (only the recursion bound) and
+`is_walked_through` → `true` (a non-walked node without a height has no
+measured children either).
+
+The final run (318 mutants: 227 caught, 19 timeouts, 24 unviable, 48
+missed) left the equivalents above plus three gaps, now closed: the
+slack's materialized terms (`every_row_that_leaves_the_band_culls_at_once`:
+a tall block holds the far edge so only the leaving rows bind, 1 px
+tightness), the `positioned` mark (`a_fixed_element_survives_its_section_leaving_the_band`)
+and the restyle into a row seen in view (the restyle test ends at the
+top). Also equivalent: the `changed` flag's `(outer - previous) > 0.5`
+arithmetic (an always-true flag only adds a rebuild after a measurement)
+and the slacks' `1e-3` epsilon variants.
+
+Every fix was ablated against the suite (the property at 128 cases plus
+the regression tests) and fails it. Each found seed has a minimized
+regression test. `Changed<WindowKey>` in the measurement's filter survives
+the ablation: every handle shift found also changes the kept entities'
+`ComputedNode::stack_index`. It stays as defense in depth. The property
+passes 400 cases (release, 83 s).

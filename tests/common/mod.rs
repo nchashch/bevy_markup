@@ -12,13 +12,13 @@ use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
 use bevy::ecs::schedule::ScheduleBuildSettings;
 use bevy::image::{CompressedImageFormats, ImageLoader};
 use bevy::input::ButtonState;
-use bevy::text::{LetterSpacing, LineHeight};
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource, InlineBox};
+use bevy::text::{LetterSpacing, LineHeight};
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent, WindowRef};
+use bevy_markup::WindowSpacer;
 use bevy_markup::prelude::*;
-use bevy_markup::{WindowSpacer};
 
 pub const FRAME_PNG: &[u8] = include_bytes!("../fixtures/frame.png"); // 32×24
 
@@ -786,16 +786,32 @@ pub fn layout_fields(node: &Node, spawned: &Node, line: &mut String) {
     }
     // Grid tracks only expose `Debug`; placements print CSS-like.
     for (name, value, base) in [
-        ("grid-cols", &node.grid_template_columns, &spawned.grid_template_columns),
-        ("grid-rows", &node.grid_template_rows, &spawned.grid_template_rows),
+        (
+            "grid-cols",
+            &node.grid_template_columns,
+            &spawned.grid_template_columns,
+        ),
+        (
+            "grid-rows",
+            &node.grid_template_rows,
+            &spawned.grid_template_rows,
+        ),
     ] {
         if value != base {
             write!(line, " {name}={value:?}").unwrap();
         }
     }
     for (name, value, base) in [
-        ("grid-auto-cols", &node.grid_auto_columns, &spawned.grid_auto_columns),
-        ("grid-auto-rows", &node.grid_auto_rows, &spawned.grid_auto_rows),
+        (
+            "grid-auto-cols",
+            &node.grid_auto_columns,
+            &spawned.grid_auto_columns,
+        ),
+        (
+            "grid-auto-rows",
+            &node.grid_auto_rows,
+            &spawned.grid_auto_rows,
+        ),
     ] {
         if value != base {
             write!(line, " {name}={value:?}").unwrap();

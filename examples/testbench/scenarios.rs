@@ -93,12 +93,19 @@ pub fn twin_kind(scenario: &str) -> Option<TwinKind> {
 /// How many model rows a scenario renders at `size`: the scaling
 /// scenario's large UI renders four times the small one's.
 pub fn model_rows(scenario: &str, size: usize) -> usize {
-    if scenario == "scaling" { size * 4 } else { size }
+    if scenario == "scaling" {
+        size * 4
+    } else {
+        size
+    }
 }
 
 /// Every scenario id, in the shell's order.
 pub fn all() -> Vec<&'static str> {
-    GROUPS.iter().flat_map(|(_, ids)| ids.iter().copied()).collect()
+    GROUPS
+        .iter()
+        .flat_map(|(_, ids)| ids.iter().copied())
+        .collect()
 }
 
 /// The sizes the − / + controls step through (rows, cards or UIs).
@@ -258,7 +265,8 @@ const LOCALIZED_HTML: &str = "{% for row in rows %}<p data-l10n-id=\"tb-w-line\"
 <p data-l10n-id=\"tb-w-count\" data-l10n-args='{{ {\"n\": row.value} }}'>x</p>
 {% endfor %}";
 
-const CARD_HTML: &str = "<div class=\"card\"><p class=\"k\">UI {{ id }}</p><p class=\"v\">{{ value }}</p></div>";
+const CARD_HTML: &str =
+    "<div class=\"card\"><p class=\"k\">UI {{ id }}</p><p class=\"v\">{{ value }}</p></div>";
 
 const CALC_HTML: &str = "<div class=\"wrap\">{% for row in rows %}<div class=\"card\" style=\"width: calc({{ row.pct }}% - {{ row.px }}px)\"><p class=\"v\">{{ row.value }}</p></div>{% endfor %}</div>";
 
@@ -425,7 +433,14 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
     };
     match scenario {
         "big-document" | "restyle-storm" | "reuse-vs-fresh" => {
-            let paths = write(dir, prefix, &[("rows.html", ROWS_HTML.into()), ("bench.css", BENCH_CSS.into())]);
+            let paths = write(
+                dir,
+                prefix,
+                &[
+                    ("rows.html", ROWS_HTML.into()),
+                    ("bench.css", BENCH_CSS.into()),
+                ],
+            );
             let checks: &'static [&'static str] = match scenario {
                 "reuse-vs-fresh" => &["built", "twins", "budget"],
                 "big-document" => &["built", "reuse", "budget"],
@@ -434,12 +449,32 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
             column(vec![main(&paths[0], &paths[1], Role::Main)], checks)
         }
         "all-dirty" => {
-            let paths = write(dir, prefix, &[("rows.html", DIRTY_HTML.into()), ("bench.css", BENCH_CSS.into())]);
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[
+                    ("rows.html", DIRTY_HTML.into()),
+                    ("bench.css", BENCH_CSS.into()),
+                ],
+            );
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "budget"],
+            )
         }
         "markdown" => {
-            let paths = write(dir, prefix, &[("doc.md", DOC_INDENTED_MD.into()), ("bench.css", BENCH_CSS.into())]);
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[
+                    ("doc.md", DOC_INDENTED_MD.into()),
+                    ("bench.css", BENCH_CSS.into()),
+                ],
+            );
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "budget"],
+            )
         }
         "indent-vs-flat" => {
             let paths = write(
@@ -452,17 +487,37 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
                 ],
             );
             Plan {
-                specs: vec![main(&paths[0], &paths[2], Role::Main), main(&paths[1], &paths[2], Role::Twin)],
+                specs: vec![
+                    main(&paths[0], &paths[2], Role::Main),
+                    main(&paths[1], &paths[2], Role::Twin),
+                ],
                 row: true,
                 checks: &["built", "twins", "budget"],
             }
         }
         "localized" => {
-            let paths = write(dir, prefix, &[("rows.html", LOCALIZED_HTML.into()), ("bench.css", BENCH_CSS.into())]);
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[
+                    ("rows.html", LOCALIZED_HTML.into()),
+                    ("bench.css", BENCH_CSS.into()),
+                ],
+            );
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "budget"],
+            )
         }
         "many-uis" => {
-            let paths = write(dir, prefix, &[("card.html", CARD_HTML.into()), ("bench.css", BENCH_CSS.into())]);
+            let paths = write(
+                dir,
+                prefix,
+                &[
+                    ("card.html", CARD_HTML.into()),
+                    ("bench.css", BENCH_CSS.into()),
+                ],
+            );
             // Card UIs are created by the caller from the model's rows.
             Plan {
                 specs: vec![main(&paths[0], &paths[1], Role::Card(0))],
@@ -471,20 +526,40 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
             }
         }
         "calc-layout" => {
-            let paths = write(dir, prefix, &[("cards.html", CALC_HTML.into()), ("bench.css", BENCH_CSS.into())]);
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "budget"])
-        }
-        "nested-rules" => {
-            let css = format!("html {{ color: #ff6b6b }}\np {{ {} }}\n", "a {".repeat(20_000));
             let paths = write(
                 dir,
                 prefix,
                 &[
-                    ("page.html", "<p>The sheet must fail its load: this text keeps the default colour.</p>".into()),
+                    ("cards.html", CALC_HTML.into()),
+                    ("bench.css", BENCH_CSS.into()),
+                ],
+            );
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "budget"],
+            )
+        }
+        "nested-rules" => {
+            let css = format!(
+                "html {{ color: #ff6b6b }}\np {{ {} }}\n",
+                "a {".repeat(20_000)
+            );
+            let paths = write(
+                dir,
+                prefix,
+                &[
+                    (
+                        "page.html",
+                        "<p>The sheet must fail its load: this text keeps the default colour.</p>"
+                            .into(),
+                    ),
                     ("bomb.css", css),
                 ],
             );
-            column(vec![probe(&paths[0], &paths[1], "sheet", json!({}))], &["sheet-refused", "built", "budget"])
+            column(
+                vec![probe(&paths[0], &paths[1], "sheet", json!({}))],
+                &["sheet-refused", "built", "budget"],
+            )
         }
         "deep-dom" => {
             let html = format!(
@@ -492,11 +567,20 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
                 "<div>".repeat(5_000),
                 "</div>".repeat(5_000)
             );
-            let paths = write(dir, prefix, &[("page.html", html), ("bench.css", BENCH_CSS.into())]);
-            column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["built", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[("page.html", html), ("bench.css", BENCH_CSS.into())],
+            );
+            column(
+                vec![probe(&paths[0], &paths[1], "page", json!({}))],
+                &["built", "budget"],
+            )
         }
         "var-bombs" => {
-            let mut css = String::from("html { color: #dfe6ee; --c0: 1px; --d0: x; --f0: 1px; --x: var(--y, 1px); --y: var(--x, 2px); ");
+            let mut css = String::from(
+                "html { color: #dfe6ee; --c0: 1px; --d0: x; --f0: 1px; --x: var(--y, 1px); --y: var(--x, 2px); ",
+            );
             for i in 1..2000 {
                 css.push_str(&format!("--c{i}: var(--c{}); ", i - 1));
             }
@@ -504,12 +588,24 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
                 css.push_str(&format!("--d{i}: var(--d{0}, a) var(--d{0}, b); ", i - 1));
             }
             for i in 1..64 {
-                css.push_str(&format!("--f{i}: {}var(--f{}){}; ", "calc(".repeat(20), i - 1, " + 1px)".repeat(20)));
+                css.push_str(&format!(
+                    "--f{i}: {}var(--f{}){}; ",
+                    "calc(".repeat(20),
+                    i - 1,
+                    " + 1px)".repeat(20)
+                ));
             }
             css.push_str("}\n.chain { width: var(--c1999, 40px) }\n.double { padding-left: var(--d39, 3px) }\n.cycle { width: var(--x, 120px) }\n.fn { width: var(--f63, 80px) }\n");
             let html = "<p class=\"chain\">a 2 000-link chain</p><p class=\"double\">a doubling fallback chain</p><p class=\"cycle\">a cycle</p><p class=\"fn\">nested functions on every link</p>";
-            let paths = write(dir, prefix, &[("page.html", html.into()), ("bomb.css", css)]);
-            column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["built", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[("page.html", html.into()), ("bomb.css", css)],
+            );
+            column(
+                vec![probe(&paths[0], &paths[1], "page", json!({}))],
+                &["built", "budget"],
+            )
         }
         "grid-bombs" => {
             let names: Vec<String> = (0..1000).map(|i| format!("a{i}")).collect();
@@ -519,14 +615,25 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
                 names.join(" ")
             );
             let html = "<div class=\"g1\"><p>repeat(4 000 000 000)</p></div><div class=\"g2\"><p>a 32-bit wrap</p></div><div class=\"g3\"><p>40 000 area rows</p></div><div class=\"g4\"><p>1 000 names per repeat</p></div>";
-            let paths = write(dir, prefix, &[("page.html", html.into()), ("bomb.css", css)]);
-            column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["built", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[("page.html", html.into()), ("bomb.css", css)],
+            );
+            column(
+                vec![probe(&paths[0], &paths[1], "page", json!({}))],
+                &["built", "budget"],
+            )
         }
         "hostile-args" => {
             let html = "{% for p in payloads %}<p data-l10n-id=\"tb-w-hostile\" data-l10n-args='{{ {\"n\": 2, \"who\": p} }}'>x</p>
 <p data-l10n-id=\"tb-w-hostile-cached\" data-l10n-args='{{ {\"who\": p} }}'>x</p>
 {% endfor %}";
-            let paths = write(dir, prefix, &[("page.html", html.into()), ("bench.css", BENCH_CSS.into())]);
+            let paths = write(
+                dir,
+                prefix,
+                &[("page.html", html.into()), ("bench.css", BENCH_CSS.into())],
+            );
             let payloads = json!([
                 "<a href=x data-on-click=boom>Continue</a>",
                 "[Continue](https://evil.example) ![x](../../save.png)",
@@ -537,16 +644,30 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
                 "Ada \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} Jose\u{301}",
             ]);
             column(
-                vec![probe(&paths[0], &paths[1], "page", json!({ "payloads": payloads }))],
+                vec![probe(
+                    &paths[0],
+                    &paths[1],
+                    "page",
+                    json!({ "payloads": payloads }),
+                )],
                 &["built", "no-forged", "no-fallback", "budget"],
             )
         }
         "args-injection" => {
             let html = "<p id=\"literal\" data-l10n-id=\"tb-w-greet\" data-l10n-args='{{ {\"name\": name} }}'>x</p>
 <p id=\"splice\" data-l10n-id=\"tb-w-greet\" data-l10n-args='{\"name\": \"{{ name }}\"}'>x</p>";
-            let paths = write(dir, prefix, &[("page.html", html.into()), ("bench.css", BENCH_CSS.into())]);
+            let paths = write(
+                dir,
+                prefix,
+                &[("page.html", html.into()), ("bench.css", BENCH_CSS.into())],
+            );
             column(
-                vec![probe(&paths[0], &paths[1], "page", json!({ "name": "Ada\", \"extra\": \"INJECTED" }))],
+                vec![probe(
+                    &paths[0],
+                    &paths[1],
+                    "page",
+                    json!({ "name": "Ada\", \"extra\": \"INJECTED" }),
+                )],
                 &["built", "map-literal", "budget"],
             )
         }
@@ -583,12 +704,23 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
                 md.push_str(&format!("{}{{% endif %}}\n", "    ".repeat(depth)));
             }
             md.push_str(&"    an indented line\n".repeat(10_000));
-            let paths = write(dir, prefix, &[("bomb.md", md), ("bench.css", BENCH_CSS.into())]);
-            column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["survived", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[("bomb.md", md), ("bench.css", BENCH_CSS.into())],
+            );
+            column(
+                vec![probe(&paths[0], &paths[1], "page", json!({}))],
+                &["survived", "budget"],
+            )
         }
         "selector-list" | "selectors-vs-fresh" => {
             let css = format!("{BENCH_CSS}{SELECTOR_CSS}");
-            let paths = write(dir, prefix, &[("list.html", SELECTOR_LIST_HTML.into()), ("bench.css", css)]);
+            let paths = write(
+                dir,
+                prefix,
+                &[("list.html", SELECTOR_LIST_HTML.into()), ("bench.css", css)],
+            );
             let checks: &'static [&'static str] = if scenario == "selectors-vs-fresh" {
                 &["built", "twins", "budget"]
             } else {
@@ -599,34 +731,69 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
         "text-features" => {
             dir.insert_asset(Path::new(&format!("{prefix}/tile.png")), TILE_PNG.to_vec());
             let css = format!("{BENCH_CSS}{TEXT_FEATURES_CSS}");
-            let paths = write(dir, prefix, &[("page.html", TEXT_FEATURES_HTML.into()), ("bench.css", css)]);
+            let paths = write(
+                dir,
+                prefix,
+                &[("page.html", TEXT_FEATURES_HTML.into()), ("bench.css", css)],
+            );
             // No reuse check: the panel's class flips every frame, and an
             // element whose attributes change rebuilds its subtree
             // (ADR 0021: an ancestor's classes can change descendants'
             // matches).
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "auto-scroll", "budget"])
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "auto-scroll", "budget"],
+            )
         }
         "order-independence" => {
             let css = format!("{BENCH_CSS}{ORDER_CSS}");
-            let paths = write(dir, prefix, &[("list.html", ORDER_HTML.into()), ("bench.css", css)]);
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "twins", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[("list.html", ORDER_HTML.into()), ("bench.css", css)],
+            );
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "twins", "budget"],
+            )
         }
         "restyle-vs-full" => {
             let css = format!("{BENCH_CSS}{FOCUS_CSS}");
-            let paths = write(dir, prefix, &[("list.html", FOCUS_HTML.into()), ("bench.css", css)]);
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "twins", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[("list.html", FOCUS_HTML.into()), ("bench.css", css)],
+            );
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "twins", "budget"],
+            )
         }
         "idle-quiet" => {
             dir.insert_asset(Path::new(&format!("{prefix}/tile.png")), TILE_PNG.to_vec());
             let css = format!("{BENCH_CSS}{QUIET_CSS}");
-            let paths = write(dir, prefix, &[("list.html", QUIET_HTML.into()), ("bench.css", css)]);
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "quiet", "budget"])
+            let paths = write(
+                dir,
+                prefix,
+                &[("list.html", QUIET_HTML.into()), ("bench.css", css)],
+            );
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "quiet", "budget"],
+            )
         }
         "scaling" => {
             let css = format!("{BENCH_CSS}{SCALING_CSS}");
-            let paths = write(dir, prefix, &[("list.html", SCALING_HTML.into()), ("bench.css", css)]);
+            let paths = write(
+                dir,
+                prefix,
+                &[("list.html", SCALING_HTML.into()), ("bench.css", css)],
+            );
             Plan {
-                specs: vec![main(&paths[0], &paths[1], Role::Main), main(&paths[0], &paths[1], Role::Twin)],
+                specs: vec![
+                    main(&paths[0], &paths[1], Role::Main),
+                    main(&paths[0], &paths[1], Role::Twin),
+                ],
                 row: true,
                 checks: &["built", "linear"],
             }
@@ -634,7 +801,14 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
         "selector-bombs" => {
             let mut css = String::from("html { color: #dfe6ee }\n");
             // Extreme An+B (review_0005 I02 overflowed i32).
-            for anb in ["n-2147483647", "-n+2147483647", "-2147483648n-2147483648", "2147483647n+2147483647", "+n+3", "-n+3"] {
+            for anb in [
+                "n-2147483647",
+                "-n+2147483647",
+                "-2147483648n-2147483648",
+                "2147483647n+2147483647",
+                "+n+3",
+                "-n+3",
+            ] {
                 css.push_str(&format!("p:nth-child({anb}) {{ letter-spacing: 1px }}\np:nth-of-type({anb}) {{ line-height: 1.3 }}\n"));
             }
             // Combinator characters, `]` and quotes inside quoted values
@@ -643,30 +817,63 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
             css.push_str("p[data-y='say \"hi\"'] { color: #7fdb8f }\n");
             // A 10 000-character attribute value, and 1 000 sibling rules
             // over the same list.
-            css.push_str(&format!("p[data-z=\"{}\"] {{ color: #ff6b6b }}\n", "z".repeat(10_000)));
+            css.push_str(&format!(
+                "p[data-z=\"{}\"] {{ color: #ff6b6b }}\n",
+                "z".repeat(10_000)
+            ));
             for i in 0..1000 {
-                css.push_str(&format!(".c{i} ~ p:not(.c{}) {{ padding-left: {}px }}\n", i + 1, i % 7));
+                css.push_str(&format!(
+                    ".c{i} ~ p:not(.c{}) {{ padding-left: {}px }}\n",
+                    i + 1,
+                    i % 7
+                ));
             }
             // Nested `:not()` (a parenthesized argument drops the rule)
             // and a long compound.
             // (Past the loader's nesting guard the whole sheet is refused —
             // bug_0106 — which the nested-rules scenario covers.)
-            css.push_str(&format!("p{}x{} {{ color: red }}\n", ":not(".repeat(20), ")".repeat(20)));
-            css.push_str(&format!("p{} {{ color: #9fb3c8 }}\n", (0..500).map(|i| format!(".q{i}")).collect::<String>()));
+            css.push_str(&format!(
+                "p{}x{} {{ color: red }}\n",
+                ":not(".repeat(20),
+                ")".repeat(20)
+            ));
+            css.push_str(&format!(
+                "p{} {{ color: #9fb3c8 }}\n",
+                (0..500).map(|i| format!(".q{i}")).collect::<String>()
+            ));
             let mut html = String::from("<section>");
             html.push_str("<p id=\"probe\" data-x=\"a] b ~ c + d > e\">the quoted-value probe</p>");
             html.push_str("<p id=\"quotes\" data-y='say \"hi\"'>the escaped-quote probe</p>");
             for i in 0..200 {
-                html.push_str(&format!("<p class=\"c{i}\" data-z=\"{}\">sibling {i}</p>", if i % 50 == 0 { "z".repeat(10_000) } else { String::new() }));
+                html.push_str(&format!(
+                    "<p class=\"c{i}\" data-z=\"{}\">sibling {i}</p>",
+                    if i % 50 == 0 {
+                        "z".repeat(10_000)
+                    } else {
+                        String::new()
+                    }
+                ));
             }
             html.push_str("</section>");
             let paths = write(dir, prefix, &[("page.html", html), ("bomb.css", css)]);
-            column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["built", "quoted-match", "budget"])
+            column(
+                vec![probe(&paths[0], &paths[1], "page", json!({}))],
+                &["built", "quoted-match", "budget"],
+            )
         }
         "sibling-bombs" => {
-            let css = format!("{BENCH_CSS}{SCALING_CSS}.x:nth-child(-n+5) {{ background-color: #1a2029 }}\n");
-            let paths = write(dir, prefix, &[("list.html", SCALING_HTML.into()), ("bench.css", css)]);
-            column(vec![main(&paths[0], &paths[1], Role::Main)], &["built", "budget"])
+            let css = format!(
+                "{BENCH_CSS}{SCALING_CSS}.x:nth-child(-n+5) {{ background-color: #1a2029 }}\n"
+            );
+            let paths = write(
+                dir,
+                prefix,
+                &[("list.html", SCALING_HTML.into()), ("bench.css", css)],
+            );
+            column(
+                vec![main(&paths[0], &paths[1], Role::Main)],
+                &["built", "budget"],
+            )
         }
         "entity-bombs" => {
             let mut html = String::from("<p id=\"decoded\">&#x41;&#66;&amp;&#+65;&#x110000;</p>\n");
@@ -674,9 +881,19 @@ pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
             html.push_str(&format!("<p>{}</p>\n", "&#x1".repeat(50_000)));
             html.push_str(&format!("<p>{}</p>\n", "&am".repeat(50_000)));
             html.push_str(&format!("<p>&{};</p>\n", "a".repeat(100_000)));
-            html.push_str(&format!("<p title=\"{}\">attributes decode too</p>\n", "&#9".repeat(20_000)));
-            let paths = write(dir, prefix, &[("page.html", html), ("bench.css", BENCH_CSS.into())]);
-            column(vec![probe(&paths[0], &paths[1], "page", json!({}))], &["built", "decoded", "budget"])
+            html.push_str(&format!(
+                "<p title=\"{}\">attributes decode too</p>\n",
+                "&#9".repeat(20_000)
+            ));
+            let paths = write(
+                dir,
+                prefix,
+                &[("page.html", html), ("bench.css", BENCH_CSS.into())],
+            );
+            column(
+                vec![probe(&paths[0], &paths[1], "page", json!({}))],
+                &["built", "decoded", "budget"],
+            )
         }
         _ => column(Vec::new(), &[]),
     }

@@ -12,11 +12,11 @@ mod common;
 #[cfg(feature = "text-input")]
 use bevy::ecs::message::Messages;
 use bevy::input::ButtonState;
-use bevy::input::touch::TouchPhase;
 #[cfg(feature = "text-input")]
 use bevy::input::keyboard::Key;
 #[cfg(feature = "text-input")]
 use bevy::input::keyboard::KeyboardInput;
+use bevy::input::touch::TouchPhase;
 use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
 use bevy::math::Vec2;
 use bevy::picking::pointer::{PointerButton, PointerId};
@@ -31,18 +31,22 @@ const VIEWPORT: UVec2 = UVec2::new(640, 480);
 fn page_ui(name: &str, page: &str, css: &str, context: TemplateContext) -> TestUi {
     TestUi::with_pointer(
         name,
-        &[("page.html", page), ("slot.html", "<p>slot</p>"), ("style.css", css)],
+        &[
+            ("page.html", page),
+            ("slot.html", "<p>slot</p>"),
+            ("style.css", css),
+        ],
         VIEWPORT,
     )
     .stylesheet("style.css")
-        .spawn(
-            "page.html",
-            context,
-            Node {
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-        )
+    .spawn(
+        "page.html",
+        context,
+        Node {
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+    )
 }
 
 fn element_by_id(world: &mut World, root: Entity, id: &str) -> Entity {
@@ -458,14 +462,7 @@ fn hover_survives_a_rebuild_around_a_nested_ui_root() {
     let page = r#"<div id="wrap">{% for i in items %}<p>{{ i }}</p>{% endfor %}
         <div id="target" data-on-enter="enter-target" data-on-leave="leave-target"><p>In</p></div>
     </div>"#;
-    let spawn = |name: &str| {
-        page_ui(
-            name,
-            page,
-            "",
-            TemplateContext::new().with("items", &[0]),
-        )
-    };
+    let spawn = |name: &str| page_ui(name, page, "", TemplateContext::new().with("items", &[0]));
     let mut reused = spawn("nested-hover-reused");
     let mut fresh = spawn("nested-hover-fresh");
     reused.settle();
@@ -623,8 +620,7 @@ fn ancestor_pseudo_rule_restyles_uncached_descendants() {
     let label_1 = element_by_id(ui.world_mut(), root, "label-1");
     let label_2 = element_by_id(ui.world_mut(), root, "label-2");
     assert!(
-        !pseudo(ui.world_mut(), label_1).hovered
-            && !pseudo(ui.world_mut(), label_2).hovered,
+        !pseudo(ui.world_mut(), label_1).hovered && !pseudo(ui.world_mut(), label_2).hovered,
         "no label hovered"
     );
     ui.settle();
@@ -1386,9 +1382,7 @@ fn plain_button_outside_a_form_does_not_swallow_the_wrapper_click() {
     ui.click_at(at);
     let signals: Vec<ElementSignal> = ui.take_signals();
     assert!(
-        signals
-            .iter()
-            .any(|signal| signal.name.as_ref() == "wrap"),
+        signals.iter().any(|signal| signal.name.as_ref() == "wrap"),
         "the wrapper's click never fired: {signals:?}"
     );
     assert!(
@@ -1410,7 +1404,9 @@ fn click_id(ui: &mut TestUi, id: &str) -> Vec<ElementSignal> {
             .map(|(entity, _)| entity)
             .unwrap_or_else(|| panic!("{id}"))
     };
-    let at = node_rect(ui.world_mut(), entity).expect("laid out").center();
+    let at = node_rect(ui.world_mut(), entity)
+        .expect("laid out")
+        .center();
     ui.click_at(at);
     ui.take_signals()
 }
@@ -1528,10 +1524,17 @@ fn activation_on_submit_button_submits() {
         .filter(|signal| signal.trigger == SignalTrigger::Submit)
         .collect::<Vec<_>>();
     assert_eq!(submits.len(), 1, "one submit: {submits:?}");
-    assert!(matches!(
-        submits[0].source,
-        SignalSource::Pointer { button: PointerButton::Primary, .. }
-    ), "the pointer source is real: {:?}", submits[0].source);
+    assert!(
+        matches!(
+            submits[0].source,
+            SignalSource::Pointer {
+                button: PointerButton::Primary,
+                ..
+            }
+        ),
+        "the pointer source is real: {:?}",
+        submits[0].source
+    );
 }
 
 /// A touch pointer's entered elements emit their `data-on-leave` when the
@@ -1539,7 +1542,12 @@ fn activation_on_submit_button_submits() {
 #[test]
 fn touch_end_emits_leave() {
     let page = r#"<div id="any" data-on-enter="in" data-on-leave="out">zone</div>"#;
-    let mut ui = page_ui("touch-leave", page, "div { width: 100px; height: 50px }", TemplateContext::new());
+    let mut ui = page_ui(
+        "touch-leave",
+        page,
+        "div { width: 100px; height: 50px }",
+        TemplateContext::new(),
+    );
     ui.settle();
     ui.update(1);
     let at = {
@@ -1572,7 +1580,12 @@ fn touch_end_emits_leave() {
         .filter(|signal| signal.trigger == SignalTrigger::Enter)
         .collect();
     assert_eq!(entered.len(), 1, "one enter: {entered:?}");
-    assert!(matches!(entered[0].source, SignalSource::Hover { pointer: PointerId::Touch(3) }));
+    assert!(matches!(
+        entered[0].source,
+        SignalSource::Hover {
+            pointer: PointerId::Touch(3)
+        }
+    ));
 
     // Touch end: the pointer despawns; leave fires from the snapshot.
     ui.world_mut()
@@ -1685,10 +1698,12 @@ fn same_frame_despawn_with_a_focus_change_does_not_panic() {
         },
     );
     // The click closes the UI (the whole root, focused element included).
-    ui.app_mut()
-        .on_html_click("close", move |_: In<ElementSignal>, mut commands: Commands| {
+    ui.app_mut().on_html_click(
+        "close",
+        move |_: In<ElementSignal>, mut commands: Commands| {
             commands.entity(root).despawn();
-        });
+        },
+    );
     ui.click_at(at);
     assert!(
         ui.world_mut().get_entity(root).is_err(),
@@ -1706,8 +1721,7 @@ fn same_frame_despawn_with_a_focus_change_does_not_panic() {
 /// The tooltip anchors to the nearest ancestor that has a node instead.
 #[test]
 fn a_tooltip_on_a_link_survives_hover() {
-    let page =
-        r#"<div id="page"><p>Read <a href="one://x" data-tooltip="link-tip">the report</a>.</p></div>"#;
+    let page = r#"<div id="page"><p>Read <a href="one://x" data-tooltip="link-tip">the report</a>.</p></div>"#;
     let mut ui = TestUi::with_pointer(
         "tooltip-link",
         &[("page.html", page), ("tooltip.html", "<p>{{ key }}</p>")],
@@ -1885,10 +1899,12 @@ fn a_handler_moved_focus_shows_its_state_the_same_frame() {
     let root = ui.root();
     let (target, _) = center(ui.world_mut(), root, "target");
     let (_, at) = center(ui.world_mut(), root, "move");
-    ui.app_mut()
-        .on_html_click("focus-target", move |_: In<ElementSignal>, mut focus: ResMut<InputFocus>| {
+    ui.app_mut().on_html_click(
+        "focus-target",
+        move |_: In<ElementSignal>, mut focus: ResMut<InputFocus>| {
             focus.set(target, FocusCause::Navigated);
-        });
+        },
+    );
     // The click's release frame runs the handler; the target's focused
     // state must be set by the end of that very frame.
     ui.click_at(at);

@@ -94,12 +94,11 @@ pub(crate) fn png_1x1() -> &'static [u8] {
 
 #[cfg(test)]
 pub(crate) const PNG_1X1: &[u8] = &[
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49,
-    0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
-    0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44,
-    0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D,
-    0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
-    0x60, 0x82,
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+    0x42, 0x60, 0x82,
 ];
 
 /// Whether the manifest's values would make Bevy's slicer divide by zero,
@@ -111,9 +110,14 @@ fn desc_would_break_the_slicer(desc: &NineSliceDescriptor) -> bool {
         ScaleModeDescriptor::Tile(factor) => !finite_positive(*factor),
         ScaleModeDescriptor::Stretch => false,
     };
-    [desc.border.left, desc.border.right, desc.border.top, desc.border.bottom]
-        .iter()
-        .any(|inset| !inset.is_finite() || *inset < 0.0)
+    [
+        desc.border.left,
+        desc.border.right,
+        desc.border.top,
+        desc.border.bottom,
+    ]
+    .iter()
+    .any(|inset| !inset.is_finite() || *inset < 0.0)
         || bad_scale(&desc.sides)
         || bad_scale(&desc.center)
         || !finite_positive(desc.max_corner_scale)
@@ -376,8 +380,8 @@ mod tests {
     /// temp file, so a deleted or weakened check fails this test.
     #[test]
     fn manifests_validate_values() {
-        use bevy::asset::{AssetPlugin, AssetServer, LoadState};
         use bevy::MinimalPlugins;
+        use bevy::asset::{AssetPlugin, AssetServer, LoadState};
 
         let load = |ron: &str| {
             let dir = std::env::temp_dir().join(format!(
@@ -429,12 +433,17 @@ mod tests {
             // G19; the manifest loaded and only its image failed).
             r#"(image: "https://evil.example/frame.png", border: (left: 1, right: 1, top: 1, bottom: 1))"#,
         ] {
-            assert!(matches!(load(bad), LoadState::Failed(_)), "{bad} must be rejected");
+            assert!(
+                matches!(load(bad), LoadState::Failed(_)),
+                "{bad} must be rejected"
+            );
         }
         // And a good manifest (with the image present) still loads.
         assert!(
             matches!(
-                load(r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), sides: Tile(2.0), center: Tile(2.0))"#),
+                load(
+                    r#"(image: "frame.png", border: (left: 1, right: 1, top: 1, bottom: 1), sides: Tile(2.0), center: Tile(2.0))"#
+                ),
                 LoadState::Loaded
             ),
             "a good manifest loads"

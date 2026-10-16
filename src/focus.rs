@@ -204,11 +204,9 @@ fn first_focusable_in_scope(
 ) -> Option<Entity> {
     let in_scope = |entity: Entity| {
         visible_in_hierarchy(entity, visibility, parents)
-            && html_root(entity, parents, roots)
-                .is_some_and(|root| {
-                    active_modal(roots_in_scope, visibility, parents)
-                        .is_none_or(|modal| root == modal)
-                })
+            && html_root(entity, parents, roots).is_some_and(|root| {
+                active_modal(roots_in_scope, visibility, parents).is_none_or(|modal| root == modal)
+            })
     };
     // Nothing is navigable: the walk below (a stack of every in-scope
     // entity) costs nothing to skip, and repair_focus runs it every frame
@@ -468,10 +466,7 @@ fn focus_on_press(
     }
 }
 
-fn activate_element(
-    activate: On<ActivateElement>,
-    mut params: ActivationParams,
-) {
+fn activate_element(activate: On<ActivateElement>, mut params: ActivationParams) {
     let target = activate.entity;
     // A submit button's activation is the form's submit (Enter / gamepad A
     // on `<button type="submit">`), with the activation as its source —

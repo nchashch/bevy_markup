@@ -84,7 +84,10 @@ pub fn cascade(css: &str) -> Result<String, String> {
     // url → handle map mirrors the loader's (skipped URLs get no entry).
     let mut images = bevy::platform::collections::HashMap::new();
     let mut assets = Assets::<Image>::default();
-    for url in custom_image_urls(&sheet).into_iter().chain(image_urls(&sheet)) {
+    for url in custom_image_urls(&sheet)
+        .into_iter()
+        .chain(image_urls(&sheet))
+    {
         images.insert(url, assets.add(fake_frame()));
     }
     let stylesheet = Stylesheet {
@@ -197,12 +200,19 @@ pub fn cascade(css: &str) -> Result<String, String> {
         id: None,
         classes: classes.iter().map(|class| (*class).into()).collect(),
         submit: false,
-        pseudo: Pseudo { hover: true, ..Default::default() },
+        pseudo: Pseudo {
+            hover: true,
+            ..Default::default()
+        },
         dataset: Some(std::rc::Rc::new(std::collections::BTreeMap::from([(
             "mode".to_owned(),
             "dark".to_owned(),
         )]))),
-        position: crate::cascade::Position { tag_index: 1, tag_count: 2, ..Default::default() },
+        position: crate::cascade::Position {
+            tag_index: 1,
+            tag_count: 2,
+            ..Default::default()
+        },
     };
     let states = [
         crate::cascade::ElementState::default(),
@@ -223,34 +233,33 @@ pub fn cascade(css: &str) -> Result<String, String> {
     // exercises the cascade's match cache.
     for round in 0..2 {
         for element in &elements {
-            for ((ancestors, pseudo), state) in
-                chains.iter().flat_map(|chain| states.iter().map(move |state| (chain, state)))
+            for ((ancestors, pseudo), state) in chains
+                .iter()
+                .flat_map(|chain| states.iter().map(move |state| (chain, state)))
             {
-                let style =
-                    styler.style_of(element, &root, *pseudo, None, ancestors, &state);
-                let boxed: BoxStyle =
-                    styler.box_of(element, *pseudo, None, ancestors, &state);
-            std::fmt::write(
-                &mut out,
-                format_args!(
-                    "round {round} {}#{}{:?}: color={:?} family={:?} size={} bold={} italic={} \
+                let style = styler.style_of(element, &root, *pseudo, None, ancestors, &state);
+                let boxed: BoxStyle = styler.box_of(element, *pseudo, None, ancestors, &state);
+                std::fmt::write(
+                    &mut out,
+                    format_args!(
+                        "round {round} {}#{}{:?}: color={:?} family={:?} size={} bold={} italic={} \
                      border={:?} padding={:?} bg={:?} image={} gap={:?}\n",
-                    element.tag,
-                    element.id.as_deref().unwrap_or(""),
-                    element.classes,
-                    style.color,
-                    style.family,
-                    style.size,
-                    style.bold,
-                    style.italic,
-                    boxed.border,
-                    boxed.padding,
-                    boxed.background,
-                    boxed.image.as_ref().map_or(0, |_| 1),
-                    boxed.row_gap,
-                ),
-            )
-            .ok();
+                        element.tag,
+                        element.id.as_deref().unwrap_or(""),
+                        element.classes,
+                        style.color,
+                        style.family,
+                        style.size,
+                        style.bold,
+                        style.italic,
+                        boxed.border,
+                        boxed.padding,
+                        boxed.background,
+                        boxed.image.as_ref().map_or(0, |_| 1),
+                        boxed.row_gap,
+                    ),
+                )
+                .ok();
             }
         }
     }

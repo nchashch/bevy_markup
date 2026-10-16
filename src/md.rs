@@ -82,9 +82,8 @@ pub(crate) fn template_code_ranges(source: &str) -> Vec<Range<usize>> {
     let (dedented, lines) = dedent_blocks(source);
     let (separated, inserted) = separate_statements_mapped(&dedented);
     // `inserted` holds the separated text's offsets of the added newlines.
-    let to_source = |at: usize| {
-        dedented_to_source(&lines, at - inserted.partition_point(|&added| added < at))
-    };
+    let to_source =
+        |at: usize| dedented_to_source(&lines, at - inserted.partition_point(|&added| added < at));
     code_ranges(&separated)
         .into_iter()
         .map(|range| to_source(range.start)..to_source(range.end))
@@ -183,8 +182,8 @@ impl BlockKey<'_> {
 
 /// HTML elements that have no closing tag.
 const VOID_ELEMENTS: [&str; 14] = [
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
-    "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 /// The structural role of `line`: a Tera statement alone on its line
@@ -205,7 +204,9 @@ fn block_tag(line: &str) -> Option<BlockTag<'_>> {
         return None;
     }
     let inner = inner.trim_matches(['-', '+']).trim();
-    let keyword = inner.split(|c: char| c.is_whitespace() || c == '(').next()?;
+    let keyword = inner
+        .split(|c: char| c.is_whitespace() || c == '(')
+        .next()?;
     match keyword {
         "if" | "for" | "block" | "component" | "filter" | "raw" => {
             Some(BlockTag::Open(BlockKey::Tera(keyword)))
@@ -214,9 +215,16 @@ fn block_tag(line: &str) -> Option<BlockTag<'_>> {
         "elif" | "else" => Some(BlockTag::Middle),
         _ => {
             let closed = keyword.strip_prefix("end")?;
-            let closed = if closed == "set_global" { "set" } else { closed };
-            matches!(closed, "if" | "for" | "block" | "component" | "filter" | "raw" | "set")
-                .then_some(BlockTag::Close(BlockKey::Tera(closed)))
+            let closed = if closed == "set_global" {
+                "set"
+            } else {
+                closed
+            };
+            matches!(
+                closed,
+                "if" | "for" | "block" | "component" | "filter" | "raw" | "set"
+            )
+            .then_some(BlockTag::Close(BlockKey::Tera(closed)))
         }
     }
 }
@@ -513,7 +521,11 @@ fn separate_statements_mapped(source: &str) -> (String, Vec<usize>) {
             line_start = cursor + newline + 1;
         }
         if next_newline.is_none_or(|at| at < start) {
-            next_newline = Some(source[start..].find('\n').map_or(source.len(), |at| start + at));
+            next_newline = Some(
+                source[start..]
+                    .find('\n')
+                    .map_or(source.len(), |at| start + at),
+            );
         }
         let line_end = next_newline.unwrap_or(source.len());
         let before = &source[line_start..start];
@@ -579,9 +591,7 @@ fn decode_code_entities(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
                 code_block = false;
                 event
             }
-            Event::Code(code) => Event::Code(
-                crate::template::decode_entities(&code).into(),
-            ),
+            Event::Code(code) => Event::Code(crate::template::decode_entities(&code).into()),
             Event::Text(text) if code_block => {
                 Event::Text(crate::template::decode_entities(&text).into())
             }
@@ -715,7 +725,6 @@ fn tera_runs(text: &str) -> Vec<(bool, &str)> {
 /// spans are Tera-literal: their text stays escaped, like any Markdown
 /// code content.
 fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
-
     let mut out = Vec::with_capacity(events.len());
     let mut code_block = false;
     // Inside a `{% raw %}` block: Tera passes its content through
@@ -756,7 +765,7 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
                         // The paragraph's Tera tags pass through verbatim;
                         // their raw tags still count (Tera scans them).
                         raw_depth_before(&whole, &mut raw);
-                                out.push(Event::Html(CowStr::Boxed(whole.into_boxed_str())));
+                        out.push(Event::Html(CowStr::Boxed(whole.into_boxed_str())));
                         index = cursor + 1;
                         continue;
                     }
@@ -791,7 +800,7 @@ fn rewrite(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
             }
             Event::Text(text) if code_block => {
                 let was_raw = raw > 0;
-                    if was_raw {
+                if was_raw {
                     raw_depth_before(text, &mut raw);
                     out.push(Event::Text(text.clone()));
                 } else {
@@ -988,7 +997,6 @@ mod tests {
             !html[code_at..].contains("code\n\n"),
             "blank lines were inserted into the code: {html}"
         );
-
     }
 
     /// A `{# … #}` comment with no backtick after it used to spin
@@ -1075,145 +1083,204 @@ mod tests {
         assert!(html.contains("<p class=\"markdown\">tail</p>"), "{html}");
     }
 
-/// Statement separation reads code and lines as CommonMark does
-/// (review_0003 G17/G18): a longer fence closer closes (the statements
-/// after it separate instead of merging into a `<p>`), and a statement
-/// after inline Tera on its line stays inline (it was split off, cutting
-/// the paragraph in two).
-#[test]
-fn separation_follows_fences_and_lines() {
-    let html = to_html_template("```\ncode\n````\n{% if a %}\nShown\n{% endif %}\n");
-    assert!(html.contains("{% if a %}\n<p class=\"markdown\">Shown</p>"), "{html}");
-    let html = to_html_template("````\n```\n{% if a %}\n````\n");
-    assert!(html.contains("<code>```\n{{ \"{\" }}% if a %}"), "a shorter closer doesn't close: {html}");
-    let html = to_html_template("Hello {# c #} {% if a %}\nShown\n{% endif %}\n");
-    assert!(html.contains("<p class=\"markdown\">Hello {# c #} {% if a %}\nShown</p>"), "{html}");
-}
-
-/// Indentation inside Tera blocks is the author's, not Markdown's
-/// (review_0004 H11): an indented body converts like an unindented one —
-/// it became an indented code block once separation put a blank line
-/// after its statement. Relative indentation inside a body is kept, and
-/// Tera shown inside a fence is code, not structure.
-#[test]
-fn indented_tera_bodies_are_not_code() {
-    let html = to_html_template("{% if a %}\n    Some *text*\n{% endif %}\n");
-    assert!(html.contains(r#"<p class="markdown">Some <em class="markdown">text</em></p>"#), "{html}");
-    assert!(!html.contains("<pre"), "{html}");
-    // Nested blocks line up with their own statements.
-    let html = to_html_template(
-        "{% for x in xs %}\n    {% if x %}\n        - item {{ x }}\n    {% endif %}\n{% endfor %}\n",
-    );
-    assert!(html.contains(r#"<li class="markdown">item {{ x }}</li>"#), "{html}");
-    // Each `elif`/`else` segment dedents on its own.
-    let html = to_html_template("{% if a %}\n    A\n{% elif b %}\n      B\n{% else %}\n\tC\n{% endif %}\n");
-    for letter in ["A", "B", "C"] {
-        assert!(html.contains(&format!(r#"<p class="markdown">{letter}</p>"#)), "{letter}: {html}");
-    }
-    // Relative indentation inside the body is still Markdown's.
-    let html = to_html_template("{% if a %}\n    Example:\n\n        code here\n{% endif %}\n");
-    assert!(html.contains("<code>code here\n</code>"), "{html}");
-    // A fence's content at column 0 doesn't pin the body's indentation.
-    let html = to_html_template("{% if a %}\n    ```\ncode at 0\n    ```\n{% endif %}\n");
-    assert!(html.contains("<code>code at 0\n</code>"), "{html}");
-    // Tera inside a fence is a sample: untouched, still literal.
-    let sample = "```\n{% if a %}\n    sample\n{% endif %}\n```\n";
-    assert_eq!(dedent_blocks(sample).0, sample);
-    // A raw body dedents, but its statements are text.
-    let raw = "{% raw %}\n    {% if a %}\n        x\n    {% endif %}\n{% endraw %}\n";
-    assert_eq!(
-        dedent_blocks(raw).0,
-        "{% raw %}\n{% if a %}\n    x\n{% endif %}\n{% endraw %}\n"
-    );
-}
-
-/// Random token soup of Tera blocks, fences, backticks, tabs and
-/// multi-byte text never panics the dedent or the conversion, and every
-/// mapped code range is an ordered, in-bounds slice of the source on
-/// character boundaries.
-#[test]
-fn dedent_survives_token_soup() {
-    const TOKENS: [&str; 23] = [
-        "{% if a %}", "{% endif %}", "{% else %}", "{% for x in y %}", "{% endfor %}",
-        "{% raw %}", "{% endraw %}", "{% set x %}", "{% endset %}", "```", "~~~", "`",
-        "    ", "\t", "\n", "\n\n", "é x", "{{ x }}", "<div class=\"a\">", "</div>",
-        "<pre>", "</pre>", "<br>",
-    ];
-    let mut state: u64 = 0x2545_f491_4f6c_dd1d;
-    let mut next = || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
-    };
-    for _ in 0..3000 {
-        let length = (next() % 40) as usize;
-        let source: String = (0..length).map(|_| TOKENS[(next() % 23) as usize]).collect();
-        let _ = to_html_template(&source);
-        let mut last = 0;
-        for range in template_code_ranges(&source) {
-            assert!(range.start <= range.end && range.end <= source.len(), "{source:?}");
-            assert!(range.start >= last, "unordered: {source:?}");
-            assert!(source.is_char_boundary(range.start) && source.is_char_boundary(range.end), "{source:?}");
-            last = range.start;
-        }
-    }
-}
-
-/// Raw HTML containers dedent like Tera blocks (review_0004 H11
-/// follow-up, ADR 0025): an indented `<div>` body after a blank line was
-/// an indented code block. Containers and Tera blocks nest in any order;
-/// `<pre>`-like elements, void and self-closing tags, and lines holding
-/// more than one tag aren't containers.
-#[test]
-fn indented_html_container_bodies_are_not_code() {
-    let html = to_html_template("<div class=\"card\">\n\n    Some **text**\n\n</div>\n");
-    assert!(html.contains(r#"<p class="markdown">Some <strong class="markdown">text</strong></p>"#), "{html}");
-    let html = to_html_template(
-        "<section>\n\n    {% if a %}\n        <DIV class=\"x\">\n\n            - item\n\n        </div>\n    {% endif %}\n\n</section>\n",
-    );
-    assert!(html.contains(r#"<li class="markdown">item</li>"#), "{html}");
-    assert!(!html.contains("<pre"), "{html}");
-    // Whitespace is content in a <pre> (and its lines aren't structure).
-    let pre = "<pre>\n    <div>\n        keep\n    </div>\n</pre>\n";
-    assert_eq!(dedent_blocks(pre).0, pre);
-    // Not containers: void, self-closing, comment, two tags on a line.
-    for line in ["<br>", "<img src=\"a.png\">", "<x-icon />", "<!-- note -->", "<p>hi</p>"] {
-        assert!(block_tag(line).is_none(), "{line}");
-    }
-}
-
-/// Offsets map back through the dedent: a code range found in the
-/// dedented text lands on the same characters of the source.
-#[test]
-fn dedent_maps_offsets_back() {
-    let source = "{% if a %}\n    text `code` here\n\t\tdeep `x`\n{% endif %}\n";
-    let ranges = template_code_ranges(source);
-    let texts: Vec<&str> = ranges.iter().map(|range| &source[range.clone()]).collect();
-    assert_eq!(texts, ["`code`", "`x`"]);
-}
-
-/// Content can supply `MARKER` (plain U+0001-delimited text): a class-like
-/// run inside another attribute's value with no closing `"` used to slice
-/// past the end or inside a multi-byte character and panicked the loader
-/// (review_0003 G04). The marker is dropped and the tag stays verbatim.
-#[test]
-fn crafted_markers_cannot_panic_inject_class() {
-    let cases = [
-        "\u{1}bevy-markup\u{1}<b data-x=' class=\"\u{e9}'>x</b>",
-        "\u{1}bevy-markup\u{1}<b data-x=' class=\"'>x</b>",
-        "\u{1}bevy-markup\u{1}<b data-x=' class=\"y\">x</b>",
-    ];
-    for case in cases {
-        let html = std::panic::catch_unwind(|| to_html(case)).expect("no panic");
-        assert!(html.contains("x</b>") || html.contains("</b>"), "{case}: {html}");
-        // The unclassed tag carries no injected class.
+    /// Statement separation reads code and lines as CommonMark does
+    /// (review_0003 G17/G18): a longer fence closer closes (the statements
+    /// after it separate instead of merging into a `<p>`), and a statement
+    /// after inline Tera on its line stays inline (it was split off, cutting
+    /// the paragraph in two).
+    #[test]
+    fn separation_follows_fences_and_lines() {
+        let html = to_html_template("```\ncode\n````\n{% if a %}\nShown\n{% endif %}\n");
         assert!(
-            !html.contains("class=\"markdown markdown\""),
-            "{case}: {html}"
+            html.contains("{% if a %}\n<p class=\"markdown\">Shown</p>"),
+            "{html}"
+        );
+        let html = to_html_template("````\n```\n{% if a %}\n````\n");
+        assert!(
+            html.contains("<code>```\n{{ \"{\" }}% if a %}"),
+            "a shorter closer doesn't close: {html}"
+        );
+        let html = to_html_template("Hello {# c #} {% if a %}\nShown\n{% endif %}\n");
+        assert!(
+            html.contains("<p class=\"markdown\">Hello {# c #} {% if a %}\nShown</p>"),
+            "{html}"
         );
     }
-}
+
+    /// Indentation inside Tera blocks is the author's, not Markdown's
+    /// (review_0004 H11): an indented body converts like an unindented one —
+    /// it became an indented code block once separation put a blank line
+    /// after its statement. Relative indentation inside a body is kept, and
+    /// Tera shown inside a fence is code, not structure.
+    #[test]
+    fn indented_tera_bodies_are_not_code() {
+        let html = to_html_template("{% if a %}\n    Some *text*\n{% endif %}\n");
+        assert!(
+            html.contains(r#"<p class="markdown">Some <em class="markdown">text</em></p>"#),
+            "{html}"
+        );
+        assert!(!html.contains("<pre"), "{html}");
+        // Nested blocks line up with their own statements.
+        let html = to_html_template(
+            "{% for x in xs %}\n    {% if x %}\n        - item {{ x }}\n    {% endif %}\n{% endfor %}\n",
+        );
+        assert!(
+            html.contains(r#"<li class="markdown">item {{ x }}</li>"#),
+            "{html}"
+        );
+        // Each `elif`/`else` segment dedents on its own.
+        let html = to_html_template(
+            "{% if a %}\n    A\n{% elif b %}\n      B\n{% else %}\n\tC\n{% endif %}\n",
+        );
+        for letter in ["A", "B", "C"] {
+            assert!(
+                html.contains(&format!(r#"<p class="markdown">{letter}</p>"#)),
+                "{letter}: {html}"
+            );
+        }
+        // Relative indentation inside the body is still Markdown's.
+        let html = to_html_template("{% if a %}\n    Example:\n\n        code here\n{% endif %}\n");
+        assert!(html.contains("<code>code here\n</code>"), "{html}");
+        // A fence's content at column 0 doesn't pin the body's indentation.
+        let html = to_html_template("{% if a %}\n    ```\ncode at 0\n    ```\n{% endif %}\n");
+        assert!(html.contains("<code>code at 0\n</code>"), "{html}");
+        // Tera inside a fence is a sample: untouched, still literal.
+        let sample = "```\n{% if a %}\n    sample\n{% endif %}\n```\n";
+        assert_eq!(dedent_blocks(sample).0, sample);
+        // A raw body dedents, but its statements are text.
+        let raw = "{% raw %}\n    {% if a %}\n        x\n    {% endif %}\n{% endraw %}\n";
+        assert_eq!(
+            dedent_blocks(raw).0,
+            "{% raw %}\n{% if a %}\n    x\n{% endif %}\n{% endraw %}\n"
+        );
+    }
+
+    /// Random token soup of Tera blocks, fences, backticks, tabs and
+    /// multi-byte text never panics the dedent or the conversion, and every
+    /// mapped code range is an ordered, in-bounds slice of the source on
+    /// character boundaries.
+    #[test]
+    fn dedent_survives_token_soup() {
+        const TOKENS: [&str; 23] = [
+            "{% if a %}",
+            "{% endif %}",
+            "{% else %}",
+            "{% for x in y %}",
+            "{% endfor %}",
+            "{% raw %}",
+            "{% endraw %}",
+            "{% set x %}",
+            "{% endset %}",
+            "```",
+            "~~~",
+            "`",
+            "    ",
+            "\t",
+            "\n",
+            "\n\n",
+            "é x",
+            "{{ x }}",
+            "<div class=\"a\">",
+            "</div>",
+            "<pre>",
+            "</pre>",
+            "<br>",
+        ];
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..3000 {
+            let length = (next() % 40) as usize;
+            let source: String = (0..length)
+                .map(|_| TOKENS[(next() % 23) as usize])
+                .collect();
+            let _ = to_html_template(&source);
+            let mut last = 0;
+            for range in template_code_ranges(&source) {
+                assert!(
+                    range.start <= range.end && range.end <= source.len(),
+                    "{source:?}"
+                );
+                assert!(range.start >= last, "unordered: {source:?}");
+                assert!(
+                    source.is_char_boundary(range.start) && source.is_char_boundary(range.end),
+                    "{source:?}"
+                );
+                last = range.start;
+            }
+        }
+    }
+
+    /// Raw HTML containers dedent like Tera blocks (review_0004 H11
+    /// follow-up, ADR 0025): an indented `<div>` body after a blank line was
+    /// an indented code block. Containers and Tera blocks nest in any order;
+    /// `<pre>`-like elements, void and self-closing tags, and lines holding
+    /// more than one tag aren't containers.
+    #[test]
+    fn indented_html_container_bodies_are_not_code() {
+        let html = to_html_template("<div class=\"card\">\n\n    Some **text**\n\n</div>\n");
+        assert!(
+            html.contains(r#"<p class="markdown">Some <strong class="markdown">text</strong></p>"#),
+            "{html}"
+        );
+        let html = to_html_template(
+            "<section>\n\n    {% if a %}\n        <DIV class=\"x\">\n\n            - item\n\n        </div>\n    {% endif %}\n\n</section>\n",
+        );
+        assert!(html.contains(r#"<li class="markdown">item</li>"#), "{html}");
+        assert!(!html.contains("<pre"), "{html}");
+        // Whitespace is content in a <pre> (and its lines aren't structure).
+        let pre = "<pre>\n    <div>\n        keep\n    </div>\n</pre>\n";
+        assert_eq!(dedent_blocks(pre).0, pre);
+        // Not containers: void, self-closing, comment, two tags on a line.
+        for line in [
+            "<br>",
+            "<img src=\"a.png\">",
+            "<x-icon />",
+            "<!-- note -->",
+            "<p>hi</p>",
+        ] {
+            assert!(block_tag(line).is_none(), "{line}");
+        }
+    }
+
+    /// Offsets map back through the dedent: a code range found in the
+    /// dedented text lands on the same characters of the source.
+    #[test]
+    fn dedent_maps_offsets_back() {
+        let source = "{% if a %}\n    text `code` here\n\t\tdeep `x`\n{% endif %}\n";
+        let ranges = template_code_ranges(source);
+        let texts: Vec<&str> = ranges.iter().map(|range| &source[range.clone()]).collect();
+        assert_eq!(texts, ["`code`", "`x`"]);
+    }
+
+    /// Content can supply `MARKER` (plain U+0001-delimited text): a class-like
+    /// run inside another attribute's value with no closing `"` used to slice
+    /// past the end or inside a multi-byte character and panicked the loader
+    /// (review_0003 G04). The marker is dropped and the tag stays verbatim.
+    #[test]
+    fn crafted_markers_cannot_panic_inject_class() {
+        let cases = [
+            "\u{1}bevy-markup\u{1}<b data-x=' class=\"\u{e9}'>x</b>",
+            "\u{1}bevy-markup\u{1}<b data-x=' class=\"'>x</b>",
+            "\u{1}bevy-markup\u{1}<b data-x=' class=\"y\">x</b>",
+        ];
+        for case in cases {
+            let html = std::panic::catch_unwind(|| to_html(case)).expect("no panic");
+            assert!(
+                html.contains("x</b>") || html.contains("</b>"),
+                "{case}: {html}"
+            );
+            // The unclassed tag carries no injected class.
+            assert!(
+                !html.contains("class=\"markdown markdown\""),
+                "{case}: {html}"
+            );
+        }
+    }
 
     /// Entities survive: escaped text is not re-interpreted as markup
     /// (`&lt;` stays an entity for `tl`/`decode_entities`).
@@ -1291,14 +1358,16 @@ fn crafted_markers_cannot_panic_inject_class() {
         assert!(html.contains("{% endif %}"), "{html}");
         let html = to_html_template("{% if score > 3 %}\nshow it\n{% endif %}\n");
         assert!(html.contains("{% if score > 3 %}"), "MIXED = {html:?}");
-        assert!(html.contains("<p class=\"markdown\">show it</p>"), "MIXED = {html:?}");
+        assert!(
+            html.contains("<p class=\"markdown\">show it</p>"),
+            "MIXED = {html:?}"
+        );
         assert!(html.contains("{% endif %}"), "MIXED = {html:?}");
 
         // A block-level loop: the wrapper-free Tera lines bracket the
         // constructed Markdown.
-        let html = to_html_template(
-            "{% for i in range(end=2) %}\n## Section {{ i }}\n{% endfor %}\n",
-        );
+        let html =
+            to_html_template("{% for i in range(end=2) %}\n## Section {{ i }}\n{% endfor %}\n");
         assert!(html.contains("{% for i in range(end=2) %}"), "{html}");
         assert!(html.contains("{% endfor %}"), "{html}");
         assert!(
@@ -1317,7 +1386,10 @@ fn crafted_markers_cannot_panic_inject_class() {
         // text, not passed through.
         let html = to_html_template("a `{{ x }}` span\n");
         assert!(html.contains("<code>"), "{html}");
-        assert!(!html.contains("<p class=\"markdown\">{{ x }}</p>"), "{html}");
+        assert!(
+            !html.contains("<p class=\"markdown\">{{ x }}</p>"),
+            "{html}"
+        );
 
         // The `to_html` path (values, not templates) converts Tera
         // looking text as text, as before.
@@ -1327,100 +1399,99 @@ fn crafted_markers_cannot_panic_inject_class() {
     }
 }
 
-    /// Tera in a template (ADR 0020): a paragraph of only statements
-    /// passes through unwrapped; inline statements (inside a line, an
-    /// attribute value, a list item, a heading) stay inline and render
-    /// where they are; a code span/block is Tera-literal; and a raw
-    /// `{% raw %}` example in text doesn't break the template.
-    #[test]
-    fn tera_templates_survive_the_conversion() {
-        // A pure-Tera paragraph: unwrapped.
-        let html = to_html_template("{% if hd %}<p>hd</p>{% endif %}\n");
-        assert!(html.contains("<p>hd</p>"), "{html}");
-        // An inline statement inside an attribute value: no newlines.
-        let html = to_html_template(
-            "<img src=\"{% if hd %}hd{% else %}sd{% endif %}.png\">\n",
-        );
-        assert!(
-            html.contains("src=\"{% if hd %}hd{% else %}sd{% endif %}.png\""),
-            "{html}"
-        );
-        // A statement inside a list item, a heading and a table cell.
-        let html = to_html_template("# Hello {% if a %}world{% endif %}\n");
-        assert!(
-            html.contains("<h1 class=\"markdown\">Hello {% if a %}world{% endif %}</h1>"),
-            "{html}"
-        );
-        let html = to_html_template("* {% if a %}one{% endif %} item\n");
-        assert!(
-            html.contains("<li class=\"markdown\">{% if a %}one{% endif %} item</li>"),
-            "{html}"
-        );
-        let html = to_html_template(
-            "| a | b |\n|---|---|\n| {% if a %}1{% endif %} | 2 |\n",
-        );
-        assert!(html.contains("{% if a %}1{% endif %}"), "{html}");
-        // A code span and a fenced block are Tera-literal: the converted
-        // template contains no executable Tera from the code (`code_is_
-        // teraliteral_when_rendered` pins the rendered result).
-        let html = to_html_template("a `{{ x }}` span\n");
-        assert!(html.contains("<code>"), "{html}");
-        assert!(
-            !html.contains("<code>{{ x }}</code>"),
-            "the code's opener must not survive the conversion: {html}"
-        );
-        let html = to_html_template("```\nlet s = \"{%\"; // %}\n```\n");
-        assert!(
-            !html.contains("let s = \"{%\";"),
-            "the fenced code's opener must not survive the conversion: {html}"
-        );
-        // A literal `{% raw %}` in text: Tera-literal via the code span...
-        let html = to_html_template("text `{% raw %}` tail\n");
-        assert!(
-            !html.contains("<code>{% raw %}</code>"),
-            "the raw opener must not survive the conversion: {html}"
-        );
-    }
+/// Tera in a template (ADR 0020): a paragraph of only statements
+/// passes through unwrapped; inline statements (inside a line, an
+/// attribute value, a list item, a heading) stay inline and render
+/// where they are; a code span/block is Tera-literal; and a raw
+/// `{% raw %}` example in text doesn't break the template.
+#[test]
+fn tera_templates_survive_the_conversion() {
+    // A pure-Tera paragraph: unwrapped.
+    let html = to_html_template("{% if hd %}<p>hd</p>{% endif %}\n");
+    assert!(html.contains("<p>hd</p>"), "{html}");
+    // An inline statement inside an attribute value: no newlines.
+    let html = to_html_template("<img src=\"{% if hd %}hd{% else %}sd{% endif %}.png\">\n");
+    assert!(
+        html.contains("src=\"{% if hd %}hd{% else %}sd{% endif %}.png\""),
+        "{html}"
+    );
+    // A statement inside a list item, a heading and a table cell.
+    let html = to_html_template("# Hello {% if a %}world{% endif %}\n");
+    assert!(
+        html.contains("<h1 class=\"markdown\">Hello {% if a %}world{% endif %}</h1>"),
+        "{html}"
+    );
+    let html = to_html_template("* {% if a %}one{% endif %} item\n");
+    assert!(
+        html.contains("<li class=\"markdown\">{% if a %}one{% endif %} item</li>"),
+        "{html}"
+    );
+    let html = to_html_template("| a | b |\n|---|---|\n| {% if a %}1{% endif %} | 2 |\n");
+    assert!(html.contains("{% if a %}1{% endif %}"), "{html}");
+    // A code span and a fenced block are Tera-literal: the converted
+    // template contains no executable Tera from the code (`code_is_
+    // teraliteral_when_rendered` pins the rendered result).
+    let html = to_html_template("a `{{ x }}` span\n");
+    assert!(html.contains("<code>"), "{html}");
+    assert!(
+        !html.contains("<code>{{ x }}</code>"),
+        "the code's opener must not survive the conversion: {html}"
+    );
+    let html = to_html_template("```\nlet s = \"{%\"; // %}\n```\n");
+    assert!(
+        !html.contains("let s = \"{%\";"),
+        "the fenced code's opener must not survive the conversion: {html}"
+    );
+    // A literal `{% raw %}` in text: Tera-literal via the code span...
+    let html = to_html_template("text `{% raw %}` tail\n");
+    assert!(
+        !html.contains("<code>{% raw %}</code>"),
+        "the raw opener must not survive the conversion: {html}"
+    );
+}
 
-    /// Code content renders verbatim (ADR 0020; R34): Tera never sees an
-    /// opener inside a code span or block, so `{{ x }}` stays `{{ x }}`
-    /// (not the variable), a fenced `{%`/`endraw`/unbalanced string is
-    /// literal, and prose Tera still executes.
-    #[test]
-    fn code_is_teraliteral_when_rendered() {
-        let render = |source: &str, json: &str| -> String {
-            let html = to_html_template(source);
-            let value: serde_json::Value = serde_json::from_str(json).unwrap();
-            let mut tera = tera::Tera::default();
-            tera.add_raw_template("md", &html).unwrap();
-            let context = tera::Context::from_serialize(&value).unwrap();
-            tera.render("md", &context).unwrap()
-        };
+/// Code content renders verbatim (ADR 0020; R34): Tera never sees an
+/// opener inside a code span or block, so `{{ x }}` stays `{{ x }}`
+/// (not the variable), a fenced `{%`/`endraw`/unbalanced string is
+/// literal, and prose Tera still executes.
+#[test]
+fn code_is_teraliteral_when_rendered() {
+    let render = |source: &str, json: &str| -> String {
+        let html = to_html_template(source);
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let mut tera = tera::Tera::default();
+        tera.add_raw_template("md", &html).unwrap();
+        let context = tera::Context::from_serialize(&value).unwrap();
+        tera.render("md", &context).unwrap()
+    };
 
-        let html = render("a `{{ x }}` span\n", r#"{"x":"VALUE"}"#);
-        assert!(html.contains("<code>{{ x }}</code>"), "{html}");
-        assert!(!html.contains("VALUE"), "{html}");
+    let html = render("a `{{ x }}` span\n", r#"{"x":"VALUE"}"#);
+    assert!(html.contains("<code>{{ x }}</code>"), "{html}");
+    assert!(!html.contains("VALUE"), "{html}");
 
-        let html = render("```\nlet s = \"{%\"; // %}\n{% endraw %}\n```\n", "{}");
-        assert!(html.contains("let s = \"{%\"; // %}"), "{html}");
-        assert!(html.contains("{% endraw %}"), "{html}");
+    let html = render("```\nlet s = \"{%\"; // %}\n{% endraw %}\n```\n", "{}");
+    assert!(html.contains("let s = \"{%\"; // %}"), "{html}");
+    assert!(html.contains("{% endraw %}"), "{html}");
 
-        let html = render("text `{% raw %}` tail\n", "{}");
-        assert!(html.contains("<code>{% raw %}</code>"), "{html}");
+    let html = render("text `{% raw %}` tail\n", "{}");
+    assert!(html.contains("<code>{% raw %}</code>"), "{html}");
 
-        // Inside a raw block Tera passes content through verbatim: the
-        // code is NOT Tera-literalized (the escape braces would show as
-        // `{{ "{" }}` garbage — review_0003 G07); Tera's raw ends even
-        // inside a code fence (its scan is textual), so the code after
-        // the endraw is literalized again.
-        let html = render("{% raw %}\n\n```\n{{ x }}\n```\n\n{% endraw %}\n\n`{{ x }}`\n", r#"{"x":"VALUE"}"#);
-        assert!(html.contains("<code>{{ x }}</code>"), "{html}");
-        assert!(!html.contains("{{ \"\""), "{html}");
-        assert!(!html.contains("VALUE"), "{html}");
-        assert_eq!(html.matches("{{ x }}").count(), 2, "{html}");
+    // Inside a raw block Tera passes content through verbatim: the
+    // code is NOT Tera-literalized (the escape braces would show as
+    // `{{ "{" }}` garbage — review_0003 G07); Tera's raw ends even
+    // inside a code fence (its scan is textual), so the code after
+    // the endraw is literalized again.
+    let html = render(
+        "{% raw %}\n\n```\n{{ x }}\n```\n\n{% endraw %}\n\n`{{ x }}`\n",
+        r#"{"x":"VALUE"}"#,
+    );
+    assert!(html.contains("<code>{{ x }}</code>"), "{html}");
+    assert!(!html.contains("{{ \"\""), "{html}");
+    assert!(!html.contains("VALUE"), "{html}");
+    assert_eq!(html.matches("{{ x }}").count(), 2, "{html}");
 
-        // Prose Tera still executes; only code is literal.
-        let html = render("hello {{ name }}, code `{{ name }}`\n", r#"{"name":"Ada"}"#);
-        assert!(html.contains("hello Ada"), "{html}");
-        assert!(html.contains("<code>{{ name }}</code>"), "{html}");
-    }
+    // Prose Tera still executes; only code is literal.
+    let html = render("hello {{ name }}, code `{{ name }}`\n", r#"{"name":"Ada"}"#);
+    assert!(html.contains("hello Ada"), "{html}");
+    assert!(html.contains("<code>{{ name }}</code>"), "{html}");
+}

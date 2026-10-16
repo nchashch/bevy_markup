@@ -120,8 +120,11 @@ fn read_fields_into_preview(
             // hand-written JSON broke it on a quote or backslash (the
             // forms receipt's fix, applied here too).
             let args = serde_json::to_string(
-                &live.iter()
-                    .map(|(key, value)| ((*key).to_owned(), serde_json::Value::from(value.as_str())))
+                &live
+                    .iter()
+                    .map(|(key, value)| {
+                        ((*key).to_owned(), serde_json::Value::from(value.as_str()))
+                    })
                     .collect::<serde_json::Map<String, serde_json::Value>>(),
             )
             .unwrap_or_default();

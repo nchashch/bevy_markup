@@ -47,7 +47,11 @@ impl Rng {
 }
 
 fn element(rng: &mut Rng, depth: usize) -> El {
-    let tag = if depth >= 2 || rng.below(3) == 0 { "p" } else { "div" };
+    let tag = if depth >= 2 || rng.below(3) == 0 {
+        "p"
+    } else {
+        "div"
+    };
     let classes = match rng.below(4) {
         0 => vec![],
         1 => vec!["a"],
@@ -60,11 +64,18 @@ fn element(rng: &mut Rng, depth: usize) -> El {
         _ => Some("light"),
     };
     let children = if tag == "div" {
-        (0..1 + rng.below(3)).map(|_| element(rng, depth + 1)).collect()
+        (0..1 + rng.below(3))
+            .map(|_| element(rng, depth + 1))
+            .collect()
     } else {
         Vec::new()
     };
-    El { tag, classes, data_m, children }
+    El {
+        tag,
+        classes,
+        data_m,
+        children,
+    }
 }
 
 /// A compound selector's parts.
@@ -142,7 +153,9 @@ impl Compound {
                 Some(Some(value)) => el.data_m == Some(value),
             }
             && !self.hover
-            && self.not_class.is_none_or(|class| !el.classes.contains(&class))
+            && self
+                .not_class
+                .is_none_or(|class| !el.classes.contains(&class))
             && match self.structural {
                 None => true,
                 Some("first-child") => index == 1,
@@ -190,7 +203,10 @@ fn positions(children: &[El]) -> Vec<(usize, usize, usize)> {
         .iter()
         .enumerate()
         .map(|(position, child)| {
-            let type_index = children[..=position].iter().filter(|other| other.tag == child.tag).count();
+            let type_index = children[..=position]
+                .iter()
+                .filter(|other| other.tag == child.tag)
+                .count();
             (position + 1, children.len(), type_index)
         })
         .collect()
@@ -215,23 +231,27 @@ fn expected(root: &El, selector: &Selector) -> Vec<(&'static str, bool)> {
         let matched = subject
             && match &selector.left {
                 None => true,
-                Some((left, Combinator::Descendant)) => {
-                    ancestors.iter().any(|(ancestor, at)| left.matches(ancestor, *at))
-                }
-                Some((left, Combinator::Child)) => {
-                    ancestors.last().is_some_and(|(parent, at)| left.matches(parent, *at))
-                }
-                Some((left, Combinator::Adjacent)) => {
-                    previous.last().is_some_and(|(sibling, at)| left.matches(sibling, *at))
-                }
-                Some((left, Combinator::General)) => {
-                    previous.iter().any(|(sibling, at)| left.matches(sibling, *at))
-                }
+                Some((left, Combinator::Descendant)) => ancestors
+                    .iter()
+                    .any(|(ancestor, at)| left.matches(ancestor, *at)),
+                Some((left, Combinator::Child)) => ancestors
+                    .last()
+                    .is_some_and(|(parent, at)| left.matches(parent, *at)),
+                Some((left, Combinator::Adjacent)) => previous
+                    .last()
+                    .is_some_and(|(sibling, at)| left.matches(sibling, *at)),
+                Some((left, Combinator::General)) => previous
+                    .iter()
+                    .any(|(sibling, at)| left.matches(sibling, *at)),
             };
         out.push((el.tag, matched));
         ancestors.push((el, position));
         let child_positions = positions(&el.children);
-        let siblings: Vec<(&El, Pos)> = el.children.iter().zip(child_positions.iter().copied()).collect();
+        let siblings: Vec<(&El, Pos)> = el
+            .children
+            .iter()
+            .zip(child_positions.iter().copied())
+            .collect();
         for (index, (child, at)) in siblings.iter().enumerate() {
             walk(child, *at, ancestors, &siblings[..index], selector, out);
         }
@@ -281,29 +301,46 @@ fn case(seed: u64) {
         tag: "div",
         classes: vec![],
         data_m: None,
-        children: (0..1 + rng.below(3)).map(|_| element(&mut rng, 1)).collect(),
+        children: (0..1 + rng.below(3))
+            .map(|_| element(&mut rng, 1))
+            .collect(),
     };
     let subject = Compound::random(&mut rng);
     let left = match rng.below(5) {
         0 => None,
         n => Some((
             Compound::random(&mut rng),
-            [Combinator::Descendant, Combinator::Child, Combinator::Adjacent, Combinator::General][n - 1],
+            [
+                Combinator::Descendant,
+                Combinator::Child,
+                Combinator::Adjacent,
+                Combinator::General,
+            ][n - 1],
         )),
     };
     let selector = Selector { left, subject };
     let page = html(&root, &mut 0);
-    let css = format!("html {{ color: #ffffff }} {} {{ background-color: #ff0000 }}", selector.css());
-    let dump = TestUi::new(&format!("selector-model-{seed}"), &[("page.html", page.as_str()), ("a.css", css.as_str())])
-        .stylesheet("a.css")
-        .spawn("page.html", TemplateContext::new(), Node::default())
-        .settle()
-        .dump();
+    let css = format!(
+        "html {{ color: #ffffff }} {} {{ background-color: #ff0000 }}",
+        selector.css()
+    );
+    let dump = TestUi::new(
+        &format!("selector-model-{seed}"),
+        &[("page.html", page.as_str()), ("a.css", css.as_str())],
+    )
+    .stylesheet("a.css")
+    .spawn("page.html", TemplateContext::new(), Node::default())
+    .settle()
+    .dump();
     let model = expected(&root, &selector);
     let actual = built(&dump);
-    let model: Vec<(String, bool)> = model.into_iter().map(|(tag, painted)| (tag.to_owned(), painted)).collect();
+    let model: Vec<(String, bool)> = model
+        .into_iter()
+        .map(|(tag, painted)| (tag.to_owned(), painted))
+        .collect();
     assert_eq!(
-        actual, model,
+        actual,
+        model,
         "seed {seed}\nselector: {}\npage: {page}\ndump:\n{dump}",
         selector.css()
     );

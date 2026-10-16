@@ -405,16 +405,8 @@ pub(crate) fn emit_form(
 ) {
     // The nearest form ancestor with a `data-on-submit` hook.
     let Some((form, name)) = std::iter::successors(
-        parents
-            .get(button)
-            .ok()
-            .map(|child_of| child_of.parent()),
-        |current| {
-            parents
-                .get(*current)
-                .ok()
-                .map(|child_of| child_of.parent())
-        },
+        parents.get(button).ok().map(|child_of| child_of.parent()),
+        |current| parents.get(*current).ok().map(|child_of| child_of.parent()),
     )
     .find_map(|form| {
         let element = elements.get(form).ok()?;

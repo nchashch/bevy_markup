@@ -310,6 +310,10 @@ tests/
                    reference model (dump + ElementSignals)
   layout_properties.rs  flexbox invariants on real headless layout (row-reverse mirror, auto margins,
                    grow shares, space-between, wrap without overlap)
+  windowing_model.rs  proptest: random documents × text changes / row flips / scrolls, a windowed
+                   build vs an unwindowed one stepped in lockstep, checked every frame (placement,
+                   coverage, unique WindowKeys; tightness once settled) + minimized regressions
+                   (bug_0160–0177)
   content_lint.rs  lint tests over the examples' content in examples/assets/: locale parity,
                    templates render (+ every data-l10n-id resolves), no hard-coded text, CSS url()s, pseudo-locale
   golden.rs        golden images (#[ignore]d): tests/golden/<scene>/ rendered offscreen by real Bevy,
@@ -415,6 +419,11 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   agent docs). Mark breaking changes. A release renames `[Unreleased]` to
   `[x.y.z] - YYYY-MM-DD`, adds a fresh empty `[Unreleased]`, and updates the
   compare links at the bottom.
+
+- **Formatting:** run `cargo fmt` (the whole workspace) before
+  committing. Formatting every file is fine, including files a change
+  didn't touch and `tests/common/mod.rs`: don't restore by hand what the
+  formatter changed.
 
 - Library = HTML/CSS/Fluent/Tera → Bevy UI only. Panels, layouts, selectors,
   scrollbars, cameras, `ClearColor`, font files and asset paths belong to apps
@@ -872,9 +881,6 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 - wgpu's GL backend isn't usable for software rendering (Bevy 0.20 doesn't
   enable wgpu `gles`; llvmpipe GL can't compile some of Bevy's GLSL): use
   lavapipe (Vulkan).
-- `rustfmt tests/<file>.rs` also formats `tests/common/mod.rs` (it follows
-  `mod common;`), whose code isn't rustfmt-formatted; use
-  `--config skip_children=true`, or don't format.
 - `TestUi::settle` never returns for a stylesheet whose `url()` image is
   missing (the sheet loads, its dependency fails); check sheets first (as
   `content_lint` does).
@@ -927,6 +933,37 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   band edge — strictly more flips a culled element, `EDGE` early for a
   materialized one), the viewport's width or height changes, or a height
   does (J05).
+  The band follows the offset the root *shows*: `ScrollPosition` clamped
+  to the last layout's scroll range (`visible_scroll`; Bevy clamps only
+  for its layout, bug_0164). A cull is refused for a subtree that isn't
+  clean in this build's pairing — its stored height is stale (bug_0161) —
+  and the refusal flags the band stale for one rebuild (bug_0162). A
+  windowed UI always pairs (ADR 0021's adaptive gate skips it: the
+  pairing also remaps the height model, bug_0167); a remap that drops
+  heights, and `WindowModel::clear`, set `remeasure` (every keyed entity
+  is measured once, bug_0163/bug_0166). The cached skip refreshes a
+  reused root's `WindowKey` with its `DomNode` (bug_0169). `CursorFrame`
+  isn't `Clone`: its cells are shared state (bug_0165). Opaque marks
+  follow the node both ways (`Changed<Node>` re-measures, a flip is
+  news, bug_0171); `positioned` marks only grow. Known costs, in
+  `HtmlWindowed`'s docs: one inserted row builds the rest of its list
+  for a frame (bug_0168, open: siblings align by position), and rows
+  above the band that change height shift the view for one frame past
+  the margin (bug_0170; also row flips inside containers and a width
+  change's first frame). Walked-through elements (`html`, `body`) stay in
+  the walk — no root unwrap (bug_0172: it lost `body`'s style for every
+  UI); `column_height` advances the cursor by their children, itemless
+  nodes (`is_itemless`: ASCII-blank text, comments, `head`) by zero
+  (bug_0175). The measurement clears the model when the content width
+  moves (bug_0173), reads `%` margins' basis from a plain `ComputedNode`
+  query (the root has no `ChildOf`, bug_0174) and measures
+  `unrounded_size` (bug_0176). Whether a frame can be tracked is one
+  predicate, `children_are_opaque`, on the `Node` a container's declared
+  layout produces (anything but a non-wrapping, start-packed column or
+  block; reversed directions are opaque) and on the root's `Node` (a row
+  root windows nothing) — bug_0177; there are no measured opaque marks. `tests/windowing_model.rs` is the property that
+  found these; run it with `PROPTEST_CASES=400 --release` after windowing
+  changes.
 - Bevy/taffy size the border box by default; bevy_markup nodes set
   `BoxSizing::ContentBox` (CSS initial); `box-sizing` overrides.
 - `cargo mutants` copies the source tree and ignores nested `.gitignore`s:

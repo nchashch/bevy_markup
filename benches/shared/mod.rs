@@ -9,12 +9,12 @@
 #![allow(dead_code)]
 
 use bevy::asset::AssetMetaCheck;
-use bevy::window::{PrimaryWindow, WindowEvent, WindowRef};
 use bevy::asset::uuid::Uuid;
 use bevy::camera::{ComputedCameraValues, RenderTarget, RenderTargetInfo};
 use bevy::image::{CompressedImageFormats, ImageLoader};
 use bevy::prelude::*;
 use bevy::text::DEFAULT_FONT_DATA;
+use bevy::window::{PrimaryWindow, WindowEvent, WindowRef};
 use bevy_markup::html::{HtmlUi, TemplateContext};
 use bevy_markup::prelude::*;
 use std::marker::PhantomData;
@@ -109,7 +109,11 @@ pub(crate) fn markdown_template(elements: usize) -> String {
 /// The locale manifest + messages for the localized and markdown
 /// workloads; `markdown` opts the values into Markdown conversion.
 pub(crate) fn locale_files(markdown: bool) -> Vec<(String, String)> {
-    let markdown_line = if markdown { "\n    markdown: true," } else { "" };
+    let markdown_line = if markdown {
+        "\n    markdown: true,"
+    } else {
+        ""
+    };
     let rows = (0..600)
         .map(|_| {
             format!(
@@ -121,9 +125,7 @@ pub(crate) fn locale_files(markdown: bool) -> Vec<(String, String)> {
     vec![
         (
             "locales/en-US/main.ftl.ron".into(),
-            format!(
-                "(\n    locale: \"en-US\",\n    resources: [\"ui.ftl\"],{markdown_line}\n)\n"
-            ),
+            format!("(\n    locale: \"en-US\",\n    resources: [\"ui.ftl\"],{markdown_line}\n)\n"),
         ),
         ("locales/en-US/ui.ftl".into(), rows),
     ]
@@ -146,7 +148,8 @@ pub(crate) fn font(id: u128) -> Handle<Font> {
     Handle::Uuid(Uuid::from_u128(id), PhantomData)
 }
 
-pub(crate) static SPECTRAL: LazyLock<[Handle<Font>; 4]> = LazyLock::new(|| [font(1), font(2), font(3), font(4)]);
+pub(crate) static SPECTRAL: LazyLock<[Handle<Font>; 4]> =
+    LazyLock::new(|| [font(1), font(2), font(3), font(4)]);
 
 /// The frame bench's fixture frame image (the tests' 32×24 PNG), for the
 /// `border-image`.
@@ -321,7 +324,10 @@ pub(crate) fn specialized_files(size: usize, workload: &str) -> Vec<(String, Str
         "markdown" => ("page.md", markdown_template(size), true),
         _ => ("page.html", localized_template(size), false),
     };
-    let mut files = vec![(path.to_owned(), page), ("style.css".to_owned(), CSS.to_owned())];
+    let mut files = vec![
+        (path.to_owned(), page),
+        ("style.css".to_owned(), CSS.to_owned()),
+    ];
     files.extend(locale_files(markdown));
     files
 }
@@ -357,16 +363,12 @@ pub(crate) fn hover_template(elements: usize) -> String {
 
 /// The tooltips' template (the menu's shape: the Fluent message the
 /// `data-tooltip` key names).
-pub(crate) const TOOLTIP_TEMPLATE: &str =
-    r#"<html class="tooltip"><p class="tooltip-text" data-l10n-id="{{ key }}">{{ key }}</p></html>"#;
+pub(crate) const TOOLTIP_TEMPLATE: &str = r#"<html class="tooltip"><p class="tooltip-text" data-l10n-id="{{ key }}">{{ key }}</p></html>"#;
 
 /// [`bench_app_loading`], plus a primary window and the camera targeting
 /// it — the `tests/common` `with_pointer` composition: real picking input
 /// runs (`WindowEvent`s drive the full backend → `HoverMap` chain).
-pub(crate) fn bench_app_pointer(
-    files: &[(&str, &str)],
-    template: &str,
-) -> (App, Entity) {
+pub(crate) fn bench_app_pointer(files: &[(&str, &str)], template: &str) -> (App, Entity) {
     let (mut app, root) = bench_app_loading(files, template);
     app.world_mut().spawn((
         Window {

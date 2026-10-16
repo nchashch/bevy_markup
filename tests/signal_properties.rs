@@ -327,9 +327,7 @@ impl<'a> Model<'a> {
         // `pressing` map accumulates across presses and moves); the press
         // state clears at the release, so a second release clicks nothing.
         let clicked = picked != Picked::None && pointer.pressed.contains(&picked);
-        if clicked
-            && let Some(i) = self.emitter(&chain, SignalTrigger::Click)
-        {
+        if clicked && let Some(i) = self.emitter(&chain, SignalTrigger::Click) {
             out.push((self.spec.ids[i].clone(), TRIGGER_INDEX_CLICK, i));
         }
         pointer.pressed.clear();

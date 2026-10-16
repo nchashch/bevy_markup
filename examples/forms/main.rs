@@ -104,8 +104,8 @@ fn handle_signals(
             SignalTrigger::Submit if signal.name == "signup" => {
                 for mut context in &mut contexts {
                     context.insert("submitted", &signal.payload);
-                    let args = serde_json::to_string(&signal.payload)
-                        .unwrap_or_else(|_| "{}".to_owned());
+                    let args =
+                        serde_json::to_string(&signal.payload).unwrap_or_else(|_| "{}".to_owned());
                     context.insert("submitted_args", &args);
                 }
             }

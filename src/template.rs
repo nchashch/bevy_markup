@@ -133,7 +133,11 @@ pub(crate) fn decode_entities(text: &str) -> String {
             .strip_prefix("&#x")
             .or_else(|| text[at..].strip_prefix("&#X"))
             .and_then(|rest| terminated_digits(rest, 16, 1, 8, 3))
-            .or_else(|| text[at..].strip_prefix("&#").and_then(|rest| terminated_digits(rest, 10, 1, 10, 2)));
+            .or_else(|| {
+                text[at..]
+                    .strip_prefix("&#")
+                    .and_then(|rest| terminated_digits(rest, 10, 1, 10, 2))
+            });
         if let Some((consumed, code)) = numeric {
             let code = match code {
                 0x00 => 0xFFFD,
@@ -198,7 +202,10 @@ fn terminated_digits(
     (length >= min && length <= max && rest[length..].starts_with(';')).then_some(())?;
     // The consumed span includes the terminator and the `&#`/`&#x`
     // prefix (the caller's `at` still sits on the `&`).
-    Some((digits.len() + 1 + prefix, u32::from_str_radix(digits, radix).ok()?))
+    Some((
+        digits.len() + 1 + prefix,
+        u32::from_str_radix(digits, radix).ok()?,
+    ))
 }
 
 /// The C1 controls' Windows-1252 replacements, indexed from 0x80.
@@ -236,12 +243,10 @@ fn json_from_tera(text: &str) -> std::borrow::Cow<'_, str> {
         if bytes[at] == b'\\' {
             match bytes.get(at + 1) {
                 Some(b'u') if bytes.get(at + 2) == Some(&b'{') => {
-                    let escape = text[at + 3..]
-                        .find('}')
-                        .and_then(|close| {
-                            let code = u32::from_str_radix(&text[at + 3..at + 3 + close], 16).ok()?;
-                            Some((char::from_u32(code)?, close))
-                        });
+                    let escape = text[at + 3..].find('}').and_then(|close| {
+                        let code = u32::from_str_radix(&text[at + 3..at + 3 + close], 16).ok()?;
+                        Some((char::from_u32(code)?, close))
+                    });
                     if let Some((character, close)) = escape {
                         let mut units = [0u16; 2];
                         for unit in character.encode_utf16(&mut units) {
@@ -404,9 +409,10 @@ fn tera_span_end(source: &str, closer: [u8; 2]) -> Option<usize> {
                 }
                 cursor += 1;
             }
-            first if first == closer[0]
-                && cursor + 1 < bytes.len()
-                && bytes[cursor + 1] == closer[1] =>
+            first
+                if first == closer[0]
+                    && cursor + 1 < bytes.len()
+                    && bytes[cursor + 1] == closer[1] =>
             {
                 return Some(cursor + 2);
             }
@@ -480,10 +486,16 @@ pub(crate) fn resolve_references(
             return Ok((out, references));
         };
         // A stop inside code: copied verbatim through the code's end.
-        while code.get(code_index).is_some_and(|range| range.end <= base + start) {
+        while code
+            .get(code_index)
+            .is_some_and(|range| range.end <= base + start)
+        {
             code_index += 1;
         }
-        if let Some(range) = code.get(code_index).filter(|range| range.start <= base + start) {
+        if let Some(range) = code
+            .get(code_index)
+            .filter(|range| range.start <= base + start)
+        {
             let end = range.end - base;
             out.push_str(&rest[..end]);
             rest = &rest[end..];
@@ -508,7 +520,7 @@ pub(crate) fn resolve_references(
             let Some(span_len) = tera_span_end(&rest[start..], *b"}}") else {
                 out.push_str(&rest[start..start + 2]);
                 rest = &rest[start + 2..];
-                    continue;
+                continue;
             };
             out.push_str(&rest[start..start + span_len]);
             rest = &rest[start + span_len..];
@@ -565,10 +577,7 @@ pub(crate) fn resolve_references(
         // `Allow` keeps its includes inside the asset root (they can
         // still name any file under it).
         if resolved.is_unapproved() {
-            return Err(format!(
-                "template include escapes the asset root: {literal}"
-            )
-            .into());
+            return Err(format!("template include escapes the asset root: {literal}").into());
         }
         // The resolved path replaces the literal; everything else in the
         // tag (opening, closing quote, whitespace control, `%}`) keeps
@@ -684,8 +693,6 @@ async fn load_template(
     Ok(HtmlTemplate { tera, name })
 }
 
-
-
 /// Includes naming a network source fail the load (review_0003 G19:
 /// with Bevy's `http`/`https` features a template reached the network);
 /// other sources stay usable.
@@ -710,7 +717,10 @@ fn attribute_json_accepts_tera_escapes() {
     assert_eq!(parsed(r#"{"v": "\u{1F468}"}"#).unwrap(), "\u{1F468}");
     assert_eq!(parsed(r#"{"v": "x\0y"}"#).unwrap(), "x\0y");
     assert_eq!(parsed(r#"{"v": "\\u{41}"}"#).unwrap(), "\\u{41}");
-    assert_eq!(parsed(r#"{"v": "\u00e9 \"q\" \n"}"#).unwrap(), "\u{e9} \"q\" \n");
+    assert_eq!(
+        parsed(r#"{"v": "\u00e9 \"q\" \n"}"#).unwrap(),
+        "\u{e9} \"q\" \n"
+    );
     assert!(parse_attribute_json(r#"{"v": "\u{zz}"}"#).is_err());
 }
 
@@ -730,19 +740,63 @@ fn scanner_code_is_commonmark_code() {
     let real = vec!["real.md".to_owned()];
     let none = Vec::<String>::new();
     for (shape, source, expected) in [
-        ("lazy continuation", "Intro\n    {% include \"real.md\" %}\n", &real),
-        ("list item paragraph", "- item\n\n    {% include \"real.md\" %}\n", &real),
-        ("tab-indented code", "Intro\n\n\t{% include \"gone.md\" %}\n", &none),
-        ("escaped backticks", "\\`{% include \"real.md\" %}\\`\n", &real),
-        ("longer fence closer", "```\ncode\n````\n\n{% include \"real.md\" %}\n", &real),
-        ("shorter fence closer", "````\n```\n{% include \"gone.md\" %}\n````\n", &none),
-        ("fence in a quote", "> ```\n> {% include \"gone.md\" %}\n> ```\n", &none),
-        ("fence in a list", "- item\n\n  ```\n  {% include \"gone.md\" %}\n  ```\n", &none),
-        ("double-backtick span", "``a ` {% include \"gone.md\" %} ``\n", &none),
-        ("unclosed span", "a ` b\n\n{% include \"real.md\" %}\n", &real),
+        (
+            "lazy continuation",
+            "Intro\n    {% include \"real.md\" %}\n",
+            &real,
+        ),
+        (
+            "list item paragraph",
+            "- item\n\n    {% include \"real.md\" %}\n",
+            &real,
+        ),
+        (
+            "tab-indented code",
+            "Intro\n\n\t{% include \"gone.md\" %}\n",
+            &none,
+        ),
+        (
+            "escaped backticks",
+            "\\`{% include \"real.md\" %}\\`\n",
+            &real,
+        ),
+        (
+            "longer fence closer",
+            "```\ncode\n````\n\n{% include \"real.md\" %}\n",
+            &real,
+        ),
+        (
+            "shorter fence closer",
+            "````\n```\n{% include \"gone.md\" %}\n````\n",
+            &none,
+        ),
+        (
+            "fence in a quote",
+            "> ```\n> {% include \"gone.md\" %}\n> ```\n",
+            &none,
+        ),
+        (
+            "fence in a list",
+            "- item\n\n  ```\n  {% include \"gone.md\" %}\n  ```\n",
+            &none,
+        ),
+        (
+            "double-backtick span",
+            "``a ` {% include \"gone.md\" %} ``\n",
+            &none,
+        ),
+        (
+            "unclosed span",
+            "a ` b\n\n{% include \"real.md\" %}\n",
+            &real,
+        ),
         // Indentation inside a Tera block isn't Markdown (review_0004
         // H11): this body line is a paragraph, so the include runs.
-        ("indented block body", "{% if a %}\n    see {% include \"real.md\" %}\n{% endif %}\n", &real),
+        (
+            "indented block body",
+            "{% if a %}\n    see {% include \"real.md\" %}\n{% endif %}\n",
+            &real,
+        ),
     ] {
         assert_eq!(&resolve(source), expected, "{shape}");
     }
@@ -798,85 +852,101 @@ fn scanner_protects_code_like_pulldown() {
 }
 #[cfg(test)]
 mod tests {
-/// The scanners are linear (review_0003 G14: they used to re-find each
-/// stop needle, or re-scan the line, per statement — a 320 KB template
-/// cost seconds to load). Asserted as *scaling*, not wall time (review_0004
-/// H09: a 2 s bound passed a quadratic rewrite at 1.25 s): 4× the input
-/// may cost at most 8× the time — linear is ~4×, quadratic ~16× — best of
-/// three runs each, so machine speed and load cancel out.
-/// review_0005 I04: each `&#` scanned to the next `;` (or the end of the
-/// text) before checking the digit bound, so a text of `&#` references
-/// without terminators decoded in O(n²) — on every render. Scaling, not
-/// wall time: 4× the input may cost at most 8× (best of three).
-#[test]
-fn entity_decoding_stays_linear_without_terminators() {
-    use std::time::{Duration, Instant};
-    let best = |text: &str| {
-        (0..3)
-            .map(|_| {
-                let start = Instant::now();
-                std::hint::black_box(decode_entities(text));
-                start.elapsed()
-            })
-            .min()
-            .unwrap()
-    };
-    for (shape, unit) in [("numeric", "&#1"), ("hex", "&#x1"), ("named", "&am")] {
-        let (small, large) = (best(&unit.repeat(10_000)), best(&unit.repeat(40_000)));
-        assert!(
-            large < small * 8 + Duration::from_millis(5),
-            "decode_entities scales superlinearly on {shape}: 10k {small:?}, 40k {large:?}"
-        );
-    }
-}
-
-#[test]
-fn scanners_stay_linear_on_pathological_input() {
-    use std::time::{Duration, Instant};
-    let path = AssetPath::from("p.md");
-    let best = |text: &str, run: &dyn Fn(&str)| -> Duration {
-        (0..3)
-            .map(|_| {
-                let start = Instant::now();
-                run(text);
-                start.elapsed()
-            })
-            .min()
-            .unwrap()
-    };
-    let resolve = |text: &str| drop(resolve_references(&path, text));
-    let separate = |text: &str| drop(md::separate_statements(text));
-    // Deeply nested, indented blocks: the dedent re-reads each body per
-    // level (review_0004 H11), bounded by its depth cap.
-    let nested = |count: usize| {
-        let open: String = (0..count).map(|depth| format!("{}{{% if a %}}\n", " ".repeat(depth % 40))).collect();
-        let close: String = (0..count).rev().map(|depth| format!("{}{{% endif %}}\n", " ".repeat(depth % 40))).collect();
-        format!("{open}text\n{close}")
-    };
-    for (shape, small, large) in [
-        ("expressions", "{{ x }}\n".repeat(10_000), "{{ x }}\n".repeat(40_000)),
-        ("code spans", "`c`\n".repeat(10_000), "`c`\n".repeat(40_000)),
-        (
-            "own-line statements",
-            "{% if a %}x{% endif %}\n".repeat(10_000),
-            "{% if a %}x{% endif %}\n".repeat(40_000),
-        ),
-        (
-            "one line of inline statements",
-            "{% if a %}x{% endif %} ".repeat(10_000),
-            "{% if a %}x{% endif %} ".repeat(40_000),
-        ),
-        ("deeply nested indented blocks", nested(1_000), nested(4_000)),
-    ] {
-        for (scanner, run) in [("resolve_references", &resolve as &dyn Fn(&str)), ("separate_statements", &separate)] {
-            let (small_time, large_time) = (best(&small, run), best(&large, run));
+    /// The scanners are linear (review_0003 G14: they used to re-find each
+    /// stop needle, or re-scan the line, per statement — a 320 KB template
+    /// cost seconds to load). Asserted as *scaling*, not wall time (review_0004
+    /// H09: a 2 s bound passed a quadratic rewrite at 1.25 s): 4× the input
+    /// may cost at most 8× the time — linear is ~4×, quadratic ~16× — best of
+    /// three runs each, so machine speed and load cancel out.
+    /// review_0005 I04: each `&#` scanned to the next `;` (or the end of the
+    /// text) before checking the digit bound, so a text of `&#` references
+    /// without terminators decoded in O(n²) — on every render. Scaling, not
+    /// wall time: 4× the input may cost at most 8× (best of three).
+    #[test]
+    fn entity_decoding_stays_linear_without_terminators() {
+        use std::time::{Duration, Instant};
+        let best = |text: &str| {
+            (0..3)
+                .map(|_| {
+                    let start = Instant::now();
+                    std::hint::black_box(decode_entities(text));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        for (shape, unit) in [("numeric", "&#1"), ("hex", "&#x1"), ("named", "&am")] {
+            let (small, large) = (best(&unit.repeat(10_000)), best(&unit.repeat(40_000)));
             assert!(
-                large_time < small_time * 8 + Duration::from_millis(20),
-                "{scanner} scales superlinearly on {shape}: 10k {small_time:?}, 40k {large_time:?}"
+                large < small * 8 + Duration::from_millis(5),
+                "decode_entities scales superlinearly on {shape}: 10k {small:?}, 40k {large:?}"
             );
         }
     }
-}
+
+    #[test]
+    fn scanners_stay_linear_on_pathological_input() {
+        use std::time::{Duration, Instant};
+        let path = AssetPath::from("p.md");
+        let best = |text: &str, run: &dyn Fn(&str)| -> Duration {
+            (0..3)
+                .map(|_| {
+                    let start = Instant::now();
+                    run(text);
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let resolve = |text: &str| drop(resolve_references(&path, text));
+        let separate = |text: &str| drop(md::separate_statements(text));
+        // Deeply nested, indented blocks: the dedent re-reads each body per
+        // level (review_0004 H11), bounded by its depth cap.
+        let nested = |count: usize| {
+            let open: String = (0..count)
+                .map(|depth| format!("{}{{% if a %}}\n", " ".repeat(depth % 40)))
+                .collect();
+            let close: String = (0..count)
+                .rev()
+                .map(|depth| format!("{}{{% endif %}}\n", " ".repeat(depth % 40)))
+                .collect();
+            format!("{open}text\n{close}")
+        };
+        for (shape, small, large) in [
+            (
+                "expressions",
+                "{{ x }}\n".repeat(10_000),
+                "{{ x }}\n".repeat(40_000),
+            ),
+            ("code spans", "`c`\n".repeat(10_000), "`c`\n".repeat(40_000)),
+            (
+                "own-line statements",
+                "{% if a %}x{% endif %}\n".repeat(10_000),
+                "{% if a %}x{% endif %}\n".repeat(40_000),
+            ),
+            (
+                "one line of inline statements",
+                "{% if a %}x{% endif %} ".repeat(10_000),
+                "{% if a %}x{% endif %} ".repeat(40_000),
+            ),
+            (
+                "deeply nested indented blocks",
+                nested(1_000),
+                nested(4_000),
+            ),
+        ] {
+            for (scanner, run) in [
+                ("resolve_references", &resolve as &dyn Fn(&str)),
+                ("separate_statements", &separate),
+            ] {
+                let (small_time, large_time) = (best(&small, run), best(&large, run));
+                assert!(
+                    large_time < small_time * 8 + Duration::from_millis(20),
+                    "{scanner} scales superlinearly on {shape}: 10k {small_time:?}, 40k {large_time:?}"
+                );
+            }
+        }
+    }
 
     use super::*;
     use proptest::prelude::*;
@@ -919,26 +989,17 @@ fn scanners_stay_linear_on_pathological_input() {
     #[test]
     fn scanner_edge_cases_keep_later_references() {
         let markdown = AssetPath::parse("main.md").clone_owned();
-        let (_, references) = resolve_references(
-            &markdown,
-            "It`s here\n{% include \"a.md\" %}\n",
-        )
-        .unwrap();
+        let (_, references) =
+            resolve_references(&markdown, "It`s here\n{% include \"a.md\" %}\n").unwrap();
         assert_eq!(references.len(), 1);
 
-        let (_, references) = resolve_references(
-            &markdown,
-            "```rust\nx\n```\n{% include \"a.md\" %}\n",
-        )
-        .unwrap();
+        let (_, references) =
+            resolve_references(&markdown, "```rust\nx\n```\n{% include \"a.md\" %}\n").unwrap();
         assert_eq!(references.len(), 1);
 
         let html = AssetPath::parse("main.html").clone_owned();
-        let (out, references) = resolve_references(
-            &html,
-            "{% set x = \"{#\" %}\n{% include \"a.html\" %}\n",
-        )
-        .unwrap();
+        let (out, references) =
+            resolve_references(&html, "{% set x = \"{#\" %}\n{% include \"a.html\" %}\n").unwrap();
         assert_eq!(references.len(), 1);
         assert!(out.contains("x = \"{#\""), "the tag is verbatim: {out}");
 

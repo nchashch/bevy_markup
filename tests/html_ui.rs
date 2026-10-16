@@ -18,9 +18,9 @@ use common::*;
 
 use bevy::asset::AssetEvent;
 use bevy::prelude::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use bevy_markup::prelude::*;
 use bevy_markup::Skeleton;
+use bevy_markup::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // ---------------------------------------------------------------------------
 // Vectors
@@ -513,7 +513,8 @@ fn remote_asset_sources_are_refused() {
     )
     .stylesheet("style.css")
     .spawn("page.html", TemplateContext::new(), Node::default());
-    let remote_bundle = ui.load::<bevy_markup::prelude::LocaleBundle>("locales/en-US/remote.ftl.ron");
+    let remote_bundle =
+        ui.load::<bevy_markup::prelude::LocaleBundle>("locales/en-US/remote.ftl.ron");
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -572,7 +573,11 @@ fn tera_escaped_values_still_localize() {
         let dump = ui.settle().dump();
         assert!(!dump.contains("FALLBACK"), "{name:?}: {dump}");
         // The visible part of the name survives.
-        let visible: String = name.chars().filter(|c| c.is_alphanumeric()).take(3).collect();
+        let visible: String = name
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .take(3)
+            .collect();
         assert!(dump.contains(&visible), "{name:?}: {dump}");
     }
 }
@@ -605,7 +610,10 @@ fn map_literal_args_cannot_be_injected() {
     );
     let dump = ui.settle().dump();
     // The whole value is the name (an injection would cut it at `Ada`).
-    assert!(dump.contains("INJECTED!"), "the value was split into arguments: {dump}");
+    assert!(
+        dump.contains("INJECTED!"),
+        "the value was split into arguments: {dump}"
+    );
 }
 
 /// A Markdown template may indent its Tera blocks for readability: the
@@ -628,7 +636,10 @@ fn indented_markdown_templates_build_like_flat_ones() {
             .dump()
     };
     let flat_dump = dump("md-flat", flat);
-    assert!(flat_dump.contains("Ada is up") && flat_dump.contains("Brin is down"), "{flat_dump}");
+    assert!(
+        flat_dump.contains("Ada is up") && flat_dump.contains("Brin is down"),
+        "{flat_dump}"
+    );
     assert!(!flat_dump.contains("pre"), "{flat_dump}");
     assert_eq!(dump("md-indented", indented), flat_dump);
 }
@@ -638,7 +649,8 @@ fn indented_markdown_templates_build_like_flat_ones() {
 /// body after a blank line rendered as a code block).
 #[test]
 fn indented_html_containers_in_markdown_build_like_flat_ones() {
-    let flat = "<div class=\"card\">\n\n## Quest\n\nFind the **cat**.\n\n- north\n- east\n\n</div>\n";
+    let flat =
+        "<div class=\"card\">\n\n## Quest\n\nFind the **cat**.\n\n- north\n- east\n\n</div>\n";
     let indented = "<div class=\"card\">\n\n    ## Quest\n\n    Find the **cat**.\n\n    - north\n    - east\n\n</div>\n";
     let dump = |name: &str, page: &str| {
         TestUi::new(name, &[("page.md", page)])
@@ -647,7 +659,10 @@ fn indented_html_containers_in_markdown_build_like_flat_ones() {
             .dump()
     };
     let flat_dump = dump("md-div-flat", flat);
-    assert!(flat_dump.contains("h2") && flat_dump.contains("east"), "{flat_dump}");
+    assert!(
+        flat_dump.contains("h2") && flat_dump.contains("east"),
+        "{flat_dump}"
+    );
     assert_eq!(dump("md-div-indented", indented), flat_dump);
 }
 
@@ -739,7 +754,11 @@ fn render_change_during_a_wait_carries_the_new_content() {
             name,
             &[("page.html", page), ("late.css", "html { color: #00ff00 }")],
         )
-        .spawn("page.html", TemplateContext::new().with("n", &"a"), Node::default())
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("n", &"a"),
+            Node::default(),
+        )
     };
     let mut ui = spawn("wait-content");
     let mut fresh = spawn("wait-content-fresh");
@@ -790,7 +809,10 @@ fn gate_skipped_builds_with_a_stale_skeleton_stay_fresh() {
     let files = [
         ("page.html", page),
         ("style.css", "html { color: #ffffff }"),
-        ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
+        (
+            "locales/en-US/main.ftl.ron",
+            r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+        ),
         ("locales/en-US/ui.ftl", "count = { $n } items"),
     ];
     let spawn = |name: &str| {
@@ -836,7 +858,10 @@ fn reuse_keeps_a_bare_span_when_a_sibling_changes() {
     let spawn = |name: &str| {
         TestUi::new(
             name,
-            &[("page.html", page), ("style.css", "html { color: #ffffff }")],
+            &[
+                ("page.html", page),
+                ("style.css", "html { color: #ffffff }"),
+            ],
         )
         .spawn(
             "page.html",
@@ -882,13 +907,11 @@ fn reuse_with_inline_vars_forces_no_extra_restyles() {
         ("style.css", "html { color: #ffffff }"),
     ];
     let spawn = |name: &str| {
-        TestUi::new(name, &files)
-            .stylesheet("style.css")
-            .spawn(
-                "page.html",
-                TemplateContext::new().with("--c", &"#ff0000").with("n", &1),
-                Node::default(),
-            )
+        TestUi::new(name, &files).stylesheet("style.css").spawn(
+            "page.html",
+            TemplateContext::new().with("--c", &"#ff0000").with("n", &1),
+            Node::default(),
+        )
     };
     let mut reused = spawn("inline-var-reuse-reused");
     let mut fresh = spawn("inline-var-reuse-fresh");
@@ -951,13 +974,11 @@ fn wait_swallows_two_changes_then_reuses_currently() {
         ("style.css", "html { color: #ffffff }"),
     ];
     let spawn = |name: &str| {
-        TestUi::new(name, &files)
-            .stylesheet("style.css")
-            .spawn(
-                "page.html",
-                TemplateContext::new().with("p", &"a").with("q", &"b"),
-                Node::default(),
-            )
+        TestUi::new(name, &files).stylesheet("style.css").spawn(
+            "page.html",
+            TemplateContext::new().with("p", &"a").with("q", &"b"),
+            Node::default(),
+        )
     };
     let mut reused = spawn("wait-reuse-reused");
     let mut fresh = spawn("wait-reuse-fresh");
@@ -1003,9 +1024,11 @@ fn style_change_while_outlined_applies_on_removal() {
         ("b.css", "html { color: #ffffff } .s { color: #0000ff }"),
     ];
     let spawn = |name: &str| {
-        TestUi::new(name, &files)
-            .stylesheet("a.css")
-            .spawn("page.html", TemplateContext::new().with("x", &1), Node::default())
+        TestUi::new(name, &files).stylesheet("a.css").spawn(
+            "page.html",
+            TemplateContext::new().with("x", &1),
+            Node::default(),
+        )
     };
     let mut reused = spawn("outlined-swap-reused");
     let mut fresh = spawn("outlined-swap-fresh");
@@ -1013,7 +1036,10 @@ fn style_change_while_outlined_applies_on_removal() {
     fresh.settle();
     // Show the outline, then swap the theme while it is shown.
     let root = reused.root();
-    reused.world_mut().entity_mut(root).insert(bevy_markup::html::HtmlDebugOutline);
+    reused
+        .world_mut()
+        .entity_mut(root)
+        .insert(bevy_markup::html::HtmlDebugOutline);
     reused.update(2);
     // The outline and the swap don't need build-count convergence; a
     // plain settle here can outrun the (single) build it waits for.
@@ -1027,7 +1053,10 @@ fn style_change_while_outlined_applies_on_removal() {
     reused.settle_quiet();
     fresh.settle_quiet();
     // Remove the outline and change the content in the same frame.
-    reused.world_mut().entity_mut(root).remove::<bevy_markup::html::HtmlDebugOutline>();
+    reused
+        .world_mut()
+        .entity_mut(root)
+        .remove::<bevy_markup::html::HtmlDebugOutline>();
     reused
         .world_mut()
         .get_mut::<TemplateContext>(root)
@@ -1135,10 +1164,12 @@ html-ui
         .find(|(_, element)| element.tag == "p")
         .expect("the p element")
         .0;
-    ui.world_mut().entity_mut(element).insert(bevy_markup::signals::PseudoState {
-        active: true,
-        ..default()
-    });
+    ui.world_mut()
+        .entity_mut(element)
+        .insert(bevy_markup::signals::PseudoState {
+            active: true,
+            ..default()
+        });
     ui.settle().assert_dump(
         r#"
 html-ui
@@ -3008,8 +3039,11 @@ fn invalid_input_types_are_text_fields() {
         ("Password", false),
     ] {
         let page = format!(r#"<input type="{kind}" value="v">"#);
-        let mut ui = TestUi::new("input-types", &[("page.html", page.as_str())])
-            .spawn("page.html", TemplateContext::new(), Node::default());
+        let mut ui = TestUi::new("input-types", &[("page.html", page.as_str())]).spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node::default(),
+        );
         ui.update(10);
         let world = ui.world_mut();
         let fields = world
@@ -3028,11 +3062,11 @@ fn input_type_is_case_insensitive() {
     let mut ui = TestUi::new(
         "input-type-case",
         &[
+            ("page.html", r#"<input type="Text" class="field">"#),
             (
-                "page.html",
-                r#"<input type="Text" class="field">"#,
+                "style.css",
+                "html { color: #ffffff } .field { width: 100px }",
             ),
-            ("style.css", "html { color: #ffffff } .field { width: 100px }"),
         ],
     )
     .stylesheet("style.css")
@@ -3086,7 +3120,6 @@ html-ui
 "#,
     );
 }
-
 
 /// Other `type`s stay unsupported (ADR 0016): only a text (or missing)
 /// `type` builds the field; the others are dropped like any unsupported
@@ -3300,7 +3333,10 @@ fn calc_resolves_on_direct_children_of_a_top_level_root() {
         <p id="p" style="width: calc(50vw - 10px)">x</p><p id="rule" class="half">x</p>"#;
     let mut ui = TestUi::with_layout(
         "calc-root-children",
-        &[("page.html", page), ("style.css", ".half { width: calc(25% + 10px) }")],
+        &[
+            ("page.html", page),
+            ("style.css", ".half { width: calc(25% + 10px) }"),
+        ],
         UVec2::new(400, 300),
     )
     .stylesheet("style.css")
@@ -3319,7 +3355,11 @@ fn calc_resolves_on_direct_children_of_a_top_level_root() {
     let world = ui.world_mut();
     for (id, width) in [("div", 190.0), ("p", 190.0), ("rule", 110.0)] {
         let element = element_by_id(world, root, id);
-        assert_eq!(world.get::<Node>(element).unwrap().width, Val::Px(width), "#{id}");
+        assert_eq!(
+            world.get::<Node>(element).unwrap().width,
+            Val::Px(width),
+            "#{id}"
+        );
     }
 }
 
@@ -3331,16 +3371,20 @@ fn calc_resolves_on_direct_children_of_a_top_level_root() {
 fn viewport_units_in_nested_calc_measure_the_viewport() {
     let page = r#"<div><p id="calc" style="width: calc(50vw - 10px)">x</p>
         <p id="plain" style="width: 50vw">x</p></div>"#;
-    let mut ui = TestUi::with_layout("calc-vw-nested", &[("page.html", page)], UVec2::new(400, 300))
-        .spawn(
-            "page.html",
-            TemplateContext::new(),
-            Node {
-                width: Val::Px(100.0),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-        );
+    let mut ui = TestUi::with_layout(
+        "calc-vw-nested",
+        &[("page.html", page)],
+        UVec2::new(400, 300),
+    )
+    .spawn(
+        "page.html",
+        TemplateContext::new(),
+        Node {
+            width: Val::Px(100.0),
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+    );
     ui.settle();
     ui.update(3);
     let root = ui.root();
@@ -3373,7 +3417,9 @@ fn root_calc_without_a_marked_camera_uses_the_window_camera() {
         .query_filtered::<Entity, With<bevy::ui::IsDefaultUiCamera>>()
         .single(world)
         .unwrap();
-    world.entity_mut(marked).remove::<bevy::ui::IsDefaultUiCamera>();
+    world
+        .entity_mut(marked)
+        .remove::<bevy::ui::IsDefaultUiCamera>();
     world.spawn((
         bevy::camera::Camera2d,
         bevy::camera::Camera {
@@ -3394,7 +3440,11 @@ fn root_calc_without_a_marked_camera_uses_the_window_camera() {
     ui.update(3);
     let root = ui.root();
     let width = ui.world_mut().get::<Node>(root).unwrap().width;
-    assert_eq!(width, Val::Px(300.0), "the minimap camera became the viewport");
+    assert_eq!(
+        width,
+        Val::Px(300.0),
+        "the minimap camera became the viewport"
+    );
 }
 
 /// A second camera without the `IsDefaultUiCamera` marker must not
@@ -3435,7 +3485,11 @@ fn root_calc_resolves_against_the_ui_camera() {
     ui.settle();
     let root = ui.root();
     let width = ui.world_mut().get::<Node>(root).unwrap().width;
-    assert_eq!(width, Val::Px(300.0), "the wrong camera became the viewport");
+    assert_eq!(
+        width,
+        Val::Px(300.0),
+        "the wrong camera became the viewport"
+    );
 
     // An explicit `UiTargetCamera` on the root wins over the default.
     let second = {
@@ -3492,16 +3546,14 @@ fn restyle_that_respawns_spans_reports_a_build() {
     .stylesheet("a.css")
     .spawn("page.html", TemplateContext::new(), Node::default());
     ui.world_mut().insert_resource(Counts::default());
-    ui.app_mut().add_observer(
-        |_: On<HtmlUiBuilt>, mut counts: ResMut<Counts>| {
+    ui.app_mut()
+        .add_observer(|_: On<HtmlUiBuilt>, mut counts: ResMut<Counts>| {
             counts.built += 1;
-        },
-    );
-    ui.app_mut().add_observer(
-        |_: On<HtmlUiRestyled>, mut counts: ResMut<Counts>| {
+        });
+    ui.app_mut()
+        .add_observer(|_: On<HtmlUiRestyled>, mut counts: ResMut<Counts>| {
             counts.restyled += 1;
-        },
-    );
+        });
     ui.settle();
     let (built, restyled) = {
         let counts = ui.world_mut().resource::<Counts>();
@@ -3513,7 +3565,11 @@ fn restyle_that_respawns_spans_reports_a_build() {
     ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b_sheet);
     ui.settle();
     let counts = ui.world_mut().resource::<Counts>();
-    assert_eq!(counts.built, built + 1, "the respawn was not reported as a build");
+    assert_eq!(
+        counts.built,
+        built + 1,
+        "the respawn was not reported as a build"
+    );
     assert_eq!(
         counts.restyled, restyled,
         "a span respawn must not fire HtmlUiRestyled"
@@ -3534,21 +3590,22 @@ fn rem_size_sync_does_not_restyle() {
 
     let mut ui = TestUi::new(
         "rem-sync",
-        &[("page.html", "<p>x</p>"), ("style.css", "html { color: #ffffff }")],
+        &[
+            ("page.html", "<p>x</p>"),
+            ("style.css", "html { color: #ffffff }"),
+        ],
     )
     .stylesheet("style.css")
     .spawn("page.html", TemplateContext::new(), Node::default());
     ui.world_mut().insert_resource(Counts::default());
-    ui.app_mut().add_observer(
-        |_: On<HtmlUiBuilt>, mut counts: ResMut<Counts>| {
+    ui.app_mut()
+        .add_observer(|_: On<HtmlUiBuilt>, mut counts: ResMut<Counts>| {
             counts.built += 1;
-        },
-    );
-    ui.app_mut().add_observer(
-        |_: On<HtmlUiRestyled>, mut counts: ResMut<Counts>| {
+        });
+    ui.app_mut()
+        .add_observer(|_: On<HtmlUiRestyled>, mut counts: ResMut<Counts>| {
             counts.restyled += 1;
-        },
-    );
+        });
     ui.settle();
     let counts = ui.world_mut().resource::<Counts>();
     assert!(counts.built >= 1, "the UI never built");
@@ -3560,11 +3617,7 @@ fn rem_size_sync_does_not_restyle() {
 /// is dropped (warned once); the capped prefix builds normally.
 #[test]
 fn deep_nesting_is_capped() {
-    let deep = format!(
-        "{}x{}",
-        "<div>".repeat(200),
-        "</div>".repeat(200)
-    );
+    let deep = format!("{}x{}", "<div>".repeat(200), "</div>".repeat(200));
     let mut ui = TestUi::new(
         "deep-nesting",
         &[("page.html", "<p>before</p>{{ deep | safe }}<p>after</p>")],
@@ -3576,10 +3629,19 @@ fn deep_nesting_is_capped() {
     );
     ui.settle();
     let dump = ui.dump();
-    let divs = dump.lines().filter(|line| line.trim_start().starts_with("div")).count();
+    let divs = dump
+        .lines()
+        .filter(|line| line.trim_start().starts_with("div"))
+        .count();
     assert_eq!(divs, 100, "the cap should keep exactly 100 levels:\n{dump}");
-    assert!(dump.contains("\"before\""), "content before the deep tree vanished:\n{dump}");
-    assert!(dump.contains("\"after\""), "content after the deep tree vanished:\n{dump}");
+    assert!(
+        dump.contains("\"before\""),
+        "content before the deep tree vanished:\n{dump}"
+    );
+    assert!(
+        dump.contains("\"after\""),
+        "content after the deep tree vanished:\n{dump}"
+    );
 }
 
 /// Deep *inline* content (runs, not nodes) is bounded too: 1000 nested
@@ -3588,11 +3650,7 @@ fn deep_nesting_is_capped() {
 #[test]
 fn deep_inline_nesting_is_capped() {
     let deep = format!("<p>x{}y{}</p>", "<b>".repeat(1000), "</b>".repeat(1000));
-    let mut ui = TestUi::new(
-        "deep-inline",
-        &[("page.html", "{{ deep | safe }}")],
-    )
-    .spawn(
+    let mut ui = TestUi::new("deep-inline", &[("page.html", "{{ deep | safe }}")]).spawn(
         "page.html",
         TemplateContext::new().with("deep", &deep),
         Node::default(),
@@ -3612,16 +3670,12 @@ fn deep_inline_nesting_is_capped() {
 /// (review_0003 G06; the run must finish in bounded time).
 #[test]
 fn deep_inline_nesting_chain_is_bounded() {
-    let deep = format!(
-        "<p>x{}y{}</p>",
-        "<b>".repeat(20_000),
-        "</b>".repeat(20_000)
+    let deep = format!("<p>x{}y{}</p>", "<b>".repeat(20_000), "</b>".repeat(20_000));
+    let mut ui = TestUi::new("deep-inline-chain", &[("page.html", "{{ deep | safe }}")]).spawn(
+        "page.html",
+        TemplateContext::new().with("deep", &deep),
+        Node::default(),
     );
-    let mut ui = TestUi::new(
-        "deep-inline-chain",
-        &[("page.html", "{{ deep | safe }}")],
-    )
-    .spawn("page.html", TemplateContext::new().with("deep", &deep), Node::default());
     let start = std::time::Instant::now();
     ui.settle();
     let elapsed = start.elapsed();
@@ -3649,11 +3703,7 @@ fn attribute_heavy_pages_stay_bounded() {
     page.push('>');
     page.push_str("<s></s>&nbsp;".repeat(10_000).as_str());
     page.push_str("</div>");
-    let mut ui = TestUi::new(
-        "attr-heavy",
-        &[("page.html", "{{ page | safe }}")],
-    )
-    .spawn(
+    let mut ui = TestUi::new("attr-heavy", &[("page.html", "{{ page | safe }}")]).spawn(
         "page.html",
         TemplateContext::new().with("page", &page),
         Node::default(),
@@ -3662,7 +3712,11 @@ fn attribute_heavy_pages_stay_bounded() {
     ui.settle();
     let elapsed = start.elapsed();
     let dump = ui.dump();
-    assert!(dump.contains("div"), "the div vanished:\n{}", &dump[..80.min(dump.len())]);
+    assert!(
+        dump.contains("div"),
+        "the div vanished:\n{}",
+        &dump[..80.min(dump.len())]
+    );
     assert!(
         elapsed < std::time::Duration::from_secs(20),
         "attribute-heavy pages are quadratic again: {elapsed:?}"
@@ -3673,16 +3727,8 @@ fn attribute_heavy_pages_stay_bounded() {
 /// overflow it (it is depth-bounded like the build walks now).
 #[test]
 fn deep_outline_does_not_overflow() {
-    let deep = format!(
-        "{}x{}",
-        "<div>".repeat(3000),
-        "</div>".repeat(3000)
-    );
-    let mut ui = TestUi::new(
-        "deep-outline",
-        &[("page.html", "{{ deep | safe }}")],
-    )
-    .spawn(
+    let deep = format!("{}x{}", "<div>".repeat(3000), "</div>".repeat(3000));
+    let mut ui = TestUi::new("deep-outline", &[("page.html", "{{ deep | safe }}")]).spawn(
         "page.html",
         TemplateContext::new().with("deep", &deep),
         Node::default(),
@@ -3743,13 +3789,19 @@ html-ui
 #[test]
 fn inline_var_tracking_gaps_restyle() {
     let get = |page: &str| {
-        TestUi::new("inline-gaps", &[("page.html", page), ("style.css", "html { color: #ffffff }")])
-            .stylesheet("style.css")
-            .spawn(
-                "page.html",
-                TemplateContext::new().with("--brand", &"#ff0000"),
-                Node::default(),
-            )
+        TestUi::new(
+            "inline-gaps",
+            &[
+                ("page.html", page),
+                ("style.css", "html { color: #ffffff }"),
+            ],
+        )
+        .stylesheet("style.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("--brand", &"#ff0000"),
+            Node::default(),
+        )
     };
     // A run-level inline style inside a block.
     let mut ui = get(r#"<p>Hello <span style="color: var(--brand)">x</span></p>"#);
@@ -3797,24 +3849,25 @@ html-ui
 #[test]
 fn translation_inline_var_change_restyles() {
     let files = [
-        (
-            "page.html",
-            r#"<p data-l10n-id="hi">fallback</p>"#,
-        ),
-        (
-            "style.css",
-            "html { color: #ffffff }",
-        ),
+        ("page.html", r#"<p data-l10n-id="hi">fallback</p>"#),
+        ("style.css", "html { color: #ffffff }"),
         (
             "locales/en-US/main.ftl.ron",
             r#"(locale: "en-US", resources: ["ui.ftl"])"#,
         ),
-        ("locales/en-US/ui.ftl", "hi = Hi <b style=\"color: var(--brand)\">you</b>"),
+        (
+            "locales/en-US/ui.ftl",
+            "hi = Hi <b style=\"color: var(--brand)\">you</b>",
+        ),
     ];
     let mut ui = TestUi::new("translation-inline-var", &files)
         .stylesheet("style.css")
         .locale("locales/en-US/main.ftl.ron")
-        .spawn("page.html", TemplateContext::new().with("--brand", &"#ff0000"), Node::default());
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("--brand", &"#ff0000"),
+            Node::default(),
+        );
     ui.settle();
     let root = ui.root();
     ui.world_mut()
@@ -3823,7 +3876,10 @@ fn translation_inline_var_change_restyles() {
         .insert("--brand", &"#00ff00");
     ui.settle();
     let dump = ui.dump();
-    assert!(dump.contains("#00ff00"), "the translated inline restyled: {dump}");
+    assert!(
+        dump.contains("#00ff00"),
+        "the translated inline restyled: {dump}"
+    );
 }
 
 /// `<a href>` links: the link's runs become a picked span entity that
@@ -4561,8 +4617,7 @@ fn pair_elements<'o>(
         .iter()
         .filter(|e| {
             let tag = e["tag"].as_str().unwrap();
-            (tag == "html" || BLOCKS.contains(&tag) || CONTAINERS.contains(&tag))
-                && tag != "tbody"
+            (tag == "html" || BLOCKS.contains(&tag) || CONTAINERS.contains(&tag)) && tag != "tbody"
         })
         .collect();
     if ours.len() != theirs.len() {
@@ -4977,92 +5032,92 @@ mod skeleton_reuse {
     use super::*;
     use bevy_markup::Skeleton;
 
-/// A retry after many gate-skipped builds serves the CURRENT content
-/// (R04, bug_0033): a gate-skipped build updates its entities from
-/// fresh specs and replaces the skeleton alongside — the comparator's
-/// skeleton is stripped every step so its build is always fresh. On the
-/// R04 revert the skeleton kept the first step's specs while the doc
-/// advanced, and the retry's clean match served the stale spec's text.
-#[test]
-fn gate_retry_after_all_dirty_builds_stays_current() {
-    let rows = (0..9)
-        .map(|i| format!("<p>Row {i}: {{{{ v }}}}</p>"))
-        .collect::<String>();
-    let page = format!(r#"<p class="t">T: {{{{ b }}}}</p>{rows}"#);
-    let (mut reused, mut fresh) = spawn_two(
-        "gate-retry",
-        &[("page.html", page.as_str()), ("a.css", "html { color: #ffffff }")],
-        &TemplateContext::new().with("v", &0u32).with("b", &0u32),
-    );
-    reused.settle();
-    fresh.settle();
-
-    let toggle = |ui: &mut TestUi, keep: bool, v: u32| {
-        let root = ui.root();
-        if !keep {
-            ui.world_mut().entity_mut(root).remove::<Skeleton>();
-        }
-        ui.world_mut()
-            .get_mut::<TemplateContext>(root)
-            .unwrap()
-            .insert("v", &v);
-    };
-    // One-key changes: all nine rows are dirty every step, the pairing
-    // scores useless and the gate skips (backing off 16, 32 … builds).
-    // 32 steps: the pairing retries at step ~17 (v=1) and then skips —
-    // the final render (v=0) differs from the last retry's, so the
-    // structural assert below can't pass by parity.
-    for step in 1..=32u32 {
-        let v = step % 2;
-        toggle(&mut reused, true, v);
-        toggle(&mut fresh, false, v);
+    /// A retry after many gate-skipped builds serves the CURRENT content
+    /// (R04, bug_0033): a gate-skipped build updates its entities from
+    /// fresh specs and replaces the skeleton alongside — the comparator's
+    /// skeleton is stripped every step so its build is always fresh. On the
+    /// R04 revert the skeleton kept the first step's specs while the doc
+    /// advanced, and the retry's clean match served the stale spec's text.
+    #[test]
+    fn gate_retry_after_all_dirty_builds_stays_current() {
+        let rows = (0..9)
+            .map(|i| format!("<p>Row {i}: {{{{ v }}}}</p>"))
+            .collect::<String>();
+        let page = format!(r#"<p class="t">T: {{{{ b }}}}</p>{rows}"#);
+        let (mut reused, mut fresh) = spawn_two(
+            "gate-retry",
+            &[
+                ("page.html", page.as_str()),
+                ("a.css", "html { color: #ffffff }"),
+            ],
+            &TemplateContext::new().with("v", &0u32).with("b", &0u32),
+        );
         reused.settle();
         fresh.settle();
-        assert_eq!(reused.dump(), fresh.dump(), "toggle {step}");
-    }
 
-    // The structural half of the guard: after the gate-skipped builds
-    // the skeleton must have been replaced wholesale — its document is
-    // the CURRENT render (R04's revert ticked the counter only and left
-    // the skeleton at the first step's state, and the retry's clean
-    // match then served the stale spec's text).
-    let root = reused.root();
-    let skeleton_source = reused
-        .world_mut()
-        .get::<Skeleton>(root)
-        .and_then(|skeleton| skeleton.document_source().map(str::to_owned));
-    let current_source = reused
-        .world_mut()
-        .get::<bevy_markup::prelude::RenderedHtml>(root)
-        .map(|rendered| match &*rendered {
-            bevy_markup::prelude::RenderedHtml::Ready(document) => {
-                document.source().to_owned()
+        let toggle = |ui: &mut TestUi, keep: bool, v: u32| {
+            let root = ui.root();
+            if !keep {
+                ui.world_mut().entity_mut(root).remove::<Skeleton>();
             }
-            _ => String::new(),
-        });
-    assert_eq!(
-        skeleton_source.as_deref(),
-        current_source.as_deref(),
-        "the skeleton's document is the current render"
-    );
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("v", &v);
+        };
+        // One-key changes: all nine rows are dirty every step, the pairing
+        // scores useless and the gate skips (backing off 16, 32 … builds).
+        // 32 steps: the pairing retries at step ~17 (v=1) and then skips —
+        // the final render (v=0) differs from the last retry's, so the
+        // structural assert below can't pass by parity.
+        for step in 1..=32u32 {
+            let v = step % 2;
+            toggle(&mut reused, true, v);
+            toggle(&mut fresh, false, v);
+            reused.settle();
+            fresh.settle();
+            assert_eq!(reused.dump(), fresh.dump(), "toggle {step}");
+        }
 
-    // The visible half: the b change (which can land on a retry) shows
-    // the current text.
-    toggle(&mut reused, true, 0);
-    toggle(&mut fresh, false, 0);
-    for ui in [&mut reused, &mut fresh] {
-        let root = ui.root();
-        ui.world_mut()
-            .get_mut::<TemplateContext>(root)
-            .unwrap()
-            .insert("b", &1);
+        // The structural half of the guard: after the gate-skipped builds
+        // the skeleton must have been replaced wholesale — its document is
+        // the CURRENT render (R04's revert ticked the counter only and left
+        // the skeleton at the first step's state, and the retry's clean
+        // match then served the stale spec's text).
+        let root = reused.root();
+        let skeleton_source = reused
+            .world_mut()
+            .get::<Skeleton>(root)
+            .and_then(|skeleton| skeleton.document_source().map(str::to_owned));
+        let current_source = reused
+            .world_mut()
+            .get::<bevy_markup::prelude::RenderedHtml>(root)
+            .map(|rendered| match &*rendered {
+                bevy_markup::prelude::RenderedHtml::Ready(document) => document.source().to_owned(),
+                _ => String::new(),
+            });
+        assert_eq!(
+            skeleton_source.as_deref(),
+            current_source.as_deref(),
+            "the skeleton's document is the current render"
+        );
+
+        // The visible half: the b change (which can land on a retry) shows
+        // the current text.
+        toggle(&mut reused, true, 0);
+        toggle(&mut fresh, false, 0);
+        for ui in [&mut reused, &mut fresh] {
+            let root = ui.root();
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("b", &1);
+        }
+        reused.settle();
+        fresh.settle();
+        assert_eq!(reused.dump(), fresh.dump());
+        assert!(reused.dump().contains("T: 1"), "{}", reused.dump());
     }
-    reused.settle();
-    fresh.settle();
-    assert_eq!(reused.dump(), fresh.dump());
-    assert!(reused.dump().contains("T: 1"), "{}", reused.dump());
-}
-
 
     fn spawn_two(
         name: &'static str,
@@ -5081,11 +5136,7 @@ fn gate_retry_after_all_dirty_builds_stays_current() {
     /// Applies `op` to both UIs (the comparator drops its skeleton first,
     /// so its build is fresh), settles both, and compares the dumps.
     /// Both UIs are settled when it returns.
-    fn assert_same_after(
-        reused: &mut TestUi,
-        fresh: &mut TestUi,
-        op: impl Fn(&mut TestUi, bool),
-    ) {
+    fn assert_same_after(reused: &mut TestUi, fresh: &mut TestUi, op: impl Fn(&mut TestUi, bool)) {
         reused.settle();
         fresh.settle();
         op(reused, true);
@@ -5141,9 +5192,18 @@ fn gate_retry_after_all_dirty_builds_stays_current() {
     #[test]
     fn stylesheet_swap_with_a_content_change_restyles_reused_subtrees() {
         let files = [
-            ("page.html", "<p class=\"static\">Static</p><p>Value: {{ n }}</p>"),
-            ("a.css", "html { color: #ffffff } .static { color: #ff0000 }"),
-            ("b.css", "html { color: #ffffff } .static { color: #00ff00 }"),
+            (
+                "page.html",
+                "<p class=\"static\">Static</p><p>Value: {{ n }}</p>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff } .static { color: #ff0000 }",
+            ),
+            (
+                "b.css",
+                "html { color: #ffffff } .static { color: #00ff00 }",
+            ),
         ];
         let (mut reused, mut fresh) =
             spawn_two("swap", &files, &TemplateContext::new().with("n", &1));
@@ -5178,13 +5238,26 @@ fn gate_retry_after_all_dirty_builds_stays_current() {
     #[test]
     fn change_while_a_sheet_loads_restyles_when_it_fails() {
         let files = [
-            ("page.html", "<p class=\"static\">Static</p><p>Value: {{ n }}</p>"),
-            ("a.css", "html { color: #ffffff } .static { color: #ff0000 }"),
-            ("b.css", "html { color: #ffffff } .static { color: #0000ff }"),
+            (
+                "page.html",
+                "<p class=\"static\">Static</p><p>Value: {{ n }}</p>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff } .static { color: #ff0000 }",
+            ),
+            (
+                "b.css",
+                "html { color: #ffffff } .static { color: #0000ff }",
+            ),
         ];
         let mut reused = TestUi::new("failed-sheet-reused", &files)
             .stylesheet("a.css")
-            .spawn("page.html", TemplateContext::new().with("n", &1), Node::default());
+            .spawn(
+                "page.html",
+                TemplateContext::new().with("n", &1),
+                Node::default(),
+            );
         let b_sheet = reused.load::<Stylesheet>("b.css");
         let reused_root = reused.root();
         reused
@@ -5199,7 +5272,11 @@ fn gate_retry_after_all_dirty_builds_stays_current() {
         );
         let mut fresh = TestUi::new("failed-sheet-fresh", &files)
             .stylesheet("a.css")
-            .spawn("page.html", TemplateContext::new().with("n", &1), Node::default());
+            .spawn(
+                "page.html",
+                TemplateContext::new().with("n", &1),
+                Node::default(),
+            );
         let b_sheet = fresh.load::<Stylesheet>("b.css");
         let fresh_root = fresh.root();
         fresh
@@ -5377,15 +5454,9 @@ fn gate_retry_after_all_dirty_builds_stays_current() {
         fresh.settle();
         assert_eq!(reused.dump(), fresh.dump());
         let a2 = reused.load::<Stylesheet>("a2.css");
-        reused
-            .world_mut()
-            .resource_mut::<DefaultStylesheet>()
-            .0 = Some(a2);
+        reused.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(a2);
         let a2 = fresh.load::<Stylesheet>("a2.css");
-        fresh
-            .world_mut()
-            .resource_mut::<DefaultStylesheet>()
-            .0 = Some(a2);
+        fresh.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(a2);
         reused.settle();
         fresh.settle();
         assert_eq!(reused.dump(), fresh.dump());
@@ -5438,11 +5509,8 @@ fn gate_retry_after_all_dirty_builds_stays_current() {
                 "html { color: #ffffff; font-size: 20px } .x:hover { color: #ff0000 }",
             ),
         ];
-        let (mut reused, _fresh) = spawn_two(
-            "hover",
-            &files,
-            &TemplateContext::new().with("n", &1),
-        );
+        let (mut reused, _fresh) =
+            spawn_two("hover", &files, &TemplateContext::new().with("n", &1));
         reused.settle();
 
         // Content changes around the clean panel: its subtree reuses.
@@ -5556,7 +5624,10 @@ fn fresh_render_without_a_bundle_shows_fallback_not_stale_translations() {
             ),
             ("a.ftl.ron", "(locale: \"en-US\", resources: [\"a.ftl\"])"),
             ("a.ftl", "m = translated\n"),
-            ("bad.ftl.ron", "(locale: \"en-US\", resources: [\"missing.ftl\"])"),
+            (
+                "bad.ftl.ron",
+                "(locale: \"en-US\", resources: [\"missing.ftl\"])",
+            ),
             ("c.ftl.ron", "(locale: \"en-US\", resources: [\"c.ftl\"])"),
             ("c.ftl", "m = localized again\n"),
         ],
@@ -5757,11 +5828,7 @@ fn unapproved_paths_fail_their_loads() {
     let _ = std::fs::remove_file(std::env::temp_dir().join(&outside));
 
     let resource = unique("ftl");
-    std::fs::write(
-        std::env::temp_dir().join(&resource),
-        "m = outside\n",
-    )
-    .unwrap();
+    std::fs::write(std::env::temp_dir().join(&resource), "m = outside\n").unwrap();
     let manifest = format!("(locale: \"en-US\", resources: [\"../{resource}\"])");
     let mut ui = TestUi::new("unapproved-resource", &[("bad.ftl.ron", manifest.as_str())]);
     let bundle = ui.load::<LocaleBundle>("bad.ftl.ron");
@@ -6034,10 +6101,15 @@ fn world_anchor_respects_ui_scale_and_viewport_origin() {
 #[test]
 fn update_without_finish_drives_the_focus_systems() {
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::input_focus::directional_navigation::{DirectionalNavigationMap, AutoNavigationConfig};
+    use bevy::input_focus::directional_navigation::{
+        AutoNavigationConfig, DirectionalNavigationMap,
+    };
     #[allow(unused_imports)]
     use bevy::prelude::*;
-    let _ = (DirectionalNavigationMap::default(), AutoNavigationConfig::default());
+    let _ = (
+        DirectionalNavigationMap::default(),
+        AutoNavigationConfig::default(),
+    );
     // A minimal app without the harness (which calls `finish()`): the
     // same plugin stack as `TestUi::new` minus `app.finish()`.
     let mut app = App::new();
@@ -6057,10 +6129,11 @@ fn update_without_finish_drives_the_focus_systems() {
     app.update();
     // `HtmlFocus` is app-driven (`run_system_once`): its navigator's
     // params must validate without `finish()`.
-    app.world_mut().run_system_once(|mut focus: HtmlFocus| {
-        let _ = focus.focused();
-    })
-    .expect("HtmlFocus's navigator validated without finish()");
+    app.world_mut()
+        .run_system_once(|mut focus: HtmlFocus| {
+            let _ = focus.focused();
+        })
+        .expect("HtmlFocus's navigator validated without finish()");
     app.update();
 }
 
@@ -6094,7 +6167,10 @@ fn scoped_flip_pair(
 fn bump_target(ui: &mut TestUi, step: u32) {
     let root = ui.root();
     let world = ui.world_mut();
-    world.get_mut::<TemplateContext>(root).unwrap().insert("n", &step);
+    world
+        .get_mut::<TemplateContext>(root)
+        .unwrap()
+        .insert("n", &step);
     ui.settle();
 }
 
@@ -6110,7 +6186,11 @@ fn flip_on_an_unreactive_element_changes_nothing() {
         &[("page.html", page), ("style.css", "p { color: #ffffff }")],
     )
     .stylesheet("style.css")
-    .spawn("page.html", TemplateContext::new().with("n", &0), Node::default());
+    .spawn(
+        "page.html",
+        TemplateContext::new().with("n", &0),
+        Node::default(),
+    );
     ui.settle();
     let before = ui.dump();
     let root = ui.root();
@@ -6131,7 +6211,12 @@ fn var_change_restyles_everything_under_scoping() {
     let page = r#"<div class="hot" id="hot"><p>hot</p></div>
         {% for i in rows %}<div class="row" data-bump="{{ n }}"><p style="color: var(--c)">row {{ i }}</p></div>{% endfor %}"#;
     let css = "html { --c: #ff0000 } .hot:hover { color: #00ff00 }";
-    let context = || TemplateContext::new().with("--c", &"#ff0000").with("rows", &[0, 1, 2]).with("n", &0);
+    let context = || {
+        TemplateContext::new()
+            .with("--c", &"#ff0000")
+            .with("rows", &[0, 1, 2])
+            .with("n", &0)
+    };
     let (mut target, mut fresh) = scoped_flip_pair("scoped-var", page, css, context());
     let before = target.dump();
 
@@ -6152,7 +6237,10 @@ fn var_change_restyles_everything_under_scoping() {
         .insert("--c", &"#00ff00");
     bump_target(&mut fresh, 1);
     assert!(before.contains("#ff0000"), "the rows started red");
-    assert!(target.dump().contains("#00ff00"), "the var recolored the rows");
+    assert!(
+        target.dump().contains("#00ff00"),
+        "the var recolored the rows"
+    );
     assert_eq!(target.dump(), fresh.dump(), "the var restyle matches fresh");
 }
 
@@ -6165,8 +6253,12 @@ fn flip_and_content_change_in_one_frame() {
     let page = r#"<div class="hot" id="hot"><p>hot {{ n }}</p></div>
         <p>plain {{ n }}</p>"#;
     let css = ".hot:hover { color: #00ff00 }";
-    let (mut target, mut fresh) =
-        scoped_flip_pair("scoped-flip-content", page, css, TemplateContext::new().with("n", &0));
+    let (mut target, mut fresh) = scoped_flip_pair(
+        "scoped-flip-content",
+        page,
+        css,
+        TemplateContext::new().with("n", &0),
+    );
     let hot = {
         let root = target.root();
         element_by_id(target.world_mut(), root, "hot")
@@ -6195,7 +6287,11 @@ fn flip_and_content_change_in_one_frame() {
     });
     fresh.settle();
     bump_target(&mut fresh, 1);
-    assert!(target.dump().contains("\"hot 1\" default 16px #00ff00"), "{})", target.dump());
+    assert!(
+        target.dump().contains("\"hot 1\" default 16px #00ff00"),
+        "{})",
+        target.dump()
+    );
     assert_eq!(target.dump(), fresh.dump(), "the held flip matches fresh");
 }
 
@@ -6224,7 +6320,10 @@ fn focus_restyles_scoped() {
     mark(&mut target, "a");
     mark(&mut fresh, "a");
     let marked = target.dump();
-    assert!(marked.contains("div#a focus bg=#111111"), "a marked: {marked}");
+    assert!(
+        marked.contains("div#a focus bg=#111111"),
+        "a marked: {marked}"
+    );
     assert_eq!(marked, fresh.dump(), "the focus restyle matches fresh");
     mark(&mut target, "b");
     mark(&mut fresh, "b");
@@ -6234,7 +6333,10 @@ fn focus_restyles_scoped() {
         after.contains("div#a focus") && !after.contains("div#a focus bg"),
         "a unmarked: {after}"
     );
-    assert!(after.contains("div#b focus bg=#111111"), "b marked: {after}");
+    assert!(
+        after.contains("div#b focus bg=#111111"),
+        "b marked: {after}"
+    );
     // Hiding the focus mark restores the start (clearing focus itself
     // would only trigger the repair system: headless, nothing took it
     // back, so focus is restored to a focusable immediately).
@@ -6256,8 +6358,12 @@ fn link_span_flip_restyles_its_block() {
     use bevy::ecs::system::RunSystemOnce;
     let page = r#"<p data-bump="{{ n }}">See <a href="https://example.test" id="link">the link</a> now</p>"#;
     let css = "a:hover { color: #ff0000 }";
-    let (mut target, mut fresh) =
-        scoped_flip_pair("scoped-link", page, css, TemplateContext::new().with("n", &0));
+    let (mut target, mut fresh) = scoped_flip_pair(
+        "scoped-link",
+        page,
+        css,
+        TemplateContext::new().with("n", &0),
+    );
     let flip_span = |ui: &mut TestUi, hovered: bool| {
         // The link's span, via `HtmlElements::by_tag` (the links example's
         // own discovery path).
@@ -6265,11 +6371,9 @@ fn link_span_flip_restyles_its_block() {
         let root = ui.root();
         let span = ui
             .world_mut()
-            .run_system_once(
-                move |elements: HtmlElements| {
-                    elements.by_tag(root, "a").next().expect("the link span")
-                },
-            )
+            .run_system_once(move |elements: HtmlElements| {
+                elements.by_tag(root, "a").next().expect("the link span")
+            })
             .expect("span lookup");
         ui.world_mut().entity_mut(span).insert(PseudoState {
             hovered,
@@ -6283,11 +6387,9 @@ fn link_span_flip_restyles_its_block() {
     let root = fresh.root();
     let fspan = fresh
         .world_mut()
-        .run_system_once(
-            move |elements: HtmlElements| {
-                elements.by_tag(root, "a").next().expect("the link span")
-            },
-        )
+        .run_system_once(move |elements: HtmlElements| {
+            elements.by_tag(root, "a").next().expect("the link span")
+        })
         .expect("span lookup");
     fresh.world_mut().entity_mut(fspan).insert(PseudoState {
         hovered: true,
@@ -6310,12 +6412,9 @@ fn deep_ancestor_rule_restyles_the_chain() {
         <div class="mid"><p class="label" id="deep">deep</p></div>
     </div>"#;
     let css = ".pad { padding: 24px } .pad:hover .mid .label { color: #00ff00 }";
-    let mut ui = TestUi::new(
-        "scoped-deep",
-        &[("page.html", page), ("style.css", css)],
-    )
-    .stylesheet("style.css")
-    .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut ui = TestUi::new("scoped-deep", &[("page.html", page), ("style.css", css)])
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
     ui.settle();
     let before = ui.dump();
     let root = ui.root();
@@ -6343,16 +6442,16 @@ fn restyle_storms_keep_the_pairing_healthy() {
     let page = r#"<div class="hot" id="hot" data-bump="{{ n }}"><p>hot</p></div>
         {% for i in rows %}<div class="row"><p>row {{ i }}</p></div>{% endfor %}"#;
     let css = "html { --c: #ff0000 } .hot:hover { color: #00ff00 }";
-    let mut ui = TestUi::new(
-        "scoped-storm",
-        &[("page.html", page), ("style.css", css)],
-    )
-    .stylesheet("style.css")
-    .spawn(
-        "page.html",
-        TemplateContext::new().with("--c", &"#ff0000").with("rows", &[0, 1, 2]).with("n", &0),
-        Node::default(),
-    );
+    let mut ui = TestUi::new("scoped-storm", &[("page.html", page), ("style.css", css)])
+        .stylesheet("style.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new()
+                .with("--c", &"#ff0000")
+                .with("rows", &[0, 1, 2])
+                .with("n", &0),
+            Node::default(),
+        );
     ui.settle();
     let root = ui.root();
     let hot = element_by_id(ui.world_mut(), root, "hot");
@@ -6382,7 +6481,11 @@ fn restyle_storms_keep_the_pairing_healthy() {
         .unwrap()
         .insert("n", &7);
     ui.settle();
-    assert!(ui.dump().contains("\"hot\""), "the content rebuilt: {}", ui.dump());
+    assert!(
+        ui.dump().contains("\"hot\""),
+        "the content rebuilt: {}",
+        ui.dump()
+    );
     let (useful, strike) = ui
         .world_mut()
         .get::<Skeleton>(root)
@@ -6401,8 +6504,14 @@ fn flip_during_a_stylesheet_wait_applies_with_the_sheet() {
         "scoped-wait",
         &[
             ("page.html", r#"<div class="hot" id="hot"><p>hot</p></div>"#),
-            ("a.css", "html { color: #ffffff } .hot:hover { color: #00ff00 }"),
-            ("b.css", "html { color: #ffffff } .hot { font-size: 20px } .hot:hover { color: #00ff00 }"),
+            (
+                "a.css",
+                "html { color: #ffffff } .hot:hover { color: #00ff00 }",
+            ),
+            (
+                "b.css",
+                "html { color: #ffffff } .hot { font-size: 20px } .hot:hover { color: #00ff00 }",
+            ),
         ],
     )
     .stylesheet("a.css")
@@ -6521,9 +6630,9 @@ fn entities_decode_through_the_pipeline() {
             "<p>A &mdash; B &amp;lt; C &#169; &#x2603; &nbsp; &notareal; end</p>",
         )],
     );
-    let mut ui = ui
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut ui =
+        ui.stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
     ui.settle();
     let dump = ui.dump();
     assert!(
@@ -6538,7 +6647,8 @@ fn entities_decode_through_the_pipeline() {
 /// moves.
 #[test]
 fn overflow_auto_promotes_and_demotes_with_content() {
-    let page = r#"<div id="box" class="clip">{% for i in rows %}<p>row {{ i }}</p>{% endfor %}</div>"#;
+    let page =
+        r#"<div id="box" class="clip">{% for i in rows %}<p>row {{ i }}</p>{% endfor %}</div>"#;
     let css = ".clip { height: 40px; overflow-x: scroll; overflow-y: auto }";
     let mut ui = TestUi::with_layout(
         "overflow-auto",
@@ -6623,19 +6733,16 @@ fn remote_background_images_are_refused() {
     let ui = TestUi::new(
         "background-remote",
         &[
-            (
-                "page.html",
-                r#"<div class="bg" id="box"><p>text</p></div>"#,
-            ),
+            ("page.html", r#"<div class="bg" id="box"><p>text</p></div>"#),
             (
                 "style.css",
                 "html { color: #ffffff } .bg { background-image: url(https://evil.example/bg.png) }",
             ),
         ],
     );
-    let mut ui = ui
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut ui =
+        ui.stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
     ui.settle();
     let dump = ui.dump();
     assert!(
@@ -6652,10 +6759,7 @@ fn font_face_rules_are_a_noop() {
     let ui = TestUi::new(
         "font-face",
         &[
-            (
-                "page.html",
-                r#"<p class="fancy">Fancy text</p>"#,
-            ),
+            ("page.html", r#"<p class="fancy">Fancy text</p>"#),
             (
                 "style.css",
                 "@font-face { font-family: \"Fancy\"; src: url(fancy.woff2) } \
@@ -6663,9 +6767,9 @@ fn font_face_rules_are_a_noop() {
             ),
         ],
     );
-    let mut ui = ui
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut ui =
+        ui.stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
     ui.settle();
     let dump = ui.dump();
     // The sheet loaded (the color applied) and the unknown family fell
@@ -6903,9 +7007,9 @@ fn attribute_selectors_through_the_pipeline() {
             ),
         ],
     );
-    let mut ui = ui
-        .stylesheet("style.css")
-        .spawn("page.html", TemplateContext::new(), Node::default());
+    let mut ui =
+        ui.stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
     ui.settle();
     let dump = ui.dump();
     assert!(
@@ -6942,7 +7046,14 @@ mod review_0005 {
     /// Renders `page` with `key = from`, changes it to `to`, and returns
     /// (the incrementally updated dump, a fresh build's dump of `to`). The
     /// fresh comparator drops its skeleton first, so nothing is reused.
-    fn reuse_and_fresh(name: &str, page: &str, css: &str, key: &'static str, from: &str, to: &str) -> (String, String) {
+    fn reuse_and_fresh(
+        name: &str,
+        page: &str,
+        css: &str,
+        key: &'static str,
+        from: &str,
+        to: &str,
+    ) -> (String, String) {
         let files = [("page.html", page), ("a.css", css)];
         let context = TemplateContext::new().with(key, &from);
         let mut reused = TestUi::new(&format!("{name}-reused"), &files)
@@ -6958,14 +7069,19 @@ mod review_0005 {
             if !keep {
                 ui.world_mut().entity_mut(root).remove::<Skeleton>();
             }
-            ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert(key, &to);
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert(key, &to);
         }
         (reused.settle().dump(), fresh.settle().dump())
     }
 
     /// Whether the dump shows a styled (red) element right before `text`.
     fn red_before(dump: &str, text: &str) -> bool {
-        let at = dump.find(&format!("\"{text}\"")).unwrap_or_else(|| panic!("{text} in {dump}"));
+        let at = dump
+            .find(&format!("\"{text}\""))
+            .unwrap_or_else(|| panic!("{text} in {dump}"));
         let element = dump[..at].lines().rev().find(|line| {
             let line = line.trim_start();
             !line.is_empty() && !line.starts_with('-') && !line.starts_with('"')
@@ -6981,12 +7097,26 @@ mod review_0005 {
     #[test]
     fn nth_child_extreme_offsets_neither_panic_nor_mismatch() {
         let page = "<div><p>1</p><p>2</p><p>3</p></div>";
-        let all = built("i02-all", page, &format!("{WHITE} p:nth-child(n-2147483647) {{ background-color: #ff0000 }}"));
+        let all = built(
+            "i02-all",
+            page,
+            &format!("{WHITE} p:nth-child(n-2147483647) {{ background-color: #ff0000 }}"),
+        );
         for text in ["1", "2", "3"] {
-            assert!(red_before(&all, text), "n-2147483647 matches every index:\n{all}");
+            assert!(
+                red_before(&all, text),
+                "n-2147483647 matches every index:\n{all}"
+            );
         }
-        let none = built("i02-none", page, &format!("{WHITE} p:nth-child(-n-2147483647) {{ background-color: #ff0000 }}"));
-        assert!(!none.contains("bg=#ff0000"), "-n-2147483647 matches no index:\n{none}");
+        let none = built(
+            "i02-none",
+            page,
+            &format!("{WHITE} p:nth-child(-n-2147483647) {{ background-color: #ff0000 }}"),
+        );
+        assert!(
+            !none.contains("bg=#ff0000"),
+            "-n-2147483647 matches no index:\n{none}"
+        );
     }
 
     // ---- I03: O(n²) sibling lists ----------------------------------------
@@ -7033,7 +7163,9 @@ mod review_0005 {
             "i05-adjacent",
             r#"<div class="{{ c }}"><p>a</p></div><p id="t">t</p><p id="u">u</p>"#,
             &format!("{WHITE} .hot + p {{ background-color: #ff0000 }}"),
-            "c", "hot", "cold",
+            "c",
+            "hot",
+            "cold",
         );
         assert_eq!(reused, fresh);
     }
@@ -7045,7 +7177,9 @@ mod review_0005 {
             "i05-general",
             r#"<div class="{{ c }}"><p>a</p></div><div><p>s</p></div><p id="t">t</p>"#,
             &format!("{WHITE} .hot ~ p {{ background-color: #ff0000 }}"),
-            "c", "hot", "cold",
+            "c",
+            "hot",
+            "cold",
         );
         assert_eq!(reused, fresh);
     }
@@ -7058,7 +7192,9 @@ mod review_0005 {
             "i05-nth-of-type",
             r#"<{{ c }} class="x">a</{{ c }}><p id="t">t</p>"#,
             &format!("{WHITE} p:nth-of-type(1) {{ background-color: #ff0000 }}"),
-            "c", "div", "p",
+            "c",
+            "div",
+            "p",
         );
         assert_eq!(reused, fresh);
     }
@@ -7071,7 +7207,9 @@ mod review_0005 {
             "i05-last-of-type",
             r#"<p id="t">t</p><{{ c }} class="x">a</{{ c }}>"#,
             &format!("{WHITE} p:last-of-type {{ background-color: #ff0000 }}"),
-            "c", "div", "p",
+            "c",
+            "div",
+            "p",
         );
         assert_eq!(reused, fresh);
     }
@@ -7085,9 +7223,17 @@ mod review_0005 {
     #[test]
     fn cache_keys_on_preceding_siblings() {
         let css = format!("{WHITE} .hot + p {{ background-color: #ff0000 }}");
-        let dump = built("i06-siblings", "<div><div class=\"hot\">x</div><p>a</p></div><div><div>x</div><p>b</p></div>", &css);
+        let dump = built(
+            "i06-siblings",
+            "<div><div class=\"hot\">x</div><p>a</p></div><div><div>x</div><p>b</p></div>",
+            &css,
+        );
         assert!(red_before(&dump, "a") && !red_before(&dump, "b"), "{dump}");
-        let dump = built("i06-siblings-reversed", "<div><div>x</div><p>b</p></div><div><div class=\"hot\">x</div><p>a</p></div>", &css);
+        let dump = built(
+            "i06-siblings-reversed",
+            "<div><div>x</div><p>b</p></div><div><div class=\"hot\">x</div><p>a</p></div>",
+            &css,
+        );
         assert!(red_before(&dump, "a") && !red_before(&dump, "b"), "{dump}");
     }
 
@@ -7096,9 +7242,17 @@ mod review_0005 {
     #[test]
     fn cache_keys_on_the_dataset() {
         let css = format!("{WHITE} [data-x=\"2\"] {{ background-color: #ff0000 }}");
-        let dump = built("i06-dataset", "<div><p data-x=\"1\">a</p></div><div><p data-x=\"2\">b</p></div>", &css);
+        let dump = built(
+            "i06-dataset",
+            "<div><p data-x=\"1\">a</p></div><div><p data-x=\"2\">b</p></div>",
+            &css,
+        );
         assert!(!red_before(&dump, "a") && red_before(&dump, "b"), "{dump}");
-        let dump = built("i06-dataset-reversed", "<div><p data-x=\"2\">b</p></div><div><p data-x=\"1\">a</p></div>", &css);
+        let dump = built(
+            "i06-dataset-reversed",
+            "<div><p data-x=\"2\">b</p></div><div><p data-x=\"1\">a</p></div>",
+            &css,
+        );
         assert!(!red_before(&dump, "a") && red_before(&dump, "b"), "{dump}");
     }
 
@@ -7108,8 +7262,11 @@ mod review_0005 {
     /// styled `.b` with nothing hovered.
     #[test]
     fn sibling_compounds_test_their_pseudo_state() {
-        let dump = built("i07-sibling-hover", "<div class=\"a\">A</div><p class=\"b\">B</p>",
-            &format!("{WHITE} .a:hover + .b {{ background-color: #ff0000 }}"));
+        let dump = built(
+            "i07-sibling-hover",
+            "<div class=\"a\">A</div><p class=\"b\">B</p>",
+            &format!("{WHITE} .a:hover + .b {{ background-color: #ff0000 }}"),
+        );
         assert!(!red_before(&dump, "B"), "nothing is hovered:\n{dump}");
     }
 
@@ -7117,8 +7274,15 @@ mod review_0005 {
     #[test]
     fn sibling_compounds_test_their_attributes() {
         let css = format!("{WHITE} [data-m=\"dark\"] + p {{ background-color: #ff0000 }}");
-        let dump = built("i07-sibling-attr", "<div><div data-m=\"light\">x</div><p>no</p></div><div><div data-m=\"dark\">x</div><p>yes</p></div>", &css);
-        assert!(!red_before(&dump, "no") && red_before(&dump, "yes"), "{dump}");
+        let dump = built(
+            "i07-sibling-attr",
+            "<div><div data-m=\"light\">x</div><p>no</p></div><div><div data-m=\"dark\">x</div><p>yes</p></div>",
+            &css,
+        );
+        assert!(
+            !red_before(&dump, "no") && red_before(&dump, "yes"),
+            "{dump}"
+        );
     }
 
     /// I07: an ancestor compound's attribute test was ignored: the rule
@@ -7132,7 +7296,10 @@ mod review_0005 {
             &css,
         );
         assert!(red_before(&dump, "yes"), "{dump}");
-        assert!(!red_before(&dump, "light") && !red_before(&dump, "absent"), "{dump}");
+        assert!(
+            !red_before(&dump, "light") && !red_before(&dump, "absent"),
+            "{dump}"
+        );
     }
 
     // ---- I08: `:not()` around a pseudo-class ----------------------------
@@ -7142,7 +7309,10 @@ mod review_0005 {
     fn hover(ui: &mut TestUi, id: &str, hovered: bool) {
         let root = ui.root();
         let entity = element_by_id(ui.world_mut(), root, id);
-        ui.world_mut().entity_mut(entity).insert(PseudoState { hovered, ..default() });
+        ui.world_mut().entity_mut(entity).insert(PseudoState {
+            hovered,
+            ..default()
+        });
         ui.update(10);
     }
 
@@ -7153,7 +7323,10 @@ mod review_0005 {
     fn not_hover_matches_while_not_hovered() {
         let files = [
             ("page.html", "<div id=\"a\" class=\"a\"><p>A</p></div>"),
-            ("a.css", "html { color: #ffffff } .a:not(:hover) { background-color: #ff0000 }"),
+            (
+                "a.css",
+                "html { color: #ffffff } .a:not(:hover) { background-color: #ff0000 }",
+            ),
         ];
         let mut ui = TestUi::new("i08-not-hover", &files)
             .stylesheet("a.css")
@@ -7165,14 +7338,20 @@ mod review_0005 {
         assert!(!dump.contains("bg=#ff0000"), "hovered:\n{dump}");
         hover(&mut ui, "a", false);
         let dump = ui.dump();
-        assert!(dump.contains("div#a.a bg=#ff0000"), "unhovered again:\n{dump}");
+        assert!(
+            dump.contains("div#a.a bg=#ff0000"),
+            "unhovered again:\n{dump}"
+        );
     }
 
     /// I08: `p:not(:focus)` never matched either.
     #[test]
     fn not_focus_matches_while_not_focused() {
-        let dump = built("i08-not-focus", "<div><p>a</p></div>",
-            &format!("{WHITE} p:not(:focus) {{ background-color: #ff0000 }}"));
+        let dump = built(
+            "i08-not-focus",
+            "<div><p>a</p></div>",
+            &format!("{WHITE} p:not(:focus) {{ background-color: #ff0000 }}"),
+        );
         assert!(red_before(&dump, "a"), "{dump}");
     }
 
@@ -7183,8 +7362,14 @@ mod review_0005 {
     #[test]
     fn not_hover_sibling_rules_follow_the_flip() {
         let files = [
-            ("page.html", "<div id=\"a\" class=\"a\"><p>A</p></div><p class=\"b\">B</p>"),
-            ("a.css", "html { color: #ffffff } .a:not(:hover) + .b { background-color: #ff0000 }"),
+            (
+                "page.html",
+                "<div id=\"a\" class=\"a\"><p>A</p></div><p class=\"b\">B</p>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff } .a:not(:hover) + .b { background-color: #ff0000 }",
+            ),
         ];
         let mut ui = TestUi::new("i08-not-hover-sibling", &files)
             .stylesheet("a.css")
@@ -7207,20 +7392,34 @@ mod review_0005 {
 
     fn auto_scroll_panel(name: &str, css_extra: &str) -> TestUi {
         let page = r#"<div id="panel" class="panel {{ c }}"><p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p></div>"#;
-        let css = format!("html {{ color: #ffffff; font-size: 16px }} .panel {{ height: 40px; overflow-y: auto }} {css_extra}");
+        let css = format!(
+            "html {{ color: #ffffff; font-size: 16px }} .panel {{ height: 40px; overflow-y: auto }} {css_extra}"
+        );
         // The pointer harness (layout + picking): the hover test hovers
         // for real — a hand-inserted `PseudoState` is reset by picking
         // the next frame.
-        let mut ui = TestUi::with_pointer(name, &[("page.html", page), ("a.css", css.as_str())], UVec2::new(400, 300))
-            .stylesheet("a.css")
-            .spawn(
-                "page.html",
-                TemplateContext::new().with("c", "off"),
-                Node { width: Val::Px(400.0), flex_direction: FlexDirection::Column, ..default() },
-            );
+        let mut ui = TestUi::with_pointer(
+            name,
+            &[("page.html", page), ("a.css", css.as_str())],
+            UVec2::new(400, 300),
+        )
+        .stylesheet("a.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new().with("c", "off"),
+            Node {
+                width: Val::Px(400.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        );
         ui.settle();
         ui.update(5);
-        assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll, "the overflowing panel scrolls");
+        assert_eq!(
+            overflow_y(&mut ui, "panel"),
+            OverflowAxis::Scroll,
+            "the overflowing panel scrolls"
+        );
         ui
     }
 
@@ -7231,7 +7430,10 @@ mod review_0005 {
     fn auto_scroll_survives_an_in_place_update() {
         let mut ui = auto_scroll_panel("i09-update", ".on { background-color: #222222 }");
         let root = ui.root();
-        ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("c", &"on");
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("c", &"on");
         ui.settle();
         ui.update(10);
         assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll);
@@ -7247,9 +7449,15 @@ mod review_0005 {
         let rect = node_rect(ui.world_mut(), panel).expect("the panel is laid out");
         ui.move_pointer(rect.center());
         ui.update(10);
-        let hovered = ui.world_mut().get::<PseudoState>(panel).is_some_and(|state| state.hovered);
+        let hovered = ui
+            .world_mut()
+            .get::<PseudoState>(panel)
+            .is_some_and(|state| state.hovered);
         assert!(hovered, "the pointer hovers the panel");
-        assert!(ui.dump().contains("bg=#222222"), "the hover restyled the panel");
+        assert!(
+            ui.dump().contains("bg=#222222"),
+            "the hover restyled the panel"
+        );
         assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll);
     }
 
@@ -7263,13 +7471,26 @@ mod review_0005 {
         let root = ui.root();
         let panel = element_by_id(ui.world_mut(), root, "panel");
         let before = node_rect(ui.world_mut(), panel).expect("laid out");
-        let tick = ui.world_mut().entity(panel).get_ref::<Node>().unwrap().last_changed();
+        let tick = ui
+            .world_mut()
+            .entity(panel)
+            .get_ref::<Node>()
+            .unwrap()
+            .last_changed();
         ui.world_mut().get_mut::<Node>(root).unwrap().width = Val::Px(300.0);
         ui.update(5);
         let after = node_rect(ui.world_mut(), panel).expect("laid out");
         assert_ne!(before.width(), after.width(), "the panel's layout changed");
-        let later = ui.world_mut().entity(panel).get_ref::<Node>().unwrap().last_changed();
-        assert_eq!(tick, later, "the panel's Node was rewritten with the same axis");
+        let later = ui
+            .world_mut()
+            .entity(panel)
+            .get_ref::<Node>()
+            .unwrap()
+            .last_changed();
+        assert_eq!(
+            tick, later,
+            "the panel's Node was rewritten with the same axis"
+        );
         assert_eq!(overflow_y(&mut ui, "panel"), OverflowAxis::Scroll);
     }
 
@@ -7318,7 +7539,9 @@ mod review_0005 {
             "i05-nested-adjacent",
             r#"<section><div class="{{ c }}"><p>a</p></div><p id="t">t</p><p id="u">u</p></section>"#,
             &format!("{WHITE} .hot + p {{ background-color: #ff0000 }}"),
-            "c", "hot", "cold",
+            "c",
+            "hot",
+            "cold",
         );
         assert!(!red_before(&fresh, "t"), "{fresh}");
         assert_eq!(reused, fresh);
@@ -7332,7 +7555,9 @@ mod review_0005 {
             "i05-adjacent-text",
             r#"<section><div class="{{ c }}"><p>a</p></div> between <p id="t">t</p><p id="u">u</p></section>"#,
             &format!("{WHITE} .hot + p {{ background-color: #ff0000 }}"),
-            "c", "hot", "cold",
+            "c",
+            "hot",
+            "cold",
         );
         assert!(!red_before(&fresh, "t"), "{fresh}");
         assert_eq!(reused, fresh);
@@ -7349,7 +7574,9 @@ mod review_0005 {
             "i05-nested",
             r#"<section>{% if c == "el" %}<div>new</div>{% else %}x{% endif %}<div id="t"><p>t</p></div></section>"#,
             &format!("{WHITE} div:first-child p {{ background-color: #ff0000 }}"),
-            "c", "text", "el",
+            "c",
+            "text",
+            "el",
         );
         assert!(!red_before(&fresh, "t"), "{fresh}");
         assert_eq!(reused, fresh);
@@ -7364,7 +7591,9 @@ mod review_0005 {
             "i05-text-element",
             r#"{% if c == "el" %}<div>x</div>{% else %}x{% endif %}<p id="t">t</p>"#,
             &format!("{WHITE} p:first-child {{ background-color: #ff0000 }}"),
-            "c", "text", "el",
+            "c",
+            "text",
+            "el",
         );
         assert!(!red_before(&fresh, "t"), "{fresh}");
         assert_eq!(reused, fresh);
@@ -7389,8 +7618,14 @@ mod review_0005 {
     #[test]
     fn inline_ancestors_carry_their_pseudo_state() {
         let files = [
-            ("page.html", "<p><a href=\"x\" id=\"l\">go <i>in</i></a></p>"),
-            ("a.css", "html { color: #ffffff } a:hover i { color: #ff0000 }"),
+            (
+                "page.html",
+                "<p><a href=\"x\" id=\"l\">go <i>in</i></a></p>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff } a:hover i { color: #ff0000 }",
+            ),
         ];
         let mut ui = TestUi::new("fix-inline-ancestor-pseudo", &files)
             .stylesheet("a.css")
@@ -7407,7 +7642,10 @@ mod review_0005 {
                 .map(|(entity, _)| entity)
                 .expect("the link span")
         };
-        ui.world_mut().entity_mut(link).insert(PseudoState { hovered: true, ..default() });
+        ui.world_mut().entity_mut(link).insert(PseudoState {
+            hovered: true,
+            ..default()
+        });
         ui.update(10);
         let dump = ui.dump();
         assert!(dump.contains("\"in\" default 16px #ff0000"), "{dump}");
@@ -7418,8 +7656,14 @@ mod review_0005 {
     #[test]
     fn not_hover_on_an_ancestor_follows_the_flip() {
         let files = [
-            ("page.html", "<div class=\"row\" id=\"r\"><p>label</p></div><p>other</p>"),
-            ("a.css", "html { color: #ffffff } .row:not(:hover) p { color: #ff0000 }"),
+            (
+                "page.html",
+                "<div class=\"row\" id=\"r\"><p>label</p></div><p>other</p>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff } .row:not(:hover) p { color: #ff0000 }",
+            ),
         ];
         let mut ui = TestUi::new("fix-not-hover-ancestor", &files)
             .stylesheet("a.css")
@@ -7440,20 +7684,36 @@ mod review_0005 {
     fn auto_scroll_promotes_the_x_axis() {
         let page = r#"<div id="panel" class="panel"><p>a very long line of text that cannot fit in forty pixels</p></div>"#;
         let css = "html { color: #ffffff; font-size: 16px } .panel { width: 40px; overflow-x: auto } p { white-space: nowrap }";
-        let mut ui = TestUi::with_layout("i09-x", &[("page.html", page), ("a.css", css)], UVec2::new(400, 300))
-            .stylesheet("a.css")
-            .spawn(
-                "page.html",
-                TemplateContext::new(),
-                Node { width: Val::Px(400.0), flex_direction: FlexDirection::Column, ..default() },
-            );
+        let mut ui = TestUi::with_layout(
+            "i09-x",
+            &[("page.html", page), ("a.css", css)],
+            UVec2::new(400, 300),
+        )
+        .stylesheet("a.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node {
+                width: Val::Px(400.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        );
         ui.settle();
         ui.update(5);
         let root = ui.root();
         let panel = element_by_id(ui.world_mut(), root, "panel");
         let overflow = ui.world_mut().get::<Node>(panel).unwrap().overflow;
-        assert_eq!(overflow.x, OverflowAxis::Scroll, "the overflowing axis scrolls");
-        assert_eq!(overflow.y, OverflowAxis::Visible, "the other axis is left alone");
+        assert_eq!(
+            overflow.x,
+            OverflowAxis::Scroll,
+            "the overflowing axis scrolls"
+        );
+        assert_eq!(
+            overflow.y,
+            OverflowAxis::Visible,
+            "the other axis is left alone"
+        );
     }
 
     // ---- I14: bug_0129's crate half, deterministically -------------------
@@ -7466,13 +7726,21 @@ mod review_0005 {
     #[test]
     fn failed_sheet_swap_during_a_wait_updates_unstyled() {
         let files = [
-            ("page.html", "<div class=\"box\"><p class=\"t\">text</p></div>"),
-            ("a.css", "html { color: #ffffff } .box { background-color: #ff0000 } .t { color: #00ff00 }"),
+            (
+                "page.html",
+                "<div class=\"box\"><p class=\"t\">text</p></div>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff } .box { background-color: #ff0000 } .t { color: #00ff00 }",
+            ),
             ("broken.css", "{ not css"),
         ];
-        let mut ui = TestUi::new("i14-swap", &files)
-            .stylesheet("a.css")
-            .spawn("page.html", TemplateContext::new(), Node::default());
+        let mut ui = TestUi::new("i14-swap", &files).stylesheet("a.css").spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node::default(),
+        );
         let styled = ui.settle().dump();
         assert!(styled.contains("bg=#ff0000"), "{styled}");
         let broken = ui.load::<Stylesheet>("broken.css");
@@ -7507,7 +7775,9 @@ mod mutation_gaps {
 
     /// The dump line of the element right before the text run `text`.
     fn element_before<'a>(dump: &'a str, text: &str) -> &'a str {
-        let at = dump.find(&format!("\"{text}\"")).unwrap_or_else(|| panic!("{text} in {dump}"));
+        let at = dump
+            .find(&format!("\"{text}\""))
+            .unwrap_or_else(|| panic!("{text} in {dump}"));
         dump[..at]
             .lines()
             .rev()
@@ -7529,7 +7799,10 @@ mod mutation_gaps {
     fn hover(ui: &mut TestUi, id: &str, hovered: bool) {
         let root = ui.root();
         let entity = element_by_id(ui.world_mut(), root, id);
-        ui.world_mut().entity_mut(entity).insert(PseudoState { hovered, ..default() });
+        ui.world_mut().entity_mut(entity).insert(PseudoState {
+            hovered,
+            ..default()
+        });
         ui.update(10);
     }
 
@@ -7578,10 +7851,18 @@ mod mutation_gaps {
     #[test]
     fn sibling_combinators_parse_without_spaces() {
         let page = "<div><h1>h</h1><p>a</p><p>b</p></div>";
-        let dump = built("gap-adjacent", page, &format!("{WHITE} h1+p {{ background-color: #ff0000 }}"));
+        let dump = built(
+            "gap-adjacent",
+            page,
+            &format!("{WHITE} h1+p {{ background-color: #ff0000 }}"),
+        );
         assert!(element_before(&dump, "a").contains("bg=#ff0000"), "{dump}");
         assert!(!element_before(&dump, "b").contains("bg="), "{dump}");
-        let dump = built("gap-general", page, &format!("{WHITE} h1~p {{ background-color: #ff0000 }}"));
+        let dump = built(
+            "gap-general",
+            page,
+            &format!("{WHITE} h1~p {{ background-color: #ff0000 }}"),
+        );
         assert!(element_before(&dump, "a").contains("bg=#ff0000"), "{dump}");
         assert!(element_before(&dump, "b").contains("bg=#ff0000"), "{dump}");
     }
@@ -7609,8 +7890,14 @@ mod mutation_gaps {
                 "{WHITE} [data-a-b] {{ background-color: #ff0000 }} [data-a_b] {{ background-color: #0000ff }}"
             ),
         );
-        assert!(element_before(&dump, "dash").contains("bg=#ff0000"), "{dump}");
-        assert!(element_before(&dump, "under").contains("bg=#0000ff"), "{dump}");
+        assert!(
+            element_before(&dump, "dash").contains("bg=#ff0000"),
+            "{dump}"
+        );
+        assert!(
+            element_before(&dump, "under").contains("bg=#0000ff"),
+            "{dump}"
+        );
         assert!(!element_before(&dump, "none").contains("bg="), "{dump}");
     }
 
@@ -7629,9 +7916,18 @@ mod mutation_gaps {
              .rem { font-size: 10px; letter-spacing: 0.25rem } \
              .lh { font-size: 10px; line-height: 2rem }",
         );
-        assert!(element_before(&dump, "spaced").contains("ls=Px(5.0)"), "{dump}");
-        assert!(element_before(&dump, "root").contains("ls=Px(5.0)"), "{dump}");
-        assert!(element_before(&dump, "tall").contains("lh=Px(40.0)"), "{dump}");
+        assert!(
+            element_before(&dump, "spaced").contains("ls=Px(5.0)"),
+            "{dump}"
+        );
+        assert!(
+            element_before(&dump, "root").contains("ls=Px(5.0)"),
+            "{dump}"
+        );
+        assert!(
+            element_before(&dump, "tall").contains("lh=Px(40.0)"),
+            "{dump}"
+        );
     }
 
     /// `unset` on the new inherited text properties drops an earlier
@@ -7647,9 +7943,15 @@ mod mutation_gaps {
             ),
         );
         let set = element_before(&dump, "SET");
-        assert!(set.contains("align=") && set.contains("lh=") && set.contains("ls="), "{dump}");
+        assert!(
+            set.contains("align=") && set.contains("lh=") && set.contains("ls="),
+            "{dump}"
+        );
         let unset = element_before(&dump, "unset");
-        assert!(!unset.contains("align=") && !unset.contains("lh=") && !unset.contains("ls="), "{dump}");
+        assert!(
+            !unset.contains("align=") && !unset.contains("lh=") && !unset.contains("ls="),
+            "{dump}"
+        );
     }
 
     /// `text-transform` with an unsupported extra keyword drops the whole
@@ -7675,9 +7977,18 @@ mod mutation_gaps {
     fn sibling_combinators_match_inside_translations() {
         let files = [
             ("page.html", "<div data-l10n-id=\"m\">fallback</div>"),
-            ("a.css", "html { color: #ffffff } h1 + p { background-color: #ff0000 }"),
-            ("locales/en-US/main.ftl.ron", r#"(locale: "en-US", resources: ["ui.ftl"])"#),
-            ("locales/en-US/ui.ftl", "m = <h1>head</h1><p>next</p><p>later</p>"),
+            (
+                "a.css",
+                "html { color: #ffffff } h1 + p { background-color: #ff0000 }",
+            ),
+            (
+                "locales/en-US/main.ftl.ron",
+                r#"(locale: "en-US", resources: ["ui.ftl"])"#,
+            ),
+            (
+                "locales/en-US/ui.ftl",
+                "m = <h1>head</h1><p>next</p><p>later</p>",
+            ),
         ];
         let dump = TestUi::new("gap-fragment-siblings", &files)
             .stylesheet("a.css")
@@ -7685,7 +7996,10 @@ mod mutation_gaps {
             .spawn("page.html", TemplateContext::new(), Node::default())
             .settle()
             .dump();
-        assert!(element_before(&dump, "next").contains("bg=#ff0000"), "{dump}");
+        assert!(
+            element_before(&dump, "next").contains("bg=#ff0000"),
+            "{dump}"
+        );
         assert!(!element_before(&dump, "later").contains("bg="), "{dump}");
     }
 
@@ -7705,10 +8019,19 @@ mod mutation_gaps {
                  .content {{ background-clip: content-box }} .border {{ background-clip: border-box }}"
             ),
         );
-        assert!(dump.contains("div.x padding=4,4,4,4 bg-image=frame.png tiled=true,false"), "{dump}");
-        assert!(dump.contains("div.y padding=4,4,4,4 bg-image=frame.png tiled=false,true"), "{dump}");
+        assert!(
+            dump.contains("div.x padding=4,4,4,4 bg-image=frame.png tiled=true,false"),
+            "{dump}"
+        );
+        assert!(
+            dump.contains("div.y padding=4,4,4,4 bg-image=frame.png tiled=false,true"),
+            "{dump}"
+        );
         assert!(dump.contains("div.content padding=4,4,4,4 bg-image=frame.png tiled=true,true visual-box=ContentBox"), "{dump}");
-        assert!(dump.contains("div.border padding=4,4,4,4 bg-image=frame.png tiled=true,true\n"), "{dump}");
+        assert!(
+            dump.contains("div.border padding=4,4,4,4 bg-image=frame.png tiled=true,true\n"),
+            "{dump}"
+        );
     }
 
     /// The `background` shorthand sets the color and the image, and
@@ -7726,7 +8049,10 @@ mod mutation_gaps {
         assert!(dump.contains("div.c bg=#ff0000"), "{dump}");
         // The shorthand's omitted color resets to transparent.
         let image = element_before(&dump, "i");
-        assert!(image.starts_with("div.i ") && image.ends_with(" bg-image=frame.png tiled=true,true"), "{dump}");
+        assert!(
+            image.starts_with("div.i ") && image.ends_with(" bg-image=frame.png tiled=true,true"),
+            "{dump}"
+        );
     }
 
     // ---- scoped interaction restyles (ADR 0029) ----------------------------
@@ -7737,8 +8063,14 @@ mod mutation_gaps {
     #[test]
     fn hover_back_to_the_default_color_recascades_children() {
         let files = [
-            ("page.html", "<div class=\"row\" id=\"r\"><p>child</p></div><p>other</p>"),
-            ("a.css", "html { color: #ffffff } .row { color: #ff0000 } .row:hover { color: #ffffff }"),
+            (
+                "page.html",
+                "<div class=\"row\" id=\"r\"><p>child</p></div><p>other</p>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff } .row { color: #ff0000 } .row:hover { color: #ffffff }",
+            ),
         ];
         let mut ui = TestUi::new("gap-hover-default", &files)
             .stylesheet("a.css")
@@ -7758,7 +8090,10 @@ mod mutation_gaps {
     #[test]
     fn boxed_block_under_a_hovered_ancestor_restyles() {
         let files = [
-            ("page.html", "<div class=\"row\" id=\"r\"><p class=\"boxed\">boxed</p></div><p>other</p>"),
+            (
+                "page.html",
+                "<div class=\"row\" id=\"r\"><p class=\"boxed\">boxed</p></div><p>other</p>",
+            ),
             (
                 "a.css",
                 "html { color: #ffffff } .boxed { background-color: #000080 } .row:hover .boxed { color: #00ff00 }",
@@ -7779,8 +8114,14 @@ mod mutation_gaps {
     #[test]
     fn inline_run_under_a_hovered_ancestor_restyles() {
         let files = [
-            ("page.html", "<div class=\"row\" id=\"r\"><p>plain <b>bold</b></p></div><p>other</p>"),
-            ("a.css", "html { color: #ffffff } .row:hover b { color: #00ff00 }"),
+            (
+                "page.html",
+                "<div class=\"row\" id=\"r\"><p>plain <b>bold</b></p></div><p>other</p>",
+            ),
+            (
+                "a.css",
+                "html { color: #ffffff } .row:hover b { color: #00ff00 }",
+            ),
         ];
         let mut ui = TestUi::new("gap-hover-inline", &files)
             .stylesheet("a.css")
@@ -7805,8 +8146,11 @@ mod mutation_gaps {
             ("a.css", "html { color: #ffffff } p { color: #ff0000 }"),
             ("b.css", "html { color: #ffffff } p { color: #0000ff }"),
         ];
-        let mut ui = TestUi::new("gap-own-swap", &files)
-            .spawn("page.html", TemplateContext::new(), Node::default());
+        let mut ui = TestUi::new("gap-own-swap", &files).spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node::default(),
+        );
         let a = ui.load::<Stylesheet>("a.css");
         let root = ui.root();
         ui.world_mut().entity_mut(root).insert(HtmlStylesheet(a));
@@ -7855,7 +8199,12 @@ mod mutation_gaps {
         let b = ui.load::<Stylesheet>("b.css");
         let dump = ui.settle().dump();
         assert_eq!(run_color(&dump, "b"), "#ff0000", "{dump}");
-        assert!(ui.app_mut().world().resource::<AssetServer>().is_loaded_with_dependencies(&b));
+        assert!(
+            ui.app_mut()
+                .world()
+                .resource::<AssetServer>()
+                .is_loaded_with_dependencies(&b)
+        );
         ui.world_mut().resource_mut::<DefaultStylesheet>().0 = Some(b);
         let dump = ui.settle().dump();
         assert_eq!(run_color(&dump, "a"), "#0000ff", "{dump}");
@@ -7870,13 +8219,18 @@ mod mutation_gaps {
             ("page.html", "<div><p>a</p><p>b</p></div>"),
             ("a.css", "html { color: #ffffff } p { color: var(--c) }"),
         ];
-        let mut ui = TestUi::new("gap-var", &files)
-            .stylesheet("a.css")
-            .spawn("page.html", TemplateContext::new().with("--c", &"#ff0000"), Node::default());
+        let mut ui = TestUi::new("gap-var", &files).stylesheet("a.css").spawn(
+            "page.html",
+            TemplateContext::new().with("--c", &"#ff0000"),
+            Node::default(),
+        );
         let dump = ui.settle().dump();
         assert_eq!(run_color(&dump, "b"), "#ff0000", "{dump}");
         let root = ui.root();
-        ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("--c", &"#0000ff");
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("--c", &"#0000ff");
         let dump = ui.settle().dump();
         assert_eq!(run_color(&dump, "a"), "#0000ff", "{dump}");
         assert_eq!(run_color(&dump, "b"), "#0000ff", "{dump}");
@@ -7896,9 +8250,21 @@ mod mutation_gaps {
 
     /// `nested`: the paragraphs sit in a `section` (the nested pairing
     /// path) instead of at the document's top level.
-    fn health_after_in(name: &str, values: &[&str], changed: &[&str], css: &str, nested: bool) -> (bool, u8) {
-        let page: String = (0..values.len()).map(|i| format!("<p>{{{{ v{i} }}}}</p>")).collect();
-        let page = if nested { format!("<section>{page}</section>") } else { page };
+    fn health_after_in(
+        name: &str,
+        values: &[&str],
+        changed: &[&str],
+        css: &str,
+        nested: bool,
+    ) -> (bool, u8) {
+        let page: String = (0..values.len())
+            .map(|i| format!("<p>{{{{ v{i} }}}}</p>"))
+            .collect();
+        let page = if nested {
+            format!("<section>{page}</section>")
+        } else {
+            page
+        };
         let keys: Vec<&'static str> = (0..values.len())
             .map(|i| &*Box::leak(format!("v{i}").into_boxed_str()))
             .collect();
@@ -7907,9 +8273,11 @@ mod mutation_gaps {
             context.insert(*key, value);
         }
         let files = [("page.html", page.as_str()), ("a.css", css)];
-        let mut ui = TestUi::new(name, &files)
-            .stylesheet("a.css")
-            .spawn("page.html", context, Node::default());
+        let mut ui = TestUi::new(name, &files).stylesheet("a.css").spawn(
+            "page.html",
+            context,
+            Node::default(),
+        );
         ui.settle();
         let root = ui.root();
         let mut context = ui.world_mut().get_mut::<TemplateContext>(root).unwrap();
@@ -7917,7 +8285,10 @@ mod mutation_gaps {
             context.insert(*key, value);
         }
         ui.settle();
-        ui.world_mut().get::<Skeleton>(root).unwrap().pairing_health()
+        ui.world_mut()
+            .get::<Skeleton>(root)
+            .unwrap()
+            .pairing_health()
     }
 
     /// One changed paragraph of four: three subtrees reuse, so the
@@ -7925,14 +8296,24 @@ mod mutation_gaps {
     /// content build.
     #[test]
     fn a_mostly_unchanged_page_reuses_and_stays_useful() {
-        assert_eq!(health_after("gap-reuse-useful", &["a", "b", "c", "d"], &["a", "b", "c", "D"]), (true, 0));
+        assert_eq!(
+            health_after(
+                "gap-reuse-useful",
+                &["a", "b", "c", "d"],
+                &["a", "b", "c", "D"]
+            ),
+            (true, 0)
+        );
     }
 
     /// Two changed paragraphs of three: one subtree reuses, under half —
     /// the pairing is useless and takes a strike (the backoff).
     #[test]
     fn a_mostly_changed_page_strikes_the_pairing() {
-        assert_eq!(health_after("gap-reuse-useless", &["a", "b", "c"], &["a", "B", "C"]), (false, 1));
+        assert_eq!(
+            health_after("gap-reuse-useless", &["a", "b", "c"], &["a", "B", "C"]),
+            (false, 1)
+        );
     }
 
     /// Content reuse inside a container: one changed paragraph of four in
@@ -7942,23 +8323,44 @@ mod mutation_gaps {
     #[test]
     fn a_changed_container_reuses_its_unchanged_children() {
         assert_eq!(
-            health_after_in("gap-reuse-nested", &["a", "b", "c", "d"], &["a", "b", "c", "D"], WHITE, true),
+            health_after_in(
+                "gap-reuse-nested",
+                &["a", "b", "c", "d"],
+                &["a", "b", "c", "D"],
+                WHITE,
+                true
+            ),
             (true, 0)
         );
     }
 
     /// Renders `page` with `key = from`, changes it to `to`, and returns the
     /// skeleton's `(useful, strike)` after that content build.
-    fn health_after_page(name: &str, page: &str, css: &str, key: &'static str, from: &str, to: &str) -> (bool, u8) {
+    fn health_after_page(
+        name: &str,
+        page: &str,
+        css: &str,
+        key: &'static str,
+        from: &str,
+        to: &str,
+    ) -> (bool, u8) {
         let files = [("page.html", page), ("a.css", css)];
-        let mut ui = TestUi::new(name, &files)
-            .stylesheet("a.css")
-            .spawn("page.html", TemplateContext::new().with(key, &from), Node::default());
+        let mut ui = TestUi::new(name, &files).stylesheet("a.css").spawn(
+            "page.html",
+            TemplateContext::new().with(key, &from),
+            Node::default(),
+        );
         ui.settle();
         let root = ui.root();
-        ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert(key, &to);
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert(key, &to);
         ui.settle();
-        ui.world_mut().get::<Skeleton>(root).unwrap().pairing_health()
+        ui.world_mut()
+            .get::<Skeleton>(root)
+            .unwrap()
+            .pairing_health()
     }
 
     /// An attribute change leaves positions alone: a position-only sheet
@@ -7967,8 +8369,13 @@ mod mutation_gaps {
     #[test]
     fn an_attribute_change_keeps_reuse_under_a_position_only_sheet() {
         let page = r#"<section><p>a</p><p>b</p><p class="{{ c }}">c</p><p>d</p><p>e</p><p>f</p></section>"#;
-        let css = format!("{WHITE} p:nth-child(2n) {{ color: #ff0000 }} p:last-of-type {{ color: #00ff00 }}");
-        assert_eq!(health_after_page("gap-attr-positions", page, &css, "c", "x", "y"), (true, 0));
+        let css = format!(
+            "{WHITE} p:nth-child(2n) {{ color: #ff0000 }} p:last-of-type {{ color: #00ff00 }}"
+        );
+        assert_eq!(
+            health_after_page("gap-attr-positions", page, &css, "c", "x", "y"),
+            (true, 0)
+        );
     }
 
     /// Under a `+`-only sheet an attribute change un-cleans just the next
@@ -7977,7 +8384,10 @@ mod mutation_gaps {
     fn an_attribute_change_unclean_only_the_next_sibling_under_adjacent_rules() {
         let page = r#"<section><p>a</p><p class="{{ c }}">b</p><p>c</p><p>d</p><p>e</p><p>f</p></section>"#;
         let css = format!("{WHITE} .hot + p {{ color: #ff0000 }}");
-        assert_eq!(health_after_page("gap-attr-adjacent", page, &css, "c", "hot", "cold"), (true, 0));
+        assert_eq!(
+            health_after_page("gap-attr-adjacent", page, &css, "c", "hot", "cold"),
+            (true, 0)
+        );
     }
 
     /// A sibling-dependent sheet still reuses across a text-only change:
@@ -7987,16 +8397,26 @@ mod mutation_gaps {
     fn a_sibling_dependent_sheet_reuses_across_text_changes() {
         let css = "html { color: #ffffff } p:nth-child(2) { color: #ff0000 } p + p { background-color: #000080 }";
         assert_eq!(
-            health_after_with("gap-reuse-sibling-sheet", &["a", "b", "c", "d"], &["a", "b", "c", "D"], css),
+            health_after_with(
+                "gap-reuse-sibling-sheet",
+                &["a", "b", "c", "d"],
+                &["a", "b", "c", "D"],
+                css
+            ),
             (true, 0)
         );
         assert_eq!(
-            health_after_in("gap-reuse-sibling-sheet-nested", &["a", "b", "c", "d"], &["a", "b", "c", "D"], css, true),
+            health_after_in(
+                "gap-reuse-sibling-sheet-nested",
+                &["a", "b", "c", "d"],
+                &["a", "b", "c", "D"],
+                css,
+                true
+            ),
             (true, 0),
             "the same inside a container"
         );
     }
-
 }
 
 /// ADR 0031: a windowed UI materializes the scroll window's band and
@@ -8036,14 +8456,19 @@ fn windowed_build_materializes_the_band_and_spacers_the_rest() {
         },
     );
     let root = ui.root();
-    ui.world_mut().entity_mut(root).insert(HtmlWindowed::default());
+    ui.world_mut()
+        .entity_mut(root)
+        .insert(HtmlWindowed::default());
     // Build 1: the model is empty, so the whole document materializes and
     // is measured; the measurement's news rebuild it once (review_0006
     // J08), culled to the band at scroll 0 — [−200, 400): p1 … p20.
     ui.settle();
     let first = ui.dump();
     assert_eq!(first.matches("\n  p#p").count(), 20, "{first}");
-    assert!(first.contains("p#p20\n") && !first.contains("p#p21\n"), "{first}");
+    assert!(
+        first.contains("p#p20\n") && !first.contains("p#p21\n"),
+        "{first}"
+    );
 
     // Scroll: the band is [offset, offset + viewport] grown by one
     // viewport on each side. Each paragraph is one 20px line (16px text
@@ -8086,10 +8511,16 @@ fn windowed_build_materializes_the_band_and_spacers_the_rest() {
     ui.update(3);
     let world = ui.world_mut();
     let content = world.get::<ComputedNode>(root).expect("laid out");
-    assert!((content.content_size.y * content.inverse_scale_factor - 1200.0).abs() < 1.0, "{content:?}");
+    assert!(
+        (content.content_size.y * content.inverse_scale_factor - 1200.0).abs() < 1.0,
+        "{content:?}"
+    );
     let p6 = element_by_id(world, root, "p6");
     let rect = node_rect(world, p6).expect("p6 laid out");
-    assert!((rect.min.y - (100.0 - offset)).abs() < 1.0, "p6 at {rect:?}");
+    assert!(
+        (rect.min.y - (100.0 - offset)).abs() < 1.0,
+        "p6 at {rect:?}"
+    );
 
     // Scrolling further moves the band; the top part culled, the bottom
     // part materialized.
@@ -8100,8 +8531,14 @@ fn windowed_build_materializes_the_band_and_spacers_the_rest() {
     let dump = ui.dump();
     // The band is [offset − margin, offset + viewport + margin] =
     // [700, 1300): p36 (y=700) through p60.
-    assert!(dump.contains("p#p36\n") && dump.contains("p#p60\n"), "{dump}");
-    assert!(!dump.contains("p#p1\n") && !dump.contains("p#p35\n"), "{dump}");
+    assert!(
+        dump.contains("p#p36\n") && dump.contains("p#p60\n"),
+        "{dump}"
+    );
+    assert!(
+        !dump.contains("p#p1\n") && !dump.contains("p#p35\n"),
+        "{dump}"
+    );
 }
 
 /// Mouse-wheel scrolling through the real picking path: the wheel event
@@ -8179,10 +8616,37 @@ fn mouse_wheel_scrolls_a_windowed_ui() {
     let top = element_by_id(world, root, &format!("p{index}"));
     let rect = node_rect(world, top).expect("the top paragraph is built");
     let expected = (index as f32 - 1.0) * 20.0 - scroll;
-    assert!((rect.min.y - expected).abs() < 1.0, "p{index} at {:.1}, expected {expected:.1}", rect.min.y);
+    assert!(
+        (rect.min.y - expected).abs() < 1.0,
+        "p{index} at {:.1}, expected {expected:.1}",
+        rect.min.y
+    );
 }
 
 /// review_0006: the windowed build (ADR 0031) and bug_0151.
+/// bug_0172: a document's `<body>` keeps its style and its place in
+/// selectors. ADR 0031's root unwrap collected `body`'s children with the
+/// root's style and no ancestors: `body { … }`, `body > p` and
+/// `.b section p` were lost for every `<html><body>` document.
+#[test]
+fn body_styles_and_selectors_hold_in_a_whole_document() {
+    let page = "<html><head><title>t</title></head><body class=\"b\"><p id=\"x\">x</p><section><p id=\"y\">y</p></section></body></html>";
+    let css = "html { flex-direction: column; color: #ffffff } .b { color: #ff0000 } body > p { font-size: 30px } .b section p { color: #00ff00 }";
+    let mut ui = TestUi::new("bug0172", &[("page.html", page), ("style.css", css)])
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    ui.assert_dump(
+        "html-ui dir=Column
+  p#x
+    \"x\" default 30px #ff0000
+  section
+    p#y
+      \"y\" default 16px #00ff00
+",
+    );
+}
+
 mod review_0006 {
     use super::*;
 
@@ -8208,10 +8672,22 @@ mod review_0006 {
     const BENCH_CSS: &str = "html { flex-direction: column; gap: 2px } .row { flex-direction: row; gap: 8px; padding: 1px 4px; border-width: 1px }";
 
     fn scrolled_page(name: &str, css: &str, page: &str, windowed: bool, offset: f32) -> TestUi {
-        scrolled_with(name, css, page, windowed.then(HtmlWindowed::default), offset)
+        scrolled_with(
+            name,
+            css,
+            page,
+            windowed.then(HtmlWindowed::default),
+            offset,
+        )
     }
 
-    fn scrolled_with(name: &str, css: &str, page: &str, windowed: Option<HtmlWindowed>, offset: f32) -> TestUi {
+    fn scrolled_with(
+        name: &str,
+        css: &str,
+        page: &str,
+        windowed: Option<HtmlWindowed>,
+        offset: f32,
+    ) -> TestUi {
         scrolled_at_scale(name, css, page, windowed, offset, 1.0)
     }
 
@@ -8225,19 +8701,26 @@ mod review_0006 {
         offset: f32,
         scale: f32,
     ) -> TestUi {
-        let mut ui = TestUi::with_layout(name, &[("page.html", page), ("style.css", css)], UVec2::new(300, 200))
-            .stylesheet("style.css")
-            .spawn(
-                "page.html",
-                TemplateContext::new(),
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(200.0),
-                    flex_direction: FlexDirection::Column,
-                    overflow: Overflow { x: OverflowAxis::Visible, y: OverflowAxis::Scroll },
-                    ..default()
+        let mut ui = TestUi::with_layout(
+            name,
+            &[("page.html", page), ("style.css", css)],
+            UVec2::new(300, 200),
+        )
+        .stylesheet("style.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(200.0),
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow {
+                    x: OverflowAxis::Visible,
+                    y: OverflowAxis::Scroll,
                 },
-            );
+                ..default()
+            },
+        );
         if scale != 1.0 {
             let world = ui.world_mut();
             let mut cameras = world.query::<&mut Camera>();
@@ -8257,7 +8740,9 @@ mod review_0006 {
             None => false,
         };
         ui.settle();
-        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, offset)));
+        ui.world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, offset)));
         // A scroll rebuilds only a windowed UI, and only when its band
         // changes (J05) — `settle` demands a build, so run frames instead.
         let _ = windowed;
@@ -8275,7 +8760,9 @@ mod review_0006 {
             .collect();
         found
             .into_iter()
-            .filter_map(|(entity, id)| node_rect(world, entity).map(|rect| (id, (rect.min.y, rect.max.y))))
+            .filter_map(|(entity, id)| {
+                node_rect(world, entity).map(|rect| (id, (rect.min.y, rect.max.y)))
+            })
             .collect()
     }
 
@@ -8292,20 +8779,40 @@ mod review_0006 {
         let mut full = scrolled("bug0151-full", css, 300, false, offset);
         let mut windowed = scrolled("bug0151-windowed", css, 300, true, offset);
         let (full, windowed) = (rects(&mut full), rects(&mut windowed));
-        assert!(windowed.len() < 300, "the windowed UI culled: {} materialized", windowed.len());
+        assert!(
+            windowed.len() < 300,
+            "the windowed UI culled: {} materialized",
+            windowed.len()
+        );
         let mut wrong = Vec::new();
         for (id, rect) in &windowed {
             let expected = full[id];
             if (rect.0 - expected.0).abs() > 1.0 {
-                wrong.push(format!("{id}: at {:.0}, full build {:.0}", rect.0, expected.0));
+                wrong.push(format!(
+                    "{id}: at {:.0}, full build {:.0}",
+                    rect.0, expected.0
+                ));
             }
         }
-        assert!(wrong.is_empty(), "{} of {} misplaced, e.g. {:?}", wrong.len(), windowed.len(), &wrong[..wrong.len().min(3)]);
+        assert!(
+            wrong.is_empty(),
+            "{} of {} misplaced, e.g. {:?}",
+            wrong.len(),
+            windowed.len(),
+            &wrong[..wrong.len().min(3)]
+        );
         // The viewport (window y 0..200) shows materialized rows.
-        let visible: Vec<&String> = full.iter().filter(|(_, (top, bottom))| *bottom > 0.0 && *top < 200.0).map(|(id, _)| id).collect();
+        let visible: Vec<&String> = full
+            .iter()
+            .filter(|(_, (top, bottom))| *bottom > 0.0 && *top < 200.0)
+            .map(|(id, _)| id)
+            .collect();
         assert!(!visible.is_empty());
         for id in visible {
-            assert!(windowed.contains_key(id), "{id} is in the viewport but not materialized");
+            assert!(
+                windowed.contains_key(id),
+                "{id} is in the viewport but not materialized"
+            );
         }
     }
 
@@ -8317,7 +8824,11 @@ mod review_0006 {
 
     /// As [`band_errors`] with the visible region `(top, bottom)` in
     /// window px (a bordered root clips at its padding box).
-    fn band_errors_in(full: &mut TestUi, windowed: &mut TestUi, visible: (f32, f32)) -> Vec<String> {
+    fn band_errors_in(
+        full: &mut TestUi,
+        windowed: &mut TestUi,
+        visible: (f32, f32),
+    ) -> Vec<String> {
         let (full, windowed) = (rects(full), rects(windowed));
         let mut errors: Vec<String> = windowed
             .iter()
@@ -8326,10 +8837,76 @@ mod review_0006 {
             .collect();
         errors.extend(
             full.iter()
-                .filter(|(id, (top, bottom))| *bottom > visible.0 && *top < visible.1 && !windowed.contains_key(*id))
+                .filter(|(id, (top, bottom))| {
+                    *bottom > visible.0 && *top < visible.1 && !windowed.contains_key(*id)
+                })
                 .map(|(id, _)| format!("{id}: visible but not materialized")),
         );
         errors
+    }
+
+    /// bug_0164: the band follows the offset the root shows, not the
+    /// app's `ScrollPosition`. Bevy clamps the position only for its
+    /// layout, so an overshoot (here, far past the end) kept the band
+    /// below the content: everything culled, a blank viewport.
+    #[test]
+    fn an_overshooting_scroll_shows_the_end() {
+        let mut full = scrolled(
+            "bug0160-over-full",
+            "html { flex-direction: column }",
+            300,
+            false,
+            1.0e6,
+        );
+        let mut windowed = scrolled(
+            "bug0160-over-windowed",
+            "html { flex-direction: column }",
+            300,
+            true,
+            1.0e6,
+        );
+        let errors = band_errors(&mut full, &mut windowed);
+        assert!(errors.is_empty(), "{errors:#?}");
+        assert!(
+            rects(&mut windowed).contains_key("p300"),
+            "the last row is built"
+        );
+    }
+
+    /// bug_0164 the way users meet it (found by `tests/windowing_model.rs`):
+    /// a view scrolled to the bottom of a list that then shrinks. The
+    /// app's `ScrollPosition` stays past the new end.
+    #[test]
+    fn content_shrinking_under_a_bottom_scrolled_view_shows_the_end() {
+        let page: String = (1..=300)
+            .map(|i| {
+                let row = format!("<p id=\"p{i}\">Paragraph {i}</p>");
+                if i > 100 {
+                    format!("{{% if not short is defined %}}{row}{{% endif %}}")
+                } else {
+                    row
+                }
+            })
+            .collect();
+        let css = "html { flex-direction: column }";
+        let bottom = 300.0 * 19.2 - 200.0;
+        let mut full = scrolled_page("bug0160-shrink-full", css, &page, false, bottom);
+        let mut windowed = scrolled_page("bug0160-shrink-windowed", css, &page, true, bottom);
+        for ui in [&mut full, &mut windowed] {
+            let root = ui.root();
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("short", &true);
+            ui.update(12);
+        }
+        let errors = band_errors(&mut full, &mut windowed);
+        assert!(errors.is_empty(), "{errors:#?}");
+        let built = rects(&mut windowed);
+        assert!(
+            built.contains_key("p100") && !built.contains_key("p101"),
+            "the new end is built"
+        );
     }
 
     /// bug_0151 in the testbench's shape (the project owner's run): row
@@ -8341,9 +8918,15 @@ mod review_0006 {
         let page = bench_rows(600);
         for offset in [500.0, 4000.0, 9000.0] {
             let mut full = scrolled_page("bug0151-rows-full", BENCH_CSS, &page, false, offset);
-            let mut windowed = scrolled_page("bug0151-rows-windowed", BENCH_CSS, &page, true, offset);
+            let mut windowed =
+                scrolled_page("bug0151-rows-windowed", BENCH_CSS, &page, true, offset);
             let errors = band_errors(&mut full, &mut windowed);
-            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            assert!(
+                errors.is_empty(),
+                "offset {offset}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
         }
     }
 
@@ -8360,11 +8943,18 @@ mod review_0006 {
                 "bug0151-tight-windowed",
                 BENCH_CSS,
                 &page,
-                Some(HtmlWindowed { margin_viewports: 0.0 }),
+                Some(HtmlWindowed {
+                    margin_viewports: 0.0,
+                }),
                 offset,
             );
             let errors = band_errors(&mut full, &mut windowed);
-            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            assert!(
+                errors.is_empty(),
+                "offset {offset}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
         }
     }
 
@@ -8373,7 +8963,10 @@ mod review_0006 {
     fn census(ui: &mut TestUi) -> (usize, usize) {
         let world = ui.world_mut();
         let elements = world.query::<&HtmlElement>().iter(world).count();
-        let models = world.query::<&bevy_markup::WindowModel>().iter(world).count();
+        let models = world
+            .query::<&bevy_markup::WindowModel>()
+            .iter(world)
+            .count();
         (elements, models)
     }
 
@@ -8390,7 +8983,12 @@ mod review_0006 {
         let (elements, _) = census(&mut windowed);
         assert!(elements < 300, "{elements} of 1 801 elements materialized");
         let errors = band_errors(&mut full, &mut windowed);
-        assert!(errors.is_empty(), "{} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        assert!(
+            errors.is_empty(),
+            "{} errors, e.g. {:?}",
+            errors.len(),
+            &errors[..errors.len().min(3)]
+        );
     }
 
     /// J02, deeper: two container levels with margins, borders and
@@ -8413,13 +9011,23 @@ mod review_0006 {
                 "j02-boxes-windowed",
                 &css,
                 &page,
-                Some(HtmlWindowed { margin_viewports: 0.0 }),
+                Some(HtmlWindowed {
+                    margin_viewports: 0.0,
+                }),
                 offset,
             );
             let (elements, _) = census(&mut windowed);
-            assert!(elements < 300, "offset {offset}: {elements} elements materialized");
+            assert!(
+                elements < 300,
+                "offset {offset}: {elements} elements materialized"
+            );
             let errors = band_errors(&mut full, &mut windowed);
-            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            assert!(
+                errors.is_empty(),
+                "offset {offset}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
         }
     }
 
@@ -8444,7 +9052,10 @@ mod review_0006 {
         let keyed = |ui: &mut TestUi| -> (usize, usize) {
             let world = ui.world_mut();
             let elements = world.query::<&HtmlElement>().iter(world).count();
-            let keys = world.query::<(&HtmlElement, &bevy_markup::WindowKey)>().iter(world).count();
+            let keys = world
+                .query::<(&HtmlElement, &bevy_markup::WindowKey)>()
+                .iter(world)
+                .count();
             (elements, keys)
         };
         let page = format!("<main>{}</main>", bench_rows(50));
@@ -8452,7 +9063,10 @@ mod review_0006 {
         assert_eq!(keyed(&mut plain).1, 0, "an unwindowed UI carries keys");
         let mut windowed = scrolled_page("keys-windowed", BENCH_CSS, &page, true, 300.0);
         let (elements, keys) = keyed(&mut windowed);
-        assert_eq!(keys, elements, "every built element of a windowed UI is keyed");
+        assert_eq!(
+            keys, elements,
+            "every built element of a windowed UI is keyed"
+        );
     }
 
     /// J02: only the windowed root carries a `WindowModel`. The
@@ -8474,27 +9088,40 @@ mod review_0006 {
     fn a_padded_windowed_root_settles_and_culls() {
         let page = bench_rows(600);
         let css = format!("{BENCH_CSS} html {{ padding: 8px }}");
-        let mut ui = TestUi::with_layout("j03-padding", &[("page.html", page.as_str()), ("style.css", css.as_str())], UVec2::new(300, 200))
-            .stylesheet("style.css")
-            .spawn(
-                "page.html",
-                TemplateContext::new(),
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(200.0),
-                    flex_direction: FlexDirection::Column,
-                    overflow: Overflow { x: OverflowAxis::Visible, y: OverflowAxis::Scroll },
-                    ..default()
+        let mut ui = TestUi::with_layout(
+            "j03-padding",
+            &[("page.html", page.as_str()), ("style.css", css.as_str())],
+            UVec2::new(300, 200),
+        )
+        .stylesheet("style.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(200.0),
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow {
+                    x: OverflowAxis::Visible,
+                    y: OverflowAxis::Scroll,
                 },
-            );
+                ..default()
+            },
+        );
         let root = ui.root();
-        ui.world_mut().entity_mut(root).insert((HtmlWindowed::default(), ScrollPosition(Vec2::new(0.0, 4000.0))));
+        ui.world_mut().entity_mut(root).insert((
+            HtmlWindowed::default(),
+            ScrollPosition(Vec2::new(0.0, 4000.0)),
+        ));
         ui.update(40);
         let before = ui.builds();
         ui.update(30);
         let builds = ui.builds() - before;
         let (elements, _) = census(&mut ui);
-        assert_eq!(builds, 0, "an idle windowed UI rebuilt {builds} times in 30 frames");
+        assert_eq!(
+            builds, 0,
+            "an idle windowed UI rebuilt {builds} times in 30 frames"
+        );
         assert!(elements < 300, "{elements} of 1 800 elements materialized");
     }
 
@@ -8513,17 +9140,31 @@ mod review_0006 {
                 "j03-hidpi-windowed",
                 &css,
                 &page,
-                Some(HtmlWindowed { margin_viewports: 0.0 }),
+                Some(HtmlWindowed {
+                    margin_viewports: 0.0,
+                }),
                 offset,
                 2.0,
             );
             let before = windowed.builds();
             windowed.update(20);
-            assert_eq!(windowed.builds() - before, 0, "offset {offset}: an idle HiDPI UI rebuilt");
+            assert_eq!(
+                windowed.builds() - before,
+                0,
+                "offset {offset}: an idle HiDPI UI rebuilt"
+            );
             let (elements, _) = census(&mut windowed);
-            assert!(elements < 300, "offset {offset}: {elements} elements materialized");
+            assert!(
+                elements < 300,
+                "offset {offset}: {elements} elements materialized"
+            );
             let errors = band_errors_in(&mut full, &mut windowed, (0.0, 400.0));
-            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            assert!(
+                errors.is_empty(),
+                "offset {offset}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
             // A marginless band builds the viewport, no more: a physical
             // viewport (twice the logical one at scale 2) built twice the
             // rows.
@@ -8532,7 +9173,10 @@ mod review_0006 {
                 .filter(|(top, bottom)| *bottom > 0.0 && *top < 400.0)
                 .count();
             let built = rects(&mut windowed).len();
-            assert!(built <= visible + 6, "offset {offset}: {built} elements built for {visible} visible");
+            assert!(
+                built <= visible + 6,
+                "offset {offset}: {built} elements built for {visible} visible"
+            );
         }
     }
 
@@ -8548,12 +9192,104 @@ mod review_0006 {
                 "j03-boxed-windowed",
                 &css,
                 &page,
-                Some(HtmlWindowed { margin_viewports: 0.0 }),
+                Some(HtmlWindowed {
+                    margin_viewports: 0.0,
+                }),
                 offset,
             );
             // Visible: the padding box, inside the 5 px border.
             let errors = band_errors_in(&mut full, &mut windowed, (5.0, 195.0));
-            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            assert!(
+                errors.is_empty(),
+                "offset {offset}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
+        }
+    }
+
+    /// With `margin_viewports: 0`, a built element must touch the visible
+    /// region `(top, bottom)` (window px), within `slack` px.
+    fn tightness_errors(
+        full: &mut TestUi,
+        windowed: &mut TestUi,
+        visible: (f32, f32),
+        slack: f32,
+    ) -> Vec<String> {
+        let (full, windowed) = (rects(full), rects(windowed));
+        windowed
+            .keys()
+            .filter(|id| {
+                let (top, bottom) = full[*id];
+                bottom < visible.0 - slack || top > visible.1 + slack
+            })
+            .map(|id| format!("{id}: built at {:?}, outside {visible:?}", full[id]))
+            .collect()
+    }
+
+    /// The root's box and scale in every windowing term (review_0006's
+    /// mutation run): an asymmetric border (the visible region's height),
+    /// top padding (where the content starts), scrollbars on both axes (the
+    /// scroll range, as taffy computes it), scale 2, a marginless band — checked
+    /// for coverage *and* tightness, mid-document and past the end (the
+    /// offset clamp, bug_0164).
+    #[test]
+    fn the_root_box_and_scale_bound_the_band_exactly() {
+        let page = bench_rows(400);
+        let css =
+            format!("{BENCH_CSS} html {{ padding: 30px 6px 10px; border-width: 20px 3px 24px }}");
+        // Vertical scrolling only (taffy's range counts no scrollbar: the
+        // vertical one's width must not count) and both axes (the
+        // horizontal one's height must).
+        for (offset, both_axes) in [
+            (2500.0, false),
+            (1.0e6, false),
+            (2500.0, true),
+            (1.0e6, true),
+        ] {
+            let mut uis = [
+                scrolled_at_scale("root-box-full", &css, &page, None, 0.0, 2.0),
+                scrolled_at_scale(
+                    "root-box-windowed",
+                    &css,
+                    &page,
+                    Some(HtmlWindowed {
+                        margin_viewports: 0.0,
+                    }),
+                    0.0,
+                    2.0,
+                ),
+            ];
+            for ui in &mut uis {
+                let root = ui.root();
+                let mut node = ui.world_mut().get_mut::<Node>(root).unwrap();
+                node.scrollbar_width = 10.0;
+                if both_axes {
+                    node.overflow.x = OverflowAxis::Scroll;
+                }
+                ui.update(6);
+                ui.world_mut()
+                    .entity_mut(root)
+                    .insert(ScrollPosition(Vec2::new(0.0, offset)));
+                ui.update(12);
+            }
+            let [full, windowed] = &mut uis;
+            // Physical px: the border is 20 px (40) on top and 24 px (48)
+            // at the bottom of the 200 px (400) root.
+            let errors = band_errors_in(full, windowed, (40.0, 352.0));
+            assert!(
+                errors.is_empty(),
+                "offset {offset}, both axes {both_axes}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
+            let loose = tightness_errors(full, windowed, (40.0, 352.0), 12.0);
+            assert!(
+                loose.is_empty(),
+                "offset {offset}: {} built outside, e.g. {:?}",
+                loose.len(),
+                &loose[..loose.len().min(3)]
+            );
         }
     }
 
@@ -8564,21 +9300,30 @@ mod review_0006 {
     #[test]
     fn a_windowed_ui_culls_without_being_scrolled() {
         let page = bench_rows(600);
-        let mut ui = TestUi::with_layout("j08-unscrolled", &[("page.html", page.as_str()), ("style.css", BENCH_CSS)], UVec2::new(300, 200))
-            .stylesheet("style.css")
-            .spawn(
-                "page.html",
-                TemplateContext::new(),
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(200.0),
-                    flex_direction: FlexDirection::Column,
-                    overflow: Overflow { x: OverflowAxis::Visible, y: OverflowAxis::Scroll },
-                    ..default()
+        let mut ui = TestUi::with_layout(
+            "j08-unscrolled",
+            &[("page.html", page.as_str()), ("style.css", BENCH_CSS)],
+            UVec2::new(300, 200),
+        )
+        .stylesheet("style.css")
+        .spawn(
+            "page.html",
+            TemplateContext::new(),
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(200.0),
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow {
+                    x: OverflowAxis::Visible,
+                    y: OverflowAxis::Scroll,
                 },
-            );
+                ..default()
+            },
+        );
         let root = ui.root();
-        ui.world_mut().entity_mut(root).insert((HtmlWindowed::default(), ScrollPosition::default()));
+        ui.world_mut()
+            .entity_mut(root)
+            .insert((HtmlWindowed::default(), ScrollPosition::default()));
         ui.update(40);
         let (elements, _) = census(&mut ui);
         assert!(elements < 300, "{elements} of 1 800 elements materialized");
@@ -8599,7 +9344,9 @@ mod review_0006 {
             .stylesheet("style.css")
             .spawn("page.html", TemplateContext::new(), Node::default());
         let root = ui.root();
-        ui.world_mut().entity_mut(root).insert((HtmlWindowed::default(), ScrollPosition::default()));
+        ui.world_mut()
+            .entity_mut(root)
+            .insert((HtmlWindowed::default(), ScrollPosition::default()));
         ui.settle();
         ui.update(10);
         let (elements, _) = census(&mut ui);
@@ -8615,7 +9362,9 @@ mod review_0006 {
         let page = bench_rows(600);
         let mut ui = scrolled_page("j04-scroll-reuse", BENCH_CSS, &page, true, 4000.0);
         let root = ui.root();
-        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 4024.0)));
+        ui.world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, 4024.0)));
         ui.update(5);
         let (reused, total) = ui
             .world_mut()
@@ -8649,14 +9398,19 @@ mod review_0006 {
                         width: Val::Percent(100.0),
                         height: Val::Px(200.0),
                         flex_direction: FlexDirection::Column,
-                        overflow: Overflow { x: OverflowAxis::Visible, y: OverflowAxis::Scroll },
+                        overflow: Overflow {
+                            x: OverflowAxis::Visible,
+                            y: OverflowAxis::Scroll,
+                        },
                         ..default()
                     },
                 );
             let root = ui.root();
             if windowed {
                 ui.world_mut().entity_mut(root).insert((
-                    HtmlWindowed { margin_viewports: 0.25 },
+                    HtmlWindowed {
+                        margin_viewports: 0.25,
+                    },
                     ScrollPosition::default(),
                 ));
             }
@@ -8667,28 +9421,52 @@ mod review_0006 {
         let mut full = spawn("j04-steps-full", false);
         let step = |ui: &mut TestUi, offset: f32| {
             let root = ui.root();
-            ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, offset)));
+            ui.world_mut()
+                .entity_mut(root)
+                .insert(ScrollPosition(Vec2::new(0.0, offset)));
             ui.update(6);
         };
-        for offset in [3000.0, 3030.0, 3100.0, 3101.0, 3170.0, 3050.0, 2990.0, 3400.0] {
+        for offset in [
+            3000.0, 3030.0, 3100.0, 3101.0, 3170.0, 3050.0, 2990.0, 3400.0,
+        ] {
             step(&mut windowed, offset);
             step(&mut full, offset);
             let errors = band_errors(&mut full, &mut windowed);
-            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            assert!(
+                errors.is_empty(),
+                "offset {offset}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
         }
         // A content change while scrolled (a row in the band gets a value):
         // a longer text, then the scroll moves on.
         for ui in [&mut windowed, &mut full] {
             let root = ui.root();
-            ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("v", &"a much longer value");
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("v", &"a much longer value");
             // Row 155 sits in the band at 3 400 px (22 px per row).
-            ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("i", &155);
+            ui.world_mut()
+                .get_mut::<TemplateContext>(root)
+                .unwrap()
+                .insert("i", &155);
             ui.update(8);
         }
         let errors = band_errors(&mut full, &mut windowed);
-        assert!(errors.is_empty(), "after a content change: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        assert!(
+            errors.is_empty(),
+            "after a content change: {} errors, e.g. {:?}",
+            errors.len(),
+            &errors[..errors.len().min(3)]
+        );
         let root = windowed.root();
-        let (reused, total) = windowed.world_mut().get::<Skeleton>(root).and_then(|skeleton| skeleton.last_reuse()).unwrap();
+        let (reused, total) = windowed
+            .world_mut()
+            .get::<Skeleton>(root)
+            .and_then(|skeleton| skeleton.last_reuse())
+            .unwrap();
         assert!(reused > 0, "{reused} of {total} reused");
     }
 
@@ -8713,11 +9491,18 @@ mod review_0006 {
             let offset = 900.0 + step as f32 * 47.0;
             for ui in [&mut windowed, &mut full] {
                 let root = ui.root();
-                ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, offset)));
+                ui.world_mut()
+                    .entity_mut(root)
+                    .insert(ScrollPosition(Vec2::new(0.0, offset)));
                 ui.update(6);
             }
             let errors = band_errors(&mut full, &mut windowed);
-            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            assert!(
+                errors.is_empty(),
+                "offset {offset}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
         }
     }
 
@@ -8728,22 +9513,35 @@ mod review_0006 {
     /// cursor stopped culling at the first one).
     #[test]
     fn loose_text_keeps_culling_across_scrolls() {
-        let page: String = (1..=300).map(|i| format!("loose line {i}<p id=\"p{i}\">paragraph {i}</p>")).collect();
+        let page: String = (1..=300)
+            .map(|i| format!("loose line {i}<p id=\"p{i}\">paragraph {i}</p>"))
+            .collect();
         let css = "html { flex-direction: column; gap: 2px }";
         for (step, offset) in [(0, 3000.0), (1, 3050.0), (2, 3200.0)] {
             let mut full = scrolled_page("loose-full", css, &page, false, offset);
             let mut windowed = scrolled_page("loose-windowed", css, &page, true, 3000.0);
             if step > 0 {
                 let root = windowed.root();
-                windowed.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 3050.0)));
+                windowed
+                    .world_mut()
+                    .entity_mut(root)
+                    .insert(ScrollPosition(Vec2::new(0.0, 3050.0)));
                 windowed.update(6);
-                windowed.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, offset)));
+                windowed
+                    .world_mut()
+                    .entity_mut(root)
+                    .insert(ScrollPosition(Vec2::new(0.0, offset)));
                 windowed.update(6);
             }
             let built = rects(&mut windowed).len();
             assert!(built < 100, "offset {offset}: {built} paragraphs built");
             let errors = band_errors(&mut full, &mut windowed);
-            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            assert!(
+                errors.is_empty(),
+                "offset {offset}: {} errors, e.g. {:?}",
+                errors.len(),
+                &errors[..errors.len().min(3)]
+            );
         }
     }
 
@@ -8757,7 +9555,9 @@ mod review_0006 {
             "j05-taller-windowed",
             BENCH_CSS,
             &page,
-            Some(HtmlWindowed { margin_viewports: 0.0 }),
+            Some(HtmlWindowed {
+                margin_viewports: 0.0,
+            }),
             4000.0,
         );
         let mut full = scrolled_page("j05-taller-full", BENCH_CSS, &page, false, 4000.0);
@@ -8778,7 +9578,12 @@ mod review_0006 {
             ui.update(8);
         }
         let errors = band_errors_in(&mut full, &mut windowed, (0.0, 400.0));
-        assert!(errors.is_empty(), "{} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        assert!(
+            errors.is_empty(),
+            "{} errors, e.g. {:?}",
+            errors.len(),
+            &errors[..errors.len().min(3)]
+        );
     }
 
     /// J05's slack at a tall block: with a 2 000 px block filling one band
@@ -8788,10 +9593,14 @@ mod review_0006 {
     #[test]
     fn the_slack_follows_the_culled_rows_beside_a_tall_block() {
         let rows = |range: std::ops::RangeInclusive<usize>| -> String {
-            range.map(|i| format!("<p id=\"p{i}\">row {i}</p>")).collect()
+            range
+                .map(|i| format!("<p id=\"p{i}\">row {i}</p>"))
+                .collect()
         };
         let css = "html { flex-direction: column; gap: 2px } .tall { height: 2000px }";
-        let tight = Some(HtmlWindowed { margin_viewports: 0.0 });
+        let tight = Some(HtmlWindowed {
+            margin_viewports: 0.0,
+        });
         // Culled below: the band starts inside the tall block; scrolling
         // down 1 800 px brings the rows after it into view.
         let page = format!("<p class=\"tall\" id=\"tall\">tall</p>{}", rows(1..=200));
@@ -8799,11 +9608,18 @@ mod review_0006 {
         let mut full = scrolled_page("slack-below-full", css, &page, false, 100.0);
         for ui in [&mut windowed, &mut full] {
             let root = ui.root();
-            ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 1900.0)));
+            ui.world_mut()
+                .entity_mut(root)
+                .insert(ScrollPosition(Vec2::new(0.0, 1900.0)));
             ui.update(8);
         }
         let errors = band_errors(&mut full, &mut windowed);
-        assert!(errors.is_empty(), "below: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        assert!(
+            errors.is_empty(),
+            "below: {} errors, e.g. {:?}",
+            errors.len(),
+            &errors[..errors.len().min(3)]
+        );
         // Culled above: the band sits inside a tall block after 100 rows;
         // scrolling up 200 px brings the last rows into view.
         let page = format!("{}<p class=\"tall\" id=\"tall\">tall</p>", rows(1..=100));
@@ -8812,46 +9628,242 @@ mod review_0006 {
         let mut full = scrolled_page("slack-above-full", css, &page, false, start);
         for ui in [&mut windowed, &mut full] {
             let root = ui.root();
-            ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, start - 200.0)));
+            ui.world_mut()
+                .entity_mut(root)
+                .insert(ScrollPosition(Vec2::new(0.0, start - 200.0)));
             ui.update(8);
         }
         let errors = band_errors(&mut full, &mut windowed);
-        assert!(errors.is_empty(), "above: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        assert!(
+            errors.is_empty(),
+            "above: {} errors, e.g. {:?}",
+            errors.len(),
+            &errors[..errors.len().min(3)]
+        );
         // Leaving: rows at the band's top with the tall block below them;
         // scrolling down past the rows must cull them (the materialized
         // rows' own slack — the tall block alone allows a long move).
         let start = 100.0 * 22.0 - 100.0;
         let mut windowed = scrolled_with("slack-leave-windowed", css, &page, tight, start);
         let root = windowed.root();
-        windowed.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, start + 400.0)));
+        windowed
+            .world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, start + 400.0)));
         windowed.update(8);
-        let built = rects(&mut windowed).keys().filter(|id| id.starts_with('p')).count();
+        let built = rects(&mut windowed)
+            .keys()
+            .filter(|id| id.starts_with('p'))
+            .count();
         assert!(built <= 1, "{built} rows still built above the band");
     }
 
-    /// J05 with a subtree reused whole: its rows weren't visited, so the
-    /// slack keeps the band clear of its top — scrolling until its first
-    /// row leaves the band rebuilds and culls that row.
+    /// J05 with a subtree reused whole (`note_reused`): its rows weren't
+    /// visited, so the slack keeps the band's top clear of the subtree's
+    /// top. The layout makes that the binding constraint: the section is
+    /// the first child of a wrapper whose 200 px top padding holds the
+    /// band's top edge — no neighbour above it in its column (any element
+    /// between the edge and the section would bind first, by one gap),
+    /// the wrapper itself straddles the edge (so it re-collects and the
+    /// section reuses whole), nothing is culled below (a tall tail), and
+    /// the reuse comes from a content change, not a scroll.
+    /// Scrolling 150 px down then puts the section's first rows above the
+    /// band; only the subtree's slack triggers the rebuild that culls
+    /// them (without it they stay built until some later rebuild).
     #[test]
     fn a_reused_section_culls_its_rows_once_they_leave_the_band() {
-        let filler: String = (1..=100).map(|i| format!("<p id=\"f{i}\">filler {i}</p>")).collect();
-        let section: String = (1..=10).map(|i| format!("<p id=\"s{i}\">section {i}</p>")).collect();
-        let page = format!("{filler}<section class=\"s\">{section}</section><p class=\"tall\">tall</p>");
-        let css = "html { flex-direction: column; gap: 2px } .s { gap: 2px } .tall { height: 3000px }";
-        let mut ui = scrolled_page("reused-section", css, &page, true, 2100.0);
+        let section: String = (1..=10)
+            .map(|i| format!("<p id=\"s{i}\">section {i}</p>"))
+            .collect();
+        let page = format!(
+            "<p class=\"tall\">tall</p><div class=\"wrap\"><section class=\"s\">{section}</section><p id=\"end\">{{{{ v }}}}</p><p class=\"tail\">tail</p></div>"
+        );
+        let css = "html { flex-direction: column; gap: 2px } .wrap { padding-top: 200px; gap: 2px } .s { gap: 2px } .tall { height: 3000px } .tail { height: 1000px }";
+        let files = [("page.html", page.as_str()), ("style.css", css)];
+        let mut ui = TestUi::with_layout("note-reused", &files, UVec2::new(300, 200))
+            .stylesheet("style.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new().with("v", &"first"),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(200.0),
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow {
+                        x: OverflowAxis::Visible,
+                        y: OverflowAxis::Scroll,
+                    },
+                    ..default()
+                },
+            );
         let root = ui.root();
-        // A scroll past a filler row's edge (a rebuild); the section,
-        // inside the band, reuses whole.
-        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 2125.0)));
+        // The band at 3 300 is [3 100, 3 700): the tall block (0 … 3 000)
+        // is culled, the section (3 202 … 3 420) lies wholly inside.
+        ui.world_mut().entity_mut(root).insert((
+            HtmlWindowed::default(),
+            ScrollPosition(Vec2::new(0.0, 3300.0)),
+        ));
+        ui.settle();
         ui.update(6);
-        let (reused, _) = ui.world_mut().get::<Skeleton>(root).and_then(|skeleton| skeleton.last_reuse()).unwrap();
-        assert!(reused > 0, "the section reused");
-        // Down until the section's first row is above the band's top
-        // (the band reaches one viewport, 200 px, above the offset).
-        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 2450.0)));
+        // A content change after the section: a content build in which
+        // the section reuses whole.
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("v", &"second");
+        ui.update(6);
+        let (reused, _) = ui
+            .world_mut()
+            .get::<Skeleton>(root)
+            .and_then(|skeleton| skeleton.last_reuse())
+            .unwrap();
+        assert!(reused > 0, "the section reused whole");
+        // 150 px down: the band's top (3 250) passes s1 (3 202 … 3 222)
+        // and s2 (3 224 … 3 244).
+        ui.world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, 3450.0)));
         ui.update(6);
         let built = rects(&mut ui);
-        assert!(!built.contains_key("s1"), "s1 is above the band but still built: {:?}", built.keys().collect::<Vec<_>>());
+        for id in ["s1", "s2"] {
+            assert!(
+                !built.contains_key(id),
+                "{id} is above the band but still built: {:?}",
+                built.keys().collect::<Vec<_>>()
+            );
+        }
+        assert!(
+            built.contains_key("s3"),
+            "s3 straddles the band's top and stays built"
+        );
+    }
+
+    /// The bottom-edge mirror of the test above: the section is the last
+    /// child of a wrapper whose 200 px bottom padding holds the band's
+    /// bottom edge; the content change is before it, so it reuses whole.
+    /// 150 px up, the band's bottom passes s7–s10, and only the reused
+    /// subtree's slack rebuilds to cull them (review_0006's mutation run:
+    /// `note_reused`'s bottom term survived).
+    #[test]
+    fn a_reused_section_culls_its_rows_once_they_leave_the_band_bottom() {
+        let section: String = (1..=10)
+            .map(|i| format!("<p id=\"s{i}\">section {i}</p>"))
+            .collect();
+        let page = format!(
+            "<p class=\"tall\">tall</p><div class=\"wrap\"><p class=\"head\">head</p><p id=\"end\">{{{{ v }}}}</p><section class=\"s\">{section}</section></div><p class=\"tail\">tail</p>"
+        );
+        let css = "html { flex-direction: column; gap: 2px } .wrap { padding-bottom: 200px; gap: 2px } .s { gap: 2px } .tall { height: 1000px } .head { height: 1000px } .tail { height: 3000px }";
+        let files = [("page.html", page.as_str()), ("style.css", css)];
+        let mut ui = TestUi::with_layout("note-reused-bottom", &files, UVec2::new(300, 200))
+            .stylesheet("style.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new().with("v", &"first"),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(200.0),
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow {
+                        x: OverflowAxis::Visible,
+                        y: OverflowAxis::Scroll,
+                    },
+                    ..default()
+                },
+            );
+        let root = ui.root();
+        // The band at 1 900 is [1 700, 2 300): the section (2 026 … 2 244)
+        // lies wholly inside, the band's bottom in the wrapper's padding.
+        ui.world_mut().entity_mut(root).insert((
+            HtmlWindowed::default(),
+            ScrollPosition(Vec2::new(0.0, 1900.0)),
+        ));
+        ui.settle();
+        ui.update(6);
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("v", &"second");
+        ui.update(6);
+        let (reused, _) = ui
+            .world_mut()
+            .get::<Skeleton>(root)
+            .and_then(|skeleton| skeleton.last_reuse())
+            .unwrap();
+        assert!(reused > 0, "the section reused whole");
+        // 150 px up: the band's bottom (2 150) passes s7 (2 158 …) to s10.
+        ui.world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, 1750.0)));
+        ui.update(6);
+        let built = rects(&mut ui);
+        for id in ["s7", "s8", "s9", "s10"] {
+            assert!(
+                !built.contains_key(id),
+                "{id} is below the band but still built: {:?}",
+                built.keys().collect::<Vec<_>>()
+            );
+        }
+        assert!(
+            built.contains_key("s6"),
+            "s6 straddles the band's bottom and stays built"
+        );
+    }
+
+    /// The band's promise: blocks that stay in it keep their entities
+    /// across scroll builds and content builds (review_0006's mutation
+    /// run: replacing every kept element on every build passed).
+    #[test]
+    fn rows_that_stay_in_the_band_keep_their_entities() {
+        let page: String = (1..=300)
+            .map(|i| match i {
+                145 => "<p id=\"p145\">{{ v | default(value=\"first\") }}</p>".to_owned(),
+                // Boxed rows (a wrapper plus its text node) too.
+                _ if i % 10 == 0 => format!("<p id=\"p{i}\" class=\"bx\">row {i}</p>"),
+                _ => format!("<p id=\"p{i}\">row {i}</p>"),
+            })
+            .collect();
+        let css =
+            "html { flex-direction: column; gap: 2px } .bx { padding: 2px; border-width: 1px }";
+        let mut ui = scrolled_page("kept-entities", css, &page, true, 2900.0);
+        let entity_of = |ui: &mut TestUi, id: &str| -> Entity {
+            let world = ui.world_mut();
+            let mut query = world.query::<(Entity, &HtmlElement)>();
+            query
+                .iter(world)
+                .find(|(_, element)| element.id.as_deref() == Some(id))
+                .map(|(entity, _)| entity)
+                .unwrap()
+        };
+        let (before, boxed) = (entity_of(&mut ui, "p141"), entity_of(&mut ui, "p140"));
+        let root = ui.root();
+        // A scroll build (a small step past the slack) and a content build.
+        ui.world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, 2960.0)));
+        ui.update(12);
+        assert_eq!(
+            (entity_of(&mut ui, "p141"), entity_of(&mut ui, "p140")),
+            (before, boxed),
+            "kept across a scroll build"
+        );
+        // The changed row is re-collected (a fresh spec, not the reused
+        // skip) and updated in place: it keeps its entity too.
+        let changed = entity_of(&mut ui, "p145");
+        ui.world_mut()
+            .get_mut::<TemplateContext>(root)
+            .unwrap()
+            .insert("v", &"changed");
+        ui.update(12);
+        assert_eq!(
+            (entity_of(&mut ui, "p141"), entity_of(&mut ui, "p140")),
+            (before, boxed),
+            "kept across a content build"
+        );
+        assert_eq!(
+            entity_of(&mut ui, "p145"),
+            changed,
+            "the changed row is updated in place"
+        );
     }
 
     /// J05: a scroll that leaves the band's membership unchanged doesn't
@@ -8863,9 +9875,15 @@ mod review_0006 {
         let mut ui = scrolled_page("j05-subpixel", BENCH_CSS, &page, true, 4000.0);
         let root = ui.root();
         let before = ui.builds();
-        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 4000.5)));
+        ui.world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, 4000.5)));
         ui.update(5);
-        assert_eq!(ui.builds() - before, 0, "a half-pixel scroll rebuilt the UI");
+        assert_eq!(
+            ui.builds() - before,
+            0,
+            "a half-pixel scroll rebuilt the UI"
+        );
     }
 
     /// bug_0151's second symptom: hovering a materialized row (a scoped
@@ -8887,10 +9905,18 @@ mod review_0006 {
                 .collect();
             visible[visible.len() / 2]
         };
-        windowed.world_mut().entity_mut(target).insert(PseudoState { hovered: true, ..default() });
+        windowed.world_mut().entity_mut(target).insert(PseudoState {
+            hovered: true,
+            ..default()
+        });
         windowed.update(10);
         let _ = root;
         let errors = band_errors(&mut full, &mut windowed);
-        assert!(errors.is_empty(), "{} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        assert!(
+            errors.is_empty(),
+            "{} errors, e.g. {:?}",
+            errors.len(),
+            &errors[..errors.len().min(3)]
+        );
     }
 }

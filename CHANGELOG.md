@@ -137,6 +137,34 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   run of culled rows dropped the gaps between them, so the visible list
   thinned and emptied as you scrolled down a long document. The spacers
   now keep the gaps.
+- **A document's `<body>` lost its style** (bug_0172, since 0.7.0's
+  windowing): in an `<html><body>` template, `body { … }` rules and
+  selectors through `body` (`body > p`, `.dark section p` with the class
+  on `body`) did nothing, windowed or not.
+- **Windowed UIs misplaced rows after a resize or below percent margins**
+  (bug_0173, bug_0174, bug_0176): a root that changed width kept the old
+  heights, a top-level element's `%` vertical margins counted as zero, and
+  the stand-ins for culled rows drifted by pixel rounding.
+- **Windowed UIs culled reversed containers and row roots as columns**
+  (bug_0177): children of a `column-reverse`/`row-reverse` container, or
+  of a root laid out as a row, went missing or sat wrong. A root that
+  isn't a column now windows nothing.
+- **Windowed whole documents (`<html><head>…<body>`) now cull**
+  (bug_0175); comments and `<head>` no longer stop the culling.
+- **A windowed UI scrolled past its end showed a blank viewport**
+  (bug_0164): a list that shrank under a bottom-scrolled view (or any
+  `ScrollPosition` past the content) placed the window below the content.
+  The window now follows the offset the root actually shows.
+- **Windowed UIs could place rows wrongly or leave visible rows unbuilt
+  after content changes** (bug_0161, bug_0165, bug_0169): a changed row
+  above the viewport kept its old height in the spacer, a child without a
+  measured height didn't stop the culling after it, and rows reused after
+  an insertion kept a stale key their height was recorded under.
+- **Windowed UIs kept rows built or stopped culling after content
+  changes** (bug_0160, bug_0162, bug_0163, bug_0166, bug_0167, bug_0171):
+  after loose text, a refused cull, a width change, a changed child list,
+  a low-reuse build, or a container restyled out of a grid or row, the
+  UI built more than the viewport until some later rebuild.
 - **Windowed UIs measured their heights in physical pixels** while the
   scroll offset is logical: on a display whose scale factor isn't 1 the
   height model was the display's scale times too tall, so scrolling

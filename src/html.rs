@@ -136,7 +136,17 @@ pub struct HtmlDebugOutline;
 /// signal/focus machinery see materialized elements only (focus
 /// navigation stays inside the window; scrolling an element out of it
 /// despawns it and the focus repair refocuses). Translated subtrees and
-/// containers laid out as rows or grids are never culled inside.
+/// containers laid out as rows, grids, reversed or wrapping are never
+/// culled inside; a root that isn't a column (the `HtmlUi` default is a
+/// row: give `html` `flex-direction: column`) windows nothing.
+///
+/// Content changes cost more than scrolling. An element whose content
+/// changed builds for one frame to be measured. Adding or removing an
+/// element builds the rest of its container (the root's, for a top-level
+/// row) for one frame. A change that grows or shrinks the rows above the
+/// viewport by more than the margin in one step leaves part of the
+/// viewport unbuilt for that frame (so does the first frame after the
+/// root's width changes); the next frame corrects it.
 #[derive(Component, Clone, Copy, Debug, Reflect)]
 #[reflect(Component, Default)]
 pub struct HtmlWindowed {

@@ -25,12 +25,19 @@ fn library_code_has_no_debug_prints() {
             if code.starts_with("//") {
                 continue;
             }
-            if ["println!(", "eprintln!(", "dbg!("].iter().any(|print| code.contains(print)) {
+            if ["println!(", "eprintln!(", "dbg!("]
+                .iter()
+                .any(|print| code.contains(print))
+            {
                 found.push(format!("{}:{}: {}", path.display(), number + 1, code));
             }
         }
     }
-    assert!(found.is_empty(), "debug prints in library code:\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "debug prints in library code:\n{}",
+        found.join("\n")
+    );
 }
 
 /// No file writes in library code (review_0005 I16): `build_html_ui`
@@ -55,7 +62,9 @@ fn library_code_writes_no_files() {
             // The first test module ends the library code (a lone
             // `#[cfg(test)]` helper, like `nine_slice.rs`'s, doesn't).
             if line.starts_with("#[cfg(test)]")
-                && lines.get(number + 1).is_some_and(|next| next.starts_with("mod "))
+                && lines
+                    .get(number + 1)
+                    .is_some_and(|next| next.starts_with("mod "))
             {
                 break;
             }
@@ -63,13 +72,23 @@ fn library_code_writes_no_files() {
             if code.starts_with("//") {
                 continue;
             }
-            if ["OpenOptions", "File::create", "fs::write", "create_dir", "\"/tmp"]
-                .iter()
-                .any(|write| code.contains(write))
+            if [
+                "OpenOptions",
+                "File::create",
+                "fs::write",
+                "create_dir",
+                "\"/tmp",
+            ]
+            .iter()
+            .any(|write| code.contains(write))
             {
                 found.push(format!("{}:{}: {}", path.display(), number + 1, code));
             }
         }
     }
-    assert!(found.is_empty(), "file writes in library code:\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "file writes in library code:\n{}",
+        found.join("\n")
+    );
 }

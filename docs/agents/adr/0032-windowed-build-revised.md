@@ -8,7 +8,7 @@
 | `Author` | Claude Opus 5.5 (Anthropic), via Claude Code |
 | `Commit` | `bd99546 INDEX: bug_0151's row` + uncommitted review_0006 fixes |
 | `Status` | Accepted |
-| `Related` | ADR 0031 (amended by this record), ADR 0021 (the skeleton), ADR 0029 (restyle accounting), review_0006 (J01–J09), bug_0151–bug_0157 |
+| `Related` | ADR 0031 (amended by this record), ADR 0021 (the skeleton), ADR 0029 (restyle accounting), review_0006 (J01–J09 and the follow-up), bug_0151–bug_0157, bug_0160–bug_0177 |
 
 ## Context
 
@@ -104,6 +104,29 @@ with the bench's scripted key injection free to change the size.
   (review_0006's `band_errors`), and the testbench gains a `band` check
   (the built rows cover the viewport). Both fail with bug_0151 put back;
   counts of built rows never could.
-- Open: `note_reused`'s slack has no isolating test (it guards bounded
-  over-building only). Focus navigation beyond the band stays
-  unsupported.
+- `note_reused`'s slack guards bounded over-building only. It binds when
+  no neighbour sits between the band's edge and a reused subtree (the
+  first child of a container whose padding holds the edge); its test
+  builds exactly that.
+- The windowing property (`tests/windowing_model.rs`, review_0006's
+  follow-up) found twelve more defects (bug_0160–bug_0171), and the mutation run
+  over the windowing diff six more (bug_0172–bug_0177). Three of the
+  fixes are decisions:
+  - **A windowed UI always pairs.** ADR 0021's adaptive gate turns the
+    pairing off after low-reuse builds. A windowed build reuses at a
+    band's rate, and its pairing also carries the height model across
+    content changes, so with the gate the model cleared (bug_0167).
+  - **The band follows the offset the root shows:** `ScrollPosition`
+    clamped to the last layout's scroll range, as Bevy's layout clamps it
+    (bug_0164).
+  - **Walked-through elements stay in the walk.** The first
+    implementation unwrapped `html`/`body` so the cursor started at the
+    content, and lost their styles for every UI (bug_0172). Instead a
+    walked-through element advances its column's cursor by its
+    children's heights (bug_0175).
+- Content changes have two known costs (`HtmlWindowed`'s docs):
+  - One inserted or removed row builds the rest of its list for a
+    frame: the skeleton aligns siblings by position (bug_0168, open).
+  - Rows above the band that change height shift the view for one
+    frame, beyond the margin (bug_0170, a known limit).
+- Open: focus navigation beyond the band stays unsupported.

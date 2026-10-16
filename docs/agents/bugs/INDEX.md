@@ -189,6 +189,24 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0157](bug_0157.md) | Every sub-pixel scroll rebuilt a windowed UI, and a taller viewport never did | `src/build.rs` | low | fixed (uncommitted) | review_0006 (J05) |
 | [bug_0158](bug_0158.md) | Non-windowed UIs paid the windowing measurement every frame | `src/build.rs` | low | fixed (uncommitted) | review_0006 follow-up |
 | [bug_0159](bug_0159.md) | The testbench's scripted runs changed their own size | `examples/testbench/main.rs` | low | fixed (uncommitted) | review_0006 follow-up |
+| [bug_0160](bug_0160.md) | A text change stopped a windowed UI culling at the first loose text | `src/build.rs` | low | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0161](bug_0161.md) | A changed row above the band left its old height in the spacer, displacing the visible rows | `src/build.rs` | high | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0162](bug_0162.md) | A refused cull whose height didn't change stayed built | `src/build.rs` | low | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0163](bug_0163.md) | A cleared height model was never measured again | `src/build.rs` | medium | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0164](bug_0164.md) | An overshooting scroll offset culled the whole viewport | `src/build.rs` | high | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0165](bug_0165.md) | An unmeasured child didn't stop its container's cursor | `src/build.rs` | high | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0166](bug_0166.md) | Heights a content change dropped were never measured again | `src/build.rs` | medium | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0167](bug_0167.md) | Low reuse turned off the pairing that carries a windowed UI's heights | `src/build.rs` | medium | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0168](bug_0168.md) | One inserted or removed row materializes a windowed document for a frame | `src/build.rs` | medium | open | the windowing property (review_0006 follow-up) |
+| [bug_0169](bug_0169.md) | A subtree reused whole after a handle shift kept its old window key | `src/build.rs` | high | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0170](bug_0170.md) | Content that changes height above the band shifts the visible rows for one frame | `src/build.rs` | low | open | the windowing property (review_0006 follow-up) |
+| [bug_0171](bug_0171.md) | A container that stopped being a grid or row never culled its children again | `src/build.rs` | low | fixed (uncommitted) | the windowing property (review_0006 follow-up) |
+| [bug_0172](bug_0172.md) | A document's `<body>` lost its style and its place in selectors | `src/build.rs` | high | fixed (uncommitted) | the windowing mutation run (review_0006 follow-up) |
+| [bug_0173](bug_0173.md) | A windowed root that changed width kept its old heights | `src/build.rs` | high | fixed (uncommitted) | the windowing mutation run (review_0006 follow-up) |
+| [bug_0174](bug_0174.md) | A top-level element's percent margins measured as zero | `src/build.rs` | high | fixed (uncommitted) | the windowing mutation run (review_0006 follow-up) |
+| [bug_0175](bug_0175.md) | A windowed whole document (`<html><head>…<body>`) never culled | `src/build.rs` | medium | fixed (uncommitted) | the windowing mutation run (review_0006 follow-up) |
+| [bug_0176](bug_0176.md) | Spacers drifted by the layout's per-node rounding | `src/build.rs` | low | fixed (uncommitted) | the windowing mutation run (review_0006 follow-up) |
+| [bug_0177](bug_0177.md) | Reversed containers and non-column roots were culled as columns | `src/build.rs` | high | fixed (uncommitted) | the windowing mutation rerun (review_0006 follow-up) |
 
 ## Discovery session metadata: bug_0001–0005
 
@@ -368,3 +386,25 @@ settle (rebuild observed) and the resulting dump to match a reference model.
 - **Machine/toolchain:** as for review_0003 (Arch Linux, rustc 1.98.1,
   Bevy 0.20.0).
 
+
+## Discovery session metadata: the windowing property (2026-10-16)
+
+- **Tool:** `tests/windowing_model.rs`, written in the review_0006 follow-up:
+  random documents (paragraphs of three heights, margins, nested padded
+  and bordered sections, loose text, tall blocks, `{% if f %}` rows) × 8
+  random steps (text changes that may wrap, row flips, small/medium/jump
+  scrolls), a windowed and an unwindowed build of the same document
+  stepped in lockstep and compared in every frame (placement, coverage,
+  unique window keys; tightness once settled). Failing seeds are kept in
+  `tests/windowing_model.proptest-regressions` and minimized by hand
+  (a page-file delta debugger) into the named regression tests.
+- **Reports:** bug_0160–bug_0171 (bug_0168 and bug_0170 open); bug_0172–bug_0177 from the mutation runs over the windowing diff (`902d81c..`, 323 then 330 mutants), whose survivors each got a test or a documented reason.
+- **Discovery and fix agent:** Claude Code session, `claude-opus-5-5`.
+  Every fix was ablated against the suite (the property at 128 cases plus
+  the regressions); each fails it. `Changed<WindowKey>` in the
+  measurement's filter survives: every handle shift found so far also
+  changes the kept entities' `ComputedNode::stack_index`, which
+  re-measures them anyway — kept as defense in depth.
+- **Commit at discovery:** `2678c8f` (all fixes uncommitted at filing).
+- **Machine/toolchain:** Arch Linux (kernel 7.2.8), rustc 1.98.1, Bevy
+  0.20.0.

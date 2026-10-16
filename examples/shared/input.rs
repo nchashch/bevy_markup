@@ -348,7 +348,9 @@ mod input_tests {
         let low = world.spawn((HtmlModal, ZIndex(10))).id();
         let high = world.spawn((HtmlModal, ZIndex(20))).id();
         let plain = world.spawn_empty().id();
-        let hidden = world.spawn((HtmlModal, ZIndex(30), Visibility::Hidden)).id();
+        let hidden = world
+            .spawn((HtmlModal, ZIndex(30), Visibility::Hidden))
+            .id();
         let no_focus = world.spawn((HtmlModal, ZIndex(40), HtmlNoFocus)).id();
         let walk = |world: &mut World, roots: Vec<Entity>| {
             world
@@ -373,8 +375,14 @@ mod input_tests {
                 .unwrap()
         };
         // Either iteration order: z 20 wins, whatever comes last.
-        assert_eq!(walk(&mut world, vec![high, low, plain, hidden, no_focus]), vec![high]);
-        assert_eq!(walk(&mut world, vec![no_focus, hidden, plain, high, low]), vec![high]);
+        assert_eq!(
+            walk(&mut world, vec![high, low, plain, hidden, no_focus]),
+            vec![high]
+        );
+        assert_eq!(
+            walk(&mut world, vec![no_focus, hidden, plain, high, low]),
+            vec![high]
+        );
         // No visible modal: every shown, focus-taking root participates.
         assert_eq!(walk(&mut world, vec![plain, hidden, no_focus]), vec![plain]);
     }

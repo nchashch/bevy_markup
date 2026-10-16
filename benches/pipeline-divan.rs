@@ -12,12 +12,13 @@
 //! criterion run's `--measurement-time` does.
 
 use bevy_markup::template::HtmlDocument;
-use divan::{black_box, black_box_drop, AllocProfiler, Bencher};
+use divan::{AllocProfiler, Bencher, black_box, black_box_drop};
 
 mod shared;
 
-use shared::{bench_app, bench_app_loading, frame_files, set_n, specialized_files, SIZES,
-    template_path};
+use shared::{
+    SIZES, bench_app, bench_app_loading, frame_files, set_n, specialized_files, template_path,
+};
 
 /// Divan's allocator profiler: with this as the global allocator, every
 /// benchmark reports allocation counts and bytes alongside time.
@@ -129,7 +130,6 @@ fn markdown(bencher: Bencher, size: usize) {
     });
 }
 
-
 // --- Interaction benches -------------------------------------------------
 //
 // These are possible with criterion too, but they earn their keep only
@@ -144,7 +144,6 @@ use bevy::prelude::*;
 use bevy::ui::ComputedNode;
 use bevy_markup::prelude::*;
 
-
 /// A stable hover over a bound, tooltip-carrying row (the pointer parked
 /// on it via a real `CursorMoved` event): `hover_signals` tracks the
 /// enter, `update_pseudo_states` holds the `:hover` styles, and the
@@ -153,8 +152,7 @@ use bevy_markup::prelude::*;
 #[divan::bench(args = SIZES, max_time = 2)]
 fn hover_stable(bencher: Bencher, size: usize) {
     let files = hover_files(size);
-    let (mut app, _root) =
-        shared::bench_app_pointer(&shared::borrowed(&files), "page.html");
+    let (mut app, _root) = shared::bench_app_pointer(&shared::borrowed(&files), "page.html");
     insert_tooltips(&mut app);
     let center = bound_row_center(&mut app, 0).expect("a bound row laid out");
     shared::move_pointer(&mut app, center);
@@ -172,8 +170,7 @@ fn hover_stable(bencher: Bencher, size: usize) {
 #[divan::bench(args = SIZES, max_time = 2)]
 fn hover_flicker(bencher: Bencher, size: usize) {
     let files = hover_files(size);
-    let (mut app, _root) =
-        shared::bench_app_pointer(&shared::borrowed(&files), "page.html");
+    let (mut app, _root) = shared::bench_app_pointer(&shared::borrowed(&files), "page.html");
     insert_tooltips(&mut app);
     let center = bound_row_center(&mut app, 0).expect("a bound row laid out");
     let away = Vec2::new(5.0, 5.0);
@@ -206,12 +203,9 @@ fn bound_row_center(app: &mut App, index: usize) -> Option<Vec2> {
 fn focus_navigation(bencher: Bencher, size: usize) {
     let files = hover_files(size);
     let (mut app, _root) = bench_app_loading(&shared::borrowed(&files), "page.html");
-    app.add_systems(
-        Update,
-        |mut focus: HtmlFocus| {
-            focus.navigate(bevy::math::CompassOctant::South);
-        },
-    );
+    app.add_systems(Update, |mut focus: HtmlFocus| {
+        focus.navigate(bevy::math::CompassOctant::South);
+    });
     bencher.bench_local(|| black_box(app.update()));
 }
 
@@ -272,7 +266,10 @@ fn hover_files(size: usize) -> Vec<(String, String)> {
     let mut files = vec![
         ("page.html".to_owned(), shared::hover_template(size)),
         ("style.css".to_owned(), shared::CSS.to_owned()),
-        ("tooltip.html".to_owned(), shared::TOOLTIP_TEMPLATE.to_owned()),
+        (
+            "tooltip.html".to_owned(),
+            shared::TOOLTIP_TEMPLATE.to_owned(),
+        ),
     ];
     files.extend(shared::locale_files(false));
     files

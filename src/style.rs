@@ -317,7 +317,10 @@ impl AssetLoader for StylesheetLoader {
             // A remote image is skipped like a custom property's schemed
             // URL: the frame isn't drawn, the rest of the sheet applies.
             if crate::template::is_remote(&path) {
-                warn!("stylesheet {}: remote border-image skipped: {url}", load_context.path());
+                warn!(
+                    "stylesheet {}: remote border-image skipped: {url}",
+                    load_context.path()
+                );
                 continue;
             }
             images.insert(url.clone(), load_context.load(path));
@@ -358,9 +361,9 @@ mod tests {
     /// (review_0003 G09). The map keeps only the loadable URLs.
     #[test]
     fn skipped_custom_urls_do_not_shift_the_pairing() {
+        use bevy::MinimalPlugins;
         use bevy::app::App;
         use bevy::asset::{AssetPlugin, AssetServer, LoadState};
-        use bevy::MinimalPlugins;
 
         let dir = std::env::temp_dir().join(format!(
             "bevy_markup_urls_{}",

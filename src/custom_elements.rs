@@ -235,6 +235,9 @@ mod tests {
                 },
             );
         }
-        assert_eq!(world.resource::<CustomElements>().warned.len(), MAX_WARNED_NAMES);
+        assert_eq!(
+            world.resource::<CustomElements>().warned.len(),
+            MAX_WARNED_NAMES
+        );
     }
 }

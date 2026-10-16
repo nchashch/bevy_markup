@@ -323,8 +323,7 @@ pub(crate) fn place_world_anchored(
                 // before the test mixed them: a visible point hid with
                 // UiScale < 1, an off-screen one showed with UiScale > 1).
                 let local = position - rect.min;
-                let on_screen =
-                    local.cmpge(Vec2::ZERO).all() && local.cmple(rect.size()).all();
+                let on_screen = local.cmpge(Vec2::ZERO).all() && local.cmple(rect.size()).all();
                 // UI px: relative to the UI camera's viewport top-left,
                 // divided by UiScale (Bevy multiplies `Val::Px` back by
                 // the scale factor × UiScale).

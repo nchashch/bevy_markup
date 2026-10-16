@@ -223,9 +223,7 @@ impl AssetLoader for LocaleBundleLoader {
         }
         Ok(LocaleBundle(Arc::new(BundleState {
             bundle,
-            markdown: manifest
-                .markdown
-                .then(|| markdown_cache(&sources)),
+            markdown: manifest.markdown.then(|| markdown_cache(&sources)),
         })))
     }
 
@@ -311,11 +309,7 @@ pub(crate) fn localize(
         let RenderedHtml::Ready(document) = &*rendered else {
             continue;
         };
-        localized.0 = resolve_all(
-            document.dom(),
-            &bundle.0.bundle,
-            bundle.0.markdown.as_ref(),
-        );
+        localized.0 = resolve_all(document.dom(), &bundle.0.bundle, bundle.0.markdown.as_ref());
     }
 }
 
@@ -427,7 +421,9 @@ fn is_inert(c: char) -> bool {
 /// longer match, and it can't start a link, image, list or heading.
 fn inert_markdown(text: &str) -> String {
     let identifier = text.starts_with(|c: char| c.is_ascii_alphabetic())
-        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if identifier {
         return text.to_owned();
     }
@@ -475,9 +471,7 @@ where
         .ok_or_else(|| format!("message `{id}` has no value"))?;
 
     let args = args_json
-        .map(|json| {
-            parse_args(json, inert).map_err(|err| format!("`{id}` data-l10n-args: {err}"))
-        })
+        .map(|json| parse_args(json, inert).map_err(|err| format!("`{id}` data-l10n-args: {err}")))
         .transpose()?;
 
     let mut errors = Vec::new();
@@ -754,8 +748,8 @@ fn markdown_cache(sources: &[String]) -> MarkdownCache {
 /// (`inert_markdown`, the per-value path).
 #[allow(clippy::needless_continue)]
 fn parse_args(json: &str, inert: bool) -> Result<FluentArgs<'static>, String> {
-    let serde_json::Value::Object(map) = crate::template::parse_attribute_json(json)
-        .map_err(|err| err.to_string())?
+    let serde_json::Value::Object(map) =
+        crate::template::parse_attribute_json(json).map_err(|err| err.to_string())?
     else {
         return Err("expected a JSON object".to_owned());
     };
@@ -834,7 +828,8 @@ mod tests {
         // `parse_args` before fluent formatted them (escaping again here
         // double-escaped `O'Brien & Co`).
         let entry = cache.messages.get("greet").expect("greet cached");
-        let html = substitute(entry, "Hello \u{2068}&lt;em&gt;*&lt;/em&gt;\u{2069}.").expect("substituted");
+        let html = substitute(entry, "Hello \u{2068}&lt;em&gt;*&lt;/em&gt;\u{2069}.")
+            .expect("substituted");
         assert!(
             html.contains("&lt;em&gt;*&lt;/em&gt;"),
             "the pre-escaped value lands as-is: {html}"
@@ -999,9 +994,7 @@ mod tests {
         );
         // A resource with any syntax error still caches its good
         // messages (the bundle keeps the partial AST too).
-        let cache = markdown_cache(&[
-            "!!! junk line\nok = fine { $n }\n".to_owned(),
-        ]);
+        let cache = markdown_cache(&["!!! junk line\nok = fine { $n }\n".to_owned()]);
         assert!(
             cache.messages.contains_key("ok"),
             "the junk line hid the resource's messages"
@@ -1025,112 +1018,132 @@ mod tests {
         // value, the conversion decodes it in code and push_html escapes
         // it again; raw values injected markup, review_0003 G01).
         let dom = crate::template::HtmlDocument::parse(
-            r#"<p data-l10n-id="cmd" data-l10n-args='{"cmd":"a & b","os":"linux"}'></p>"#.to_owned(),
+            r#"<p data-l10n-id="cmd" data-l10n-args='{"cmd":"a & b","os":"linux"}'></p>"#
+                .to_owned(),
         )
         .unwrap();
-        let resource = std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
-        let mut concurrent = fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
+        let resource =
+            std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
+        let mut concurrent =
+            fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
         concurrent.add_resource(resource).unwrap();
         let cache = markdown_cache(&[source.to_owned()]);
         let localized = resolve_all(dom.dom(), &concurrent, Some(&cache));
-        let html = localized.values().next().expect("localized").as_ref().unwrap();
+        let html = localized
+            .values()
+            .next()
+            .expect("localized")
+            .as_ref()
+            .unwrap();
         assert!(html.contains("<code>a &amp; b</code>"), "{html}");
         assert!(!html.contains("&amp;amp;"), "double-escaped: {html}");
     }
 
-/// String arguments cannot inject *Markdown* on the per-value path
-/// either: escaping HTML left `[x](url)` and `![x](path)` to pulldown,
-/// so a player name became a real link (an `open` signal with the
-/// attacker's href) or image there, while the cached path showed the
-/// same value as text (review_0004 H03). Every Markdown-significant
-/// character of a value is inert; the output matches the cached path's.
-#[test]
-fn string_args_cannot_inject_markdown_on_the_per_value_path() {
-    let run = |source: &str, id: &str, args: &str| {
-        // The attribute is escaped as Tera's autoescape would.
-        let args = args.replace('&', "&amp;").replace('\'', "&#39;");
-        let page = format!("<p data-l10n-id=\"{id}\" data-l10n-args='{args}'></p>");
-        let dom = crate::template::HtmlDocument::parse(page).unwrap();
-        let resource =
-            std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
-        let mut concurrent =
-            fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
-        concurrent.add_resource(resource).unwrap();
-        let localized = resolve_all(
-            dom.dom(),
-            &concurrent,
-            Some(&markdown_cache(&[source.to_owned()])),
-        );
-        localized.values().next().unwrap().as_ref().unwrap().clone()
-    };
-    let source = "hi = Hello { $who }!\n\
+    /// String arguments cannot inject *Markdown* on the per-value path
+    /// either: escaping HTML left `[x](url)` and `![x](path)` to pulldown,
+    /// so a player name became a real link (an `open` signal with the
+    /// attacker's href) or image there, while the cached path showed the
+    /// same value as text (review_0004 H03). Every Markdown-significant
+    /// character of a value is inert; the output matches the cached path's.
+    #[test]
+    fn string_args_cannot_inject_markdown_on_the_per_value_path() {
+        let run = |source: &str, id: &str, args: &str| {
+            // The attribute is escaped as Tera's autoescape would.
+            let args = args.replace('&', "&amp;").replace('\'', "&#39;");
+            let page = format!("<p data-l10n-id=\"{id}\" data-l10n-args='{args}'></p>");
+            let dom = crate::template::HtmlDocument::parse(page).unwrap();
+            let resource =
+                std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
+            let mut concurrent =
+                fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
+            concurrent.add_resource(resource).unwrap();
+            let localized = resolve_all(
+                dom.dom(),
+                &concurrent,
+                Some(&markdown_cache(&[source.to_owned()])),
+            );
+            localized.values().next().unwrap().as_ref().unwrap().clone()
+        };
+        let source = "hi = Hello { $who }!\n\
                   sel = { $n ->\n    [one] Hello { $who }!\n   *[other] Hello { $who }!\n}\n\
                   kind = { $k ->\n    [two-handed] Heavy *{ $k }*\n   *[other] Light\n}\n";
-    for who in [
-        "[Continue](https://evil.example) ![x](../../save.png)",
-        "*bold* _it_ `code` ~~gone~~ \\* | a | b |",
-        "line\n\n# Heading\n\n- item\n\n    code\n1. one",
-        "<b>tag</b> & \"quoted\" 'single'",
-        "[^1]\n\n[^1]: note",
-    ] {
-        let args = serde_json::json!({ "n": 2, "who": who }).to_string();
-        let per_value = run(source, "sel", &args);
-        for forged in ["<a ", "<img", "<em", "<strong", "<code", "<del", "<h1", "<ul", "<ol",
-            "<pre", "<table", "<b>", "<sup", "<section", "<li"] {
-            assert!(!per_value.contains(forged), "{who:?} forged {forged}: {per_value}");
+        for who in [
+            "[Continue](https://evil.example) ![x](../../save.png)",
+            "*bold* _it_ `code` ~~gone~~ \\* | a | b |",
+            "line\n\n# Heading\n\n- item\n\n    code\n1. one",
+            "<b>tag</b> & \"quoted\" 'single'",
+            "[^1]\n\n[^1]: note",
+        ] {
+            let args = serde_json::json!({ "n": 2, "who": who }).to_string();
+            let per_value = run(source, "sel", &args);
+            for forged in [
+                "<a ", "<img", "<em", "<strong", "<code", "<del", "<h1", "<ul", "<ol", "<pre",
+                "<table", "<b>", "<sup", "<section", "<li",
+            ] {
+                assert!(
+                    !per_value.contains(forged),
+                    "{who:?} forged {forged}: {per_value}"
+                );
+            }
+            // The cached path's rendering of the same text: the two agree
+            // (as the build reads them — pulldown leaves quotes unescaped
+            // in text, the cache keeps `&quot;`).
+            let cached = run(source, "hi", &args);
+            assert_eq!(
+                decode_entities(&per_value),
+                decode_entities(&cached),
+                "{who:?}"
+            );
         }
-        // The cached path's rendering of the same text: the two agree
-        // (as the build reads them — pulldown leaves quotes unescaped
-        // in text, the cache keeps `&quot;`).
-        let cached = run(source, "hi", &args);
-        assert_eq!(decode_entities(&per_value), decode_entities(&cached), "{who:?}");
-    }
-    // An identifier-shaped value still selects its variant, and the
-    // author's own Markdown around it still converts.
-    let html = run(source, "kind", r#"{"k": "two-handed"}"#);
-    assert!(html.contains(r#"Heavy <em class="markdown">two-handed</em>"#), "{html}");
-    // A value can't smuggle the stand-in of `<` past the restore.
-    let html = run(source, "sel", r#"{"n": 2, "who": "\uf73cb\uf73e"}"#);
-    assert!(!html.contains("<b"), "{html}");
-}
-
-/// String arguments cannot inject markup on the per-value path: a
-/// crafted value stayed raw (the former `translate_raw`) and pulldown
-/// passed its HTML through, so a player name could forge a clickable
-/// element carrying `data-on-*` bindings (review_0003 G01). Both shapes
-/// that reach the per-value path are pinned: a selector, and an
-/// ambiguous split falling out of `substitute`.
-#[test]
-fn string_args_cannot_inject_markup_on_the_per_value_path() {
-    let run = |source: &str, page: &str| {
-        let dom = crate::template::HtmlDocument::parse(page.to_owned()).unwrap();
-        let resource =
-            std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
-        let mut concurrent =
-            fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
-        concurrent.add_resource(resource).unwrap();
-        let localized = resolve_all(
-            dom.dom(),
-            &concurrent,
-            Some(&markdown_cache(&[source.to_owned()])),
+        // An identifier-shaped value still selects its variant, and the
+        // author's own Markdown around it still converts.
+        let html = run(source, "kind", r#"{"k": "two-handed"}"#);
+        assert!(
+            html.contains(r#"Heavy <em class="markdown">two-handed</em>"#),
+            "{html}"
         );
-        localized.values().next().unwrap().as_ref().unwrap().clone()
-    };
-    // A selector is uncacheable: per value.
-    let html = run(
-        "found = { $n ->\n    [one] { $who } found one\n   *[other] { $who } found { $n }\n}\n",
-        r#"<p data-l10n-id="found" data-l10n-args='{"n": 2, "who": "<a href=x data-on-click=delete-save>Continue</a>"}'></p>"#,
-    );
-    assert!(!html.contains("<a "), "injected: {html}");
-    assert!(html.contains("&lt;a href"), "escaped: {html}");
-    // An ambiguous split falls out of `substitute`: per value.
-    let html = run(
-        "pair = { $a } and { $b }\n",
-        r#"<p data-l10n-id="pair" data-l10n-args='{"a": "<b class=\"evil\">T</b> and", "b": "z"}'></p>"#,
-    );
-    assert!(!html.contains("<b "), "injected: {html}");
-    assert!(html.contains("&lt;b"), "escaped: {html}");
-}
+        // A value can't smuggle the stand-in of `<` past the restore.
+        let html = run(source, "sel", r#"{"n": 2, "who": "\uf73cb\uf73e"}"#);
+        assert!(!html.contains("<b"), "{html}");
+    }
+
+    /// String arguments cannot inject markup on the per-value path: a
+    /// crafted value stayed raw (the former `translate_raw`) and pulldown
+    /// passed its HTML through, so a player name could forge a clickable
+    /// element carrying `data-on-*` bindings (review_0003 G01). Both shapes
+    /// that reach the per-value path are pinned: a selector, and an
+    /// ambiguous split falling out of `substitute`.
+    #[test]
+    fn string_args_cannot_inject_markup_on_the_per_value_path() {
+        let run = |source: &str, page: &str| {
+            let dom = crate::template::HtmlDocument::parse(page.to_owned()).unwrap();
+            let resource =
+                std::sync::Arc::new(fluent::FluentResource::try_new(source.to_owned()).unwrap());
+            let mut concurrent =
+                fluent::concurrent::FluentBundle::new_concurrent(vec!["en-US".parse().unwrap()]);
+            concurrent.add_resource(resource).unwrap();
+            let localized = resolve_all(
+                dom.dom(),
+                &concurrent,
+                Some(&markdown_cache(&[source.to_owned()])),
+            );
+            localized.values().next().unwrap().as_ref().unwrap().clone()
+        };
+        // A selector is uncacheable: per value.
+        let html = run(
+            "found = { $n ->\n    [one] { $who } found one\n   *[other] { $who } found { $n }\n}\n",
+            r#"<p data-l10n-id="found" data-l10n-args='{"n": 2, "who": "<a href=x data-on-click=delete-save>Continue</a>"}'></p>"#,
+        );
+        assert!(!html.contains("<a "), "injected: {html}");
+        assert!(html.contains("&lt;a href"), "escaped: {html}");
+        // An ambiguous split falls out of `substitute`: per value.
+        let html = run(
+            "pair = { $a } and { $b }\n",
+            r#"<p data-l10n-id="pair" data-l10n-args='{"a": "<b class=\"evil\">T</b> and", "b": "z"}'></p>"#,
+        );
+        assert!(!html.contains("<b "), "injected: {html}");
+        assert!(html.contains("&lt;b"), "escaped: {html}");
+    }
 
     /// Cached substitution never shows double-escaped text: the values
     /// were escaped once by `parse_args`; a second escape in `substitute`
@@ -1198,7 +1211,10 @@ fn string_args_cannot_inject_markup_on_the_per_value_path() {
             !html.contains("A X B X C"),
             "the injected marker re-expanded: {html}"
         );
-        assert!(html.contains(&format!("B {y}")), "y's value is literal: {html}");
+        assert!(
+            html.contains(&format!("B {y}")),
+            "y's value is literal: {html}"
+        );
     }
 
     /// Float JSON numbers are numbers too: `1.0` is `one` (as `JSON.parse`

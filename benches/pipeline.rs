@@ -35,12 +35,12 @@
 //! flags regressions on the next run.
 
 use bevy_markup::template::HtmlDocument;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 
 mod shared;
 
-use shared::{bench_app, bench_app_loading, rendered, set_n, SIZES};
+use shared::{SIZES, bench_app, bench_app_loading, rendered, set_n};
 
 fn render_and_parse(c: &mut Criterion) {
     let mut group = c.benchmark_group("render");

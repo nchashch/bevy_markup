@@ -4,9 +4,9 @@
 //! tag, id, classes and pseudo-state.
 
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use bevy::platform::collections::HashMap;
@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use bevy::ui::{GridTrackRepetition, MaxTrackSizingFunction, MinTrackSizingFunction};
 use lightningcss::declaration::DeclarationBlock;
 use lightningcss::properties::Property;
+use lightningcss::properties::PropertyId;
 use lightningcss::properties::align::{
     self as css_align, BaselinePosition, ContentDistribution, ContentPosition, GapValue,
     SelfPosition,
@@ -37,16 +38,15 @@ use lightningcss::properties::grid::{
 use lightningcss::properties::overflow::OverflowKeyword;
 use lightningcss::properties::position as css_position;
 use lightningcss::properties::size::{self as css_size, MaxSize, Size};
-use lightningcss::properties::transition::Transition;
-use lightningcss::properties::PropertyId;
-use lightningcss::values::easing::EasingFunction;
 use lightningcss::properties::text::TextDecorationLine;
+use lightningcss::properties::transition::Transition;
 use lightningcss::rules::CssRule;
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleAttribute, StyleSheet};
 use lightningcss::traits::IntoOwned;
 use lightningcss::traits::ToCss;
 use lightningcss::values::calc::{Calc, MathFunction};
 use lightningcss::values::color::{CssColor, RGBA};
+use lightningcss::values::easing::EasingFunction;
 use lightningcss::values::ident::CustomIdent;
 use lightningcss::values::image::Image;
 use lightningcss::values::length::{LengthPercentage, LengthPercentageOrAuto, LengthValue};
@@ -556,14 +556,8 @@ impl LayoutDecl {
             &mut corners.bottom_left,
             &self.border_radius[3].map(CornerRadius::from),
         );
-        set(
-            &mut node.overflow.x,
-            &self.overflow[0].map(bevy_overflow),
-        );
-        set(
-            &mut node.overflow.y,
-            &self.overflow[1].map(bevy_overflow),
-        );
+        set(&mut node.overflow.x, &self.overflow[0].map(bevy_overflow));
+        set(&mut node.overflow.y, &self.overflow[1].map(bevy_overflow));
         let position_type = match self.position {
             // `fixed` positions against the viewport (via the `FixedNode`
             // component, added by the build), with absolute-style insets.
@@ -960,7 +954,10 @@ impl SiblingList {
         prefix.push(0u64);
         for sibling in &list {
             let last = *prefix.last().expect("seeded");
-            prefix.push(last.wrapping_mul(1_000_003).wrapping_add(sibling.identity_hash()));
+            prefix.push(
+                last.wrapping_mul(1_000_003)
+                    .wrapping_add(sibling.identity_hash()),
+            );
         }
         std::rc::Rc::new(Self { list, prefix })
     }
@@ -1286,9 +1283,7 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
                 Property::BorderImage(border_image, _) => Some(&border_image.source),
                 Property::BorderImageSource(image) => Some(image),
                 Property::BackgroundImage(images) => images.first(),
-                Property::Background(backgrounds) => {
-                    backgrounds.first().map(|layer| &layer.image)
-                }
+                Property::Background(backgrounds) => backgrounds.first().map(|layer| &layer.image),
                 _ => None,
             };
             let Some(image) = image else { continue };
@@ -1367,8 +1362,10 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
                     match &custom.name {
                         CustomPropertyName::Custom(dashed) => {
                             if !refs.is_empty() {
-                                declarations
-                                    .push((dashed.0.as_ref().to_owned(), refs.into_iter().collect()));
+                                declarations.push((
+                                    dashed.0.as_ref().to_owned(),
+                                    refs.into_iter().collect(),
+                                ));
                             }
                         }
                         // An unknown property the build reads raw
@@ -1386,8 +1383,7 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
     // The transitive closure, as a worklist (linear: every name enters
     // once — the fixpoint loop re-scanned every declaration per round,
     // quadratic in the chain length).
-    let by_name: HashMap<String, Vec<String>> =
-        declarations.into_iter().collect();
+    let by_name: HashMap<String, Vec<String>> = declarations.into_iter().collect();
     let mut work: Vec<String> = names.iter().cloned().collect();
     while let Some(active) = work.pop() {
         if let Some(refs) = by_name.get(&active) {
@@ -1400,7 +1396,6 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
     }
     names.into_iter().collect()
 }
-
 
 /// The `var()` names a token list references, function arguments included.
 fn collect_var_names(tokens: &TokenList, names: &mut BTreeSet<String>) {
@@ -1436,8 +1431,7 @@ pub(crate) struct Pseudo {
 /// An ancestor for selector matching: its identity plus its interaction
 /// state (for pseudo-classes in a compound selector), nearest first.
 /// Also a sibling list's entry (ADR 0028), so it compares by content.
-#[derive(Clone, Debug, PartialEq)]
-#[derive(Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub(crate) struct Ancestor {
     /// The tag/id/classes a compound selector reads.
     pub tag: String,
@@ -1567,7 +1561,11 @@ fn css_unescape(value: &str) -> String {
             chars.next();
         }
         let code = u32::from_str_radix(&hex, 16).unwrap_or(0xFFFD);
-        out.push(char::from_u32(code).filter(|c| *c != '\0').unwrap_or('\u{FFFD}'));
+        out.push(
+            char::from_u32(code)
+                .filter(|c| *c != '\0')
+                .unwrap_or('\u{FFFD}'),
+        );
     }
     out
 }
@@ -1670,9 +1668,9 @@ impl Selector {
                 // DOM order (farthest first): the immediately preceding
                 // sibling is the LAST entry.
                 let matched_sibling = match last_combinator {
-                    Combinator::AdjacentSibling => {
-                        siblings.last().filter(|sibling| parts.matches_ancestor(sibling, false))
-                    }
+                    Combinator::AdjacentSibling => siblings
+                        .last()
+                        .filter(|sibling| parts.matches_ancestor(sibling, false)),
                     _ => siblings
                         .iter()
                         .find(|sibling| parts.matches_ancestor(sibling, false)),
@@ -1719,7 +1717,9 @@ impl Selector {
                 Some(&Combinator::AdjacentSibling) => siblings
                     .last()
                     .is_some_and(|sibling| parts.matches_ancestor(sibling, true)),
-                _ => siblings.iter().any(|sibling| parts.matches_ancestor(sibling, true)),
+                _ => siblings
+                    .iter()
+                    .any(|sibling| parts.matches_ancestor(sibling, true)),
             };
             return reactive
                 && (self.compounds.len() == 2
@@ -1764,7 +1764,10 @@ impl Selector {
         let combinator = self.combinators[index - 1];
         // A sibling combinator at a non-subject position: the related
         // element's own siblings aren't threaded — never matches.
-        if matches!(combinator, Combinator::AdjacentSibling | Combinator::GeneralSibling) {
+        if matches!(
+            combinator,
+            Combinator::AdjacentSibling | Combinator::GeneralSibling
+        ) {
             return false;
         }
         let compound = &self.compounds[index - 1];
@@ -1862,9 +1865,7 @@ impl Compound {
                                 .strip_prefix('"')
                                 .and_then(|v| v.strip_suffix('"'))
                                 .or_else(|| {
-                                    value
-                                        .strip_prefix('\'')
-                                        .and_then(|v| v.strip_suffix('\''))
+                                    value.strip_prefix('\'').and_then(|v| v.strip_suffix('\''))
                                 })
                                 .unwrap_or(value);
                             (name.trim(), Some(css_unescape(value)))
@@ -1878,7 +1879,9 @@ impl Compound {
                         return None;
                     };
                     if name.is_empty()
-                        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                        || !name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
                     {
                         return None;
                     }
@@ -1910,17 +1913,15 @@ impl Compound {
                             }
                             let argument = after[1..close].trim();
                             match name {
-                                "nth-child" => structural.push(
-                                    StructuralPseudo::NthChild(AnB::parse(argument)?),
-                                ),
-                                "nth-of-type" => structural.push(
-                                    StructuralPseudo::NthOfType(AnB::parse(argument)?),
-                                ),
+                                "nth-child" => structural
+                                    .push(StructuralPseudo::NthChild(AnB::parse(argument)?)),
+                                "nth-of-type" => structural
+                                    .push(StructuralPseudo::NthOfType(AnB::parse(argument)?)),
                                 // A selector list (a comma inside) fails
                                 // the compound's parse.
-                                _ => structural.push(StructuralPseudo::Not(
-                                    Box::new(Compound::parse(argument)?),
-                                )),
+                                _ => structural.push(StructuralPseudo::Not(Box::new(
+                                    Compound::parse(argument)?,
+                                ))),
                             }
                             rest = &after[close + 1..];
                             continue;
@@ -1986,7 +1987,11 @@ impl Compound {
             + usize::from(self.pseudo.active)
             + usize::from(self.pseudo.focus)
             + usize::from(self.pseudo.focus_visible);
-        let own = (self.ids.len() as u32, classes as u32, self.tag.is_some() as u32);
+        let own = (
+            self.ids.len() as u32,
+            classes as u32,
+            self.tag.is_some() as u32,
+        );
         self.structural.iter().fold(own, |sum, part| {
             let (ids, classes, tags) = part.specificity();
             (sum.0 + ids, sum.1 + classes, sum.2 + tags)
@@ -2029,7 +2034,10 @@ impl Compound {
                 .classes
                 .iter()
                 .all(|class| subject.classes.iter().any(|own| own == class))
-            && self.attributes.iter().all(|attribute| attribute.matches(subject));
+            && self
+                .attributes
+                .iter()
+                .all(|attribute| attribute.matches(subject));
         let mut result = Tri::of(parts);
         if result == Tri::No {
             return Tri::No;
@@ -2068,7 +2076,11 @@ impl Compound {
     /// [`test`](Self::test)).
     fn matches_ancestor(&self, ancestor: &Ancestor, wild: bool) -> bool {
         let outcome = self.test(&Subject::ancestor(ancestor), wild);
-        if wild { outcome != Tri::No } else { outcome == Tri::Yes }
+        if wild {
+            outcome != Tri::No
+        } else {
+            outcome == Tri::Yes
+        }
     }
 }
 
@@ -2091,9 +2103,7 @@ impl InlineStyle {
             .chain(&block.important_declarations)
         {
             match declaration {
-                Property::Unparsed(unparsed) => {
-                    collect_var_names(&unparsed.value, &mut names)
-                }
+                Property::Unparsed(unparsed) => collect_var_names(&unparsed.value, &mut names),
                 Property::Custom(custom) => collect_var_names(&custom.value, &mut names),
                 _ => {}
             }
@@ -2211,10 +2221,7 @@ pub(crate) struct HtmlStyles<'a> {
 impl<'a> HtmlStyles<'a> {
     /// Looks `var(--name)` up in `context` (the UI's `TemplateContext`,
     /// stringified) before the sheet's own custom properties.
-    pub fn with_context(
-        mut self,
-        context: &'a dyn Fn(&str) -> Option<String>,
-    ) -> Self {
+    pub fn with_context(mut self, context: &'a dyn Fn(&str) -> Option<String>) -> Self {
         self.context = Some(context);
         self
     }
@@ -2240,7 +2247,12 @@ impl<'a> HtmlStyles<'a> {
             // per-element custom-property inheritance. Collected before
             // selector filtering, so a rule with an unsupported selector
             // still registers its variables.
-            for declaration in rule.declarations.declarations.iter().chain(&rule.declarations.important_declarations) {
+            for declaration in rule
+                .declarations
+                .declarations
+                .iter()
+                .chain(&rule.declarations.important_declarations)
+            {
                 if let Property::Custom(custom) = declaration {
                     if let CustomPropertyName::Custom(name) = &custom.name {
                         variables.insert(name.0.as_ref().to_owned(), custom.value.clone());
@@ -2280,9 +2292,9 @@ impl<'a> HtmlStyles<'a> {
             .filter(|(_, rule)| rule.selector.has_pseudo())
             .map(|(index, _)| index)
             .collect();
-        let reads = rules
-            .iter()
-            .fold(SelectorReads::default(), |reads, rule| reads.with(&rule.selector));
+        let reads = rules.iter().fold(SelectorReads::default(), |reads, rule| {
+            reads.with(&rule.selector)
+        });
         Self {
             rules,
             variables,
@@ -2346,7 +2358,11 @@ impl<'a> HtmlStyles<'a> {
                     element.dataset.hash(&mut hasher);
                 }
                 if self.reads.siblings() {
-                    state.previous_siblings.as_ref().map(Siblings::hash).hash(&mut hasher);
+                    state
+                        .previous_siblings
+                        .as_ref()
+                        .map(Siblings::hash)
+                        .hash(&mut hasher);
                 }
                 hasher.finish()
             },
@@ -2461,10 +2477,31 @@ fn text_transform_decl(
 ) -> Option<TextTransformSpec> {
     use lightningcss::properties::text::TextTransform as Css;
     match transform {
-        Css { case, .. } if *case == lightningcss::properties::text::TextTransformCase::None && transform.other == lightningcss::properties::text::TextTransformOther::empty() => Some(TextTransformSpec::None),
-        Css { case: lightningcss::properties::text::TextTransformCase::Uppercase, other } if *other == lightningcss::properties::text::TextTransformOther::empty() => Some(TextTransformSpec::Uppercase),
-        Css { case: lightningcss::properties::text::TextTransformCase::Lowercase, other } if *other == lightningcss::properties::text::TextTransformOther::empty() => Some(TextTransformSpec::Lowercase),
-        Css { case: lightningcss::properties::text::TextTransformCase::Capitalize, other } if *other == lightningcss::properties::text::TextTransformOther::empty() => Some(TextTransformSpec::Capitalize),
+        Css { case, .. }
+            if *case == lightningcss::properties::text::TextTransformCase::None
+                && transform.other
+                    == lightningcss::properties::text::TextTransformOther::empty() =>
+        {
+            Some(TextTransformSpec::None)
+        }
+        Css {
+            case: lightningcss::properties::text::TextTransformCase::Uppercase,
+            other,
+        } if *other == lightningcss::properties::text::TextTransformOther::empty() => {
+            Some(TextTransformSpec::Uppercase)
+        }
+        Css {
+            case: lightningcss::properties::text::TextTransformCase::Lowercase,
+            other,
+        } if *other == lightningcss::properties::text::TextTransformOther::empty() => {
+            Some(TextTransformSpec::Lowercase)
+        }
+        Css {
+            case: lightningcss::properties::text::TextTransformCase::Capitalize,
+            other,
+        } if *other == lightningcss::properties::text::TextTransformOther::empty() => {
+            Some(TextTransformSpec::Capitalize)
+        }
         // full-width / full-size-kana / mixed forms: unsupported.
         _ => unsupported("text-transform value"),
     }
@@ -2504,7 +2541,9 @@ fn text_align(align: lightningcss::properties::text::TextAlign) -> Option<TextAl
 /// element (`normal`, a unitless number, `%`, `em`); a length inherits as
 /// pixels (`px`, `rem`; other absolute units convert; viewport units are
 /// unsupported and drop the declaration).
-fn line_height_decl(line_height: &lightningcss::properties::font::LineHeight) -> Option<LineHeightSpec> {
+fn line_height_decl(
+    line_height: &lightningcss::properties::font::LineHeight,
+) -> Option<LineHeightSpec> {
     use lightningcss::properties::font::LineHeight as Css;
     match line_height {
         Css::Normal => Some(LineHeightSpec::Normal),
@@ -2532,11 +2571,11 @@ fn line_height_decl(line_height: &lightningcss::properties::font::LineHeight) ->
 
 /// `letter-spacing` (ADR 0027): the computed length inherits; `normal` is
 /// zero. Viewport units are unsupported and drop the declaration.
-fn letter_spacing_decl(spacing: &lightningcss::properties::text::Spacing) -> Option<LetterSpacingSpec> {
+fn letter_spacing_decl(
+    spacing: &lightningcss::properties::text::Spacing,
+) -> Option<LetterSpacingSpec> {
     match spacing {
-        lightningcss::properties::text::Spacing::Normal => {
-            Some(LetterSpacingSpec::Normal)
-        }
+        lightningcss::properties::text::Spacing::Normal => Some(LetterSpacingSpec::Normal),
         lightningcss::properties::text::Spacing::Length(length) => match length {
             lightningcss::values::length::Length::Value(value) => match value {
                 LengthValue::Px(px) => Some(LetterSpacingSpec::Px(*px)),
@@ -2547,9 +2586,7 @@ fn letter_spacing_decl(spacing: &lightningcss::properties::text::Spacing) -> Opt
             // `letter-spacing: calc(…)` (a length calc) — unsupported
             // (drops the declaration, like the other calc properties do
             // when unresolvable at apply time).
-            lightningcss::values::length::Length::Calc(_) => {
-                unsupported("letter-spacing calc()")
-            }
+            lightningcss::values::length::Length::Calc(_) => unsupported("letter-spacing calc()"),
         },
     }
 }
@@ -2560,8 +2597,8 @@ fn letter_spacing_decl(spacing: &lightningcss::properties::text::Spacing) -> Opt
 fn list_style_decl(
     list_style: &lightningcss::properties::list::ListStyleType,
 ) -> Option<ListStyleSpec> {
-    use lightningcss::properties::list::{CounterStyle, ListStyleType as Css};
     use lightningcss::properties::list::PredefinedCounterStyle;
+    use lightningcss::properties::list::{CounterStyle, ListStyleType as Css};
     match list_style {
         Css::None => Some(ListStyleSpec::None),
         Css::CounterStyle(CounterStyle::Predefined(style)) => match style {
@@ -2842,7 +2879,9 @@ pub(crate) fn nesting_over_limit(text: &str, limit: usize) -> bool {
                 }
             }
             b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = text[i + 2..].find("*/").map_or(bytes.len(), |end| i + 2 + end + 1);
+                i = text[i + 2..]
+                    .find("*/")
+                    .map_or(bytes.len(), |end| i + 2 + end + 1);
             }
             b'(' if i >= 3
                 && bytes[i - 3..i].eq_ignore_ascii_case(b"url")
@@ -3006,11 +3045,19 @@ impl<'a> Substitution<'a> {
                     let arguments = self.substitute(&function.arguments)?;
                     format!("{}({arguments})", function.name.as_ref())
                 }
-                TokenOrValue::Token(token) => token.to_css_string(PrinterOptions::default()).ok()?,
-                TokenOrValue::Color(color) => color.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Token(token) => {
+                    token.to_css_string(PrinterOptions::default()).ok()?
+                }
+                TokenOrValue::Color(color) => {
+                    color.to_css_string(PrinterOptions::default()).ok()?
+                }
                 TokenOrValue::Url(url) => url.to_css_string(PrinterOptions::default()).ok()?,
-                TokenOrValue::Length(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-                TokenOrValue::Angle(value) => value.to_css_string(PrinterOptions::default()).ok()?,
+                TokenOrValue::Length(value) => {
+                    value.to_css_string(PrinterOptions::default()).ok()?
+                }
+                TokenOrValue::Angle(value) => {
+                    value.to_css_string(PrinterOptions::default()).ok()?
+                }
                 TokenOrValue::Time(value) => value.to_css_string(PrinterOptions::default()).ok()?,
                 TokenOrValue::Resolution(value) => {
                     value.to_css_string(PrinterOptions::default()).ok()?
@@ -3216,9 +3263,12 @@ fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
         }
         "inset" => {
             style.layout.inset = [None; 4];
-            style
-                .calc
-                .retain(|(p, _)| !matches!(p, CalcProp::Top | CalcProp::Right | CalcProp::Bottom | CalcProp::Left));
+            style.calc.retain(|(p, _)| {
+                !matches!(
+                    p,
+                    CalcProp::Top | CalcProp::Right | CalcProp::Bottom | CalcProp::Left
+                )
+            });
         }
         "transition" => style.transitions.clear(),
         "text-align" => style.text_align = None,
@@ -3253,20 +3303,22 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             }
         }
         Property::BackgroundImage(images) => {
-            style.background_image = images.first().and_then(|image| {
-                image_url(image).map(|url| background_image(url, None))
-            });
+            style.background_image = images
+                .first()
+                .and_then(|image| image_url(image).map(|url| background_image(url, None)));
         }
         Property::Background(backgrounds) => {
             // The shorthand resets `background-repeat` and `background-clip`
             // to their initials (CSS reset semantics); its first layer's
             // color and image apply when supported.
-            let Some(background) = backgrounds.first() else { return };
+            let Some(background) = backgrounds.first() else {
+                return;
+            };
             if let Some(color) = to_color(&background.color) {
                 style.background = Some(color);
             }
-            style.background_image = image_url(&background.image)
-                .map(|url| background_image(url, None));
+            style.background_image =
+                image_url(&background.image).map(|url| background_image(url, None));
         }
         Property::BackgroundRepeat(repeats) => {
             if let Some(repeat) = repeats.first() {
@@ -3282,8 +3334,10 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
             if let Some(clip) = clips.first() {
                 if let Some(image) = &style.background_image {
                     if let Some(box_) = background_clip(clip) {
-                        style.background_image =
-                            Some(BackgroundImageDecl { clip: box_, ..image.clone() });
+                        style.background_image = Some(BackgroundImageDecl {
+                            clip: box_,
+                            ..image.clone()
+                        });
                     }
                 }
             }
@@ -3492,7 +3546,8 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         | Property::TransitionDuration(..)
         | Property::TransitionDelay(..)
         | Property::TransitionTimingFunction(..) => {
-            let _: Option<()> = unsupported("transition longhands (declare the `transition` shorthand)");
+            let _: Option<()> =
+                unsupported("transition longhands (declare the `transition` shorthand)");
         }
         Property::FlexDirection(direction, _) => {
             style.layout.flex_direction = Some(flex_direction(direction));
@@ -3744,10 +3799,18 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         // An unsupported line drops the declaration: the earlier side
         // keeps its value.
-        Property::GridRowStart(line) => style.layout.grid_row[0] = grid_line(line).or(style.layout.grid_row[0].take()),
-        Property::GridRowEnd(line) => style.layout.grid_row[1] = grid_line(line).or(style.layout.grid_row[1].take()),
-        Property::GridColumnStart(line) => style.layout.grid_column[0] = grid_line(line).or(style.layout.grid_column[0].take()),
-        Property::GridColumnEnd(line) => style.layout.grid_column[1] = grid_line(line).or(style.layout.grid_column[1].take()),
+        Property::GridRowStart(line) => {
+            style.layout.grid_row[0] = grid_line(line).or(style.layout.grid_row[0].take())
+        }
+        Property::GridRowEnd(line) => {
+            style.layout.grid_row[1] = grid_line(line).or(style.layout.grid_row[1].take())
+        }
+        Property::GridColumnStart(line) => {
+            style.layout.grid_column[0] = grid_line(line).or(style.layout.grid_column[0].take())
+        }
+        Property::GridColumnEnd(line) => {
+            style.layout.grid_column[1] = grid_line(line).or(style.layout.grid_column[1].take())
+        }
         Property::GridRow(row) => {
             let sides = [grid_line(&row.start), grid_line(&row.end)];
             // A shorthand applies only if EVERY side parses (`span x` is
@@ -3862,16 +3925,20 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         // An unsupported value drops the declaration: the earlier
         // corners keep their values.
         Property::BorderTopLeftRadius(radius, _) => {
-            style.layout.border_radius[0] = corner_radius(radius).or(style.layout.border_radius[0].take());
+            style.layout.border_radius[0] =
+                corner_radius(radius).or(style.layout.border_radius[0].take());
         }
         Property::BorderTopRightRadius(radius, _) => {
-            style.layout.border_radius[1] = corner_radius(radius).or(style.layout.border_radius[1].take());
+            style.layout.border_radius[1] =
+                corner_radius(radius).or(style.layout.border_radius[1].take());
         }
         Property::BorderBottomRightRadius(radius, _) => {
-            style.layout.border_radius[2] = corner_radius(radius).or(style.layout.border_radius[2].take());
+            style.layout.border_radius[2] =
+                corner_radius(radius).or(style.layout.border_radius[2].take());
         }
         Property::BorderBottomLeftRadius(radius, _) => {
-            style.layout.border_radius[3] = corner_radius(radius).or(style.layout.border_radius[3].take());
+            style.layout.border_radius[3] =
+                corner_radius(radius).or(style.layout.border_radius[3].take());
         }
         Property::Outline(outline) => {
             style.outline = OutlineDecl {
@@ -3884,7 +3951,9 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         Property::OutlineStyle(outline_style) => {
             style.outline.visible = Some(outline_visible(outline_style));
         }
-        Property::OutlineWidth(width) => style.outline.width = side_width(width).or(style.outline.width.take()),
+        Property::OutlineWidth(width) => {
+            style.outline.width = side_width(width).or(style.outline.width.take())
+        }
         Property::OutlineColor(color) => style.outline.color = Some(to_color(color)),
         // lightningcss has no typed `outline-offset` either.
         Property::Custom(custom) if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "outline-offset") =>
@@ -4277,8 +4346,7 @@ fn track_sizing(
             // including the first repeat's own start are knowable (their
             // line doesn't depend on the repeat count); everything after
             // the repeat starts is not.
-            let before_or_at_first_repeat =
-                first_repeat.is_none_or(|first| index <= first);
+            let before_or_at_first_repeat = first_repeat.is_none_or(|first| index <= first);
             for name in &list.line_names[index] {
                 if before_or_at_first_repeat {
                     // Positive spelling only: the negative spelling
@@ -5110,10 +5178,13 @@ mod tests {
         // element; the failure memo makes it linear.
         let start = std::time::Instant::now();
         let deep = selector(".b .a .a .a .a .a .a p");
-        let ancestors: Vec<Ancestor> = (0..40)
-            .map(|_| ancestor("div", &["a"]))
-            .collect();
-        assert!(!deep.matches(&element("p", None, &[]), Pseudo::default(), &ancestors, &ElementState::default()));
+        let ancestors: Vec<Ancestor> = (0..40).map(|_| ancestor("div", &["a"])).collect();
+        assert!(!deep.matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &ancestors,
+            &ElementState::default()
+        ));
         assert!(
             start.elapsed() < std::time::Duration::from_millis(100),
             "the combinator matching took {:?}",
@@ -5122,11 +5193,21 @@ mod tests {
         let selector = selector(".panel p");
         let ancestors = vec![ancestor("div", &["panel"]), ancestor("section", &["page"])];
         assert!(
-            selector.matches(&element("p", None, &[]), Pseudo::default(), &ancestors, &ElementState::default()),
+            selector.matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &ancestors,
+                &ElementState::default()
+            ),
             "the panel is an ancestor"
         );
         assert!(
-            !selector.matches(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default()),
+            !selector.matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default()
+            ),
             "no ancestors"
         );
         assert!(
@@ -5146,16 +5227,31 @@ mod tests {
         let selector = selector(".panel > p");
         let direct = vec![ancestor("div", &["panel"]), ancestor("section", &["page"])];
         assert!(
-            selector.matches(&element("p", None, &[]), Pseudo::default(), &direct, &ElementState::default()),
+            selector.matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &direct,
+                &ElementState::default()
+            ),
             "the panel is the parent"
         );
         let deep = vec![ancestor("div", &["other"]), ancestor("div", &["panel"])];
         assert!(
-            !selector.matches(&element("p", None, &[]), Pseudo::default(), &deep, &ElementState::default()),
+            !selector.matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &deep,
+                &ElementState::default()
+            ),
             "the panel is a grandparent"
         );
         assert!(
-            !selector.matches(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default()),
+            !selector.matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default()
+            ),
             "no parent"
         );
     }
@@ -5171,13 +5267,23 @@ mod tests {
             ancestor("main", &["outer"]),
         ];
         assert!(
-            selector.matches(&element("p", None, &[]), Pseudo::default(), &ancestors, &ElementState::default()),
+            selector.matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &ancestors,
+                &ElementState::default()
+            ),
             ".b is the parent, .a is above it"
         );
         // .b and .a are the other way round: no chain satisfies both.
         let wrong_order = vec![ancestor("div", &["a"]), ancestor("section", &["b"])];
         assert!(
-            !selector.matches(&element("p", None, &[]), Pseudo::default(), &wrong_order, &ElementState::default()),
+            !selector.matches(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &wrong_order,
+                &ElementState::default()
+            ),
             ".a must be above .b"
         );
     }
@@ -5233,9 +5339,17 @@ mod tests {
         assert_eq!(selector("p:not(div)").specificity(), (0, 0, 2));
         let sheet = owned_sheet("p:first-child { color: red } p { color: blue }");
         let styles = HtmlStyles::from_sheet(&sheet);
-        let first = ElementState { tag_index: 1, tag_count: 2, ..ElementState::default() };
+        let first = ElementState {
+            tag_index: 1,
+            tag_count: 2,
+            ..ElementState::default()
+        };
         let style = styles.get(&element("p", None, &[]), Pseudo::default(), &[], &first);
-        assert_eq!(style.color, Some(Color::srgb_u8(255, 0, 0)), "the more specific rule wins");
+        assert_eq!(
+            style.color,
+            Some(Color::srgb_u8(255, 0, 0)),
+            "the more specific rule wins"
+        );
     }
 
     /// CSS string escapes: a backslash before a non-hex character keeps
@@ -5269,13 +5383,55 @@ mod tests {
         };
         let none = SelectorReads::default();
         assert_eq!(reads("p { color: red } .a > #b { color: red }"), none);
-        assert_eq!(reads("[data-x] { color: red }"), SelectorReads { dataset: true, ..none });
-        assert_eq!(reads("p:not([data-x]) { color: red }"), SelectorReads { dataset: true, ..none });
-        assert_eq!(reads(".a + p { color: red }"), SelectorReads { adjacent_siblings: true, ..none });
-        assert_eq!(reads(".a ~ p { color: red }"), SelectorReads { general_siblings: true, ..none });
-        assert_eq!(reads("p:first-child { color: red }"), SelectorReads { subject_position: true, ..none });
-        assert_eq!(reads("p:not(:last-child) { color: red }"), SelectorReads { subject_position: true, ..none });
-        assert_eq!(reads("li:first-child p { color: red }"), SelectorReads { context_position: true, ..none });
+        assert_eq!(
+            reads("[data-x] { color: red }"),
+            SelectorReads {
+                dataset: true,
+                ..none
+            }
+        );
+        assert_eq!(
+            reads("p:not([data-x]) { color: red }"),
+            SelectorReads {
+                dataset: true,
+                ..none
+            }
+        );
+        assert_eq!(
+            reads(".a + p { color: red }"),
+            SelectorReads {
+                adjacent_siblings: true,
+                ..none
+            }
+        );
+        assert_eq!(
+            reads(".a ~ p { color: red }"),
+            SelectorReads {
+                general_siblings: true,
+                ..none
+            }
+        );
+        assert_eq!(
+            reads("p:first-child { color: red }"),
+            SelectorReads {
+                subject_position: true,
+                ..none
+            }
+        );
+        assert_eq!(
+            reads("p:not(:last-child) { color: red }"),
+            SelectorReads {
+                subject_position: true,
+                ..none
+            }
+        );
+        assert_eq!(
+            reads("li:first-child p { color: red }"),
+            SelectorReads {
+                context_position: true,
+                ..none
+            }
+        );
         assert_eq!(
             reads("[data-x] + p:nth-child(2) { color: red }"),
             SelectorReads {
@@ -5288,14 +5444,32 @@ mod tests {
         );
         assert!(!none.sibling_dependent());
         for dependent in [
-            SelectorReads { adjacent_siblings: true, ..none },
-            SelectorReads { general_siblings: true, ..none },
-            SelectorReads { subject_position: true, ..none },
-            SelectorReads { context_position: true, ..none },
+            SelectorReads {
+                adjacent_siblings: true,
+                ..none
+            },
+            SelectorReads {
+                general_siblings: true,
+                ..none
+            },
+            SelectorReads {
+                subject_position: true,
+                ..none
+            },
+            SelectorReads {
+                context_position: true,
+                ..none
+            },
         ] {
             assert!(dependent.sibling_dependent(), "{dependent:?}");
         }
-        assert!(!SelectorReads { dataset: true, ..none }.sibling_dependent());
+        assert!(
+            !SelectorReads {
+                dataset: true,
+                ..none
+            }
+            .sibling_dependent()
+        );
     }
 
     /// A `+` or a space inside parentheses, brackets or quotes is no
@@ -5309,7 +5483,12 @@ mod tests {
             ("p:nth-of-type(3n+1) { color: red }", 4, None, true),
             ("p:nth-of-type(3n+1) { color: red }", 2, None, false),
             (r#"p[data-x="a b"] { color: red }"#, 1, Some("a b"), true),
-            (r#"p[data-x="a+b~c>d"] { color: red }"#, 1, Some("a+b~c>d"), true),
+            (
+                r#"p[data-x="a+b~c>d"] { color: red }"#,
+                1,
+                Some("a+b~c>d"),
+                true,
+            ),
             (r#"p[data-x="a b"] { color: red }"#, 1, Some("a"), false),
             // A `]` and a backslash-escaped quote inside the value.
             (r#"p[data-x="a] b"] { color: red }"#, 1, Some("a] b"), true),
@@ -5317,7 +5496,12 @@ mod tests {
             (r#"p[data-x="a\\b"] { color: red }"#, 1, Some("a\\b"), true),
             (r#"p[data-x="\41 B"] { color: red }"#, 1, Some("AB"), true),
             // An escaped quote, then a `]` and a space, all in the value.
-            (r#"p[data-x='a"] b'] { color: red }"#, 1, Some("a\"] b"), true),
+            (
+                r#"p[data-x='a"] b'] { color: red }"#,
+                1,
+                Some("a\"] b"),
+                true,
+            ),
         ] {
             let sheet = owned_sheet(css);
             let styles = HtmlStyles::from_sheet(&sheet);
@@ -5334,7 +5518,11 @@ mod tests {
                 ..ElementState::default()
             };
             let style = styles.get(&element, Pseudo::default(), &[], &state);
-            assert_eq!(style.color.is_some(), matches, "{css} at {index} with {value:?}");
+            assert_eq!(
+                style.color.is_some(),
+                matches,
+                "{css} at {index} with {value:?}"
+            );
         }
     }
 
@@ -5351,12 +5539,7 @@ mod tests {
         };
         // `+`: the immediately preceding sibling.
         assert!(
-            selector(".hot + p").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[],
-                &state
-            ),
+            selector(".hot + p").matches(&element("p", None, &[]), Pseudo::default(), &[], &state),
             "the hot div is the immediately preceding sibling"
         );
         // `+` does not reach past the adjacent sibling.
@@ -5371,42 +5554,31 @@ mod tests {
         );
         // `~`: any preceding sibling.
         assert!(
-            selector(".page ~ p").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[],
-                &state
-            ),
+            selector(".page ~ p").matches(&element("p", None, &[]), Pseudo::default(), &[], &state),
             "the page section precedes"
         );
         // The wrong sibling.
-        assert!(
-            !selector(".cold + p").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[],
-                &state
-            )
-        );
+        assert!(!selector(".cold + p").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &state
+        ));
         // The first element has no preceding siblings.
-        assert!(
-            !selector(".hot + p").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[],
-                &ElementState::default()
-            )
-        );
+        assert!(!selector(".hot + p").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState::default()
+        ));
         // A sibling combinator at a NON-subject position never matches
         // (the sibling's own siblings aren't threaded).
-        assert!(
-            !selector(".hot + div p").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[ancestor("div", &[])],
-                &state
-            )
-        );
+        assert!(!selector(".hot + div p").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[ancestor("div", &[])],
+            &state
+        ));
         // The sibling's parts still combine with the rest's ancestors
         // (`a b + c`: a is in c's chain, above the shared parent).
         assert!(
@@ -5422,37 +5594,45 @@ mod tests {
         // (`:hover` on it) — a flip on the sibling may change this
         // element (the sibling's parts wildcarded).
         let sheet = owned_sheet(".hot:hover + p { color: #00ff00 }");
-        assert!(
-            HtmlStyles::from_sheet(&sheet).pseudo_reactive(
-                &element("p", None, &[]),
-                &[],
-                &state
-            )
-        );
+        assert!(HtmlStyles::from_sheet(&sheet).pseudo_reactive(
+            &element("p", None, &[]),
+            &[],
+            &state
+        ));
         // A sibling keyed by class only (no pseudo) isn't: a flip on the
         // sibling can't change the match.
         let sheet = owned_sheet(".hot + p { color: #00ff00 }");
-        assert!(
-            !HtmlStyles::from_sheet(&sheet).pseudo_reactive(
-                &element("p", None, &[]),
-                &[],
-                &state
-            )
-        );
+        assert!(!HtmlStyles::from_sheet(&sheet).pseudo_reactive(
+            &element("p", None, &[]),
+            &[],
+            &state
+        ));
     }
 
     #[test]
     fn attribute_selectors_match_data_attributes() {
         let element = element("p", None, &[]);
         let mut element = element;
-        element.dataset.insert("kind".to_owned(), "magic".to_owned());
+        element
+            .dataset
+            .insert("kind".to_owned(), "magic".to_owned());
         let state = ElementState::default();
         // Presence.
         assert!(selector("p[data-kind]").matches(&element, Pseudo::default(), &[], &state));
         assert!(!selector("p[data-missing]").matches(&element, Pseudo::default(), &[], &state));
         // Value.
-        assert!(selector("p[data-kind=\"magic\"]").matches(&element, Pseudo::default(), &[], &state));
-        assert!(!selector("p[data-kind=\"other\"]").matches(&element, Pseudo::default(), &[], &state));
+        assert!(selector("p[data-kind=\"magic\"]").matches(
+            &element,
+            Pseudo::default(),
+            &[],
+            &state
+        ));
+        assert!(!selector("p[data-kind=\"other\"]").matches(
+            &element,
+            Pseudo::default(),
+            &[],
+            &state
+        ));
         // Single quotes.
         assert!(selector("p[data-kind='magic']").matches(&element, Pseudo::default(), &[], &state));
         // A non-data attribute drops the rule (the crate's element model
@@ -5461,12 +5641,7 @@ mod tests {
         // The specificity: an attribute counts as a class (a data rule
         // beats a type rule).
         let sheet = owned_sheet("p { color: #ffffff } p[data-kind] { color: #00ff00 }");
-        let style = HtmlStyles::from_sheet(&sheet).get(
-            &element,
-            Pseudo::default(),
-            &[],
-            &state,
-        );
+        let style = HtmlStyles::from_sheet(&sheet).get(&element, Pseudo::default(), &[], &state);
         assert_eq!(style.color, Some(Color::srgb(0.0, 1.0, 0.0)));
     }
 
@@ -5578,9 +5753,7 @@ mod tests {
     /// clamped to the first).
     #[test]
     fn negative_named_lines_count_from_the_end() {
-        let style = declared(
-            "display: grid; grid-template-columns: [a] 1fr [a] 1fr [a] 1fr [b]",
-        );
+        let style = declared("display: grid; grid-template-columns: [a] 1fr [a] 1fr [a] 1fr [b]");
         let grid = style.layout.grid_names.as_ref();
         let resolve = |placement: &str| {
             let mut child = declared(&format!("grid-column: {placement}"));
@@ -5601,9 +5774,7 @@ mod tests {
     /// repeat as positive lines, the final boundary from the end.
     #[test]
     fn repeat_names_register() {
-        let style = declared(
-            "display: grid; grid-template-columns: repeat(2, [a] 1fr [b]) [c]",
-        );
+        let style = declared("display: grid; grid-template-columns: repeat(2, [a] 1fr [b]) [c]");
         let names = style.layout.grid_names.expect("line names");
         // One track per repetition: `a`@1, the merged boundary (`b` and
         // `a` on the SAME line — registered once each; a duplicate
@@ -5647,21 +5818,17 @@ mod tests {
     /// whole table.
     #[test]
     fn later_grid_declarations_reset_names() {
-        let style = declared(
-            "display: grid; grid-template-rows: [a] 1fr; grid-template-rows: 1fr",
-        );
+        let style = declared("display: grid; grid-template-rows: [a] 1fr; grid-template-rows: 1fr");
         assert_eq!(
             style.layout.grid_names.map(|names| names.rows.is_empty()),
             Some(true)
         );
-        let style = declared(
-            "display: grid; grid-template-areas: \"x y\"; grid-template-areas: none",
-        );
+        let style =
+            declared("display: grid; grid-template-areas: \"x y\"; grid-template-areas: none");
         let names = style.layout.grid_names.expect("table");
         assert!(names.areas.is_empty() && names.implied_rows == 0);
-        let style = declared(
-            "display: grid; grid-template-areas: \"x y\"; grid-template: 1fr / 1fr",
-        );
+        let style =
+            declared("display: grid; grid-template-areas: \"x y\"; grid-template: 1fr / 1fr");
         let names = style.layout.grid_names.expect("table");
         assert!(names.areas.is_empty() && names.rows.is_empty() && names.columns.is_empty());
     }
@@ -5781,20 +5948,17 @@ mod tests {
         let style = declared("display: grid; grid-template-columns: repeat(40000, [a] 1fr)");
         assert_eq!(style.layout.grid_template_columns, None);
         // A 40 000-row template with names.
-        let style = declared(
-            concat!(
-                "display: grid; grid-template-columns: 1fr; grid-template-rows: ",
-                "repeat(40000, auto)"
-            ),
-        );
+        let style = declared(concat!(
+            "display: grid; grid-template-columns: 1fr; grid-template-rows: ",
+            "repeat(40000, auto)"
+        ));
         assert_eq!(style.layout.grid_template_rows, None);
         // The count × tracks product saturates (review_0003 G38): this
         // one is 2^32 + 2, which wrapped to 2 on 32-bit targets and
         // slipped under the cap. (On 64-bit it never wrapped; the test
         // pins the outcome on every target.)
-        let style = declared(
-            "display: grid; grid-template-columns: repeat(1431655766, [a] 1px 1px 1px)",
-        );
+        let style =
+            declared("display: grid; grid-template-columns: repeat(1431655766, [a] 1px 1px 1px)");
         assert_eq!(style.layout.grid_template_columns, None);
         // A normal grid still resolves.
         let style = declared("display: grid; grid-template-columns: repeat(3, [a] 1fr)");
@@ -5825,7 +5989,12 @@ mod tests {
         let parsed = owned_sheet(&sheet);
         let styles = HtmlStyles::from_sheet(&parsed);
         let start = std::time::Instant::now();
-        let style = styles.get(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default());
+        let style = styles.get(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState::default(),
+        );
         let elapsed = start.elapsed();
         assert!(
             elapsed < std::time::Duration::from_millis(150),
@@ -5857,9 +6026,8 @@ mod tests {
         assert_eq!(style.layout.width, Some(Val::Px(8.0)));
         // A name outside the cycle that references a member takes its own
         // fallback: --x isn't on the cycle.
-        let style = declared(
-            "--a: var(--b, 1px); --b: var(--a, 2px); --x: var(--a, 3px); width: var(--x)",
-        );
+        let style =
+            declared("--a: var(--b, 1px); --b: var(--a, 2px); --x: var(--a, 3px); width: var(--x)");
         assert_eq!(style.layout.width, Some(Val::Px(3.0)));
         // The cycle is local: an unrelated property still resolves.
         let style = declared("--a: var(--a, 5px); color: #00ff00; width: 10px");
@@ -5990,7 +6158,10 @@ mod tests {
             .b { background: url(img/a\).png); border-image: url("x{.png") 4 }
             .c\{ { color: red }
         "#;
-        assert!(!nesting_over_limit(authored, MAX_CSS_NESTING), "authored CSS passes");
+        assert!(
+            !nesting_over_limit(authored, MAX_CSS_NESTING),
+            "authored CSS passes"
+        );
 
         // The inline path drops the attribute instead of crashing.
         let html = format!(r#"<p style="width: {}">x</p>"#, deep(400));
@@ -6025,8 +6196,7 @@ mod tests {
             .join(" ");
         // The registration runs per element style, not at sheet parse.
         // (`declared` wraps its argument in `p { … }` itself.)
-        let sheet =
-            format!("display: grid; grid-template-columns: repeat(1000, [{names}] 1px)");
+        let sheet = format!("display: grid; grid-template-columns: repeat(1000, [{names}] 1px)");
         let t = Instant::now();
         let _ = declared(&sheet).layout.grid_names;
         let elapsed = t.elapsed();
@@ -6044,8 +6214,12 @@ mod tests {
     #[test]
     fn unsupported_shorthand_sides_drop_the_whole_declaration() {
         let get = |rules: &str| {
-            HtmlStyles::from_sheet(&owned_sheet(rules))
-                .get(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default())
+            HtmlStyles::from_sheet(&owned_sheet(rules)).get(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default(),
+            )
         };
         let style = get(
             "p { display: grid; grid-column: 2 / 3 } p { display: grid; grid-column: span x / 5 }",
@@ -6062,15 +6236,29 @@ mod tests {
         assert_eq!(style.layout.grid_column[0], Some(GridLineDecl::Line(2)));
         assert_eq!(style.layout.grid_column[1], Some(GridLineDecl::Line(4)));
 
-        let style =
-            get("p { border-radius: 8px } p { border-radius: calc(10% + 2px) 4px }");
-        assert_eq!(style.layout.border_radius[0], Some((Val::Px(8.0), Val::Px(8.0))));
-        assert_eq!(style.layout.border_radius[1], Some((Val::Px(8.0), Val::Px(8.0))));
-        assert_eq!(style.layout.border_radius[2], Some((Val::Px(8.0), Val::Px(8.0))));
-        assert_eq!(style.layout.border_radius[3], Some((Val::Px(8.0), Val::Px(8.0))));
+        let style = get("p { border-radius: 8px } p { border-radius: calc(10% + 2px) 4px }");
+        assert_eq!(
+            style.layout.border_radius[0],
+            Some((Val::Px(8.0), Val::Px(8.0)))
+        );
+        assert_eq!(
+            style.layout.border_radius[1],
+            Some((Val::Px(8.0), Val::Px(8.0)))
+        );
+        assert_eq!(
+            style.layout.border_radius[2],
+            Some((Val::Px(8.0), Val::Px(8.0)))
+        );
+        assert_eq!(
+            style.layout.border_radius[3],
+            Some((Val::Px(8.0), Val::Px(8.0)))
+        );
         // A supported shorthand still applies.
         let style = get("p { border-radius: 8px } p { border-radius: 4px 6px }");
-        assert_eq!(style.layout.border_radius[1], Some((Val::Px(6.0), Val::Px(6.0))));
+        assert_eq!(
+            style.layout.border_radius[1],
+            Some((Val::Px(6.0), Val::Px(6.0)))
+        );
     }
 
     /// Deep: drops instead of overflowing.
@@ -6102,10 +6290,7 @@ mod tests {
         assert_eq!(style.pointer_events, Some(false));
         let style = declared("--offset: 2px; outline-offset: var(--offset)");
         assert_eq!(style.outline.offset, Some(2.0));
-        let style = declared_with_context(
-            "pointer-events: var(--pe)",
-            &[("--pe", "auto")],
-        );
+        let style = declared_with_context("pointer-events: var(--pe)", &[("--pe", "auto")]);
         assert_eq!(style.pointer_events, Some(true));
     }
 
@@ -6121,7 +6306,10 @@ mod tests {
             )),
             ["--a", "--brand"]
         );
-        assert_eq!(var_names(&owned_sheet("p { color: var(--brand) }")), ["--brand"]);
+        assert_eq!(
+            var_names(&owned_sheet("p { color: var(--brand) }")),
+            ["--brand"]
+        );
     }
 
     /// `restore_from` undoes everything `apply_to` writes: a `fixed`
@@ -6174,7 +6362,10 @@ mod tests {
         );
         let style = get("p { row-gap: 8px } p { row-gap: 5% }", &[]);
         assert_eq!(style.row_gap, Some(8.0));
-        let style = get("p { width: calc(50% - 10px) } p { width: fit-content }", &[]);
+        let style = get(
+            "p { width: calc(50% - 10px) } p { width: fit-content }",
+            &[],
+        );
         assert!(style.calc.iter().any(|(prop, _)| *prop == CalcProp::Width));
         // Control: without the invalid value the later declaration wins.
         let style = get("p { width: 10px } p { width: 20px }", &[]);
@@ -6190,7 +6381,10 @@ mod tests {
         assert_eq!(style.outline.width, Some(2.0));
         let style = get("p { outline-offset: 2px } p { outline-offset: 1em }", &[]);
         assert_eq!(style.outline.offset, Some(2.0));
-        let style = get("p { pointer-events: none } p { pointer-events: visiblePainted }", &[]);
+        let style = get(
+            "p { pointer-events: none } p { pointer-events: visiblePainted }",
+            &[],
+        );
         assert_eq!(style.pointer_events, Some(false));
         let style = get("p { visibility: hidden } p { visibility: collapse }", &[]);
         assert_eq!(style.layout.visibility, Some(false));
@@ -6198,7 +6392,10 @@ mod tests {
             "p { border-radius: 8px } p { border-radius: calc(10% + 2px) }",
             &[],
         );
-        assert_eq!(style.layout.border_radius[0], Some((Val::Px(8.0), Val::Px(8.0))));
+        assert_eq!(
+            style.layout.border_radius[0],
+            Some((Val::Px(8.0), Val::Px(8.0)))
+        );
     }
 
     /// `initial`/`inherit`/`unset`/`revert` return the field to its
@@ -6208,8 +6405,12 @@ mod tests {
     #[test]
     fn inherit_initial_unset_clear_the_field() {
         let get = |rules: &str| {
-            HtmlStyles::from_sheet(&owned_sheet(rules))
-                .get(&element("p", None, &[]), Pseudo::default(), &[], &ElementState::default())
+            HtmlStyles::from_sheet(&owned_sheet(rules)).get(
+                &element("p", None, &[]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default(),
+            )
         };
         assert_eq!(get("p { color: #ff0000 } p { color: initial }").color, None);
         assert_eq!(get("p { color: #ff0000 } p { color: inherit }").color, None);
@@ -6243,7 +6444,11 @@ mod tests {
         // property's calc entries).
         let style = get("p { left: calc(50% - 10px) } p { margin: initial }");
         assert_eq!(
-            style.calc.iter().find(|(p, _)| *p == CalcProp::Left).map(|(_, c)| c.clone()),
+            style
+                .calc
+                .iter()
+                .find(|(p, _)| *p == CalcProp::Left)
+                .map(|(_, c)| c.clone()),
             Some(CalcExpr::Sum(
                 Box::new(CalcExpr::Val(Val::Percent(50.0))),
                 Box::new(CalcExpr::Val(Val::Px(-10.0)))
@@ -6252,7 +6457,10 @@ mod tests {
         );
         let style = get("p { margin: calc(1em + 2px) } p { inset: initial }");
         assert!(
-            style.calc.iter().any(|(p, _)| matches!(p, CalcProp::MarginTop)),
+            style
+                .calc
+                .iter()
+                .any(|(p, _)| matches!(p, CalcProp::MarginTop)),
             "the margin calc survives inset: initial"
         );
 
@@ -6261,8 +6469,14 @@ mod tests {
             "p { border-radius: 8px } p { border-top-left-radius: initial }"
         ));
         assert_eq!(style.layout.border_radius[0], None);
-        assert_eq!(style.layout.border_radius[1], Some((Val::Px(8.0), Val::Px(8.0))));
-        assert_eq!(style.layout.border_radius[3], Some((Val::Px(8.0), Val::Px(8.0))));
+        assert_eq!(
+            style.layout.border_radius[1],
+            Some((Val::Px(8.0), Val::Px(8.0)))
+        );
+        assert_eq!(
+            style.layout.border_radius[3],
+            Some((Val::Px(8.0), Val::Px(8.0)))
+        );
 
         // An unknown property's keyword resets too (G32: they arrived as
         // a Custom with an Unknown name and fell through to the
@@ -6287,7 +6501,12 @@ mod tests {
     fn pseudo_only_compounds_match_any_element() {
         let style = |pseudo| {
             let sheet = owned_sheet(":focus-visible { color: #ff0000 } *:hover { color: #00ff00 }");
-            HtmlStyles::from_sheet(&sheet).get(&element("p", None, &[]), pseudo, &[], &ElementState::default())
+            HtmlStyles::from_sheet(&sheet).get(
+                &element("p", None, &[]),
+                pseudo,
+                &[],
+                &ElementState::default(),
+            )
         };
         assert_eq!(
             style(Pseudo {
@@ -6325,9 +6544,7 @@ mod tests {
     /// last declaration; the longhands are unsupported.
     #[test]
     fn transition_shorthand_parses_per_property() {
-        let style = declared(
-            "transition: background-color 0.2s ease-in, color 0.1s linear 0.05s",
-        );
+        let style = declared("transition: background-color 0.2s ease-in, color 0.1s linear 0.05s");
         assert_eq!(style.transitions.len(), 2);
         assert_eq!(
             style.transitions[0].property,
@@ -6335,10 +6552,7 @@ mod tests {
         );
         assert!((style.transitions[0].duration - 0.2).abs() < 1e-5);
         assert_eq!(style.transitions[0].delay, 0.0);
-        assert_eq!(
-            style.transitions[0].easing,
-            EasingFunction::EaseIn
-        );
+        assert_eq!(style.transitions[0].easing, EasingFunction::EaseIn);
         assert_eq!(style.transitions[1].property, TransitionProp::TextColor);
         assert!((style.transitions[1].duration - 0.1).abs() < 1e-5);
         assert!((style.transitions[1].delay - 0.05).abs() < 1e-5);
@@ -6423,15 +6637,9 @@ mod tests {
         // calc() around var(): substitution is textual (as in browsers —
         // a unitless number where a length is required is invalid), so a
         // same-unit sum collapses at style time.
-        let style = declared_with_context(
-            "width: calc(var(--w) + 40px)",
-            &[("--w", "120px")],
-        );
+        let style = declared_with_context("width: calc(var(--w) + 40px)", &[("--w", "120px")]);
         assert_eq!(style.layout.width, Some(Val::Px(160.0)));
-        let style = declared_with_context(
-            "width: calc(var(--w) + 40px)",
-            &[("--w", "120")],
-        );
+        let style = declared_with_context("width: calc(var(--w) + 40px)", &[("--w", "120")]);
         assert_eq!(style.layout.width, None);
     }
 
@@ -6449,7 +6657,10 @@ mod tests {
 
         assert_eq!(
             layout("overflow: hidden scroll").overflow,
-            [Some(OverflowAxisDecl::Hidden), Some(OverflowAxisDecl::Scroll)]
+            [
+                Some(OverflowAxisDecl::Hidden),
+                Some(OverflowAxisDecl::Scroll)
+            ]
         );
         assert_eq!(
             layout("overflow: clip").overflow,
@@ -7005,9 +7216,7 @@ mod tests {
         // references the name. The custom-property URL is a separate
         // list: unresolvable ones (a data URI, a scheme) are skipped by
         // the loader instead of failing the sheet.
-        let sheet = owned_sheet(
-            r#"p { --frame: url("a.png"); border-image: var(--frame) 4 }"#,
-        );
+        let sheet = owned_sheet(r#"p { --frame: url("a.png"); border-image: var(--frame) 4 }"#);
         assert_eq!(image_urls(&sheet), Vec::<String>::new());
         assert_eq!(custom_image_urls(&sheet), ["a.png"]);
     }
@@ -7219,10 +7428,22 @@ mod tests {
     fn an_b_extreme_offsets_match_without_overflow() {
         let anb = |a, b| AnB { a, b };
         for index in [1, 2, 7] {
-            assert!(anb(1, -2147483647).matches(index), "n-2147483647 at {index}");
-            assert!(!anb(-1, -2147483647).matches(index), "-n-2147483647 at {index}");
-            assert!(anb(-1, 2147483647).matches(index), "-n+2147483647 at {index}");
-            assert!(!anb(i32::MIN, i32::MIN).matches(index), "MIN·n+MIN at {index}");
+            assert!(
+                anb(1, -2147483647).matches(index),
+                "n-2147483647 at {index}"
+            );
+            assert!(
+                !anb(-1, -2147483647).matches(index),
+                "-n-2147483647 at {index}"
+            );
+            assert!(
+                anb(-1, 2147483647).matches(index),
+                "-n+2147483647 at {index}"
+            );
+            assert!(
+                !anb(i32::MIN, i32::MIN).matches(index),
+                "MIN·n+MIN at {index}"
+            );
             assert!(anb(i32::MAX, index as i32).matches(index), "MAX·n+{index}");
         }
     }
@@ -7281,7 +7502,10 @@ mod tests {
             &element("p", None, &[]),
             Pseudo::default(),
             &[],
-            &ElementState { tag_index: 2, ..ElementState::default() },
+            &ElementState {
+                tag_index: 2,
+                ..ElementState::default()
+            },
         );
         assert!(nth, "the second p matches nth-child(2)");
         assert!(
@@ -7301,57 +7525,78 @@ mod tests {
             empty: true,
             ..ElementState::default()
         };
-        assert!(selector("p:first-child").matches(&element("p", None, &[]), Pseudo::default(), &[], &state));
-        assert!(selector("p:last-child").matches(&element("p", None, &[]), Pseudo::default(), &[], &state));
-        assert!(selector("p:empty").matches(&element("p", None, &[]), Pseudo::default(), &[], &state));
-        assert!(selector("p:focus-within").matches(&element("p", None, &[]), Pseudo::default(), &[], &state));
-        assert!(
-            !selector("p:empty").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[],
-                &ElementState { empty: false, ..state }
-            )
-        );
+        assert!(selector("p:first-child").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &state
+        ));
+        assert!(selector("p:last-child").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &state
+        ));
+        assert!(selector("p:empty").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &state
+        ));
+        assert!(selector("p:focus-within").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &state
+        ));
+        assert!(!selector("p:empty").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState {
+                empty: false,
+                ..state
+            }
+        ));
     }
 
     #[test]
     fn not_negates_a_compound() {
         // `:not(.special)` — a non-special p matches; a special one doesn't.
-        assert!(
-            selector("p:not(.special)").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[],
-                &ElementState::default()
-            )
-        );
-        assert!(
-            !selector("p:not(.special)").matches(
-                &element("p", None, &["special"]),
-                Pseudo::default(),
-                &[],
-                &ElementState::default()
-            )
-        );
+        assert!(selector("p:not(.special)").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState::default()
+        ));
+        assert!(!selector("p:not(.special)").matches(
+            &element("p", None, &["special"]),
+            Pseudo::default(),
+            &[],
+            &ElementState::default()
+        ));
         // The argument's own structural parts evaluate for the same
         // element.
-        assert!(
-            !selector("p:not(:first-child)").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[],
-                &ElementState { tag_index: 1, tag_count: 2, ..ElementState::default() }
-            )
-        );
-        assert!(
-            selector("p:not(:first-child)").matches(
-                &element("p", None, &[]),
-                Pseudo::default(),
-                &[],
-                &ElementState { tag_index: 2, tag_count: 2, ..ElementState::default() }
-            )
-        );
+        assert!(!selector("p:not(:first-child)").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState {
+                tag_index: 1,
+                tag_count: 2,
+                ..ElementState::default()
+            }
+        ));
+        assert!(selector("p:not(:first-child)").matches(
+            &element("p", None, &[]),
+            Pseudo::default(),
+            &[],
+            &ElementState {
+                tag_index: 2,
+                tag_count: 2,
+                ..ElementState::default()
+            }
+        ));
         // A selector list (a comma inside) is unsupported: the rule skips.
         assert!(Selector::parse("p:not(.a, .b)").is_none());
     }
@@ -7370,30 +7615,63 @@ mod tests {
         }
         // `match-parent`/`justify-all` need direction/text-justify: the
         // declaration drops (an earlier rule's value stands).
-        assert_eq!(declared("text-align: center; text-align: match-parent").text_align, Some(TextAlignSpec::Center));
+        assert_eq!(
+            declared("text-align: center; text-align: match-parent").text_align,
+            Some(TextAlignSpec::Center)
+        );
         assert_eq!(declared("text-align: justify-all").text_align, None);
     }
 
     #[test]
     fn line_height_kinds_resolve_per_kind() {
-        assert_eq!(declared("line-height: normal").line_height, Some(LineHeightSpec::Normal));
-        assert_eq!(declared("line-height: 1.5").line_height, Some(LineHeightSpec::Relative(1.5)));
-        assert_eq!(declared("line-height: 150%").line_height, Some(LineHeightSpec::Relative(1.5)));
+        assert_eq!(
+            declared("line-height: normal").line_height,
+            Some(LineHeightSpec::Normal)
+        );
+        assert_eq!(
+            declared("line-height: 1.5").line_height,
+            Some(LineHeightSpec::Relative(1.5))
+        );
+        assert_eq!(
+            declared("line-height: 150%").line_height,
+            Some(LineHeightSpec::Relative(1.5))
+        );
         // `em` is a multiple of the element's own size (re-multiplied per
         // element, like CSS's unitless inheritance).
-        assert_eq!(declared("line-height: 1.25em").line_height, Some(LineHeightSpec::Relative(1.25)));
-        assert_eq!(declared("line-height: 30px").line_height, Some(LineHeightSpec::Px(30.0)));
-        assert_eq!(declared("line-height: 2rem").line_height, Some(LineHeightSpec::Rem(2.0)));
+        assert_eq!(
+            declared("line-height: 1.25em").line_height,
+            Some(LineHeightSpec::Relative(1.25))
+        );
+        assert_eq!(
+            declared("line-height: 30px").line_height,
+            Some(LineHeightSpec::Px(30.0))
+        );
+        assert_eq!(
+            declared("line-height: 2rem").line_height,
+            Some(LineHeightSpec::Rem(2.0))
+        );
         // A calc or a viewport unit drops the declaration.
         assert_eq!(declared("line-height: 10vh").line_height, None);
     }
 
     #[test]
     fn letter_spacing_units_keep_their_kind() {
-        assert_eq!(declared("letter-spacing: normal").letter_spacing, Some(LetterSpacingSpec::Normal));
-        assert_eq!(declared("letter-spacing: 2px").letter_spacing, Some(LetterSpacingSpec::Px(2.0)));
-        assert_eq!(declared("letter-spacing: 0.1em").letter_spacing, Some(LetterSpacingSpec::Em(0.1)));
-        assert_eq!(declared("letter-spacing: 0.5rem").letter_spacing, Some(LetterSpacingSpec::Rem(0.5)));
+        assert_eq!(
+            declared("letter-spacing: normal").letter_spacing,
+            Some(LetterSpacingSpec::Normal)
+        );
+        assert_eq!(
+            declared("letter-spacing: 2px").letter_spacing,
+            Some(LetterSpacingSpec::Px(2.0))
+        );
+        assert_eq!(
+            declared("letter-spacing: 0.1em").letter_spacing,
+            Some(LetterSpacingSpec::Em(0.1))
+        );
+        assert_eq!(
+            declared("letter-spacing: 0.5rem").letter_spacing,
+            Some(LetterSpacingSpec::Rem(0.5))
+        );
         // Other absolute units convert (2.54cm = 96px).
         assert_eq!(
             declared("letter-spacing: 2.54cm").letter_spacing,
@@ -7409,7 +7687,10 @@ mod tests {
             ("list-style-type: circle", ListStyleSpec::Circle),
             ("list-style-type: square", ListStyleSpec::Square),
             ("list-style-type: decimal", ListStyleSpec::Decimal),
-            ("list-style-type: decimal-leading-zero", ListStyleSpec::Decimal),
+            (
+                "list-style-type: decimal-leading-zero",
+                ListStyleSpec::Decimal,
+            ),
             ("list-style-type: none", ListStyleSpec::None),
         ] {
             assert_eq!(declared(declaration).list_style, Some(expected));

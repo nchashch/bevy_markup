@@ -193,13 +193,23 @@ fn testbench_contexts() -> Vec<Value> {
     ]);
     let stats = json!({ "avg_ms": "16.7", "max_ms": "33.2", "fps": "60", "builds": 60, "restyles": 0, "uis": 1, "elements": 2040 });
     let checks = |state: &str| {
-        json!([
-            "budget", "built", "survived", "sheet-refused", "no-forged", "no-fallback", "map-literal",
-            "include-refused", "border-skipped", "twins",
-        ]
-        .iter()
-        .map(|id| json!({ "id": id, "state": state, "detail": "(12 / 0)" }))
-        .collect::<Vec<_>>())
+        json!(
+            [
+                "budget",
+                "built",
+                "survived",
+                "sheet-refused",
+                "no-forged",
+                "no-fallback",
+                "map-literal",
+                "include-refused",
+                "border-skipped",
+                "twins",
+            ]
+            .iter()
+            .map(|id| json!({ "id": id, "state": state, "detail": "(12 / 0)" }))
+            .collect::<Vec<_>>()
+        )
     };
     ["big-document", "nested-rules", "indent-vs-flat"]
         .iter()

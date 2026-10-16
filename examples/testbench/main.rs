@@ -36,10 +36,10 @@ use std::sync::OnceLock;
 use bevy::asset::io::memory::{Dir, MemoryAssetReader};
 use bevy::asset::io::{AssetSourceBuilder, ErasedAssetReader};
 use bevy::diagnostic::FrameCount;
-use bevy::ui_widgets::ScrollArea;
 use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
-use bevy::text::LetterSpacing;
 use bevy::prelude::*;
+use bevy::text::LetterSpacing;
+use bevy::ui_widgets::ScrollArea;
 use bevy_markup::prelude::*;
 use bevy_markup::{WindowModel, WindowSpacer};
 use serde_json::{Value, json};
@@ -174,7 +174,10 @@ impl Bench {
         let size = value("--size")
             .and_then(|size| size.parse::<usize>().ok())
             .map_or(4, |size| {
-                SIZES.iter().position(|step| *step >= size).unwrap_or(SIZES.len() - 1)
+                SIZES
+                    .iter()
+                    .position(|step| *step >= size)
+                    .unwrap_or(SIZES.len() - 1)
             });
         Self {
             scenarios,
@@ -403,7 +406,8 @@ fn handle_signals(
         match signal.name.as_ref() {
             "scenario" => {
                 let id = signal.payload.get("id").and_then(Value::as_str);
-                if let Some(index) = id.and_then(|id| bench.scenarios.iter().position(|s| *s == id)) {
+                if let Some(index) = id.and_then(|id| bench.scenarios.iter().position(|s| *s == id))
+                {
                     bench.select(index);
                 }
             }
@@ -518,7 +522,10 @@ fn start_scenario(
     }
     bench.generation += 1;
     let id = bench.id();
-    debug!("testbench: start {id} #{} (size {})", bench.generation, SIZES[bench.size]);
+    debug!(
+        "testbench: start {id} #{} (size {})",
+        bench.generation, SIZES[bench.size]
+    );
     bench.model = Model::new(scenarios::model_rows(id, SIZES[bench.size]));
     bench.paused = false;
     bench.started = frames.0;
@@ -552,7 +559,10 @@ fn start_scenario(
         };
         for role in roles {
             let template = server.load::<HtmlTemplate>(spec.template.clone());
-            let sheet = spec.stylesheet.clone().map(|path| server.load::<Stylesheet>(path));
+            let sheet = spec
+                .stylesheet
+                .clone()
+                .map(|path| server.load::<Stylesheet>(path));
             let context = spec
                 .context
                 .clone()
@@ -626,7 +636,16 @@ fn start_scenario(
 fn scroll_workloads(
     bench: Res<Bench>,
     frames: Res<FrameCount>,
-    mut workloads: Query<(Entity, &Workload, &mut ScrollPosition, &ComputedNode, &Children), Without<FreshTwin>>,
+    mut workloads: Query<
+        (
+            Entity,
+            &Workload,
+            &mut ScrollPosition,
+            &ComputedNode,
+            &Children,
+        ),
+        Without<FreshTwin>,
+    >,
     spacers: Query<&WindowSpacer>,
     models: Query<&WindowModel>,
 ) {
@@ -643,18 +662,32 @@ fn scroll_workloads(
         let scale = computed.inverse_scale_factor;
         let range = ((computed.content_size.y - computed.size.y) * scale).max(0.0);
         let sweep = (frames.0 as f32 * 150.0) % (2.0 * range.max(1.0));
-        scroll.0.y = if sweep < range { sweep } else { 2.0 * range - sweep };
+        scroll.0.y = if sweep < range {
+            sweep
+        } else {
+            2.0 * range - sweep
+        };
         // CULLPROBE: every 60 frames, the materialized row count against
         // the scroll offset and the content extent, plus the model.
         if frames.0 % 60 == 0 {
-            let materialized = children.iter().filter(|child| !spacers.contains(*child)).count();
+            let materialized = children
+                .iter()
+                .filter(|child| !spacers.contains(*child))
+                .count();
             let content = computed.content_size.y;
-            let model = models
-                .get(entity)
-                .ok()
-                .map(|model| model.probe());
-            info!("CULLPROBE frame={} scroll={:.0} layout_scroll={:.0} range={:.0} content={:.0} materialized={} spacers={} root={} model={:?}",
-                frames.0, scroll.0.y, computed.scroll_position.y, range, content, materialized, children.len() - materialized, computed.size, model);
+            let model = models.get(entity).ok().map(|model| model.probe());
+            info!(
+                "CULLPROBE frame={} scroll={:.0} layout_scroll={:.0} range={:.0} content={:.0} materialized={} spacers={} root={} model={:?}",
+                frames.0,
+                scroll.0.y,
+                computed.scroll_position.y,
+                range,
+                content,
+                materialized,
+                children.len() - materialized,
+                computed.size,
+                model
+            );
         }
     }
 }
@@ -682,12 +715,20 @@ fn churn(
     // dilute the ratio with a constant).
     let scaling = (id == "scaling").then(|| {
         scaling_phase(frames.0.saturating_sub(bench.started)).map(|phase| {
-            if phase % 2 == 0 { Role::Main } else { Role::Twin }
+            if phase % 2 == 0 {
+                Role::Main
+            } else {
+                Role::Twin
+            }
         })
     });
     if let Some(Some(active)) = scaling {
         for (workload, _, mut node) in &mut workloads {
-            let display = if workload.role == active { Display::Flex } else { Display::None };
+            let display = if workload.role == active {
+                Display::Flex
+            } else {
+                Display::None
+            };
             if node.display != display {
                 node.display = display;
             }
@@ -775,7 +816,11 @@ fn signature_line(entity: Entity, parts: &Query<SignatureParts>) -> Option<Strin
         parts.get(entity).ok()?;
     let mut line = String::new();
     if let Some(element) = element {
-        let _ = write!(line, "<{} {:?} {:?}>", element.tag, element.id, element.classes);
+        let _ = write!(
+            line,
+            "<{} {:?} {:?}>",
+            element.tag, element.id, element.classes
+        );
         if let Some(node) = node {
             let _ = write!(line, " {:?}", node.display);
         }
@@ -829,7 +874,11 @@ fn row_signatures(
             .chain(tree.iter_descendants_depth_first(entity))
             .filter_map(|entity| signature_line(entity, parts))
             .collect();
-        let key = lines.iter().find(|line| line.contains("unit-")).cloned().unwrap_or_default();
+        let key = lines
+            .iter()
+            .find(|line| line.contains("unit-"))
+            .cloned()
+            .unwrap_or_default();
         rows.insert(key, lines);
     }
     rows
@@ -861,8 +910,9 @@ fn compare_twins(
         if now.saturating_sub(bench.started) < 30 || now % 20 != 0 {
             return;
         }
-        let Some((main, workload, context, parent)) =
-            workloads.iter().find(|(_, workload, ..)| workload.role == Role::Main)
+        let Some((main, workload, context, parent)) = workloads
+            .iter()
+            .find(|(_, workload, ..)| workload.role == Role::Main)
         else {
             return;
         };
@@ -901,7 +951,10 @@ fn compare_twins(
                 (spawn_twin(template_context(&value), &mut commands), true)
             }
             TwinKind::Static => {
-                let Some((twin, ..)) = workloads.iter().find(|(_, workload, ..)| workload.role == Role::Twin) else {
+                let Some((twin, ..)) = workloads
+                    .iter()
+                    .find(|(_, workload, ..)| workload.role == Role::Twin)
+                else {
                     return;
                 };
                 (twin, false)
@@ -933,7 +986,9 @@ fn compare_twins(
                     if let Ok((_, workload, ..)) = workloads.get(pending.main)
                         && let Some(sheet) = &workload.sheet
                     {
-                        commands.entity(pending.main).insert(HtmlStylesheet(sheet.clone()));
+                        commands
+                            .entity(pending.main)
+                            .insert(HtmlStylesheet(sheet.clone()));
                     }
                     pending.since = now;
                 }
@@ -941,12 +996,17 @@ fn compare_twins(
             }
             Some(_) => {
                 // The forced restyle lands in this frame's PostUpdate.
-                last(pending.main).is_some_and(|frame| frame >= pending.since) && quiet_since(pending.main, 2)
+                last(pending.main).is_some_and(|frame| frame >= pending.since)
+                    && quiet_since(pending.main, 2)
             }
         },
         _ => {
             last(pending.twin).is_some_and(|twin| twin >= pending.since)
-                && now.saturating_sub(last(pending.twin).unwrap_or(now).max(last(pending.main).unwrap_or(0))) >= 2
+                && now.saturating_sub(
+                    last(pending.twin)
+                        .unwrap_or(now)
+                        .max(last(pending.main).unwrap_or(0)),
+                ) >= 2
                 && now.saturating_sub(pending.since) >= 3
         }
     };
@@ -967,10 +1027,14 @@ fn compare_twins(
                         format!(
                             "{id}: {} / {}",
                             lines.join(" "),
-                            twin.get(id).map_or("(missing)".to_owned(), |lines| lines.join(" "))
+                            twin.get(id)
+                                .map_or("(missing)".to_owned(), |lines| lines.join(" "))
                         )
                     })
-                    .or_else(|| (main.len() != twin.len()).then(|| format!("{} rows / {}", main.len(), twin.len())))
+                    .or_else(|| {
+                        (main.len() != twin.len())
+                            .then(|| format!("{} rows / {}", main.len(), twin.len()))
+                    })
             }
             kind => {
                 let main = if kind == TwinKind::FullRestyle {
@@ -980,7 +1044,11 @@ fn compare_twins(
                 };
                 let twin = signature(pending.twin, &tree, &parts);
                 (main != twin).then(|| {
-                    let at = main.iter().zip(&twin).position(|(a, b)| a != b).unwrap_or(main.len().min(twin.len()));
+                    let at = main
+                        .iter()
+                        .zip(&twin)
+                        .position(|(a, b)| a != b)
+                        .unwrap_or(main.len().min(twin.len()));
                     format!(
                         "line {at}: {} / {}",
                         main.get(at).map_or("(end)", String::as_str),
@@ -1097,21 +1165,29 @@ fn check_scenario(
             }
             "survived" => {
                 let resolved = workloads.iter().all(|(_, workload, rendered)| {
-                    !matches!(rendered, RenderedHtml::Pending) || server.load_state(&workload.template).is_failed()
+                    !matches!(rendered, RenderedHtml::Pending)
+                        || server.load_state(&workload.template).is_failed()
                 });
                 if resolved && !workloads.is_empty() {
-                    ("pass", format!("({} elements)", workload_elements().count()))
+                    (
+                        "pass",
+                        format!("({} elements)", workload_elements().count()),
+                    )
                 } else {
                     ("wait", String::new())
                 }
             }
-            "sheet-refused" => match probe("sheet").and_then(|(_, workload, _)| workload.sheet.as_ref()) {
+            "sheet-refused" => match probe("sheet")
+                .and_then(|(_, workload, _)| workload.sheet.as_ref())
+            {
                 Some(sheet) if server.load_state(sheet).is_failed() => ("pass", String::new()),
                 Some(sheet) if server.load_state(sheet).is_loaded() => ("fail", "it loaded".into()),
                 _ => ("wait", String::new()),
             },
             "no-forged" => {
-                let built_all = workloads.iter().all(|(entity, ..)| built.0.contains_key(&entity));
+                let built_all = workloads
+                    .iter()
+                    .all(|(entity, ..)| built.0.contains_key(&entity));
                 if !built_all || workloads.is_empty() {
                     ("wait", String::new())
                 } else {
@@ -1121,14 +1197,19 @@ fn check_scenario(
                                 || signals.is_some()
                         })
                         .count();
-                    (if forged == 0 { "pass" } else { "fail" }, format!("({forged} forged)"))
+                    (
+                        if forged == 0 { "pass" } else { "fail" },
+                        format!("({forged} forged)"),
+                    )
                 }
             }
             "no-fallback" => {
                 // A payload whose arguments failed to parse shows the
                 // element's own content, "x" (bug_0128: Tera's `\u{…}`
                 // escapes in a printed map).
-                let built_all = workloads.iter().all(|(entity, ..)| built.0.contains_key(&entity));
+                let built_all = workloads
+                    .iter()
+                    .all(|(entity, ..)| built.0.contains_key(&entity));
                 if !built_all || workloads.is_empty() {
                     ("wait", String::new())
                 } else {
@@ -1137,7 +1218,10 @@ fn check_scenario(
                             element.tag == "p" && element_text(*entity, &tree, &texts) == "x"
                         })
                         .count();
-                    (if fallbacks == 0 { "pass" } else { "fail" }, format!("({fallbacks} fell back)"))
+                    (
+                        if fallbacks == 0 { "pass" } else { "fail" },
+                        format!("({fallbacks} fell back)"),
+                    )
                 }
             }
             "map-literal" => {
@@ -1168,7 +1252,10 @@ fn check_scenario(
             },
             "border-skipped" => match probe("border") {
                 Some((entity, workload, _)) => {
-                    let sheet = workload.sheet.as_ref().map(|sheet| server.load_state(sheet));
+                    let sheet = workload
+                        .sheet
+                        .as_ref()
+                        .map(|sheet| server.load_state(sheet));
                     if sheet.as_ref().is_some_and(|state| state.is_failed()) {
                         ("fail", "the sheet failed".into())
                     } else if built.0.contains_key(&entity) {
@@ -1190,7 +1277,9 @@ fn check_scenario(
                 Some(skeleton) => match skeleton.last_reuse() {
                     Some((reused, total)) => {
                         let (useful, strike) = skeleton.pairing_health();
-                        let detail = format!("({reused} of {total} reused; useful {useful}, strike {strike})");
+                        let detail = format!(
+                            "({reused} of {total} reused; useful {useful}, strike {strike})"
+                        );
                         // Three quarters: a sparse churn reuses nearly
                         // everything; bug_0150 still reused the rows'
                         // grandchildren (two thirds), so "half" missed it.
@@ -1205,14 +1294,18 @@ fn check_scenario(
             // also after in-place updates (review_0005 I09).
             "auto-scroll" if check.state == "fail" => (check.state, check.detail.clone()),
             "auto-scroll" => {
-                let panel = workload_elements().find(|(_, element, _)| element.id.as_deref() == Some("panel"));
+                let panel = workload_elements()
+                    .find(|(_, element, _)| element.id.as_deref() == Some("panel"));
                 match panel.and_then(|(entity, ..)| nodes.get(entity).ok()) {
                     // Past the warm-up, every frame (a failure sticks:
                     // the promotion may recover on a later layout change).
                     Some((node, Some(computed))) if since >= 60 => {
                         let overflows = computed.content_size.y > computed.size.y + 0.5;
                         let scrolls = node.overflow.y == OverflowAxis::Scroll;
-                        let detail = format!("(content {:.0} / box {:.0}, {:?})", computed.content_size.y, computed.size.y, node.overflow.y);
+                        let detail = format!(
+                            "(content {:.0} / box {:.0}, {:?})",
+                            computed.content_size.y, computed.size.y, node.overflow.y
+                        );
                         (if overflows == scrolls { "pass" } else { "fail" }, detail)
                     }
                     _ => ("wait", String::new()),
@@ -1228,14 +1321,23 @@ fn check_scenario(
                 } else if since < 90 {
                     ("wait", String::new())
                 } else {
-                    let rebuilt = main_ui.and_then(|ui| built.0.get(&ui)).copied().filter(|frame| frame.saturating_sub(bench.started) > 90);
+                    let rebuilt = main_ui
+                        .and_then(|ui| built.0.get(&ui))
+                        .copied()
+                        .filter(|frame| frame.saturating_sub(bench.started) > 90);
                     let written = workload_elements()
-                        .filter(|(entity, ..)| nodes.get(*entity).is_ok_and(|(node, _)| node.is_changed()))
+                        .filter(|(entity, ..)| {
+                            nodes.get(*entity).is_ok_and(|(node, _)| node.is_changed())
+                        })
                         .count();
                     match (rebuilt, written) {
                         (Some(frame), _) => ("fail", format!("(updated at frame {frame})")),
-                        (None, written) if written > 0 => ("fail", format!("({written} Node writes at frame {now})")),
-                        _ if since >= 150 => ("pass", format!("(frames {}..{now})", bench.started + 90)),
+                        (None, written) if written > 0 => {
+                            ("fail", format!("({written} Node writes at frame {now})"))
+                        }
+                        _ if since >= 150 => {
+                            ("pass", format!("(frames {}..{now})", bench.started + 90))
+                        }
                         _ => ("wait", String::new()),
                     }
                 }
@@ -1243,8 +1345,13 @@ fn check_scenario(
             // Scaling: best of three at N and at 4N (see `Scaling`).
             "linear" => {
                 let best = |samples: &[f32]| samples.iter().copied().fold(f32::INFINITY, f32::min);
-                if scaling.small.len() < SCALING_PHASES / 2 || scaling.large.len() < SCALING_PHASES / 2 {
-                    ("wait", format!("({} / {} phases)", scaling.small.len(), scaling.large.len()))
+                if scaling.small.len() < SCALING_PHASES / 2
+                    || scaling.large.len() < SCALING_PHASES / 2
+                {
+                    (
+                        "wait",
+                        format!("({} / {} phases)", scaling.small.len(), scaling.large.len()),
+                    )
                 } else {
                     let (small, large) = (best(&scaling.small), best(&scaling.large));
                     let ratio = large / small.max(0.001);
@@ -1268,8 +1375,12 @@ fn check_scenario(
                 };
                 match (painted("probe"), painted("quotes")) {
                     (Some(probe), Some(quotes)) => {
-                        let background = probe.iter().any(|(_, bg)| bg.is_some_and(|bg| bg.0 == Color::srgb_u8(0x2a, 0x6f, 0x2a)));
-                        let color = quotes.iter().any(|(color, _)| color.is_some_and(|color| color.0 == Color::srgb_u8(0x7f, 0xdb, 0x8f)));
+                        let background = probe.iter().any(|(_, bg)| {
+                            bg.is_some_and(|bg| bg.0 == Color::srgb_u8(0x2a, 0x6f, 0x2a))
+                        });
+                        let color = quotes.iter().any(|(color, _)| {
+                            color.is_some_and(|color| color.0 == Color::srgb_u8(0x7f, 0xdb, 0x8f))
+                        });
                         let detail = format!("(brackets {background}, quotes {color})");
                         (if background && color { "pass" } else { "fail" }, detail)
                     }
@@ -1278,11 +1389,16 @@ fn check_scenario(
             }
             // Character references decode as browsers do (review_0005
             // I04's fix also stopped a sign from counting as a digit).
-            "decoded" => match workload_elements().find(|(_, element, _)| element.id.as_deref() == Some("decoded")) {
+            "decoded" => match workload_elements()
+                .find(|(_, element, _)| element.id.as_deref() == Some("decoded"))
+            {
                 Some((entity, ..)) => {
                     let text = element_text(entity, &tree, &texts);
                     let expected = "AB&&#+65;\u{FFFD}";
-                    (if text == expected { "pass" } else { "fail" }, format!("({text:?})"))
+                    (
+                        if text == expected { "pass" } else { "fail" },
+                        format!("({text:?})"),
+                    )
                 }
                 None => ("wait", String::new()),
             },
@@ -1295,28 +1411,42 @@ fn check_scenario(
             "band" => match main_ui.and_then(|ui| boxes.get(ui).ok().map(|root| (ui, root))) {
                 Some((ui, (root, transform))) if since >= 60 => {
                     let scale = root.inverse_scale_factor;
-                    let top = (transform.translation.y - root.size.y / 2.0 + root.border.min_inset.y) * scale;
-                    let bottom = (transform.translation.y + root.size.y / 2.0 - root.border.max_inset.y) * scale;
+                    let top = (transform.translation.y - root.size.y / 2.0
+                        + root.border.min_inset.y)
+                        * scale;
+                    let bottom = (transform.translation.y + root.size.y / 2.0
+                        - root.border.max_inset.y)
+                        * scale;
                     // Leaf elements only: a container spans its culled
                     // spacers too.
                     let mut spans: Vec<(f32, f32)> = tree
                         .iter_descendants_depth_first(ui)
                         .filter(|entity| elements.contains(*entity))
                         .filter(|entity| {
-                            !tree.get(*entity).is_ok_and(|children| children.iter().any(|child| elements.contains(child)))
+                            !tree.get(*entity).is_ok_and(|children| {
+                                children.iter().any(|child| elements.contains(child))
+                            })
                         })
                         .filter_map(|entity| boxes.get(entity).ok())
                         .map(|(node, transform)| {
                             let half = node.size.y / 2.0;
-                            ((transform.translation.y - half) * scale, (transform.translation.y + half) * scale)
+                            (
+                                (transform.translation.y - half) * scale,
+                                (transform.translation.y + half) * scale,
+                            )
                         })
                         .filter(|(a, b)| *b > top && *a < bottom)
                         .collect();
                     spans.sort_by(|a, b| a.0.total_cmp(&b.0));
-                    let row = spans.iter().map(|(a, b)| b - a).fold(0.0, f32::max).max(8.0);
+                    let row = spans
+                        .iter()
+                        .map(|(a, b)| b - a)
+                        .fold(0.0, f32::max)
+                        .max(8.0);
                     // The content's end, in the window: past it an empty
                     // viewport is just the document ending.
-                    let content_end = top - root.scroll_position.y * scale + root.content_size.y * scale;
+                    let content_end =
+                        top - root.scroll_position.y * scale + root.content_size.y * scale;
                     let end = bottom.min(content_end);
                     let mut cursor = top;
                     let mut gap = 0.0_f32;
@@ -1326,7 +1456,13 @@ fn check_scenario(
                     }
                     gap = gap.max(end - cursor);
                     if gap > row {
-                        ("fail", format!("({gap:.0} px uncovered at frame {now}, {} rows in view)", spans.len()))
+                        (
+                            "fail",
+                            format!(
+                                "({gap:.0} px uncovered at frame {now}, {} rows in view)",
+                                spans.len()
+                            ),
+                        )
                     } else {
                         ("pass", format!("({} rows in view)", spans.len()))
                     }
@@ -1335,7 +1471,10 @@ fn check_scenario(
             },
             "twins" => {
                 let detail = if twins.mismatches > 0 {
-                    format!("({} / {}: {})", twins.matches, twins.mismatches, twins.last_mismatch)
+                    format!(
+                        "({} / {}: {})",
+                        twins.matches, twins.mismatches, twins.last_mismatch
+                    )
                 } else {
                     format!("({} / {})", twins.matches, twins.mismatches)
                 };
@@ -1353,7 +1492,13 @@ fn check_scenario(
         // Scripted runs (`--no-render --exit-after N`) read the checks
         // from the log.
         if state != check.state {
-            info!("testbench: {} {}: {} {}", bench.id(), check.id, state, detail);
+            info!(
+                "testbench: {} {}: {} {}",
+                bench.id(),
+                check.id,
+                state,
+                detail
+            );
         }
         check.state = state;
         check.detail = detail;
@@ -1371,7 +1516,13 @@ fn summarize_on_exit(
         return;
     }
     for check in &checks.0 {
-        info!("testbench: final {} {}: {} {}", bench.id(), check.id, check.state, check.detail);
+        info!(
+            "testbench: final {} {}: {} {}",
+            bench.id(),
+            check.id,
+            check.state,
+            check.detail
+        );
     }
     if twins.matches + twins.mismatches > 0 {
         info!(
@@ -1411,7 +1562,14 @@ fn update_stats(
             }
             scaling.phase = phase;
             scaling.current.clear();
-        } else if phase.is_some() && frames.0.saturating_sub(bench.started).saturating_sub(SCALING_WARMUP) % PHASE >= 5 {
+        } else if phase.is_some()
+            && frames
+                .0
+                .saturating_sub(bench.started)
+                .saturating_sub(SCALING_WARMUP)
+                % PHASE
+                >= 5
+        {
             scaling.current.push(ms);
         }
     }

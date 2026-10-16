@@ -224,11 +224,7 @@ fn cycle_palette(
     }
 }
 
-fn cycle(
-    contexts: &mut Query<&mut TemplateContext>,
-    stylesheet: &PathBuf,
-    bounded: bool,
-) {
+fn cycle(contexts: &mut Query<&mut TemplateContext>, stylesheet: &PathBuf, bounded: bool) {
     let current = contexts
         .iter()
         .find_map(|context| context.get("palette").and_then(|v| v.as_i64()))
