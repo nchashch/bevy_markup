@@ -878,6 +878,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 - A pseudo-locale opening marker must not be a text `[` at the start of a
   line (FTL reads a variant key); use a string-literal placeable `{"["}`.
 - **Windowed UIs (ADR 0031)**: only materialized elements have entities.
+  Heights are logical pixels: `ComputedNode` sizes are physical —
+  multiply by `inverse_scale_factor` in `measure_window_heights` (an
+  unconverted model is the display's scale times too tall; scrolling
+  empties the viewport).
   The model's heights are measured per frame from the *newly* added
   `WindowKey` entities (`measure_window_heights`, `PostLayout`, after
   `Build` — which inserts a missing `WindowModel` the same frame); a

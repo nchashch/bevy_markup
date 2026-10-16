@@ -2062,13 +2062,16 @@ pub(crate) fn measure_window_heights(
             _ => (0.0, false),
         }
     };
-    // The content width (the margins' percentage basis): 0.20's
-    // `BorderRect` insets collapse to `min`/`max`; the crate's borders
-    // and paddings are uniform lengths.
+    // `ComputedNode` sizes are physical pixels; the scroll position the
+    // band is keyed by is logical — scale by the inverse factor (the
+    // docs' own conversion) or a HiDPI display's model is its scale
+    // times too tall and the band maps every scroll offset to rows
+    // twice as deep (the viewport empties while scrolling).
     let content_width = |computed: &ComputedNode| -> f32 {
-        computed.size.x
-            - 2.0 * computed.border.min_inset.x
-            - 2.0 * computed.padding.min_inset.x
+        computed.inverse_scale_factor
+            * (computed.size.x
+                - 2.0 * computed.border.min_inset.x
+                - 2.0 * computed.padding.min_inset.x)
     };
     for (entity, key, node, computed, parent) in &added {
         let parent = parent.0;
@@ -2106,11 +2109,14 @@ pub(crate) fn measure_window_heights(
             }
             continue;
         }
+        // The margins resolve in the same logical units the scroll
+        // uses; only the measured size is physical.
         model.heights.insert(
             key.0,
             (
                 margin_top,
-                margin_top + computed.size.y + margin_bottom,
+                (margin_top + computed.size.y + margin_bottom)
+                    * computed.inverse_scale_factor,
             ),
         );
         if children_are_opaque(node) {
@@ -4234,6 +4240,17 @@ pub struct WindowModel {
 }
 
 impl WindowModel {
+    /// The model's health for the testbench's probe: `(width, entries,
+    /// total height)`. Not covered by semver.
+    #[doc(hidden)]
+    pub fn probe(&self) -> (f32, usize, f32) {
+        (
+            self.width,
+            self.heights.len(),
+            self.heights.values().map(|(_, outer)| outer).sum(),
+        )
+    }
+
     fn remap(&mut self, pairing: &HashMap<tl::NodeHandle, tl::NodeHandle>) {
         let remap = |map: &mut HashMap<tl::NodeHandle, (f32, f32)>| {
             let old = std::mem::take(map);
@@ -6592,6 +6609,51 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use std::time::Duration;
     use lightningcss::values::easing::EasingFunction as CssEasing;
+
+    /// ADR 0031: the measured heights are logical pixels — `ComputedNode`
+    /// sizes are physical, and on a HiDPI display (the inverse scale
+    /// factor < 1) an unconverted model is the display's scale times too
+    /// tall: the band maps every scroll offset to rows deeper than the
+    /// viewport, and the visible list empties as the user scrolls.
+    #[test]
+    fn window_heights_are_measured_in_logical_pixels() {
+        let mut world = World::new();
+        // A UI root and a laid-out child at a 2x display: the child's
+        // physical height is 40 px; logical is 20.
+        let root = world
+            .spawn((
+                HtmlUi::new(Handle::default()),
+                HtmlWindowed::default(),
+                WindowModel::default(),
+                ComputedNode {
+                    size: Vec2::new(600.0, 400.0),
+                    inverse_scale_factor: 0.5,
+                    ..default()
+                },
+            ))
+            .id();
+        let child = world
+            .spawn((
+                WindowKey(tl::NodeHandle::new(0)),
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(110.0, 40.0),
+                    inverse_scale_factor: 0.5,
+                    ..default()
+                },
+                ChildOf(root),
+            ))
+            .id();
+        world.run_system_once(measure_window_heights).unwrap();
+        let model = world.get::<WindowModel>(root).expect("the root's model");
+        assert_eq!(model.width, 300.0, "the root's content width, logical");
+        assert_eq!(
+            model.heights.get(&tl::NodeHandle::new(0)),
+            Some(&(0.0, 20.0)),
+            "the child's outer height, logical (40 physical at a 2x display)"
+        );
+        let _ = child;
+    }
 
     /// The easing curves' endpoints are exact and their midpoints sane:
     /// linear is identity; the named cubic Béziers pass through 0 and 1

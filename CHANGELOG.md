@@ -122,6 +122,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   changed.
 
 ### Fixed
+- **Windowed UIs measured their heights in physical pixels** while the
+  scroll offset is logical: on a display whose scale factor isn't 1 the
+  height model was the display's scale times too tall, so scrolling
+  mapped the viewport to rows deeper than the visible content — the
+  visible list emptied as you scrolled. Heights are now converted to
+  logical pixels (`ComputedNode.inverse_scale_factor`).
 - `+` matched the *farthest* preceding sibling instead of the adjacent
   one (`.hot + p` went green on every following `p`, not just the next).
   Found by the new browser-oracle vector.

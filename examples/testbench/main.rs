@@ -41,6 +41,7 @@ use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
 use bevy::text::LetterSpacing;
 use bevy::prelude::*;
 use bevy_markup::prelude::*;
+use bevy_markup::{WindowModel, WindowSpacer};
 use serde_json::{Value, json};
 
 #[path = "../shared/input.rs"]
@@ -608,23 +609,39 @@ fn start_scenario(
 }
 
 /// `--scroll`: advance the main workload's scroll position every frame
-/// (bouncing over the first 2000 px of content), so the windowed band
+/// (bouncing over the content's full range), so the windowed band
 /// moves — the scroll-frame cost is the measured quantity (ADR 0031).
 #[hotpath::measure]
 fn scroll_workloads(
     bench: Res<Bench>,
     frames: Res<FrameCount>,
-    mut workloads: Query<(&Workload, &mut ScrollPosition), Without<FreshTwin>>,
+    mut workloads: Query<(Entity, &Workload, &mut ScrollPosition, &ComputedNode, &Children), Without<FreshTwin>>,
+    spacers: Query<&WindowSpacer>,
+    models: Query<&WindowModel>,
 ) {
     if !bench.scroll || bench.restart {
         return;
     }
-    // ~1200 px/s: 20 px per 60 fps frame.
-    let sweep = (frames.0 as f32 * 20.0) % 4000.0;
-    let y = if sweep < 2000.0 { sweep } else { 4000.0 - sweep };
-    for (workload, mut scroll) in &mut workloads {
-        if matches!(workload.role, Role::Main) {
-            scroll.0.y = y;
+    for (entity, workload, mut scroll, computed, children) in &mut workloads {
+        if !matches!(workload.role, Role::Main) {
+            continue;
+        }
+        // ~9000 px/s: 150 px per 60 fps frame — a full 20000 px document
+        // sweeps in ~45 s, deep enough to expose band-mapping drift.
+        let range = (computed.content_size.y - computed.size.y).max(0.0);
+        let sweep = (frames.0 as f32 * 150.0) % (2.0 * range.max(1.0));
+        scroll.0.y = if sweep < range { sweep } else { 2.0 * range - sweep };
+        // CULLPROBE: every 60 frames, the materialized row count against
+        // the scroll offset and the content extent, plus the model.
+        if frames.0 % 60 == 0 {
+            let materialized = children.iter().filter(|child| !spacers.contains(*child)).count();
+            let content = computed.content_size.y;
+            let model = models
+                .get(entity)
+                .ok()
+                .map(|model| model.probe());
+            info!("CULLPROBE frame={} scroll={:.0} range={:.0} content={:.0} materialized={} spacers={} root={} model={:?}",
+                frames.0, scroll.0.y, range, content, materialized, children.len() - materialized, computed.size, model);
         }
     }
 }
