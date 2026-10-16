@@ -22,9 +22,15 @@ cargo run --release --example testbench --features hotpath -- \
 `--windowed` builds the workloads only over their scroll window (a
 fixed-height scrolling viewport; ADR 0031) and `--scroll` advances the
 main workload's scroll every frame (bouncing), so the band's movement —
-the scroll-frame cost — is measurable headlessly. A/B from the 2000-row
-big-document (release, hotpath): the worst frame 77.9 ms unwindowed vs
-17.2 ms windowed idle, 17.9 ms scrolling, churned at parity.
+the scroll-frame cost — is measurable. Windowing needs layout: run it
+`--offscreen` (real layout, no window); under `--no-render` the root is
+never laid out and a windowed UI builds everything. `--windowed` adds a
+**band** check to every scenario: the built rows cover the main
+workload's viewport (no gap taller than a row) — the symptom of bug_0151,
+which a count of built rows can't see. A/B from the 2000-row
+big-document (release, hotpath, ADR 0031): the worst frame 77.9 ms
+unwindowed vs 17.2 ms windowed idle, 17.9 ms scrolling, churned at
+parity.
 ```
 
 ## Scenarios
@@ -112,7 +118,8 @@ failed.
 
 Command-line flags: `--scenario <id>` (pins it; the scenario ids are the
 ones in `scenarios.rs`, e.g. `reuse-vs-fresh`), `--size <n>` (the nearest
-size step at or above), `--no-churn`, plus the examples' launcher flags
+size step at or above; pins the size, so `--exit-after`'s injected keys
+can't step it), `--no-churn`, plus the examples' launcher flags
 (`--no-render`, `--offscreen`, `--exit-after <frames>`).
 
 ## Reading the numbers

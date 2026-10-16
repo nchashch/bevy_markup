@@ -259,7 +259,10 @@ examples/
                    `quiet` (idle: no build/restyle/`Node` write), `linear` (N vs 4N,
                    best of three, ≤ 8×, real time); indented vs flat Markdown). Every
                    check was falsified against its bug (README "Methods").
-                   `--scenario <id> --size <n> --no-churn` pin a run; checks log
+                   `--windowed` (+ `--scroll`) windows the workloads and adds a `band`
+                   check (the built rows cover the viewport; needs `--offscreen`
+                   layout). `--scenario <id> --size <n> --no-churn` pin a run (`--size`
+                   pins the size against `--exit-after`'s injected keys); checks log
                    `testbench: final …` on exit; frame times are `Time<Real>` (the
                    virtual clock clamps at 250 ms);
                    `#[hotpath::measure]` on its systems + the library's for profiling
@@ -877,25 +880,53 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `content_lint` does).
 - A pseudo-locale opening marker must not be a text `[` at the start of a
   line (FTL reads a variant key); use a string-literal placeable `{"["}`.
-- **Windowed UIs (ADR 0031)**: only materialized elements have entities.
-  Heights are logical pixels: `ComputedNode` sizes are physical —
-  multiply by `inverse_scale_factor` in `measure_window_heights` (an
-  unconverted model is the display's scale times too tall; scrolling
-  empties the viewport).
-  The model's heights are measured per frame from the *newly* added
-  `WindowKey` entities (`measure_window_heights`, `PostLayout`, after
+- **Windowed UIs (ADR 0031, revised by 0032)**: only materialized elements have entities.
+  `WindowKey`s exist only on windowed UIs' entities (an item is keyed when
+  collected with a window; `update_spec` keeps keys in step; a keyless
+  cached spec never reuses in a windowed build). A root that isn't laid
+  out (zero viewport) windows nothing — the testbench's `--no-render`
+  builds everything; use `--offscreen` to see windowing.
+  One unit system: logical pixels of the root's **content box** — the
+  model's heights (only `ComputedNode`'s measured size is physical;
+  margins are already logical), the width anchor
+  (`logical_content_width`), and the visible region (`visible_region`:
+  the padding box, starting `padding-top` above the content). Comparing
+  the physical border box with the logical content width cleared the
+  model and rebuilt every frame on any padded/bordered root or HiDPI
+  display (bug_0153). The measurement writes into the nearest `HtmlUi`'s
+  model (not the parent's: nested content never culled, bug_0152) and
+  flags `WindowModel::changed`, which triggers one rebuild (bug_0154).
+  The layout harness adds only `ScrollAreaPlugin` (the whole widget
+  group's `TextInputPlugin` duplicates the crate's under `text-input`).
+  The model's heights are measured per frame from the newly added
+  `WindowKey` entities and those whose layout changed
+  (`Changed<ComputedNode>`; `measure_window_heights`, `PostLayout`, after
   `Build` — which inserts a missing `WindowModel` the same frame); a
-  kept entity keeps its sticky height. Coalesced spacers carry no
+  culled subtree keeps its sticky height. Coalesced spacers carry no
   `WindowKey` (their height = a derived sum; keying them would
-  overwrite the run's first member and drift the cursor). The reuse
+  overwrite the run's first member and drift the cursor). A coalesced
+  run's height includes the gaps between its members (`Item::Spacer`
+  carries its column's gap): one node gets one gap in a column, so
+  summing heights alone dropped k − 1 gaps and the band rose above the
+  viewport (bug_0151). Test windowing by position against an unwindowed
+  build of the same document at the same offset (`review_0006`'s
+  `band_errors`), never by element counts. The reuse
   check runs before the cull and requires the cached spec's spacerness
   to agree with the current decision; a coalesced spacer never reuses
   (its run shifts). Translated subtrees are never culled (their
   fragments are windowless); whitespace-only raw roots advance the
   cursor by zero without invalidating it (they produce no item); any
   other unknown-height child invalidates it (culled = nothing below
-  culls). Scrolling rebuilds at band cost (no pairing on scroll-only
-  frames — the document is unchanged, the model stays keyed).
+  culls). Scroll builds pair with the skeleton (an unchanged document;
+  the model keeps its keys — remapping would drop anonymous blocks'
+  heights) and keep its strike state; a cached subtree reuses only when
+  it holds no spacer and lies wholly inside the band (it carries the
+  culling of the band it was built under; review_0006 J04). A windowed UI
+  rebuilds when the offset leaves the slack the last build recorded
+  (`WindowModel::slack`: how far it may move before any element crosses a
+  band edge — strictly more flips a culled element, `EDGE` early for a
+  materialized one), the viewport's width or height changes, or a height
+  does (J05).
 - Bevy/taffy size the border box by default; bevy_markup nodes set
   `BoxSizing::ContentBox` (CSS initial); `box-sizing` overrides.
 - `cargo mutants` copies the source tree and ignores nested `.gitignore`s:

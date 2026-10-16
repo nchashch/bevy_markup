@@ -7,7 +7,7 @@
 | Date | 2026-10-16 05:05 +0400 |
 | Author | GLM 5.3 Flash (Z.ai), via omp |
 | Commit | `c71a6cd Update testbench example` (tree also carries an uncommitted, machine-local `[patch.crates-io]` for a vendored bevy/taffy — this ADR exists so that patch is not needed) |
-| Status | Accepted (implemented the same day; the measured win: the testbench's big-document at 2000 rows, release + `--no-render` + hotpath — the worst frame 77.9 → 17.2 ms idle (4.5×), churned at parity (115.7 → 119.0 ms); per the design's rules: reuse-before-cull with the spacerness-consistency condition, never-reused coalesced spacers, `Added<WindowKey>`-incremental measurement) |
+| Status | Accepted; amended by [0032](./0032-windowed-build-revised.md) (units, nested culling, scroll reuse, slack; §3 focus and §5 headless dropped; the measured win re-taken with real layout) — originally: Accepted (implemented the same day; the measured win: the testbench's big-document at 2000 rows, release + `--no-render` + hotpath — the worst frame 77.9 → 17.2 ms idle (4.5×), churned at parity (115.7 → 119.0 ms); per the design's rules: reuse-before-cull with the spacerness-consistency condition, never-reused coalesced spacers, `Added<WindowKey>`-incremental measurement) |
 | Related | ADR 0021 (the skeleton this hangs the height model on), ADR 0029 (same dependency-tracking philosophy, restyles), ADR 0028 (the roadmap's perf items), the `testbench` example |
 
 ## Context

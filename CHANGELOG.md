@@ -61,8 +61,8 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   the fold. A long scrolling document costs about a viewport of layout:
   the testbench's big-document scenario at 2000 rows builds a worst
   frame of 17.2 ms windowed vs 77.9 ms unwindowed (release, `--no-render`,
-  hotpath), and churns at parity. Scrolling rebuilds the band at the
-  band's cost; the model's heights are sticky (a culled subtree keeps
+  hotpath), and churns at parity. Scrolling reuses the blocks that stay
+  in the band and rebuilds only when the band's contents change; the model's heights are sticky (a culled subtree keeps
   its last measured height until a signal invalidates it). With the
   component, only materialized elements have entities — `HtmlElements`,
   signals, focus and custom elements see the window; translated subtrees
@@ -122,6 +122,21 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   changed.
 
 ### Fixed
+- **Windowed UIs** (ADR 0031) now cull content inside containers (a
+  `<main>` or `<section>` wrapping the page used to build in full), cull
+  right after their first layout instead of after the first scroll, and
+  no longer rebuild every frame when the root has padding or a border, or
+  on a display whose scale factor isn't 1 (the windowing compared pixel
+  units that never agreed there, so nothing was culled either).
+  Scrolling reuses the rows that stay in view and rebuilds only when
+  the window's contents change (not on every sub-pixel step), a taller
+  viewport rebuilds the window, and UIs without `HtmlWindowed` no longer
+  pay for the windowing's measurement.
+- **A windowed UI's rows drifted above the viewport while scrolling**
+  (bug_0151): with a row `gap`, the coalesced spacer standing in for a
+  run of culled rows dropped the gaps between them, so the visible list
+  thinned and emptied as you scrolled down a long document. The spacers
+  now keep the gaps.
 - **Windowed UIs measured their heights in physical pixels** while the
   scroll offset is logical: on a display whose scale factor isn't 1 the
   height model was the display's scale times too tall, so scrolling

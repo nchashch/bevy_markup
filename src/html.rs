@@ -124,9 +124,12 @@ pub struct HtmlDebugOutline;
 /// culled subtrees replaced by their last measured height.
 ///
 /// The window is a band `scroll_offset − margin … scroll_offset + viewport
-/// + margin` in the root's content coordinates, refreshed every time the
-/// root's scroll position or viewport width changes; the margin defaults
-/// to one viewport in each direction.
+/// + margin` in the root's content coordinates (logical pixels; the
+/// viewport is the root's padding box). It is rebuilt when the scroll
+/// position moves far enough to change which blocks it holds, when the
+/// viewport's size changes, or when a measured height does; the blocks
+/// that stay in it keep their entities and reuse their specs. The margin
+/// defaults to one viewport in each direction.
 ///
 /// With this component, apps must not assume every DOM element has an
 /// entity: only materialized elements exist. [`HtmlElements`] and the

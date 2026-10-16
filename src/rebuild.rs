@@ -108,10 +108,6 @@ pub(crate) struct RebuildState {
     /// `vars_changed` compares against it. Only restyled builds record it
     /// (a `Wait` keeps the old hash, so the change outlives the wait).
     pub(crate) vars: u64,
-    /// ADR 0031: the scroll offset the last executed build windowed the
-    /// document at (a windowed UI rebuilds when the offset moves; a
-    /// `Wait` keeps the old one, so the change outlives the wait).
-    pub(crate) window_scroll: f32,
     /// The `var(--name)` names the last build's inline `style`
     /// attributes referenced: hashed with the sheet's names (the sheet
     /// can't know them — they are per element).

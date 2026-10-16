@@ -223,9 +223,13 @@ impl TestUi {
                     bevy::ui::UiPlugin::default(),
                     bevy::picking::DefaultPickingPlugins,
                     bevy::image::TextureAtlasPlugin,
-                    // The widgets' observers (the `ScrollArea` wheel
-                    // handling; inert without a `ScrollArea` entity).
-                    bevy::ui_widgets::UiWidgetsPlugins,
+                    // The `ScrollArea` wheel handling (inert without a
+                    // `ScrollArea` entity). Only that plugin: the whole
+                    // `UiWidgetsPlugins` group adds `TextInputPlugin`, which
+                    // `BevyMarkupPlugin` adds itself under `text-input` — a
+                    // duplicate plugin panicked every layout test there
+                    // (review_0006 J09).
+                    bevy::ui_widgets::ScrollAreaPlugin,
                 ))
                 // `InheritedVisibility` without the render-side visibility
                 // plugin: directional navigation skips nodes that aren't

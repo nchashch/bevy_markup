@@ -170,3 +170,9 @@ tb-check-decoded =
         [fail] FAIL
        *[other] WAIT
     } references decode correctly { $detail }
+tb-check-band =
+    { $state ->
+        [pass] PASS
+        [fail] FAIL
+       *[other] WAIT
+    } built rows cover the viewport { $detail }

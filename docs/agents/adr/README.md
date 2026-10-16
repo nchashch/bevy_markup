@@ -47,6 +47,7 @@ as `[INFERENCE]`.
 | [0028](./0028-modern-authoring-gaps-roadmap.md) | Modern authoring gaps: what to add next (roadmap) | Accepted (roadmap adopted; text surface, background-image, font-face skip, selectors, siblings, tables, attributes shipped — sticky/checkbox/textarea deferred as documented limits; SVG, @media, shadows/gradients and keyframes still open) |
 | [0029](./0029-restyle-reuse.md) | Restyle reuse: dependency-tracked re-cascade instead of full restyles | Accepted |
 | [0030](./0030-compounds-match-whole-in-every-position.md) | Compounds match whole in every position | Accepted |
-| [0031](./0031-windowed-build-spec-level-culling.md) | Windowed build: spec-level viewport culling with height-preserving spacers | Proposed |
+| [0031](./0031-windowed-build-spec-level-culling.md) | Windowed build: spec-level viewport culling with height-preserving spacers | Accepted; amended by 0032 |
+| [0032](./0032-windowed-build-revised.md) | Windowed build, revised: one unit system, nested culling, scroll reuse and slack | Accepted |
 
 Add new records to this index in the same commit that adds the file.

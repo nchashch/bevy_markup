@@ -8038,10 +8038,12 @@ fn windowed_build_materializes_the_band_and_spacers_the_rest() {
     let root = ui.root();
     ui.world_mut().entity_mut(root).insert(HtmlWindowed::default());
     // Build 1: the model is empty, so the whole document materializes and
-    // is measured.
+    // is measured; the measurement's news rebuild it once (review_0006
+    // J08), culled to the band at scroll 0 — [−200, 400): p1 … p20.
     ui.settle();
-    let full = ui.dump();
-    assert_eq!(full.matches("\n  p#p").count(), 60, "{full}");
+    let first = ui.dump();
+    assert_eq!(first.matches("\n  p#p").count(), 20, "{first}");
+    assert!(first.contains("p#p20\n") && !first.contains("p#p21\n"), "{first}");
 
     // Scroll: the band is [offset, offset + viewport] grown by one
     // viewport on each side. Each paragraph is one 20px line (16px text
@@ -8076,9 +8078,18 @@ fn windowed_build_materializes_the_band_and_spacers_the_rest() {
     // node per run, not one per block.
     assert_eq!(dump.matches("spacer h=100").count(), 1, "{dump}");
     assert_eq!(dump.matches("spacer h=500").count(), 1, "{dump}");
-    // The height invariant: the spacers plus the materialized content
-    // equal the full document's height (5 + 30 + 25 paragraphs at 20px).
-    assert_eq!(100.0 + 500.0 + 30.0 * 20.0, 60.0 * 20.0);
+    // The height invariant, measured: the laid-out content (spacers plus
+    // the materialized paragraphs) is the full document's 60 × 20 px —
+    // and the band sits where the full document puts it (p6's top at
+    // 100 px in the document, 200 px above the viewport at offset 300).
+    // (The previous assertion compared constants: review_0006 J06.)
+    ui.update(3);
+    let world = ui.world_mut();
+    let content = world.get::<ComputedNode>(root).expect("laid out");
+    assert!((content.content_size.y * content.inverse_scale_factor - 1200.0).abs() < 1.0, "{content:?}");
+    let p6 = element_by_id(world, root, "p6");
+    let rect = node_rect(world, p6).expect("p6 laid out");
+    assert!((rect.min.y - (100.0 - offset)).abs() < 1.0, "p6 at {rect:?}");
 
     // Scrolling further moves the band; the top part culled, the bottom
     // part materialized.
@@ -8157,12 +8168,729 @@ fn mouse_wheel_scrolls_a_windowed_ui() {
         .0
         .y;
     assert!(scroll > 0.0, "the wheel scrolled the root: {scroll}");
-    // The windowed build followed the offset (the band moved; the dump's
-    // spacers stand for content that scrolled out).
-    ui.settle();
-    let dump = ui.dump();
-    assert!(
-        dump.contains("spacer") && scroll > 0.0,
-        "the windowed band rebuilt at the scrolled offset: {dump}"
-    );
+    // The windowed build followed the offset: the paragraph at the
+    // viewport's top is built and sits where the scroll puts it (20 px
+    // per paragraph). Checking only that "a spacer exists" passed with
+    // the band hundreds of pixels off (review_0006 J06).
+    ui.update(10);
+    let scroll = ui.world_mut().get::<ScrollPosition>(root).unwrap().0.y;
+    let index = (scroll / 20.0).floor() as usize + 1;
+    let world = ui.world_mut();
+    let top = element_by_id(world, root, &format!("p{index}"));
+    let rect = node_rect(world, top).expect("the top paragraph is built");
+    let expected = (index as f32 - 1.0) * 20.0 - scroll;
+    assert!((rect.min.y - expected).abs() < 1.0, "p{index} at {:.1}, expected {expected:.1}", rect.min.y);
+}
+
+/// review_0006: the windowed build (ADR 0031) and bug_0151.
+mod review_0006 {
+    use super::*;
+
+    /// A scrolling root of `rows` one-line paragraphs, optionally
+    /// windowed, settled at `offset`.
+    fn scrolled(name: &str, css: &str, rows: usize, windowed: bool, offset: f32) -> TestUi {
+        let page: String = (1..=rows)
+            .map(|i| format!("<p id=\"p{i}\">Paragraph {i}</p>"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        scrolled_page(name, css, &page, windowed, offset)
+    }
+
+    /// The testbench's big-document shape: row containers (their own
+    /// `gap`, laid out as rows) under a root `gap`.
+    fn bench_rows(rows: usize) -> String {
+        (1..=rows)
+            .map(|i| format!("<div class=\"row\" id=\"r{i}\"><p class=\"k\">unit-{i}</p><p class=\"v\">{}</p></div>", i * 7 % 1000))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    const BENCH_CSS: &str = "html { flex-direction: column; gap: 2px } .row { flex-direction: row; gap: 8px; padding: 1px 4px; border-width: 1px }";
+
+    fn scrolled_page(name: &str, css: &str, page: &str, windowed: bool, offset: f32) -> TestUi {
+        scrolled_with(name, css, page, windowed.then(HtmlWindowed::default), offset)
+    }
+
+    fn scrolled_with(name: &str, css: &str, page: &str, windowed: Option<HtmlWindowed>, offset: f32) -> TestUi {
+        scrolled_at_scale(name, css, page, windowed, offset, 1.0)
+    }
+
+    /// As [`scrolled_with`] on a display of scale factor `scale` (the
+    /// camera's target: physical size × scale; rects come out physical).
+    fn scrolled_at_scale(
+        name: &str,
+        css: &str,
+        page: &str,
+        windowed: Option<HtmlWindowed>,
+        offset: f32,
+        scale: f32,
+    ) -> TestUi {
+        let mut ui = TestUi::with_layout(name, &[("page.html", page), ("style.css", css)], UVec2::new(300, 200))
+            .stylesheet("style.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new(),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(200.0),
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow { x: OverflowAxis::Visible, y: OverflowAxis::Scroll },
+                    ..default()
+                },
+            );
+        if scale != 1.0 {
+            let world = ui.world_mut();
+            let mut cameras = world.query::<&mut Camera>();
+            for mut camera in cameras.iter_mut(world) {
+                if let Some(info) = camera.computed.target_info.as_mut() {
+                    info.physical_size = (UVec2::new(300, 200).as_vec2() * scale).as_uvec2();
+                    info.scale_factor = scale;
+                }
+            }
+        }
+        let root = ui.root();
+        let windowed = match windowed {
+            Some(component) => {
+                ui.world_mut().entity_mut(root).insert(component);
+                true
+            }
+            None => false,
+        };
+        ui.settle();
+        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, offset)));
+        // A scroll rebuilds only a windowed UI, and only when its band
+        // changes (J05) — `settle` demands a build, so run frames instead.
+        let _ = windowed;
+        ui.update(12);
+        ui
+    }
+
+    /// Each element's (top, bottom) by id, in the window's coordinates.
+    fn rects(ui: &mut TestUi) -> std::collections::BTreeMap<String, (f32, f32)> {
+        let world = ui.world_mut();
+        let mut elements = world.query::<(Entity, &HtmlElement)>();
+        let found: Vec<(Entity, String)> = elements
+            .iter(world)
+            .filter_map(|(entity, element)| element.id.clone().map(|id| (entity, id)))
+            .collect();
+        found
+            .into_iter()
+            .filter_map(|(entity, id)| node_rect(world, entity).map(|rect| (id, (rect.min.y, rect.max.y))))
+            .collect()
+    }
+
+    /// bug_0151: every materialized row of a windowed UI sits where a
+    /// full (unwindowed) build of the same document puts it, at the same
+    /// scroll offset — and the rows the viewport shows are materialized.
+    /// With a root `gap`, the coalesced above-spacer dropped the gaps
+    /// between its culled rows, so the band rose by (culled − 1) × gap:
+    /// 4 px × ~100 rows here, the whole band off the viewport.
+    #[test]
+    fn windowed_rows_sit_where_the_full_build_puts_them() {
+        let css = "html { flex-direction: column; gap: 4px }";
+        let offset = 2400.0;
+        let mut full = scrolled("bug0151-full", css, 300, false, offset);
+        let mut windowed = scrolled("bug0151-windowed", css, 300, true, offset);
+        let (full, windowed) = (rects(&mut full), rects(&mut windowed));
+        assert!(windowed.len() < 300, "the windowed UI culled: {} materialized", windowed.len());
+        let mut wrong = Vec::new();
+        for (id, rect) in &windowed {
+            let expected = full[id];
+            if (rect.0 - expected.0).abs() > 1.0 {
+                wrong.push(format!("{id}: at {:.0}, full build {:.0}", rect.0, expected.0));
+            }
+        }
+        assert!(wrong.is_empty(), "{} of {} misplaced, e.g. {:?}", wrong.len(), windowed.len(), &wrong[..wrong.len().min(3)]);
+        // The viewport (window y 0..200) shows materialized rows.
+        let visible: Vec<&String> = full.iter().filter(|(_, (top, bottom))| *bottom > 0.0 && *top < 200.0).map(|(id, _)| id).collect();
+        assert!(!visible.is_empty());
+        for id in visible {
+            assert!(windowed.contains_key(id), "{id} is in the viewport but not materialized");
+        }
+    }
+
+    /// Compares a windowed UI's materialized rows with a full build at
+    /// the same scroll offset; returns the misplaced and missing rows.
+    fn band_errors(full: &mut TestUi, windowed: &mut TestUi) -> Vec<String> {
+        band_errors_in(full, windowed, (0.0, 200.0))
+    }
+
+    /// As [`band_errors`] with the visible region `(top, bottom)` in
+    /// window px (a bordered root clips at its padding box).
+    fn band_errors_in(full: &mut TestUi, windowed: &mut TestUi, visible: (f32, f32)) -> Vec<String> {
+        let (full, windowed) = (rects(full), rects(windowed));
+        let mut errors: Vec<String> = windowed
+            .iter()
+            .filter(|(id, rect)| (rect.0 - full[*id].0).abs() > 1.0)
+            .map(|(id, rect)| format!("{id}: at {:.0}, full build {:.0}", rect.0, full[id].0))
+            .collect();
+        errors.extend(
+            full.iter()
+                .filter(|(id, (top, bottom))| *bottom > visible.0 && *top < visible.1 && !windowed.contains_key(*id))
+                .map(|(id, _)| format!("{id}: visible but not materialized")),
+        );
+        errors
+    }
+
+    /// bug_0151 in the testbench's shape (the project owner's run): row
+    /// containers with their own `gap` under a root `gap`, at several
+    /// depths. The root cursor advanced by the last pushed frame's gap —
+    /// a materialized row's 8 px, not the root's 2 px.
+    #[test]
+    fn windowed_bench_rows_track_the_scroll_at_every_depth() {
+        let page = bench_rows(600);
+        for offset in [500.0, 4000.0, 9000.0] {
+            let mut full = scrolled_page("bug0151-rows-full", BENCH_CSS, &page, false, offset);
+            let mut windowed = scrolled_page("bug0151-rows-windowed", BENCH_CSS, &page, true, offset);
+            let errors = band_errors(&mut full, &mut windowed);
+            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        }
+    }
+
+    /// The band with no margin is exactly the viewport: a cursor that runs
+    /// ahead of the layout (the root advanced by a materialized row's own
+    /// 8 px gap instead of the root's 2 px) leaves the viewport's lower
+    /// rows unmaterialized — a one-viewport margin hid it.
+    #[test]
+    fn a_marginless_band_still_covers_the_viewport() {
+        let page = bench_rows(600);
+        for offset in [500.0, 4000.0, 9000.0] {
+            let mut full = scrolled_page("bug0151-tight-full", BENCH_CSS, &page, false, offset);
+            let mut windowed = scrolled_with(
+                "bug0151-tight-windowed",
+                BENCH_CSS,
+                &page,
+                Some(HtmlWindowed { margin_viewports: 0.0 }),
+                offset,
+            );
+            let errors = band_errors(&mut full, &mut windowed);
+            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        }
+    }
+
+    /// The number of materialized elements and of entities carrying a
+    /// `WindowModel` (only the windowed root should).
+    fn census(ui: &mut TestUi) -> (usize, usize) {
+        let world = ui.world_mut();
+        let elements = world.query::<&HtmlElement>().iter(world).count();
+        let models = world.query::<&bevy_markup::WindowModel>().iter(world).count();
+        (elements, models)
+    }
+
+    /// J02: content inside one container (most real pages: `<main>`,
+    /// a `<section>`) is windowed too. `measure_window_heights` recorded
+    /// only the root's direct children, so a container's children never
+    /// had heights and nothing inside it was ever culled: 600 rows in a
+    /// `<main>` materialized all 1 801 elements.
+    #[test]
+    fn content_inside_a_container_is_windowed() {
+        let page = format!("<main>{}</main>", bench_rows(600));
+        let mut full = scrolled_page("j02-nested-full", BENCH_CSS, &page, false, 4000.0);
+        let mut windowed = scrolled_page("j02-nested-windowed", BENCH_CSS, &page, true, 4000.0);
+        let (elements, _) = census(&mut windowed);
+        assert!(elements < 300, "{elements} of 1 801 elements materialized");
+        let errors = band_errors(&mut full, &mut windowed);
+        assert!(errors.is_empty(), "{} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+    }
+
+    /// J02, deeper: two container levels with margins, borders and
+    /// padding. The rows inside sit where the full build puts them (the
+    /// container cursor counted its margin twice, invisible while nested
+    /// frames culled nothing), and nothing far away is built.
+    #[test]
+    fn nested_containers_with_boxes_cull_in_place() {
+        let rows = bench_rows(600);
+        let page = format!("<main><section class=\"list\">{rows}</section></main>");
+        let css = format!(
+            "{BENCH_CSS} main {{ margin-top: 30px; padding: 6px; border-width: 3px }} \
+             .list {{ margin-top: 40px; padding-top: 5px; gap: 3px }}"
+        );
+        for offset in [700.0, 5000.0] {
+            let mut full = scrolled_page("j02-boxes-full", &css, &page, false, offset);
+            // No band margin: a cursor error shows as unbuilt rows at the
+            // viewport's edge instead of hiding in the margin.
+            let mut windowed = scrolled_with(
+                "j02-boxes-windowed",
+                &css,
+                &page,
+                Some(HtmlWindowed { margin_viewports: 0.0 }),
+                offset,
+            );
+            let (elements, _) = census(&mut windowed);
+            assert!(elements < 300, "offset {offset}: {elements} elements materialized");
+            let errors = band_errors(&mut full, &mut windowed);
+            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        }
+    }
+
+    /// A UI without `HtmlWindowed` gets no `WindowModel` (every UI's
+    /// entities carry keys; the measurement used to insert a model on any
+    /// keyed entity's parent).
+    #[test]
+    fn an_unwindowed_ui_has_no_window_model() {
+        let page = format!("<main>{}</main>", bench_rows(50));
+        let mut ui = scrolled_page("j02-unwindowed", BENCH_CSS, &page, false, 0.0);
+        let (_, models) = census(&mut ui);
+        assert_eq!(models, 0);
+    }
+
+    /// Only windowed UIs' entities carry a `WindowKey` (the measurement
+    /// visits keyed entities every frame their layout changes; keys on
+    /// every UI made non-windowed UIs pay it too). A windowed UI's built
+    /// elements are all keyed — including the ones its first, window-less
+    /// build (no layout yet) spawned.
+    #[test]
+    fn window_keys_only_on_windowed_uis() {
+        let keyed = |ui: &mut TestUi| -> (usize, usize) {
+            let world = ui.world_mut();
+            let elements = world.query::<&HtmlElement>().iter(world).count();
+            let keys = world.query::<(&HtmlElement, &bevy_markup::WindowKey)>().iter(world).count();
+            (elements, keys)
+        };
+        let page = format!("<main>{}</main>", bench_rows(50));
+        let mut plain = scrolled_page("keys-unwindowed", BENCH_CSS, &page, false, 0.0);
+        assert_eq!(keyed(&mut plain).1, 0, "an unwindowed UI carries keys");
+        let mut windowed = scrolled_page("keys-windowed", BENCH_CSS, &page, true, 300.0);
+        let (elements, keys) = keyed(&mut windowed);
+        assert_eq!(keys, elements, "every built element of a windowed UI is keyed");
+    }
+
+    /// J02: only the windowed root carries a `WindowModel`. The
+    /// measurement inserted one on the parent of every nested keyed
+    /// entity (each row container: 25 for one band, 602 inside a `<main>`).
+    #[test]
+    fn only_the_windowed_root_carries_a_window_model() {
+        let page = bench_rows(600);
+        let mut windowed = scrolled_page("j02-models", BENCH_CSS, &page, true, 4000.0);
+        let (_, models) = census(&mut windowed);
+        assert_eq!(models, 1);
+    }
+
+    /// J03: a windowed root with padding (or border) settles and culls.
+    /// The width check compared the root's border-box width with the
+    /// model's content width, so they never agreed: the model cleared on
+    /// every build (nothing culled) and the UI rebuilt every frame.
+    #[test]
+    fn a_padded_windowed_root_settles_and_culls() {
+        let page = bench_rows(600);
+        let css = format!("{BENCH_CSS} html {{ padding: 8px }}");
+        let mut ui = TestUi::with_layout("j03-padding", &[("page.html", page.as_str()), ("style.css", css.as_str())], UVec2::new(300, 200))
+            .stylesheet("style.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new(),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(200.0),
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow { x: OverflowAxis::Visible, y: OverflowAxis::Scroll },
+                    ..default()
+                },
+            );
+        let root = ui.root();
+        ui.world_mut().entity_mut(root).insert((HtmlWindowed::default(), ScrollPosition(Vec2::new(0.0, 4000.0))));
+        ui.update(40);
+        let before = ui.builds();
+        ui.update(30);
+        let builds = ui.builds() - before;
+        let (elements, _) = census(&mut ui);
+        assert_eq!(builds, 0, "an idle windowed UI rebuilt {builds} times in 30 frames");
+        assert!(elements < 300, "{elements} of 1 800 elements materialized");
+    }
+
+    /// J03 at a HiDPI scale: the model, the band and the width anchor in
+    /// one unit system. The build read the root's physical size for the
+    /// viewport and the width anchor, and the measurement scaled the
+    /// (logical) margins by the inverse factor: at scale 2 the model
+    /// cleared every build and nothing culled.
+    #[test]
+    fn a_hidpi_windowed_ui_culls_and_places_its_rows() {
+        let page = bench_rows(600);
+        let css = format!("{BENCH_CSS} .row {{ margin-top: 3px; margin-bottom: 2px }}");
+        for offset in [600.0, 5000.0] {
+            let mut full = scrolled_at_scale("j03-hidpi-full", &css, &page, None, offset, 2.0);
+            let mut windowed = scrolled_at_scale(
+                "j03-hidpi-windowed",
+                &css,
+                &page,
+                Some(HtmlWindowed { margin_viewports: 0.0 }),
+                offset,
+                2.0,
+            );
+            let before = windowed.builds();
+            windowed.update(20);
+            assert_eq!(windowed.builds() - before, 0, "offset {offset}: an idle HiDPI UI rebuilt");
+            let (elements, _) = census(&mut windowed);
+            assert!(elements < 300, "offset {offset}: {elements} elements materialized");
+            let errors = band_errors_in(&mut full, &mut windowed, (0.0, 400.0));
+            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+            // A marginless band builds the viewport, no more: a physical
+            // viewport (twice the logical one at scale 2) built twice the
+            // rows.
+            let visible = rects(&mut full)
+                .values()
+                .filter(|(top, bottom)| *bottom > 0.0 && *top < 400.0)
+                .count();
+            let built = rects(&mut windowed).len();
+            assert!(built <= visible + 6, "offset {offset}: {built} elements built for {visible} visible");
+        }
+    }
+
+    /// J03 with a padded, bordered root: the band starts at the padding
+    /// box (the visible region), not the content box.
+    #[test]
+    fn a_padded_bordered_root_places_its_band() {
+        let page = bench_rows(600);
+        let css = format!("{BENCH_CSS} html {{ padding: 40px 6px 30px; border-width: 5px }}");
+        for offset in [300.0, 5000.0] {
+            let mut full = scrolled_page("j03-boxed-full", &css, &page, false, offset);
+            let mut windowed = scrolled_with(
+                "j03-boxed-windowed",
+                &css,
+                &page,
+                Some(HtmlWindowed { margin_viewports: 0.0 }),
+                offset,
+            );
+            // Visible: the padding box, inside the 5 px border.
+            let errors = band_errors_in(&mut full, &mut windowed, (5.0, 195.0));
+            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        }
+    }
+
+    /// J08: a windowed UI culls after its first measurement, without
+    /// waiting for a scroll. The first build has no heights and builds
+    /// everything; nothing triggered a second build, so a UI that was
+    /// never scrolled stayed fully built.
+    #[test]
+    fn a_windowed_ui_culls_without_being_scrolled() {
+        let page = bench_rows(600);
+        let mut ui = TestUi::with_layout("j08-unscrolled", &[("page.html", page.as_str()), ("style.css", BENCH_CSS)], UVec2::new(300, 200))
+            .stylesheet("style.css")
+            .spawn(
+                "page.html",
+                TemplateContext::new(),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(200.0),
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow { x: OverflowAxis::Visible, y: OverflowAxis::Scroll },
+                    ..default()
+                },
+            );
+        let root = ui.root();
+        ui.world_mut().entity_mut(root).insert((HtmlWindowed::default(), ScrollPosition::default()));
+        ui.update(40);
+        let (elements, _) = census(&mut ui);
+        assert!(elements < 300, "{elements} of 1 800 elements materialized");
+        let before = ui.builds();
+        ui.update(20);
+        assert_eq!(ui.builds() - before, 0, "the culled UI keeps rebuilding");
+    }
+
+    /// A windowed UI that isn't laid out (a zero-height root: no layout
+    /// yet, or a render-less app) builds everything: an unknown viewport
+    /// windows nothing. With J08's rebuild, a zero band culled the whole
+    /// document into one spacer.
+    #[test]
+    fn an_unlaid_windowed_ui_builds_everything() {
+        let page = bench_rows(40);
+        let files = [("page.html", page.as_str()), ("style.css", BENCH_CSS)];
+        let mut ui = TestUi::new("j08-unlaid", &files)
+            .stylesheet("style.css")
+            .spawn("page.html", TemplateContext::new(), Node::default());
+        let root = ui.root();
+        ui.world_mut().entity_mut(root).insert((HtmlWindowed::default(), ScrollPosition::default()));
+        ui.settle();
+        ui.update(10);
+        let (elements, _) = census(&mut ui);
+        assert_eq!(elements, 120, "{}", ui.dump());
+    }
+
+    /// J04: a scroll that keeps most of the band reuses it. A scroll-only
+    /// build never pairs with the skeleton (it requires a render change or
+    /// a restyle), so every scroll frame re-cascades and re-collects the
+    /// whole band: 0 of 74 specs reused for a one-row scroll.
+    #[test]
+    fn scrolling_by_one_row_reuses_the_band() {
+        let page = bench_rows(600);
+        let mut ui = scrolled_page("j04-scroll-reuse", BENCH_CSS, &page, true, 4000.0);
+        let root = ui.root();
+        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 4024.0)));
+        ui.update(5);
+        let (reused, total) = ui
+            .world_mut()
+            .get::<Skeleton>(root)
+            .and_then(|skeleton| skeleton.last_reuse())
+            .expect("a content build ran");
+        assert!(reused * 2 >= total, "{reused} of {total} reused");
+    }
+
+    /// J04's reuse stays correct: small scrolls in both directions (rows
+    /// reuse their specs, the band's edges re-collect), then a content
+    /// change while scrolled; after every step the materialized rows sit
+    /// where an unwindowed build of the same state puts them.
+    #[test]
+    fn scrolling_in_steps_matches_the_full_build() {
+        let page = format!(
+            "<main>{}</main>",
+            (1..=400)
+                .map(|i| format!("<div class=\"row\" id=\"r{i}\"><p class=\"k\">unit-{i}</p><p class=\"v\">{{% if i == {i} %}}{{{{ v }}}}{{% else %}}{i}{{% endif %}}</p></div>"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let files = [("page.html", page.as_str()), ("style.css", BENCH_CSS)];
+        let spawn = |name: &str, windowed: bool| {
+            let mut ui = TestUi::with_layout(name, &files, UVec2::new(300, 200))
+                .stylesheet("style.css")
+                .spawn(
+                    "page.html",
+                    TemplateContext::new().with("i", &150).with("v", &"short"),
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(200.0),
+                        flex_direction: FlexDirection::Column,
+                        overflow: Overflow { x: OverflowAxis::Visible, y: OverflowAxis::Scroll },
+                        ..default()
+                    },
+                );
+            let root = ui.root();
+            if windowed {
+                ui.world_mut().entity_mut(root).insert((
+                    HtmlWindowed { margin_viewports: 0.25 },
+                    ScrollPosition::default(),
+                ));
+            }
+            ui.settle();
+            ui
+        };
+        let mut windowed = spawn("j04-steps-windowed", true);
+        let mut full = spawn("j04-steps-full", false);
+        let step = |ui: &mut TestUi, offset: f32| {
+            let root = ui.root();
+            ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, offset)));
+            ui.update(6);
+        };
+        for offset in [3000.0, 3030.0, 3100.0, 3101.0, 3170.0, 3050.0, 2990.0, 3400.0] {
+            step(&mut windowed, offset);
+            step(&mut full, offset);
+            let errors = band_errors(&mut full, &mut windowed);
+            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        }
+        // A content change while scrolled (a row in the band gets a value):
+        // a longer text, then the scroll moves on.
+        for ui in [&mut windowed, &mut full] {
+            let root = ui.root();
+            ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("v", &"a much longer value");
+            // Row 155 sits in the band at 3 400 px (22 px per row).
+            ui.world_mut().get_mut::<TemplateContext>(root).unwrap().insert("i", &155);
+            ui.update(8);
+        }
+        let errors = band_errors(&mut full, &mut windowed);
+        assert!(errors.is_empty(), "after a content change: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        let root = windowed.root();
+        let (reused, total) = windowed.world_mut().get::<Skeleton>(root).and_then(|skeleton| skeleton.last_reuse()).unwrap();
+        assert!(reused > 0, "{reused} of {total} reused");
+    }
+
+    /// Sections of ten rows swept through the band in small steps: a
+    /// section that straddled the band's edge (its cached spec holds a
+    /// spacer) and then lies wholly inside must re-collect, not reuse the
+    /// half-culled spec.
+    #[test]
+    fn sections_entering_the_band_rebuild_their_culled_half() {
+        let page: String = (0..40)
+            .map(|s| {
+                let rows: String = (0..10)
+                    .map(|r| format!("<p id=\"p{s}-{r}\">row {s}.{r}</p>"))
+                    .collect();
+                format!("<section class=\"s\">{rows}</section>")
+            })
+            .collect();
+        let css = "html { flex-direction: column; gap: 6px } .s { gap: 2px }";
+        let mut windowed = scrolled_page("sections-windowed", css, &page, true, 900.0);
+        let mut full = scrolled_page("sections-full", css, &page, false, 900.0);
+        for step in 1..=24 {
+            let offset = 900.0 + step as f32 * 47.0;
+            for ui in [&mut windowed, &mut full] {
+                let root = ui.root();
+                ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, offset)));
+                ui.update(6);
+            }
+            let errors = band_errors(&mut full, &mut windowed);
+            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        }
+    }
+
+    /// Loose text between elements (anonymous blocks, keyed by their raw
+    /// text node) keeps culling across scroll builds: the model keeps its
+    /// keys for an unchanged document (remapping through the pairing —
+    /// element pairs only — dropped the anonymous blocks' heights, and the
+    /// cursor stopped culling at the first one).
+    #[test]
+    fn loose_text_keeps_culling_across_scrolls() {
+        let page: String = (1..=300).map(|i| format!("loose line {i}<p id=\"p{i}\">paragraph {i}</p>")).collect();
+        let css = "html { flex-direction: column; gap: 2px }";
+        for (step, offset) in [(0, 3000.0), (1, 3050.0), (2, 3200.0)] {
+            let mut full = scrolled_page("loose-full", css, &page, false, offset);
+            let mut windowed = scrolled_page("loose-windowed", css, &page, true, 3000.0);
+            if step > 0 {
+                let root = windowed.root();
+                windowed.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 3050.0)));
+                windowed.update(6);
+                windowed.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, offset)));
+                windowed.update(6);
+            }
+            let built = rects(&mut windowed).len();
+            assert!(built < 100, "offset {offset}: {built} paragraphs built");
+            let errors = band_errors(&mut full, &mut windowed);
+            assert!(errors.is_empty(), "offset {offset}: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        }
+    }
+
+    /// A taller viewport rebuilds the band (the root's height is part of
+    /// the band; before J05 only the width and the offset triggered a
+    /// rebuild, so the extra viewport stayed empty).
+    #[test]
+    fn a_taller_viewport_rebuilds_the_band() {
+        let page = bench_rows(600);
+        let mut windowed = scrolled_with(
+            "j05-taller-windowed",
+            BENCH_CSS,
+            &page,
+            Some(HtmlWindowed { margin_viewports: 0.0 }),
+            4000.0,
+        );
+        let mut full = scrolled_page("j05-taller-full", BENCH_CSS, &page, false, 4000.0);
+        for ui in [&mut windowed, &mut full] {
+            let root = ui.root();
+            ui.world_mut().get_mut::<Node>(root).unwrap().height = Val::Px(400.0);
+        }
+        // The camera's target stays 200 px tall: grow it so the window
+        // shows the taller root.
+        for ui in [&mut windowed, &mut full] {
+            let world = ui.world_mut();
+            let mut cameras = world.query::<&mut Camera>();
+            for mut camera in cameras.iter_mut(world) {
+                if let Some(info) = camera.computed.target_info.as_mut() {
+                    info.physical_size = UVec2::new(300, 400);
+                }
+            }
+            ui.update(8);
+        }
+        let errors = band_errors_in(&mut full, &mut windowed, (0.0, 400.0));
+        assert!(errors.is_empty(), "{} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+    }
+
+    /// J05's slack at a tall block: with a 2 000 px block filling one band
+    /// edge, the other edge's culled rows set the slack — a scroll that
+    /// brings them into view must rebuild even though the tall block
+    /// alone would allow a longer move.
+    #[test]
+    fn the_slack_follows_the_culled_rows_beside_a_tall_block() {
+        let rows = |range: std::ops::RangeInclusive<usize>| -> String {
+            range.map(|i| format!("<p id=\"p{i}\">row {i}</p>")).collect()
+        };
+        let css = "html { flex-direction: column; gap: 2px } .tall { height: 2000px }";
+        let tight = Some(HtmlWindowed { margin_viewports: 0.0 });
+        // Culled below: the band starts inside the tall block; scrolling
+        // down 1 800 px brings the rows after it into view.
+        let page = format!("<p class=\"tall\" id=\"tall\">tall</p>{}", rows(1..=200));
+        let mut windowed = scrolled_with("slack-below-windowed", css, &page, tight, 100.0);
+        let mut full = scrolled_page("slack-below-full", css, &page, false, 100.0);
+        for ui in [&mut windowed, &mut full] {
+            let root = ui.root();
+            ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 1900.0)));
+            ui.update(8);
+        }
+        let errors = band_errors(&mut full, &mut windowed);
+        assert!(errors.is_empty(), "below: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        // Culled above: the band sits inside a tall block after 100 rows;
+        // scrolling up 200 px brings the last rows into view.
+        let page = format!("{}<p class=\"tall\" id=\"tall\">tall</p>", rows(1..=100));
+        let start = 100.0 * 22.0 + 100.0;
+        let mut windowed = scrolled_with("slack-above-windowed", css, &page, tight, start);
+        let mut full = scrolled_page("slack-above-full", css, &page, false, start);
+        for ui in [&mut windowed, &mut full] {
+            let root = ui.root();
+            ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, start - 200.0)));
+            ui.update(8);
+        }
+        let errors = band_errors(&mut full, &mut windowed);
+        assert!(errors.is_empty(), "above: {} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+        // Leaving: rows at the band's top with the tall block below them;
+        // scrolling down past the rows must cull them (the materialized
+        // rows' own slack — the tall block alone allows a long move).
+        let start = 100.0 * 22.0 - 100.0;
+        let mut windowed = scrolled_with("slack-leave-windowed", css, &page, tight, start);
+        let root = windowed.root();
+        windowed.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, start + 400.0)));
+        windowed.update(8);
+        let built = rects(&mut windowed).keys().filter(|id| id.starts_with('p')).count();
+        assert!(built <= 1, "{built} rows still built above the band");
+    }
+
+    /// J05 with a subtree reused whole: its rows weren't visited, so the
+    /// slack keeps the band clear of its top — scrolling until its first
+    /// row leaves the band rebuilds and culls that row.
+    #[test]
+    fn a_reused_section_culls_its_rows_once_they_leave_the_band() {
+        let filler: String = (1..=100).map(|i| format!("<p id=\"f{i}\">filler {i}</p>")).collect();
+        let section: String = (1..=10).map(|i| format!("<p id=\"s{i}\">section {i}</p>")).collect();
+        let page = format!("{filler}<section class=\"s\">{section}</section><p class=\"tall\">tall</p>");
+        let css = "html { flex-direction: column; gap: 2px } .s { gap: 2px } .tall { height: 3000px }";
+        let mut ui = scrolled_page("reused-section", css, &page, true, 2100.0);
+        let root = ui.root();
+        // A scroll past a filler row's edge (a rebuild); the section,
+        // inside the band, reuses whole.
+        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 2125.0)));
+        ui.update(6);
+        let (reused, _) = ui.world_mut().get::<Skeleton>(root).and_then(|skeleton| skeleton.last_reuse()).unwrap();
+        assert!(reused > 0, "the section reused");
+        // Down until the section's first row is above the band's top
+        // (the band reaches one viewport, 200 px, above the offset).
+        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 2450.0)));
+        ui.update(6);
+        let built = rects(&mut ui);
+        assert!(!built.contains_key("s1"), "s1 is above the band but still built: {:?}", built.keys().collect::<Vec<_>>());
+    }
+
+    /// J05: a scroll that leaves the band's membership unchanged doesn't
+    /// rebuild. The offset is compared exactly, so every sub-pixel step of
+    /// a smooth scroll rebuilt the UI.
+    #[test]
+    fn a_scroll_inside_the_band_does_not_rebuild() {
+        let page = bench_rows(600);
+        let mut ui = scrolled_page("j05-subpixel", BENCH_CSS, &page, true, 4000.0);
+        let root = ui.root();
+        let before = ui.builds();
+        ui.world_mut().entity_mut(root).insert(ScrollPosition(Vec2::new(0.0, 4000.5)));
+        ui.update(5);
+        assert_eq!(ui.builds() - before, 0, "a half-pixel scroll rebuilt the UI");
+    }
+
+    /// bug_0151's second symptom: hovering a materialized row (a scoped
+    /// restyle) must not move or thin the band.
+    #[test]
+    fn a_hover_restyle_keeps_the_band() {
+        let page = bench_rows(600);
+        let offset = 6000.0;
+        let mut full = scrolled_page("bug0151-hover-full", BENCH_CSS, &page, false, offset);
+        let mut windowed = scrolled_page("bug0151-hover-windowed", BENCH_CSS, &page, true, offset);
+        let root = windowed.root();
+        let target = {
+            let world = windowed.world_mut();
+            let mut elements = world.query::<(Entity, &HtmlElement)>();
+            let visible: Vec<Entity> = elements
+                .iter(world)
+                .filter(|(_, element)| element.classes.iter().any(|class| class == "row"))
+                .map(|(entity, _)| entity)
+                .collect();
+            visible[visible.len() / 2]
+        };
+        windowed.world_mut().entity_mut(target).insert(PseudoState { hovered: true, ..default() });
+        windowed.update(10);
+        let _ = root;
+        let errors = band_errors(&mut full, &mut windowed);
+        assert!(errors.is_empty(), "{} errors, e.g. {:?}", errors.len(), &errors[..errors.len().min(3)]);
+    }
 }

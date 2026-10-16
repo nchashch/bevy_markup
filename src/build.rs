@@ -319,6 +319,11 @@ enum Item {
         /// border box). Deliberately no model key: the coalesced run's
         /// height is a derived sum, never a member's.
         height: f32,
+        /// The containing column's row gap: coalescing k culled siblings
+        /// into one spacer must keep the k − 1 gaps between them (one
+        /// node gets one gap in the column, not k — bug_0151: the band
+        /// rose by the dropped gaps and left the viewport).
+        gap: f32,
     },
     Container {
         element: HtmlElement,
@@ -340,6 +345,9 @@ enum Item {
         /// ADR 0029: a pseudo-referencing selector could match this
         /// element or something inside it.
         pseudo_reactive: bool,
+        /// ADR 0031: collected for a windowed build — its entity carries a
+        /// `WindowKey` (only windowed UIs' entities are measured).
+        keyed: bool,
         children: Vec<Item>,
     },
     /// A `<input type="text">` (the `text-input` feature).
@@ -358,6 +366,8 @@ enum Item {
         style: Style,
         /// ADR 0029: a pseudo-referencing selector could match this field.
         pseudo_reactive: bool,
+        /// ADR 0031: collected for a windowed build (a `WindowKey`).
+        keyed: bool,
         value: TextInputSpec,
     },
     /// ADR 0021: a reused subtree — the previous build's spec, handed to
@@ -1162,16 +1172,24 @@ pub(crate) fn build_html_ui(
         if windowed.is_some() && window.models.get(entity).is_err() {
             commands.entity(entity).insert(WindowModel::default());
         }
+        // ADR 0031 (review_0006 J05): a windowed UI rebuilds when the band
+        // could change — the scroll offset left the slack the last build
+        // recorded (how far it may move before any element crosses a band
+        // edge), the viewport changed, or the heights did. An exact
+        // offset comparison rebuilt on every sub-pixel step of a smooth
+        // scroll. A `Wait` keeps the old anchor, so the move outlives it.
         let window_changed = windowed.is_some()
-                && (scroll.is_some_and(|scroll| scroll.y != rebuild.window_scroll)
-                    || window
-                        .models
-                        .get(entity)
-                        .is_ok_and(|model| {
-                            computed
-                                .as_ref()
-                                .is_some_and(|node| (node.size.x - model.width).abs() > 0.5)
-                        }));
+            && window.models.get(entity).is_ok_and(|model| {
+                let moved = scroll.zip(model.anchor).is_some_and(|(scroll, anchor)| {
+                    let delta = scroll.y - anchor;
+                    delta > model.slack.0 || -delta > model.slack.1
+                });
+                let resized = computed.as_ref().is_some_and(|node| {
+                    (logical_content_width(node) - model.width).abs() > 0.5
+                        || (visible_region(node).0 - model.viewport).abs() > 0.5
+                });
+                model.changed || moved || resized
+            });
 
         let frame = Frame {
             own: own_phase,
@@ -1203,7 +1221,6 @@ pub(crate) fn build_html_ui(
         // the same rule that keeps pending changes alive.
         if !matches!(decision, Decision::Wait | Decision::Skip) {
             rebuild.vars = vars_hash;
-            rebuild.window_scroll = scroll.as_ref().map_or(0.0, |scroll| scroll.y);
         }
         decisions.push((entity, decision, frame, rebuild.style_pending()));
     }
@@ -1343,7 +1360,11 @@ pub(crate) fn build_html_ui(
             && outline.is_none()
             && !removed_outlines.contains(&entity)
             && document_ready
-            && (rendered.is_changed() || restyle)
+            // ADR 0031 (review_0006 J04): a windowed UI's scroll build has
+            // an unchanged document; it pairs too, so the rows that stay
+            // in the band reuse their specs instead of every scroll frame
+            // re-collecting the whole band.
+            && (rendered.is_changed() || restyle || windowed.is_some())
             && (!style_pending || restyle);
         let (previous_useful, previous_since_try, previous_strike, had_skeleton) = skeletons
             .get(entity)
@@ -1547,32 +1568,63 @@ pub(crate) fn build_html_ui(
                     // it into the fresh document; a same-document build
                     // keeps it), and a width divergence clears it
                     // (wrapping changes heights).
+                    // ADR 0031 (review_0006 J05): the band's slack, filled
+                    // by the cull decisions, stored into the model below.
+                    let window_slack =
+                        (std::cell::Cell::new(f32::INFINITY), std::cell::Cell::new(f32::INFINITY));
+                    let mut built_window: Option<(f32, f32)> = None;
                     let window = windowed
                         .as_ref()
                         .zip(scroll.as_ref())
                         .zip(computed.as_ref())
                         .and_then(|((windowed, scroll), node)| {
                             let model = model_guard.as_deref_mut()?;
-                            if (node.size.x - model.width).abs() > 0.5 {
+                            // One unit system (review_0006 J03): the model's
+                            // width is the root's logical content width, so
+                            // compare with that — the physical border box
+                            // never matched with padding, a border or a
+                            // HiDPI scale (the model cleared every build and
+                            // the UI rebuilt every frame).
+                            if (logical_content_width(node) - model.width).abs() > 0.5 {
                                 model.clear();
                             }
+                            // This build consumes the measurement's news.
+                            model.changed = false;
                             match pass.as_ref() {
-                                Some(pass) => model.remap(pass.reverse),
+                                // A new document re-keys the model; an
+                                // unchanged one (a scroll or restyle build)
+                                // keeps it — remapping through the pairing,
+                                // which holds element pairs only, would
+                                // drop the anonymous blocks' heights.
+                                Some(pass) if rendered.is_changed() => model.remap(pass.reverse),
                                 None if rendered.is_changed() => model.clear(),
-                                None => {}
+                                _ => {}
                             }
-                            let viewport = node.size.y;
+                            // The visible region in the cursor's coordinates
+                            // (logical, from the content box's top): the
+                            // padding box, `scroll` down, starting
+                            // `padding-top` above the content.
+                            let (viewport, padding_top) = visible_region(node);
+                            // No layout yet (a zero-height root: before
+                            // the first layout, or a render-less app): an
+                            // unknown viewport windows nothing — a zero
+                            // band would cull the whole document.
+                            if viewport <= 0.0 {
+                                return None;
+                            }
                             let margin = windowed.margin_viewports.max(0.0) * viewport;
-                            let offset = scroll.y;
+                            let offset = scroll.y - padding_top;
                             let default_gap = match default_gap {
                                 Val::Px(gap) => gap,
                                 _ => 0.0,
                             };
+                            built_window = Some((scroll.y, viewport));
                             Some(WindowCtx {
                                 model,
                                 band: (offset - margin, offset + viewport + margin),
                                 frames: std::cell::RefCell::new(Vec::new()),
                                 default_gap,
+                                slack: &window_slack,
                             })
                         });
                     let (items, inline_vars) = collect_items(
@@ -1587,6 +1639,25 @@ pub(crate) fn build_html_ui(
                         pass.as_ref(),
                         window,
                     );
+                    // Where this build windowed, and how far the offset may
+                    // move before the band changes (`None`: nothing was
+                    // windowed — no layout yet; the viewport check
+                    // rebuilds once there is one).
+                    if windowed.is_some()
+                        && let Some(model) = model_guard.as_deref_mut()
+                    {
+                        match built_window {
+                            Some((anchor, viewport)) => {
+                                model.anchor = Some(anchor);
+                                model.slack = (window_slack.0.get(), window_slack.1.get());
+                                model.viewport = viewport;
+                            }
+                            None => {
+                                model.anchor = None;
+                                model.viewport = computed.as_ref().map_or(0.0, |node| visible_region(node).0);
+                            }
+                        }
+                    }
                     // The fresh names weren't in the recorded hash; the
                     // next context change must restyle. A reuse build's
                     // fresh set is missing the reused subtrees' names
@@ -1706,7 +1777,12 @@ pub(crate) fn build_html_ui(
                     // nothing by design) — a restyle pass preserves the
                     // content path's adaptive state (useful *and* strike)
                     // instead of striking.
-                    let content_build = matches!(decision, Decision::Build(_));
+                    // A windowed UI's scroll build (an unchanged
+                    // document) says nothing about content pairing either:
+                    // a long jump reuses nothing, and striking for it turned
+                    // the pairing off for the next scrolls (review_0006 J04).
+                    let any_build = matches!(decision, Decision::Build(_));
+                    let content_build = any_build && (rendered.is_changed() || windowed.is_none());
                     let content_useful = pass.reused.get() > 0
                         && pass.reused.get() * 2 >= total;
                     let useful = if content_build { content_useful } else { previous_useful };
@@ -1721,7 +1797,7 @@ pub(crate) fn build_html_ui(
                     };
                     let table = spec_table(&specs);
                     let current_source = current_source.clone();
-                    let reuse = content_build.then(|| (pass.reused.get(), total));
+                    let reuse = any_build.then(|| (pass.reused.get(), total));
                     // The stored document must be the render the specs
                     // were collected from — but a re-parse per build is
                     // the cost of owning it. Identical sources parse to
@@ -2050,7 +2126,10 @@ pub(crate) struct AutoScroll(pub [bool; 2]);
 /// never-culled.
 pub(crate) fn measure_window_heights(
     mut commands: Commands,
-    mut models: Query<(Entity, &ComputedNode, Option<&'static mut WindowModel>), With<HtmlUi>>,
+    mut models: Query<
+        (Entity, &ComputedNode, Option<&'static mut WindowModel>, Has<HtmlWindowed>),
+        With<HtmlUi>,
+    >,
     // A row whose layout changed re-measures: the first build measures
     // before fonts load (the fallback metrics), and a kept entity is
     // never `Added` again — without this the model keeps the stale
@@ -2082,22 +2161,34 @@ pub(crate) fn measure_window_heights(
     // docs' own conversion) or a HiDPI display's model is its scale
     // times too tall and the band maps every scroll offset to rows
     // twice as deep (the viewport empties while scrolling).
-    let content_width = |computed: &ComputedNode| -> f32 {
-        computed.inverse_scale_factor
-            * (computed.size.x
-                - 2.0 * computed.border.min_inset.x
-                - 2.0 * computed.padding.min_inset.x)
-    };
+    let content_width = logical_content_width;
     for (entity, key, node, computed, parent) in &added {
         let parent = parent.0;
-        // The build inserted it this frame (ordered before us); missing
-        // anyway means the UI root was just spawned — measure next time.
-        let Some(mut model) = models
-            .get_mut(parent)
-            .ok()
-            .and_then(|(_, _, model)| model)
-        else {
-            commands.entity(parent).insert(WindowModel::default());
+        // The entity's own UI: the nearest `HtmlUi` ancestor. Every level
+        // measures into the root's model — looking the model up on the
+        // parent found it only for the root's direct children, so nothing
+        // inside a container was ever measured or culled (review_0006
+        // J02), and the lookup's fallback put a stray `WindowModel` on
+        // every row container.
+        let mut root = parent;
+        while !models.contains(root) {
+            match nodes.get(root) {
+                Ok((_, _, child_of, _)) => root = child_of.0,
+                Err(_) => break,
+            }
+        }
+        let Ok((_, _, model, windowed)) = models.get_mut(root) else {
+            continue;
+        };
+        // Only a windowed UI keeps a model (every UI's entities carry
+        // keys).
+        if !windowed {
+            continue;
+        }
+        let Some(mut model) = model else {
+            // The build inserts it on the UI's first windowed frame;
+            // measure next time.
+            commands.entity(root).insert(WindowModel::default());
             continue;
         };
         let parent_width = nodes
@@ -2125,25 +2216,46 @@ pub(crate) fn measure_window_heights(
             continue;
         }
         // The margins resolve in the same logical units the scroll
-        // uses; only the measured size is physical.
-        model.heights.insert(
-            key.0,
-            (
-                margin_top,
-                (margin_top + computed.size.y + margin_bottom)
-                    * computed.inverse_scale_factor,
-            ),
+        // uses; only the measured size is physical (scaling the margins
+        // too shrank them on a HiDPI display — review_0006 J03).
+        let entry = (
+            margin_top,
+            margin_top + computed.size.y * computed.inverse_scale_factor + margin_bottom,
         );
+        let previous = model.heights.insert(key.0, entry);
+        if previous.is_none_or(|(_, outer)| (outer - entry.1).abs() > 0.5) {
+            model.changed = true;
+        }
         if children_are_opaque(node) {
             model.opaque.insert(key.0);
         }
     }
     // The width anchor: a divergence clears the model at the build.
-    for (_, computed, mut model) in &mut models {
+    for (_, computed, mut model, _) in &mut models {
         if let Some(model) = model.as_deref_mut() {
             model.width = content_width(computed);
         }
     }
+}
+
+/// A node's content width in logical pixels (`ComputedNode` is physical;
+/// the scroll offset and the CSS lengths the cursor adds are logical).
+fn logical_content_width(computed: &ComputedNode) -> f32 {
+    computed.inverse_scale_factor
+        * (computed.size.x
+            - computed.border.min_inset.x
+            - computed.border.max_inset.x
+            - computed.padding.min_inset.x
+            - computed.padding.max_inset.x)
+}
+
+/// A scrolling root's visible region in logical pixels: the padding box's
+/// height (what the viewport shows) and the top padding (the content box
+/// starts that far below the visible top at scroll 0).
+fn visible_region(computed: &ComputedNode) -> (f32, f32) {
+    let scale = computed.inverse_scale_factor;
+    let height = computed.size.y - computed.border.min_inset.y - computed.border.max_inset.y;
+    (height * scale, computed.padding.min_inset.y * scale)
 }
 
 /// Whether the node's children are laid out in a way the vertical cursor
@@ -2665,7 +2777,7 @@ fn item_spec(styler: &Styler, item: &Item, default_gap: Val) -> NodeSpec {
 /// with its child items for [`item_spec`] to build (and its `children`
 /// and `images` still empty).
 fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpec, Option<&'a [Item]>) {
-    if let Item::Spacer { height } = item {
+    if let Item::Spacer { height, .. } = item {
         // ADR 0031: an invisible fixed height in place of a culled
         // subtree. Not pickable, no element, no text; the height is the
         // model's (a fresh measurement re-records it as is — corrections
@@ -2697,6 +2809,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
         style,
         pseudo_reactive,
         auto_scroll,
+        keyed,
     ) = match item {
             // A reused subtree's spec comes out by refcount in the caller;
             // this path only builds fresh items.
@@ -2715,6 +2828,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 font_size,
                 style,
                 pseudo_reactive,
+                keyed,
                 value,
             } => {
                 // Returns directly: the other arms feed the shared tuple tail.
@@ -2744,7 +2858,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                     focus,
                     custom,
                     handle,
-                    window_key: handle,
+                    window_key: handle.filter(|_| *keyed),
                     border_color: boxed.border_color(),
                     background: boxed.background,
                     image: boxed.node_image(),
@@ -2779,6 +2893,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 font_size,
                 style,
                 pseudo_reactive,
+                keyed,
                 children,
             } => (
                 element.clone(),
@@ -2795,6 +2910,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
                 style.clone(),
                 *pseudo_reactive,
                 auto_axes(&boxed.layout),
+                *keyed,
             ),
         };
     let mut node = Node {
@@ -2814,7 +2930,7 @@ fn item_shell<'a>(styler: &Styler, item: &'a Item, default_gap: Val) -> (NodeSpe
         focus,
         custom,
         handle,
-        window_key: handle,
+        window_key: handle.filter(|_| keyed),
         background: boxed.background,
         image: boxed.node_image(),
         border_color: boxed.border_color(),
@@ -3598,6 +3714,11 @@ fn update_spec<'a>(
     let is_text_input = false;
     target.queue(move |mut entity: EntityWorldMut| {
         put_ref(&mut entity, Some(&queued.node));
+        // ADR 0031: the windowing key and spacer follow the spec — a kept
+        // entity from a build without a window (before the first layout)
+        // gains its key here, or it would never be measured (review_0006).
+        put(&mut entity, queued.window_key.map(WindowKey));
+        put(&mut entity, queued.spacer.map(WindowSpacer));
         // Non-text nodes get their `EmSize` from the cascade (text blocks
         // have a `TextFont`, which Bevy derives it from; a text input's
         // `EmSize` comes from its `TextFont` too, as on spawn).
@@ -4293,6 +4414,20 @@ pub struct WindowModel {
     /// The root's content width the heights were measured at: a
     /// divergence clears the model (wrapping changes heights).
     width: f32,
+    /// The scroll offset the last build windowed at (`None`: it windowed
+    /// nothing — no layout yet).
+    anchor: Option<f32>,
+    /// How far the offset may move down (`.0`) and up (`.1`) from the
+    /// anchor before some element crosses a band edge: inside it the band
+    /// is the same, so a scroll there rebuilds nothing (review_0006 J05).
+    slack: (f32, f32),
+    /// The visible height the last build windowed for.
+    viewport: f32,
+    /// The measurement learned a new or different height since the last
+    /// build: the band may cull differently, so the UI rebuilds once. The
+    /// first build materializes everything (no heights yet); without this
+    /// nothing culled until the user scrolled (review_0006 J08).
+    changed: bool,
 }
 
 impl WindowModel {
@@ -4334,6 +4469,7 @@ impl WindowModel {
         self.positioned.clear();
         self.opaque.clear();
         self.width = 0.0;
+        self.changed = false;
     }
 }
 
@@ -4376,12 +4512,17 @@ struct WindowCtx<'a> {
     /// Nested containers without their own `row-gap` space their children
     /// like the root does (the crate's default gap), in px.
     default_gap: f32,
+    /// The offset slack the cull decisions allow (down, up): see
+    /// [`WindowModel::slack`].
+    slack: &'a (std::cell::Cell<f32>, std::cell::Cell<f32>),
 }
 
 impl WindowCtx<'_> {
     /// The subtree `key` stands outside the band when its margin box at
     /// `y` doesn't intersect it: culled, replaced by its measured height.
-    fn culled(&self, frame: usize, y: f32, key: tl::NodeHandle) -> Option<f32> {
+    /// Culled: the spacer item standing in for the subtree (its measured
+    /// outer height, and its column's gap for coalescing).
+    fn culled(&self, frame: usize, y: f32, key: tl::NodeHandle) -> Option<Item> {
         let frame = self.frames.borrow().get(frame)?.clone();
         if !frame.valid.get() {
             return None;
@@ -4390,7 +4531,60 @@ impl WindowCtx<'_> {
         if self.model.positioned.contains(&key) {
             return None;
         }
-        (y + outer <= self.band.0 || y >= self.band.1).then_some(outer)
+        let (top, bottom) = (y, y + outer);
+        let culled = bottom <= self.band.0 || top >= self.band.1;
+        // How far the band may move (strictly more than the slack flips
+        // a decision) before this one flips: moving down by `d` shifts
+        // both edges by `d`. A culled element materializes only past its
+        // distance; a materialized one culls *at* it, hence the epsilon.
+        const EDGE: f32 = 1e-3;
+        if bottom <= self.band.0 {
+            self.narrow(f32::INFINITY, self.band.0 - bottom);
+        } else if top >= self.band.1 {
+            self.narrow(top - self.band.1, f32::INFINITY);
+        } else {
+            self.narrow(bottom - self.band.0 - EDGE, self.band.1 - top - EDGE);
+        }
+        culled.then_some(Item::Spacer {
+            height: outer,
+            gap: frame.gap,
+        })
+    }
+
+    fn narrow(&self, down: f32, up: f32) {
+        self.slack.0.set(self.slack.0.get().min(down.max(0.0)));
+        self.slack.1.set(self.slack.1.get().min(up.max(0.0)));
+    }
+
+    /// A subtree reused whole (it lies inside the band): its descendants
+    /// weren't visited, so the slack keeps the band clear of its top and
+    /// bottom — conservative (a child culls no earlier than its parent's
+    /// top leaves the band). Without it the worst case is bounded
+    /// over-building (rows past the band stay built until the next
+    /// rebuild), never a missing visible row; in practice the
+    /// predecessor's own constraint is at least as tight, so no test
+    /// isolates it (review_0006).
+    fn note_reused(&self, frame: usize, y: f32, key: tl::NodeHandle) {
+        let valid = self.frames.borrow().get(frame).is_some_and(|frame| frame.valid.get());
+        if let (true, Some(&(_, outer))) = (valid, self.model.heights.get(&key)) {
+            self.narrow(y - self.band.0 - 1e-3, self.band.1 - (y + outer) - 1e-3);
+        }
+    }
+
+    /// Whether the subtree `key` lies wholly inside the band (so nothing
+    /// in it culls): `true` where the cursor can't track it (an invalid
+    /// frame culls nothing below it either).
+    fn inside(&self, frame: usize, y: f32, key: tl::NodeHandle) -> bool {
+        let Some(frame) = self.frames.borrow().get(frame).cloned() else {
+            return true;
+        };
+        if !frame.valid.get() {
+            return true;
+        }
+        match self.model.heights.get(&key) {
+            Some(&(_, outer)) => y >= self.band.0 && y + outer <= self.band.1,
+            None => true,
+        }
     }
 
     /// A new cursor frame for a container's children, when the container
@@ -5138,11 +5332,12 @@ fn collect_items(
         // with no position (they aren't elements to match).
         let position = positions.get(handle).copied().unwrap_or_default();
         let advance = ctx.window.as_ref().and_then(|win| {
-            let gap = win
-                .frames
-                .borrow()
-                .last()
-                .map_or(0.0, |frame| frame.gap);
+            // The ROOT frame's gap: materialized containers push their
+            // own frames, so `last()` was the previous row's `gap`, not
+            // the document's (bug_0151).
+            let gap = root_frame
+                .and_then(|frame| win.frames.borrow().get(frame).map(|frame| frame.gap))
+                .unwrap_or(0.0);
             win.model
                 .heights
                 .get(handle)
@@ -5444,6 +5639,7 @@ fn collect_node(
                         font_size,
                         style,
                         pseudo_reactive,
+                        keyed: ctx.window.is_some(),
                         children,
                     });
                     continue;
@@ -5495,9 +5691,9 @@ fn collect_node(
                 // ADR 0031: an anonymous block outside the band = its
                 // measured height (keyed by the raw text node's handle).
                 if let (Some(win), Some((frame, y))) = (ctx.window.as_ref(), window)
-                    && let Some(height) = win.culled(frame, y, handle)
+                    && let Some(spacer) = win.culled(frame, y, handle)
                 {
-                    items.push(Item::Spacer { height });
+                    items.push(spacer);
                     continue;
                 }
                 let mut runs = Vec::new();
@@ -5518,7 +5714,7 @@ fn collect_node(
                         kind: BlockKind::Paragraph,
                         element: None,
                         handle: None,
-                        key: Some(handle),
+                        key: ctx.window.is_some().then_some(handle),
                         signals: Vec::new(),
                         focus: None,
                         custom: None,
@@ -5579,13 +5775,31 @@ fn collect_node(
             && skeleton
                 .cached_spec(old)
                 .is_some_and(|spec| spec.spacer.is_none())
+            // ADR 0031 (review_0006 J04): a cached subtree carries the
+            // culling of the band it was built under. It reuses only when
+            // no descendant would cull differently now: it holds no
+            // spacer, and — where the cursor tracks it — it lies wholly
+            // inside the band. A subtree straddling a band edge
+            // re-collects; its children decide (and reuse) one by one.
+            && ctx.window.as_ref().is_none_or(|win| {
+                // A spec collected without a window (before the first
+                // layout) has no `WindowKey`s: reused, its entities would
+                // never be measured, and nothing in it would ever cull.
+                skeleton
+                    .cached_spec(old)
+                    .is_some_and(|spec| spec.window_key.is_some() && !spec_has_spacer(spec))
+                    && window.is_none_or(|(frame, y)| win.inside(frame, y, handle))
+            })
             && skeleton.reuse(old, items)
         {
+            if let (Some(win), Some((frame, y))) = (ctx.window.as_ref(), window) {
+                win.note_reused(frame, y, handle);
+            }
             continue;
         }
 
-        if let Some(height) = culled_now {
-            items.push(Item::Spacer { height });
+        if let Some(spacer) = culled_now {
+            items.push(spacer);
             continue;
         }
 
@@ -5747,6 +5961,7 @@ fn collect_node(
                 font_size: style.size,
                 style: style.clone(),
                 pseudo_reactive: own_reactive,
+                keyed: ctx.window.is_some(),
                 value: TextInputSpec {
                     initial: value.unwrap_or_default(),
                     font: ctx.styler.text_font(&style),
@@ -5773,9 +5988,9 @@ fn collect_node(
             let mut reactive = own_reactive;
             // ADR 0031: an `<img>`'s anonymous block outside the band.
             if let (Some(win), Some((frame, y))) = (ctx.window.as_ref(), window)
-                && let Some(height) = win.culled(frame, y, handle)
+                && let Some(spacer) = win.culled(frame, y, handle)
             {
-                items.push(Item::Spacer { height });
+                items.push(spacer);
                 continue;
             }
             push_runs(
@@ -5793,7 +6008,7 @@ fn collect_node(
                     kind: BlockKind::Paragraph,
                     element: None,
                     handle: None,
-                    key: Some(handle),
+                    key: ctx.window.is_some().then_some(handle),
                     signals: Vec::new(),
                     focus: None,
                     custom: None,
@@ -5880,7 +6095,9 @@ fn collect_node(
                                 + margin_top
                                 + boxed.border[0].unwrap_or(0.0)
                                 + boxed.padding[0].unwrap_or(0.0);
-                            win.frame_for(parent_frame, top, Some(margin_top), 0.0, Some(gap), opaque)
+                            // `top` already holds the margin (passing it
+                            // again counted it twice — review_0006).
+                            win.frame_for(parent_frame, top, Some(0.0), 0.0, Some(gap), opaque)
                                 .map(|frame| (frame, own_y))
                         })
                 } else {
@@ -6057,7 +6274,7 @@ fn collect_node(
             kind,
             element: Some(element),
             handle: Some(handle),
-            key: Some(handle),
+            key: ctx.window.is_some().then_some(handle),
             signals,
             focus,
             custom,
@@ -6071,6 +6288,19 @@ fn collect_node(
         }));
     }
 }
+/// Whether a spec subtree holds a windowing spacer (it was built under a
+/// band that culled part of it).
+fn spec_has_spacer(spec: &NodeSpec) -> bool {
+    let mut stack: Vec<&NodeSpec> = vec![spec];
+    while let Some(spec) = stack.pop() {
+        if spec.spacer.is_some() {
+            return true;
+        }
+        stack.extend(spec.children.iter().map(|child| child.spec().as_ref()));
+    }
+    false
+}
+
 /// ADR 0031: consecutive culled siblings coalesce into one spacer, so a
 /// flat document of culled blocks costs taffy one node per run, not one
 /// per block. The run's key = its first member's (the height = the
@@ -6078,23 +6308,15 @@ fn collect_node(
 fn coalesce_spacers(items: Vec<Item>) -> Vec<Item> {
     let mut coalesced: Vec<Item> = Vec::with_capacity(items.len());
     for item in items {
-        let merge = match (&item, coalesced.last()) {
-            (
-                Item::Spacer { height, .. },
-                Some(Item::Spacer {
-                    height: total, ..
-                }),
-            ) => Some(*height + *total),
-            _ => None,
-        };
-        match merge {
-            Some(total) => {
-                if let Some(Item::Spacer { height, .. }) = coalesced.last_mut() {
-                    *height = total;
-                }
-            }
-            None => coalesced.push(item),
+        if let (Item::Spacer { height, gap }, Some(Item::Spacer { height: total, .. })) =
+            (&item, coalesced.last_mut())
+        {
+            // The column spaced the two members by one gap; the merged
+            // node must keep it (bug_0151).
+            *total += *gap + *height;
+            continue;
         }
+        coalesced.push(item);
     }
     coalesced
 }

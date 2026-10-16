@@ -9,9 +9,10 @@ Whole-crate review sessions are filed in
 (their verdicts + new defects `F01`–`F43`),
 [review_0003](../reviews/review_0003.md) (the fix session's audit + new
 defects `G01`–`G44`) and [review_0004](../reviews/review_0004.md) (the
-G fix session's audit + new defects `H01`–`H10`), and
+G fix session's audit + new defects `H01`–`H10`),
 [review_0005](../reviews/review_0005.md) (the ADR 0027–0029 work: new
-defects `I01`–`I16`). A finding gets its
+defects `I01`–`I16`) and [review_0006](../reviews/review_0006.md) (the
+windowed build, ADR 0031: `J01`–`J09`). A finding gets its
 own `bug_NNNN.md` here when its fix lands.
 
 The crate was called `p23` until 2026-10-05 and is now `bevy_markup`; the
@@ -179,7 +180,15 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0148](bug_0148.md) | Two flip tests inserted `PseudoState` by hand under picking, which reset it | `tests/html_ui.rs` | low | fixed (uncommitted) | the bug_0138 fix |
 | [bug_0149](bug_0149.md) | `style::tests::skipped_custom_urls_do_not_shift_the_pairing` flaked under load | `src/style.rs` | low | fixed (uncommitted) | a full `cargo test --lib --features fuzzing` run in the review_0005 fix session |
 | [bug_0150](bug_0150.md) | Content reuse worked only for the document's top-level elements | `src/build.rs` | medium | fixed (uncommitted) | review_0005 fix session (mutation run) |
-| [bug_0151](bug_0151.md) | A windowed UI's band drifts off the viewport while scrolling | `src/build.rs` (the windowed build) | high | **open** | the project owner (the interactive wheel scroll) |
+| [bug_0151](bug_0151.md) | A windowed UI's band drifts off the viewport while scrolling (coalesced spacers dropped the row gaps) | `src/build.rs` (the windowed build) | high | fixed (uncommitted) | the project owner (the interactive wheel scroll); root cause: review_0006 (J01) |
+| [bug_0152](bug_0152.md) | A windowed UI culled nothing inside a container | `src/build.rs` | high | fixed (uncommitted) | review_0006 (J02) |
+| [bug_0153](bug_0153.md) | A windowed root with padding, a border or a HiDPI scale rebuilt every frame and culled nothing | `src/build.rs` | high | fixed (uncommitted) | review_0006 (J03) |
+| [bug_0154](bug_0154.md) | A windowed UI stayed fully built until it was scrolled | `src/build.rs` | medium | fixed (uncommitted) | review_0006 (J08) |
+| [bug_0155](bug_0155.md) | Every layout-harness test panicked under `--features text-input` | `tests/common/mod.rs` | medium | fixed (uncommitted) | review_0006 (J09) |
+| [bug_0156](bug_0156.md) | Scrolling a windowed UI reused nothing: every scroll frame re-collected the whole band | `src/build.rs` | medium | fixed (uncommitted) | review_0006 (J04) |
+| [bug_0157](bug_0157.md) | Every sub-pixel scroll rebuilt a windowed UI, and a taller viewport never did | `src/build.rs` | low | fixed (uncommitted) | review_0006 (J05) |
+| [bug_0158](bug_0158.md) | Non-windowed UIs paid the windowing measurement every frame | `src/build.rs` | low | fixed (uncommitted) | review_0006 follow-up |
+| [bug_0159](bug_0159.md) | The testbench's scripted runs changed their own size | `examples/testbench/main.rs` | low | fixed (uncommitted) | review_0006 follow-up |
 
 ## Discovery session metadata: bug_0001–0005
 

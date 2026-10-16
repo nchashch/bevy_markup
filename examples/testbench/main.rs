@@ -127,6 +127,10 @@ struct Bench {
     /// `--scenario`: the scenario is fixed (scripted runs; the injected
     /// keys of `--exit-after` must not switch it).
     pinned: bool,
+    /// `--size`: the size is fixed too — the injected keys (arrows,
+    /// Enter on a focused − / + button) stepped it, so a scripted
+    /// `--size 2000` run measured some other size.
+    size_pinned: bool,
     /// A start (or restart) is due; it waits for the stage to exist.
     restart: bool,
     generation: u32,
@@ -180,6 +184,7 @@ impl Bench {
             windowed: args.iter().any(|arg| arg == "--windowed"),
             scroll: args.iter().any(|arg| arg == "--scroll"),
             pinned: pinned.is_some(),
+            size_pinned: value("--size").is_some(),
             restart: false,
             generation: 0,
             model: Model::default(),
@@ -202,6 +207,9 @@ impl Bench {
     }
 
     fn step_size(&mut self, steps: i32) {
+        if self.size_pinned {
+            return;
+        }
         let size = (self.size as i32 + steps).clamp(0, SIZES.len() as i32 - 1) as usize;
         if size != self.size {
             self.size = size;
@@ -517,9 +525,12 @@ fn start_scenario(
     bench.worst_ms = 0.0;
     let prefix = format!("g{}-{id}", bench.generation);
     let plan = scenarios::plan(id, generated(), &prefix);
+    // `--windowed` adds the band check to every scenario (ADR 0031).
+    let windowed_checks: &[&'static str] = if bench.windowed { &["band"] } else { &[] };
     checks.0 = plan
         .checks
         .iter()
+        .chain(windowed_checks)
         .map(|id| Check {
             id,
             state: "wait",
@@ -1030,6 +1041,7 @@ fn check_scenario(
     nodes: Query<(Ref<Node>, Option<&ComputedNode>)>,
     paint: Query<(Option<&TextColor>, Option<&BackgroundColor>)>,
     scaling: Res<Scaling>,
+    boxes: Query<(&ComputedNode, &UiGlobalTransform)>,
 ) {
     let now = frames.0;
     let since = now.saturating_sub(bench.started);
@@ -1273,6 +1285,53 @@ fn check_scenario(
                     (if text == expected { "pass" } else { "fail" }, format!("({text:?})"))
                 }
                 None => ("wait", String::new()),
+            },
+            // `--windowed`: the built rows cover the main workload's
+            // viewport — no gap taller than a row between the viewport's
+            // top and the content's end. bug_0151's symptom (the band
+            // drifted off the viewport while the built count stayed
+            // right) is exactly a gap; a failure sticks with its frame.
+            "band" if check.state == "fail" => (check.state, check.detail.clone()),
+            "band" => match main_ui.and_then(|ui| boxes.get(ui).ok().map(|root| (ui, root))) {
+                Some((ui, (root, transform))) if since >= 60 => {
+                    let scale = root.inverse_scale_factor;
+                    let top = (transform.translation.y - root.size.y / 2.0 + root.border.min_inset.y) * scale;
+                    let bottom = (transform.translation.y + root.size.y / 2.0 - root.border.max_inset.y) * scale;
+                    // Leaf elements only: a container spans its culled
+                    // spacers too.
+                    let mut spans: Vec<(f32, f32)> = tree
+                        .iter_descendants_depth_first(ui)
+                        .filter(|entity| elements.contains(*entity))
+                        .filter(|entity| {
+                            !tree.get(*entity).is_ok_and(|children| children.iter().any(|child| elements.contains(child)))
+                        })
+                        .filter_map(|entity| boxes.get(entity).ok())
+                        .map(|(node, transform)| {
+                            let half = node.size.y / 2.0;
+                            ((transform.translation.y - half) * scale, (transform.translation.y + half) * scale)
+                        })
+                        .filter(|(a, b)| *b > top && *a < bottom)
+                        .collect();
+                    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let row = spans.iter().map(|(a, b)| b - a).fold(0.0, f32::max).max(8.0);
+                    // The content's end, in the window: past it an empty
+                    // viewport is just the document ending.
+                    let content_end = top - root.scroll_position.y * scale + root.content_size.y * scale;
+                    let end = bottom.min(content_end);
+                    let mut cursor = top;
+                    let mut gap = 0.0_f32;
+                    for (a, b) in &spans {
+                        gap = gap.max(a - cursor);
+                        cursor = cursor.max(*b);
+                    }
+                    gap = gap.max(end - cursor);
+                    if gap > row {
+                        ("fail", format!("({gap:.0} px uncovered at frame {now}, {} rows in view)", spans.len()))
+                    } else {
+                        ("pass", format!("({} rows in view)", spans.len()))
+                    }
+                }
+                _ => ("wait", String::new()),
             },
             "twins" => {
                 let detail = if twins.mismatches > 0 {

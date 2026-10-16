@@ -170,3 +170,9 @@ tb-check-decoded =
         [fail] FEHLER
        *[other] WARTE
     } Referenzen korrekt dekodiert { $detail }
+tb-check-band =
+    { $state ->
+        [pass] OK
+        [fail] FEHLER
+       *[other] WARTE
+    } gebaute Zeilen decken den Sichtbereich { $detail }
