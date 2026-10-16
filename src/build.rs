@@ -1672,6 +1672,7 @@ pub(crate) fn build_html_ui(
             &mut connected,
             &dom_nodes,
             Some(&pairing),
+            windowed.is_some(),
         );
         // ADR 0021: this build's items become the next build's skeleton —
         // the reuse cache. The accepted costs: every build without a
@@ -2041,16 +2042,30 @@ pub(crate) struct AutoScroll(pub [bool; 2]);
 /// Heights are layout-frame-stale by one frame, like the calc resolver's
 /// model; a new materialization measures on the frame it lands.
 /// ADR 0031: after layout, record the materialized entities' outer
-/// heights into the windowing model. Only the frame's newly materialized
-/// entities are measured (their [`WindowKey`] was just added) — the band's
-/// edges as it moves; a kept entity keeps its sticky height, a culled
-/// one has no entity and keeps its last measured height. An unresolvable
-/// vertical margin or an out-of-flow (fixed/absolute) entity marks every
-/// ancestor key's subtree never-culled.
+/// heights into the windowing model. Newly materialized entities (their
+/// [`WindowKey`] was just added) and entities whose layout changed are
+/// measured; a culled one has no entity and keeps its last measured
+/// height. An unresolvable vertical margin or an out-of-flow
+/// (fixed/absolute) entity marks every ancestor key's subtree
+/// never-culled.
 pub(crate) fn measure_window_heights(
     mut commands: Commands,
     mut models: Query<(Entity, &ComputedNode, Option<&'static mut WindowModel>), With<HtmlUi>>,
-    added: Query<(Entity, &WindowKey, &Node, &ComputedNode, &ChildOf), Added<WindowKey>>,
+    // A row whose layout changed re-measures: the first build measures
+    // before fonts load (the fallback metrics), and a kept entity is
+    // never `Added` again — without this the model keeps the stale
+    // heights and the band drifts off the viewport as the user scrolls.
+    // `Changed<ComputedNode>` is O(the laid-out changes) per frame.
+    added: Query<
+        (
+            Entity,
+            &WindowKey,
+            &Node,
+            &ComputedNode,
+            &ChildOf,
+        ),
+        Or<(Added<WindowKey>, Changed<ComputedNode>)>,
+    >,
     nodes: Query<(&Node, &ComputedNode, &ChildOf, Option<&WindowKey>)>,
 ) {
     // `(px, resolvable)`; an unresolvable vertical margin makes the
@@ -3241,6 +3256,12 @@ fn update_children(
     connected: &mut Vec<ElementConnected>,
     dom_nodes: &Query<'_, '_, (&DomNode, Option<&PseudoState>)>,
     pairing: Option<&HashMap<tl::NodeHandle, tl::NodeHandle>>,
+    // ADR 0031: only a windowed UI replaces count-mismatched elements —
+    // its band's children move every scroll; a static UI's counts never
+    // change, and a mismatch there means positional pairing paired a
+    // spec with a foreign entity, which must keep the old
+    // skip-the-update behavior.
+    windowed: bool,
 ) -> bool {
     /// A level waiting for its finalization (after all deeper levels
     /// matched).
@@ -3353,6 +3374,41 @@ fn update_children(
                             }
                         }
                         (spec, _) => {
+                            // ADR 0031: a windowed band's children move as
+                            // it scrolls, so a matched element's laid-out
+                            // children often no longer count-match the
+                            // spec's. `update_spec` reconciles in place
+                            // only — when the counts diverge, replace the
+                            // element (the app's nested UIs re-nest on
+                            // `HtmlUiBuilt`, their contract).
+                            let child_owned = tree
+                                .get(child)
+                                .ok()
+                                .and_then(|(children, ..)| children)
+                                .map(|children| {
+                                    children
+                                        .iter()
+                                        .filter(|grand| {
+                                            !tree
+                                                .get(*grand)
+                                                .is_ok_and(|(.., nested)| nested)
+                                        })
+                                        .count()
+                                })
+                                .unwrap_or(0);
+                            let expected_children = spec.spec().children.len()
+                                // A boxed text block's entity owns one more
+                                // child than the spec: its own text node.
+                                + usize::from(spec.spec().text.is_some());
+                            if windowed && child_owned != expected_children {
+                                // Not kept: the level's finalization despawns
+                                // it (recursively) as stale.
+                                let id =
+                                    spawn_spec(commands, parent, spec.spec(), root, connected);
+                                desired.push(id);
+                                spawned = true;
+                                continue;
+                            }
                             let (spawned_spans, children) =
                                 update_spec(commands, child, spec.spec(), tree);
                             spawned |= spawned_spans;

@@ -627,8 +627,10 @@ fn scroll_workloads(
             continue;
         }
         // ~9000 px/s: 150 px per 60 fps frame — a full 20000 px document
-        // sweeps in ~45 s, deep enough to expose band-mapping drift.
-        let range = (computed.content_size.y - computed.size.y).max(0.0);
+        // sweeps in ~45 s, deep enough to expose band-mapping drift. The
+        // scroll position is logical; the computed sizes are physical.
+        let scale = computed.inverse_scale_factor;
+        let range = ((computed.content_size.y - computed.size.y) * scale).max(0.0);
         let sweep = (frames.0 as f32 * 150.0) % (2.0 * range.max(1.0));
         scroll.0.y = if sweep < range { sweep } else { 2.0 * range - sweep };
         // CULLPROBE: every 60 frames, the materialized row count against
@@ -640,8 +642,8 @@ fn scroll_workloads(
                 .get(entity)
                 .ok()
                 .map(|model| model.probe());
-            info!("CULLPROBE frame={} scroll={:.0} range={:.0} content={:.0} materialized={} spacers={} root={} model={:?}",
-                frames.0, scroll.0.y, range, content, materialized, children.len() - materialized, computed.size, model);
+            info!("CULLPROBE frame={} scroll={:.0} layout_scroll={:.0} range={:.0} content={:.0} materialized={} spacers={} root={} model={:?}",
+                frames.0, scroll.0.y, computed.scroll_position.y, range, content, materialized, children.len() - materialized, computed.size, model);
         }
     }
 }
