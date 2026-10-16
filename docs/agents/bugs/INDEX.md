@@ -179,6 +179,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0148](bug_0148.md) | Two flip tests inserted `PseudoState` by hand under picking, which reset it | `tests/html_ui.rs` | low | fixed (uncommitted) | the bug_0138 fix |
 | [bug_0149](bug_0149.md) | `style::tests::skipped_custom_urls_do_not_shift_the_pairing` flaked under load | `src/style.rs` | low | fixed (uncommitted) | a full `cargo test --lib --features fuzzing` run in the review_0005 fix session |
 | [bug_0150](bug_0150.md) | Content reuse worked only for the document's top-level elements | `src/build.rs` | medium | fixed (uncommitted) | review_0005 fix session (mutation run) |
+| [bug_0151](bug_0151.md) | A windowed UI's band drifts off the viewport while scrolling | `src/build.rs` (the windowed build) | high | **open** | the project owner (the interactive wheel scroll) |
 
 ## Discovery session metadata: bug_0001–0005
 
