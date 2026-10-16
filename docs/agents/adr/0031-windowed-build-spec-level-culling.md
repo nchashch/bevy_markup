@@ -56,7 +56,11 @@ offset of the block being considered, accumulated from the height
 model. A subtree whose full Y-range lies outside the window
 `[scroll_offset − margin, scroll_offset + viewport + margin]` emits a
 **spacer spec** instead of descending — a leaf spec carrying the
-subtree's cached height and no children.
+subtree's cached height and no children. The window is a **band**: the
+materialized children sit between an above-spacer and a below-spacer in
+the same flex column (`[spacer, blocks…, spacer]`), so taffy computes
+the correct scroll extent and the window's position with no new layout
+machinery, and scrolling back up is as cheap as scrolling down.
 
 This skips *everything* downstream for the culled part: entity spawn,
 the cascade, run construction, text measurement, render extraction,
@@ -102,6 +106,18 @@ thrash. Two rules prevent it:
 - **Correction is sticky:** a block's height only updates when that
   block materializes; culled blocks keep their last measured height
   until a signal invalidates them.
+- **The two directions are asymmetric.** A below-spacer error is
+  invisible (nothing on screen moves); an above-spacer error
+  displaces every visible pixel — so the above spacer must be exact.
+  When a block above the window's measured height changes by Δ (it
+  materialized on scroll-up, or a signal proved a change while
+  above-culled — a live feed prepending rows is the classic), the
+  scroll position adjusts by Δ so the first materialized block stays
+  at the same viewport position: browsers' scroll anchoring, applied
+  at spacer granularity. Below the fold no adjustment is needed.
+  Cache quality follows the same asymmetry in the crate's favor:
+  above-fold content has almost always been materialized (its heights
+  are exact); below-fold heights may be cold estimates.
 
 ### 5. Scope guards
 
