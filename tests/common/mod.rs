@@ -223,6 +223,9 @@ impl TestUi {
                     bevy::ui::UiPlugin::default(),
                     bevy::picking::DefaultPickingPlugins,
                     bevy::image::TextureAtlasPlugin,
+                    // The widgets' observers (the `ScrollArea` wheel
+                    // handling; inert without a `ScrollArea` entity).
+                    bevy::ui_widgets::UiWidgetsPlugins,
                 ))
                 // `InheritedVisibility` without the render-side visibility
                 // plugin: directional navigation skips nodes that aren't

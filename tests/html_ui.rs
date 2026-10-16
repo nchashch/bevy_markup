@@ -8092,3 +8092,77 @@ fn windowed_build_materializes_the_band_and_spacers_the_rest() {
     assert!(dump.contains("p#p36\n") && dump.contains("p#p60\n"), "{dump}");
     assert!(!dump.contains("p#p1\n") && !dump.contains("p#p35\n"), "{dump}");
 }
+
+/// Mouse-wheel scrolling through the real picking path: the wheel event
+/// (what winit sends) bubbles `PointerScroll` from the hovered row to the
+/// root's `ScrollArea`, bevy's widget scrolls it, and — ADR 0031 — a
+/// windowed UI rebuilds at the new scroll offset.
+#[test]
+fn mouse_wheel_scrolls_a_windowed_ui() {
+    use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+    use bevy::ui_widgets::ScrollArea;
+    use bevy::window::WindowEvent;
+
+    let page: String = (1..=40)
+        .map(|i| format!("<p id=\"p{i}\">Paragraph {i}</p>"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut ui = TestUi::with_pointer(
+        "wheel-scroll",
+        &[
+            ("page.html", &page),
+            ("style.css", "html { flex-direction: column }"),
+        ],
+        UVec2::new(300, 200),
+    )
+    .stylesheet("style.css")
+    .spawn(
+        "page.html",
+        TemplateContext::new(),
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Px(200.0),
+            flex_direction: FlexDirection::Column,
+            overflow: Overflow {
+                x: OverflowAxis::Visible,
+                y: OverflowAxis::Scroll,
+            },
+            ..default()
+        },
+    );
+    let root = ui.root();
+    ui.world_mut().entity_mut(root).insert((
+        HtmlWindowed::default(),
+        ScrollPosition::default(),
+        ScrollArea,
+    ));
+    ui.settle();
+    // Scroll down: the wheel's y is negative (the content moves up).
+    ui.move_pointer(Vec2::new(150.0, 100.0));
+    let window = ui.window();
+    ui.world_mut()
+        .resource_mut::<Messages<WindowEvent>>()
+        .write(WindowEvent::MouseWheel(MouseWheel {
+            window,
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y: -5.0,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        }));
+    ui.update(3);
+    let scroll = ui
+        .world_mut()
+        .get::<ScrollPosition>(root)
+        .expect("the root scrolls")
+        .0
+        .y;
+    assert!(scroll > 0.0, "the wheel scrolled the root: {scroll}");
+    // The windowed build followed the offset (the band moved; the dump's
+    // spacers stand for content that scrolled out).
+    ui.settle();
+    let dump = ui.dump();
+    assert!(
+        dump.contains("spacer") && scroll > 0.0,
+        "the windowed band rebuilt at the scrolled offset: {dump}"
+    );
+}

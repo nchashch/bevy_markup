@@ -36,6 +36,7 @@ use std::sync::OnceLock;
 use bevy::asset::io::memory::{Dir, MemoryAssetReader};
 use bevy::asset::io::{AssetSourceBuilder, ErasedAssetReader};
 use bevy::diagnostic::FrameCount;
+use bevy::ui_widgets::ScrollArea;
 use bevy::input_focus::{FocusCause, InputFocus, InputFocusVisible};
 use bevy::text::LetterSpacing;
 use bevy::prelude::*;
@@ -587,7 +588,14 @@ fn start_scenario(
                 ui.insert(HtmlStylesheet(sheet));
             }
             if bench.windowed {
-                ui.insert((HtmlWindowed::default(), ScrollPosition::default()));
+                // The windowed viewport scrolls: the wheel bubbles from
+                // the rows to the root's `ScrollArea` observer (bevy's
+                // widget; the scripted `--scroll` sweep is independent).
+                ui.insert((
+                    HtmlWindowed::default(),
+                    ScrollPosition::default(),
+                    ScrollArea,
+                ));
             }
             // The focus scenario's rows take the focus (the churn moves
             // it); every other workload stays out of the shell's
