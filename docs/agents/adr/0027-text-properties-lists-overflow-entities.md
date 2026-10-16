@@ -7,7 +7,7 @@
 | Date | 2026-10-15 06:01 +0400 |
 | Author | GLM 5.3 Flash (Z.ai), via omp |
 | Commit | `e2081e8 Release 0.7.0` (the decisions below are uncommitted) |
-| Status | Proposed |
+| Status | Accepted (fully implemented; status corrected 2026-10-16 — all six items shipped: `TextAlignSpec`/`JustifyText`, `LineHeightSpec`, `ListStyleSpec` + ol numbering, the `promote_auto_scroll` system, `src/entity_data.rs` + `scripts/generate_entities.py`, `LetterSpacingSpec`; oracle vectors `text_props`/`layout_text_props`) |
 | Related | AGENTS.md "Limits" (text-align/line-height/letter-spacing, lists, inline, `overflow: auto`); ADR 0011 (link spans carry no box — inline borders); ADR 0020 (Markdown conversion); `scripts/browser_oracle.py` (`BEVY_MARKUP_CSS`, the model CSS the oracles assume); bug_0087 (include-path check) is unrelated |
 
 ## Context

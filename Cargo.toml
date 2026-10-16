@@ -80,7 +80,9 @@ lightningcss = { version = "1.0.0-alpha.72", features = ["into_owned"] }
 # Markdown as a source syntax (ADR 0014): `.md` templates and Markdown in
 # Fluent values convert to the HTML the pipeline already parses. `html`
 # renders to HTML; no CLI parser (`getopts`).
-pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
+pulldown-cmark = { version = "0.13.3", default-features = false, features = [
+    "html",
+] }
 # The FTL AST (ADR 0020 Decision 3): the per-message Markdown patterns
 # pre-convert at bundle load. fluent doesn't re-export it; same version as
 # fluent's, patched below.
@@ -112,7 +114,9 @@ quickcheck = "1.1.0"
 # Benchmarks (benches/pipeline.rs, ADR 0018): statistical harness with
 # saved baselines and regression detection. default-features off drops the
 # plotters/gnuplot machinery; html_reports keeps the browsable report.
-criterion = { version = "0.8.2", default-features = false, features = ["html_reports"] }
+criterion = { version = "0.8.2", default-features = false, features = [
+    "html_reports",
+] }
 # The second harness (ADR 0019, reinstated): allocation counts + bytes per
 # benchmark — the direct signal for update-model work — run in parallel
 # with criterion's statistics so the two corroborate each other.
@@ -153,6 +157,7 @@ test = true
 # workspaces repeat it.
 [patch.crates-io]
 fluent-syntax = { git = "https://github.com/nchashch/fluent-rs", branch = "fix/fuzzing-bugs-0.11" }
+
 
 # Mutation testing (scripts/mutants.sh, .github/workflows/mutants.yml).
 # Every mutant rebuilds bevy_markup and relinks its test binaries: no debug info
