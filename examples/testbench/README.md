@@ -18,6 +18,13 @@ cargo run --release --example testbench --features hotpath
 # printed on exit.
 cargo run --release --example testbench --features hotpath -- \
     --scenario big-document --size 2000 --no-render --exit-after 900
+
+`--windowed` builds the workloads only over their scroll window (a
+fixed-height scrolling viewport; ADR 0031) and `--scroll` advances the
+main workload's scroll every frame (bouncing), so the band's movement —
+the scroll-frame cost — is measurable headlessly. A/B from the 2000-row
+big-document (release, hotpath): the worst frame 77.9 ms unwindowed vs
+17.2 ms windowed idle, 17.9 ms scrolling, churned at parity.
 ```
 
 ## Scenarios

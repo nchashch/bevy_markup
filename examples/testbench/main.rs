@@ -101,6 +101,7 @@ fn main() {
                         hotkeys,
                         start_scenario,
                         churn,
+                        scroll_workloads,
                         move_focus,
                         compare_twins,
                         check_scenario,
@@ -140,6 +141,10 @@ struct Bench {
     /// window (the big-document/restyle classes of scenarios show the
     /// win).
     windowed: bool,
+    /// ADR 0031: `--scroll` — advance the main workload's scroll
+    /// position every frame (bouncing), so the windowed band moves:
+    /// the scroll-frame cost is the measured quantity.
+    scroll: bool,
 }
 
 impl Bench {
@@ -171,6 +176,7 @@ impl Bench {
             size,
             churn: !args.iter().any(|arg| arg == "--no-churn"),
             windowed: args.iter().any(|arg| arg == "--windowed"),
+            scroll: args.iter().any(|arg| arg == "--scroll"),
             pinned: pinned.is_some(),
             restart: false,
             generation: 0,
@@ -581,7 +587,7 @@ fn start_scenario(
                 ui.insert(HtmlStylesheet(sheet));
             }
             if bench.windowed {
-                ui.insert(HtmlWindowed::default());
+                ui.insert((HtmlWindowed::default(), ScrollPosition::default()));
             }
             // The focus scenario's rows take the focus (the churn moves
             // it); every other workload stays out of the shell's
@@ -589,6 +595,28 @@ fn start_scenario(
             if id != "restyle-vs-full" {
                 ui.insert(HtmlNoFocus);
             }
+        }
+    }
+}
+
+/// `--scroll`: advance the main workload's scroll position every frame
+/// (bouncing over the first 2000 px of content), so the windowed band
+/// moves — the scroll-frame cost is the measured quantity (ADR 0031).
+#[hotpath::measure]
+fn scroll_workloads(
+    bench: Res<Bench>,
+    frames: Res<FrameCount>,
+    mut workloads: Query<(&Workload, &mut ScrollPosition), Without<FreshTwin>>,
+) {
+    if !bench.scroll || bench.restart {
+        return;
+    }
+    // ~1200 px/s: 20 px per 60 fps frame.
+    let sweep = (frames.0 as f32 * 20.0) % 4000.0;
+    let y = if sweep < 2000.0 { sweep } else { 4000.0 - sweep };
+    for (workload, mut scroll) in &mut workloads {
+        if matches!(workload.role, Role::Main) {
+            scroll.0.y = y;
         }
     }
 }
