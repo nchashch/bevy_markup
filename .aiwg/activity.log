@@ -45,3 +45,4 @@
 ## [2026-11-12 17:54] update | bug_0238: guard lightningcss parses against the infinite-hue debug panic (honggfuzz css, first full nightly); UPSTREAM U45
 ## [2026-11-22 04:53] update | Nightly test-fuzz SIGILL: AFL builds target x86-64, cache key retired; UPSTREAM U48
 ## [2026-11-22 05:12] update | bug_0244: DOM outline bounded at 1 MiB (cargo-fuzz html OOM); honggfuzz runs under a 4 GiB address-space limit
+## [2026-11-22 17:43] update | Guard and report lightningcss NaN math panic from nightly honggfuzz css (bug_0245, U49)

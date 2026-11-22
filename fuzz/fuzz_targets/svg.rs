@@ -16,7 +16,7 @@
 //! loader catches it as an error, and release builds don't panic there, so
 //! it isn't a finding: the panic hook lets it unwind into the loader's
 //! `catch_unwind` instead of aborting
-//! (`bevy_markup::fuzz::excuse_known_upstream_debug_panics`). Every other panic
+//! (`bevy_markup::fuzz::excuse_known_upstream_panics`). Every other panic
 //! still aborts, tiny-skia's far-off-canvas ones (U24, U27, U28) included:
 //! they panic in release too, and the loader's extent check refuses their
 //! inputs, so one reaching tiny-skia is a miss.

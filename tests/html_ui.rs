@@ -4305,6 +4305,51 @@ html-ui
     }
 }
 
+/// bug_0245 / UPSTREAM U49: a NaN in `min()` panics lightningcss in every
+/// build profile. The `style` attribute, the context `var()` and the sheet
+/// are each dropped like unparseable CSS, and the app keeps running.
+#[test]
+fn a_nan_math_argument_never_panics_the_build() {
+    let files = [
+        (
+            "page.html",
+            r#"<p style="color: hsl(0 min(1%, NaN) 50%)">inline</p><p style="color: hsl(0 min(1%, var(--n)) 50%)">var</p>"#,
+        ),
+        ("style.css", "html { color: #00ff00 }"),
+        (
+            "broken.css",
+            "html { color: #00ff00 } p { opacity: min(1, NaN) }",
+        ),
+    ];
+    let context = || TemplateContext::new().with("--n", &"NaN");
+    let mut ui = TestUi::new("nan-math", &files)
+        .stylesheet("style.css")
+        .spawn("page.html", context(), Node::default());
+    ui.settle();
+    ui.assert_dump(
+        r#"
+html-ui
+  p
+    "inline" default 16px #00ff00
+  p
+    "var" default 16px #00ff00
+"#,
+    );
+    let mut ui = TestUi::new("nan-math-sheet", &files)
+        .stylesheet("broken.css")
+        .spawn("page.html", context(), Node::default());
+    ui.settle();
+    ui.assert_dump(
+        r#"
+html-ui
+  p
+    "inline" default 16px #ffffff
+  p
+    "var" default 16px #ffffff
+"#,
+    );
+}
+
 /// F14's tracking gaps (review_0003 G30): a run-level inline style (an
 /// `<span>` inside a block), a translation's markup, and a non-ASCII
 /// variable name all restyle on a context change — the text scan missed

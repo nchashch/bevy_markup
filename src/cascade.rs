@@ -1385,8 +1385,14 @@ impl InlineStyle {
 /// to an infinite hue without evaluating `calc()`, so the parse is
 /// guarded, as usvg and resvg are (`svg::guarded`). The callers — the
 /// sheet loader, a `style` attribute, a substituted `var()` value — treat
-/// the error like unparseable CSS. (With `panic = "abort"` nothing can
-/// catch it, but release builds don't assert.)
+/// the error like unparseable CSS.
+///
+/// The same guard covers a panic in every build profile (bug_0245,
+/// UPSTREAM U49): a NaN argument to `min()`, `max()` or `clamp()` reaches an
+/// `unreachable!()` in `Percentage::parse`, and NaN is also computed
+/// (`sqrt(-1)`, `mod(1, 0)`), so no text scan refuses it. With
+/// `panic = "abort"` nothing can catch that one: such an app aborts on
+/// this CSS until lightningcss is fixed.
 pub(crate) fn guarded_parse<T>(parse: impl FnOnce() -> T) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse)).map_err(|payload| {
         let message = payload
@@ -5258,6 +5264,52 @@ mod tests {
             let sheet = guarded_parse(|| StyleSheet::parse(&css, ParserOptions::default()).is_ok());
             assert_eq!(sheet, Ok(true), "{color}");
         }
+    }
+
+    /// bug_0245 (honggfuzz, CI): a NaN in `min()`/`max()`/`clamp()` stays an
+    /// unevaluated function, and lightningcss's `Percentage::parse` calls
+    /// that `unreachable!()` (UPSTREAM U49), in release builds too. Each
+    /// parse is guarded, so the CSS is dropped like unparseable CSS.
+    #[test]
+    fn a_nan_math_argument_is_an_error_not_a_panic() {
+        for value in [
+            "min(1, NaN)",
+            "min(1%, nan)",
+            "max(1%, NaN)",
+            "clamp(1%, NaN, 3%)",
+            "min(1, sqrt(-1))",
+            "min(1, mod(1, 0))",
+            "min(1, calc(infinity - infinity))",
+        ] {
+            // The sheet loader's parse.
+            let css = format!("p {{ opacity: {value} }}");
+            let sheet = guarded_parse(|| {
+                StyleSheet::parse(&css, ParserOptions::default())
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
+            });
+            let message = sheet.expect_err(value);
+            assert!(
+                message.starts_with("the CSS parser panicked: "),
+                "{value}: {message}"
+            );
+            // A `style` attribute.
+            let html = format!(r#"<p style="opacity: {value}">x</p>"#);
+            let dom = tl::parse(&html, tl::ParserOptions::default()).unwrap();
+            let tag = dom
+                .children()
+                .iter()
+                .find_map(|handle| handle.get(dom.parser()).and_then(|node| node.as_tag()))
+                .expect("the <p>");
+            assert!(inline_style(tag).is_none(), "{value}");
+        }
+        // A substituted `var()` value: the declaration is dropped.
+        let style = declared_with_context("color: hsl(0 min(1%, var(--n)) 50%)", &[("--n", "NaN")]);
+        assert!(style.color.is_none(), "{:?}", style.color);
+        // Finite arguments are ordinary CSS.
+        let css = "p { opacity: min(1, 2); color: hsl(0 min(1%, 2%) 50%) }";
+        let sheet = guarded_parse(|| StyleSheet::parse(css, ParserOptions::default()).is_ok());
+        assert_eq!(sheet, Ok(true));
     }
 
     /// A `var()` graph can be exponential: a self-reference with two

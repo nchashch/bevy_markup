@@ -570,9 +570,9 @@ scripts/
 fuzz/
   fuzz_targets/      cargo-fuzz targets (`html`, `css`, `ftl`, `svg`) over `bevy_markup::fuzz`
                      (every driver's `svg` target is `fuzz::svg_target`: it asserts each
-                     input finishes in 5 s, and `fuzz::excuse_known_upstream_debug_panics`
+                     input finishes in 5 s, and `fuzz::excuse_known_upstream_panics`
                      lets the debug-only upstream panic U20 unwind into `svg::guarded` —
-                     `fuzz::is_known_upstream_debug_panic`, pinned to resvg 0.49.0 —
+                     `fuzz::is_known_upstream_panic`, pinned to resvg 0.49.0 —
                      every other panic aborts, tiny-skia's included)
   seeds/<target>/    committed minimized seed corpora (read-only extra input to every
                      cargo-fuzz run; copied into honggfuzz's working corpus, and `svg`'s
@@ -913,9 +913,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   lightningcss parses of untrusted text (the sheet loader, `style`
   attributes, substituted `var()` values) run under
   `cascade::guarded_parse` (`catch_unwind`): lightningcss panics in debug
-  builds on an infinite `hsl()`/`hwb()` hue (bug_0238, U45), and no scan
-  can refuse every `calc()` route to one — a panic drops the CSS like a
-  parse error;
+  builds on an infinite `hsl()`/`hwb()` hue (bug_0238, U45) and in every
+  build on a NaN `min()`/`max()`/`clamp()` argument (bug_0245, U49), and
+  no scan can refuse every `calc()` route to them — a panic drops the CSS
+  like a parse error (under `panic = "abort"`, U49 aborts the app);
   `transition` (the shorthand) animates a restyled color's change
   (`color`/`background-color`/`border-color`), driven by an
   `advance_transitions` system after `Build`.

@@ -135,6 +135,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   skipped (each costs the document's depth squared per element).
 
 ### Fixed
+- CSS: a NaN inside `min()`, `max()` or `clamp()` (`min(1, NaN)`,
+  `min(1, sqrt(-1))`) panicked the CSS parser. The declaration or sheet is
+  now dropped like unparseable CSS. **Apps built with `panic = "abort"`
+  still abort on such CSS** until lightningcss fixes it (bug_0245).
 - `HtmlDebugOutline` no longer runs out of memory on deeply nested HTML:
   the outline stops at 1 MiB with a closing "outline truncated" note
   (bug_0244).

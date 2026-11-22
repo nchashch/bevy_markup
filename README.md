@@ -240,7 +240,11 @@ underneath, and the reviews keep finding inputs they miss
   would crash the Fluent parser, fail the bundle's load. No `[patch]` is
   needed in your app.
 - **CSS**: nesting, `var()` substitution, grid tracks and selector forms
-  whose matching cost explodes are bounded or skipped.
+  whose matching cost explodes are bounded or skipped. A panic inside the
+  CSS parser drops the CSS, which needs unwinding: **with `panic = "abort"`,
+  a stylesheet such as `p { opacity: min(1, NaN) }` aborts the app** until
+  this is fixed in lightningcss. Keep the default `panic = "unwind"` if you
+  load CSS you don't control.
 - **SVG**: no external resources, size, depth, conversion-work (style
   sheets and text included) and render-cost limits, and a memory budget for
   all drawn rasters (`svg::MAX_SVG_RASTER_BYTES`).

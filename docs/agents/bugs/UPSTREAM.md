@@ -33,7 +33,7 @@ the issue may already be fixed or reported.
 | U17 | usvg (resvg) | Converter recursion through references and nesting is unbounded | stack overflow (abort) from a few KB of SVG on a 2 MB thread (`svg` feature) | static recursion-depth check before conversion (`svg_bounds::bounds`) | unreported; resvg #1223 (unreleased) bounds XML nesting and `<use>` only |
 | U18 | roxmltree | 0.21.1's tokenizer recursed once per nesting level | stack overflow at ~150 levels in debug on a 2 MB thread (`svg` feature) | version floor `roxmltree >= 0.21.2` | fixed upstream (0.21.2) |
 | U19 | usvg (resvg) | The default `ImageHrefResolver` reads any file path | an SVG reads any file the process can and embeds it (`svg` feature) | a resolver that resolves nothing | unreported (by design; worth a docs warning) |
-| U20 | resvg | `feTurbulence` overflows `i32` after enough octaves or on a huge `baseFrequency` (#1185, open; #937 a similar multiply overflow) | panic where overflow checks are on (debug builds, fuzzing): a failed load, or a crash through a redraw task (`svg` feature) | `svg::guarded` (catch_unwind around usvg/resvg); the `svg` fuzz target lets it unwind (`fuzz::is_known_upstream_debug_panic`) | reported upstream (#1185), open; the `baseFrequency` trigger unreported |
+| U20 | resvg | `feTurbulence` overflows `i32` after enough octaves or on a huge `baseFrequency` (#1185, open; #937 a similar multiply overflow) | panic where overflow checks are on (debug builds, fuzzing): a failed load, or a crash through a redraw task (`svg` feature) | `svg::guarded` (catch_unwind around usvg/resvg); the `svg` fuzz target lets it unwind (`fuzz::is_known_upstream_panic`) | reported upstream (#1185), open; the `baseFrequency` trigger unreported |
 | U21 | astral-tl | `/` is a name character: `<b/>` is an unclosed element named `b/` ([bug_0185](bug_0185.md)) | a `<br/>` merged the rest of the document into one block | `template::normalize_self_closing` before every `tl` parse | unreported |
 | U22 | svgtypes / kurbo | An arc splits into `(11·r)^⅙` cubics at kurbo's absolute 0.1 tolerance, and svgtypes' simplifier drains them with `Vec::remove(0)` ([bug_0190](bug_0190.md)) | one 40-byte arc converts for seconds or never finishes (`svg` feature) | counted before conversion in the work bound (`svg_bounds::bounds`, ADR 0040) | unreported |
 | U23 | usvg (resvg) | A pattern whose content inherits a paint naming itself recurses until the stack overflows ([bug_0191](bug_0191.md)) | stack overflow (abort) from 230 bytes (`svg` feature) | inherited references are edges of the cycle check (`svg_bounds::bounds`) | unreported |
@@ -58,10 +58,11 @@ the issue may already be fixed or reported.
 | U42 | simplecss 0.2.2 (via usvg 0.49 and bevy_markup's `svg_bounds`) | `StyleSheet::parse_more` builds an error, positioned by counting lines from the text's start (`Stream::gen_text_pos`), at every declaration's end, unitless number and `#` colour, then drops it: parsing is quadratic in the sheet's length ([bug_0231](bug_0231.md)) | 40 000 rules (760 KB) parse for 0.96 s per pass, three passes per SVG (`svg` feature) | `svg_bounds::style_scan_bytes` charges the offsets of those places before simplecss parses | unreported |
 | U43 | usvg 0.49 text layout (`text` feature) | `process_chunk` reshapes the whole chunk once per span and merges each span's glyphs into the first run with `glyphs.iter().position(…)` and `Vec::remove`/`insert`: spans × characters ([bug_0232](bug_0232.md)) | 4 000 one-character `<tspan>`s convert for 2.0 s (`svg-text`) | `svg_bounds` charges a `<text>` by its spans × characters | unreported |
 | U44 | fuzzcheck | The fuzzer unwraps `String::from_utf8` of every serialized input it keeps (for an assertion message) | a `ByteSerializer` target panics on its first non-UTF-8 input | vendored patch | unreported |
-| U45 | lightningcss 1.0.0-alpha.72 / cssparser-color 0.5.0 | An infinite `hsl()`/`hwb()` hue normalizes to NaN, and `hsl_to_rgb` `debug_assert!`s its hue range | panic at parse time in debug builds, from any CSS text ([bug_0238](bug_0238.md)) | `cascade::guarded_parse` (catch_unwind around the three lightningcss parses); the fuzz targets let it unwind (`fuzz::is_known_upstream_debug_panic`, pinned to cssparser-color 0.5.0) | unreported |
+| U45 | lightningcss 1.0.0-alpha.72 / cssparser-color 0.5.0 | An infinite `hsl()`/`hwb()` hue normalizes to NaN, and `hsl_to_rgb` `debug_assert!`s its hue range | panic at parse time in debug builds, from any CSS text ([bug_0238](bug_0238.md)) | `cascade::guarded_parse` (catch_unwind around the three lightningcss parses); the fuzz targets let it unwind (`fuzz::is_known_upstream_panic`, pinned to cssparser-color 0.5.0) | unreported |
 | U46 | Tera 2.4.0 | `unique` compares every pair of distinct items ([bug_0241](bug_0241.md)) | unmodeled quadratic render work | charge comparisons, refuse context-sized `unique` (ADR 0047) | unreported |
 | U47 | fluent-syntax 0.11.1 | Duplicate named-argument scan is quadratic ([bug_0243](bug_0243.md)) | flat FTL call stalls resource loading | `MAX_FTL_ARGUMENTS` = 64 in the pre-check (ADR 0047) | unreported |
 | U48 | cargo-afl 0.18.2 | `target-cpu=native` also reaches proc macros and build scripts | cached test-fuzz builds hit SIGILL on runners with older CPUs | append `-C target-cpu=x86-64` in `scripts/fuzz-{setup,test-fuzz}.sh` | unreported |
+| U49 | lightningcss 1.0.0-alpha.72 | A NaN argument to `min()`/`max()`/`clamp()` reaches `unreachable!()` in `Percentage::parse` | panic at parse time in every build profile, from any CSS text; an app with `panic = "abort"` aborts ([bug_0245](bug_0245.md)) | `cascade::guarded_parse` (unwinding builds only); the fuzz targets let it unwind (`fuzz::is_known_upstream_panic`, pinned to 1.0.0-alpha.72) | unreported |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -496,7 +497,7 @@ CI clippy command and workspace tests pass on both.
   fails, or the size isn't redrawn). Keep it while resvg can panic on
   input; it costs nothing on the normal path. The `svg` fuzz target
   (debug assertions on) lets this panic unwind into `guarded` instead of
-  aborting (`fuzz::is_known_upstream_debug_panic`, matched by file and
+  aborting (`fuzz::is_known_upstream_panic`, matched by file and
   message in `resvg-0.49.0/src/filter/turbulence.rs`), so it no longer
   turns the nightly red; `fuzz::svg_tests` fails once a resvg release
   stops panicking, as a reminder to drop the excuse.
@@ -1033,7 +1034,7 @@ CI clippy command and workspace tests pass on both.
 - **PR sketch:** in lightningcss, treat a non-finite hue as 0 (or
   `rem_euclid` and clamp) before `hsl_to_rgb`; CSS says an infinite
   angle in a colour clamps like any other out-of-range value.
-- **On a bump:** `fuzz::…::known_upstream_debug_panics_still_panic_as_excused`
+- **On a bump:** `fuzz::…::known_upstream_panics_still_panic_as_excused`
   fails when the panic is gone or moved; drop the excuse (and consider
   dropping the guard) then.
 
@@ -1094,3 +1095,25 @@ CI clippy command and workspace tests pass on both.
   like `AFL_OPT_LEVEL`), or pass `--target` so the flags skip host artifacts.
 - **On a bump:** check whether cargo-afl still sets `native`; if not, drop
   the override.
+
+## U49 — lightningcss: a NaN math argument reaches `unreachable!()`
+
+- **Project/version:** [parcel-bundler/lightningcss](https://github.com/parcel-bundler/lightningcss)
+  1.0.0-alpha.72, `src/values/percentage.rs:30` (`Percentage::parse`).
+- **Status:** unreported; latest upstream release and default branch not
+  checked.
+- **Problem:** `min()`, `max()` and `clamp()` can't order a NaN, so they
+  stay unevaluated, and `Percentage::parse` treats any result other than
+  `Calc::Value` as `unreachable!()`. This panics in release builds too.
+- **Reproduction:** `StyleSheet::parse("p { opacity: min(1, NaN) }",
+  ParserOptions::default())`. NaN can also be computed: `min(1, sqrt(-1))`,
+  `min(1, mod(1, 0))`, `min(1, calc(infinity - infinity))`
+  ([bug_0245](bug_0245.md)).
+- **Local workaround:** `cascade::guarded_parse` catches the unwind. It can't
+  help an app built with `panic = "abort"`, which aborts on this CSS.
+- **PR sketch:** in `Percentage::parse`, return a parse error for a result
+  that isn't `Calc::Value` instead of `unreachable!()`. `CSSNumber`'s
+  `From<Calc<CSSNumber>>` (`src/values/number.rs:65`) has the same shape and
+  should be checked.
+- **On a bump:** `fuzz::svg_tests::known_upstream_panics_still_panic_as_excused`
+  fails when the panic is gone or moved; drop the excuse then.

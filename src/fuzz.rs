@@ -99,7 +99,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
     }
     // Guarded as the loader's parse is (bug_0238): the known debug-only
     // panic unwinds into it instead of aborting the fuzz target.
-    excuse_known_upstream_debug_panics();
+    excuse_known_upstream_panics();
     let parsed = crate::cascade::guarded_parse(|| {
         StyleSheet::parse(css, ParserOptions::default()).map_err(|err| err.to_string())
     })??;
@@ -518,13 +518,12 @@ pub fn svg(source: &[u8]) -> Result<String, String> {
     ))
 }
 
-/// Whether a panic is one of the known debug-build-only upstream panics,
-/// which the fuzz targets let unwind into the library's guard
-/// (`svg::guarded`, `cascade::guarded_parse`) instead of aborting.
-/// Release builds don't panic there, and in debug builds the guard
-/// already turns the panic into an error. `file` is the panic
-/// location's path; the crate directory name pins the version, so a bump
-/// makes the fuzzer report it again until rechecked.
+/// Whether a panic is one of the known upstream panics that the fuzz
+/// targets let unwind into the library's guard (`svg::guarded`,
+/// `cascade::guarded_parse`) instead of aborting: the guard already turns
+/// it into an error. `file` is the panic location's path; the crate
+/// directory name pins the version, so a bump makes the fuzzer report it
+/// again until rechecked.
 ///
 /// - UPSTREAM U20 (resvg #1185): resvg's turbulence overflows `i32`
 ///   lattice indices after many octaves or on a huge `baseFrequency`
@@ -532,11 +531,15 @@ pub fn svg(source: &[u8]) -> Result<String, String> {
 /// - UPSTREAM U45 (bug_0238): cssparser-color's `hsl_to_rgb`
 ///   `debug_assert!`s the hue lightningcss hands it, NaN for an infinite
 ///   `hsl()`/`hwb()` hue.
+/// - UPSTREAM U49 (bug_0245): lightningcss's `Percentage::parse` reaches
+///   `unreachable!()` on a NaN argument to `min()`, `max()` or `clamp()`.
+///   Unlike the two above this panics in release builds too, so an app
+///   built with `panic = "abort"` still aborts on it.
 ///
 /// tiny-skia's far-off-canvas panics (U24, U27, U28) are not excused: they
 /// panic in release builds too, and `svg::check_extent` refuses their
 /// inputs before drawing, so one reaching tiny-skia is a miss to report.
-pub fn is_known_upstream_debug_panic(file: &str, message: &str) -> bool {
+pub fn is_known_upstream_panic(file: &str, message: &str) -> bool {
     let file = file.replace('\\', "/");
     let turbulence = file.contains("/resvg-0.49.0/")
         && file.ends_with("/src/filter/turbulence.rs")
@@ -545,21 +548,24 @@ pub fn is_known_upstream_debug_panic(file: &str, message: &str) -> bool {
     let hue = file.contains("/cssparser-color-0.5.0/")
         && file.ends_with("/lib.rs")
         && message == "assertion failed: (0.0..=1.0).contains(&hue)";
-    turbulence || hue
+    let nan_math = file.contains("/lightningcss-1.0.0-alpha.72/")
+        && file.ends_with("/src/values/percentage.rs")
+        && message == "internal error: entered unreachable code";
+    turbulence || hue || nan_math
 }
 
 /// Makes the driver's panic hook skip the known upstream debug-only panics
-/// ([`is_known_upstream_debug_panic`]), so they unwind into the library's
+/// ([`is_known_upstream_panic`]), so they unwind into the library's
 /// guard instead of aborting the fuzz target. Call it from inside the target's
 /// closure: the drivers install their aborting hook before the first
 /// input, and this wraps whichever hook is current, once.
-pub fn excuse_known_upstream_debug_panics() {
+pub fn excuse_known_upstream_panics() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let aborting = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let excused = info.location().is_some_and(|location| {
-                is_known_upstream_debug_panic(location.file(), info.payload_as_str().unwrap_or(""))
+                is_known_upstream_panic(location.file(), info.payload_as_str().unwrap_or(""))
             });
             if !excused {
                 aborting(info);
@@ -576,7 +582,7 @@ pub const SVG_FUZZ_TIME: std::time::Duration = std::time::Duration::from_secs(5)
 /// slow input means the estimate missed a cost (or a parse step is
 /// superlinear) and panics here instead of passing as a mere refusal.
 pub fn svg_target(data: &[u8]) {
-    excuse_known_upstream_debug_panics();
+    excuse_known_upstream_panics();
     if data.len() > 64 * 1024 {
         return;
     }
@@ -704,12 +710,13 @@ mod svg_tests {
         );
     }
 
-    /// The input behind U20 (by `baseFrequency`) still panics in debug
-    /// builds with the message `is_known_upstream_debug_panic` excuses. When
-    /// upstream fixes it, this fails: drop the excuse. U24's input is
+    /// The inputs behind U20 (by `baseFrequency`), U45 and U49 still panic
+    /// with the messages `is_known_upstream_panic` excuses (U20 and U45 in
+    /// debug builds). When upstream fixes one, this fails: drop its
+    /// excuse. U24's input is
     /// refused before tiny-skia draws it, so its panic is never excused.
     #[test]
-    fn known_upstream_debug_panics_still_panic_as_excused() {
+    fn known_upstream_panics_still_panic_as_excused() {
         let svg = |body: &str| {
             format!("<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>{body}</svg>")
         };
@@ -728,10 +735,7 @@ mod svg_tests {
             assert!(err.contains("with overflow"), "U20: {err}");
             let panic = err.trim_start_matches("the SVG renderer panicked: ");
             assert!(
-                super::is_known_upstream_debug_panic(
-                    "/r/resvg-0.49.0/src/filter/turbulence.rs",
-                    panic
-                ),
+                super::is_known_upstream_panic("/r/resvg-0.49.0/src/filter/turbulence.rs", panic),
                 "U20: {panic}"
             );
         }
@@ -742,28 +746,47 @@ mod svg_tests {
             let err = hue.expect_err("U45");
             let panic = err.trim_start_matches("the CSS parser panicked: ");
             assert!(
-                super::is_known_upstream_debug_panic("/r/cssparser-color-0.5.0/lib.rs", panic),
+                super::is_known_upstream_panic("/r/cssparser-color-0.5.0/lib.rs", panic),
                 "U45: {err}"
             );
         }
-        assert!(!super::is_known_upstream_debug_panic(
+        assert!(!super::is_known_upstream_panic(
             "/r/cssparser-color-0.6.0/lib.rs",
             "assertion failed: (0.0..=1.0).contains(&hue)"
         ));
+        // U49 (bug_0245): a NaN math argument, in every build profile.
+        let nan = super::cascade("p { opacity: min(1, NaN) }").expect_err("U49");
+        let panic = nan.trim_start_matches("the CSS parser panicked: ");
+        assert!(
+            super::is_known_upstream_panic(
+                "/r/lightningcss-1.0.0-alpha.72/src/values/percentage.rs",
+                panic
+            ),
+            "U49: {nan}"
+        );
+        for file in [
+            "/r/lightningcss-1.0.0-alpha.73/src/values/percentage.rs",
+            "/r/lightningcss-1.0.0-alpha.72/src/values/number.rs",
+        ] {
+            assert!(!super::is_known_upstream_panic(
+                file,
+                "internal error: entered unreachable code"
+            ));
+        }
         // Anything else still aborts the fuzz target.
-        assert!(!super::is_known_upstream_debug_panic(
+        assert!(!super::is_known_upstream_panic(
             "/r/tiny-skia-0.12.0/src/scan/path.rs",
             "index out of bounds"
         ));
-        assert!(!super::is_known_upstream_debug_panic(
+        assert!(!super::is_known_upstream_panic(
             "/r/usvg-0.49.0/src/parser/filter.rs",
             "called `Option::unwrap()` on a `None` value"
         ));
-        assert!(!super::is_known_upstream_debug_panic(
+        assert!(!super::is_known_upstream_panic(
             "/r/tiny-skia-0.12.0/src/scan/path.rs",
             "assertion failed: edges[curr_idx].last_y >= curr_y as i32"
         ));
-        assert!(!super::is_known_upstream_debug_panic(
+        assert!(!super::is_known_upstream_panic(
             "/r/resvg-0.50.0/src/filter/turbulence.rs",
             "attempt to add with overflow"
         ));
