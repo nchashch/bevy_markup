@@ -62,7 +62,7 @@ the issue may already be fixed or reported.
 | U46 | Tera 2.4.0 | `unique` compares every pair of distinct items ([bug_0241](bug_0241.md)) | unmodeled quadratic render work | charge comparisons, refuse context-sized `unique` (ADR 0047) | unreported |
 | U47 | fluent-syntax 0.11.1 | Duplicate named-argument scan is quadratic ([bug_0243](bug_0243.md)) | flat FTL call stalls resource loading | `MAX_FTL_ARGUMENTS` = 64 in the pre-check (ADR 0047) | unreported |
 | U48 | cargo-afl 0.18.2 | `target-cpu=native` also reaches proc macros and build scripts | cached test-fuzz builds hit SIGILL on runners with older CPUs | append `-C target-cpu=x86-64` in `scripts/fuzz-{setup,test-fuzz}.sh` | unreported |
-| U49 | lightningcss 1.0.0-alpha.72 | A NaN argument to `min()`/`max()`/`clamp()` reaches `unreachable!()` in `Percentage::parse` | panic at parse time in every build profile, from any CSS text; an app with `panic = "abort"` aborts ([bug_0245](bug_0245.md)) | `cascade::guarded_parse` (unwinding builds only); the fuzz targets let it unwind (`fuzz::is_known_upstream_panic`, pinned to 1.0.0-alpha.72) | unreported |
+| U49 | lightningcss 1.0.0-alpha.72 | A NaN argument to `min()`/`max()`/`clamp()` reaches `unreachable!()` in `Percentage::parse` | panic at parse time in every build profile, from any CSS text; an app with `panic = "abort"` aborts ([bug_0245](bug_0245.md)) | `cascade::guarded_parse` (unwinding builds only); the fuzz targets let it unwind (`fuzz::is_known_upstream_panic`, pinned to 1.0.0-alpha.72) | fixed on master ([`b0939ab`](https://github.com/parcel-bundler/lightningcss/commit/b0939ab684793d2ba3ccc1a91e0f4d3ba837a708)), awaiting release |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -1100,8 +1100,10 @@ CI clippy command and workspace tests pass on both.
 
 - **Project/version:** [parcel-bundler/lightningcss](https://github.com/parcel-bundler/lightningcss)
   1.0.0-alpha.72, `src/values/percentage.rs:30` (`Percentage::parse`).
-- **Status:** unreported; latest upstream release and default branch not
-  checked.
+- **Status:** fixed on master, awaiting release. [`b0939ab`](https://github.com/parcel-bundler/lightningcss/commit/b0939ab684793d2ba3ccc1a91e0f4d3ba837a708)
+  (#1329, 2026-09-26) returns a parse error instead. Checked 2026-11-22: the
+  newest release is still 1.0.0-alpha.72 (npm v1.33.0), and master
+  `8823beb` parses all the reproductions below without a panic.
 - **Problem:** `min()`, `max()` and `clamp()` can't order a NaN, so they
   stay unevaluated, and `Percentage::parse` treats any result other than
   `Calc::Value` as `unreachable!()`. This panics in release builds too.
@@ -1111,9 +1113,7 @@ CI clippy command and workspace tests pass on both.
   ([bug_0245](bug_0245.md)).
 - **Local workaround:** `cascade::guarded_parse` catches the unwind. It can't
   help an app built with `panic = "abort"`, which aborts on this CSS.
-- **PR sketch:** in `Percentage::parse`, return a parse error for a result
-  that isn't `Calc::Value` instead of `unreachable!()`. `CSSNumber`'s
-  `From<Calc<CSSNumber>>` (`src/values/number.rs:65`) has the same shape and
-  should be checked.
+- **PR sketch:** none needed; wait for the release containing `b0939ab`.
 - **On a bump:** `fuzz::svg_tests::known_upstream_panics_still_panic_as_excused`
-  fails when the panic is gone or moved; drop the excuse then.
+  fails when the panic is gone or moved; drop the excuse and the README's
+  `panic = "abort"` warning then.
