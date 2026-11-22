@@ -184,14 +184,14 @@ pub const MAX_SVG_EXTENT: f32 = 524_288.0;
 
 /// The largest Gaussian blur, in pixels of standard deviation at the drawn
 /// size, an `.svg` may ask for (`feGaussianBlur`, `feDropShadow`). resvg
-/// 0.49's box blur sizes its boxes as `i32`s and adds past `i32::MAX` for a
+/// 0.50's box blur sizes its boxes as `i32`s and adds past `i32::MAX` for a
 /// σ of ~1.4·10⁹ px (UPSTREAM U32: a panic where overflow checks are on, a
 /// wrapped, negative box in release). 2²⁰ px is far below that and far
 /// beyond any layer resvg blurs (at most 5 × [`MAX_SVG_SIDE`] per side).
 pub const MAX_SVG_BLUR: f32 = 1_048_576.0;
 
 /// How far a filter region or primitive subregion may reach from the image,
-/// in pixels at the drawn size. resvg 0.49 converts both to `IntRect`s with
+/// in pixels at the drawn size. resvg 0.50 converts both to `IntRect`s with
 /// tiny-skia-path's `NonZeroRect::to_int_rect`, which unwraps
 /// `IntRect::from_xywh` and panics in every build once `x + width` passes
 /// `i32::MAX` (UPSTREAM U35, bug_0201). 2²⁴ px leaves room for the regions of
@@ -519,7 +519,7 @@ pub(crate) fn parse_unless_costly(
 
 /// Runs usvg or resvg work, turning a panic into [`SvgError::Panicked`].
 /// Both still panic on some inputs where overflow checks are on (debug
-/// builds, fuzzing): resvg 0.49's `feTurbulence` adds past `i32::MAX`
+/// builds, fuzzing): resvg 0.50's `feTurbulence` adds past `i32::MAX`
 /// after enough octaves (resvg #1185, UPSTREAM U20). Bevy already turns a
 /// panicking asset loader into a failed load (`AssetLoaderPanic`), but the
 /// redraws of [`rasterize_svg_images`] run as `AsyncComputeTaskPool`
@@ -1659,7 +1659,7 @@ const MAX_COST_DEPTH: u32 = 512;
 /// units of one pixel drawn once, stopping early once it exceeds `max`
 /// (the result is then some value above `max`).
 ///
-/// The model follows resvg 0.49's renderer (`render.rs`, `mask.rs`,
+/// The model follows resvg 0.50's renderer (`render.rs`, `mask.rs`,
 /// `clip.rs`, `filter/mod.rs`): an isolated group (opacity, filter, mask,
 /// clip path, blend mode) draws into a layer the size of its bounding box,
 /// at most 5× the canvas on each side (`max_filter_bbox`); filters run over
@@ -2025,8 +2025,12 @@ impl CostWalk {
         }
         self.add(NODE_COST)?;
         if group.should_isolate() {
-            let bbox = group.abs_layer_bounding_box();
-            let layer = self.area(bbox.width(), bbox.height());
+            // usvg 0.50 has no box for an empty group: `area` charges its
+            // minimum.
+            let (width, height) = group
+                .abs_layer_bounding_box()
+                .map_or((0.0, 0.0), |bbox| (bbox.width(), bbox.height()));
+            let layer = self.area(width, height);
             // Allocated, then composited onto its parent.
             self.add_area(layer, 2.0)?;
             for filter in group.filters() {
@@ -2102,8 +2106,10 @@ impl CostWalk {
             )?;
             self.add_area(shape.rows, 2.0)?;
         }
-        let bbox = path.abs_stroke_bounding_box();
-        let area = self.area(bbox.width(), bbox.height());
+        let (width, height) = path
+            .abs_stroke_bounding_box()
+            .map_or((0.0, 0.0), |bbox| (bbox.width(), bbox.height()));
+        let area = self.area(width, height);
         let fill = path.fill().map(|fill| fill.paint());
         let stroke = path.stroke().map(|stroke| stroke.paint());
         for paint in fill.into_iter().chain(stroke) {
@@ -3416,7 +3422,7 @@ mod tests {
         .unwrap();
     }
 
-    /// usvg 0.49 unwraps a `PositiveF32` made from `baseFrequency` as an
+    /// usvg 0.50 unwraps a `PositiveF32` made from `baseFrequency` as an
     /// `f32`: a number past `f32::MAX` is infinity and panicked, in release
     /// too (UPSTREAM U26). The check refuses it before usvg runs.
     #[test]
@@ -3457,7 +3463,7 @@ mod tests {
         }
     }
 
-    /// usvg 0.49 multiplies `feConvolveMatrix`'s `order` sides as `u32`
+    /// usvg 0.50 multiplies `feConvolveMatrix`'s `order` sides as `u32`
     /// unchecked: a debug-build panic, a wrapped kernel size in release
     /// (UPSTREAM U29). The check refuses a product past `u32` before usvg
     /// runs, reading the sides as usvg does.
@@ -3496,7 +3502,7 @@ mod tests {
         }
     }
 
-    /// usvg 0.49 unwraps a `PositiveF32` of each `feMorphology` radius ×
+    /// usvg 0.50 unwraps a `PositiveF32` of each `feMorphology` radius ×
     /// the primitive scale, which panics in every build when it isn't
     /// finite (UPSTREAM U30). The check refuses such radii before usvg runs.
     #[test]
@@ -3540,7 +3546,7 @@ mod tests {
         }
     }
 
-    /// usvg 0.49 maps `objectBoundingBox` regions onto an element's box
+    /// usvg 0.50 maps `objectBoundingBox` regions onto an element's box
     /// with tiny-skia-path's `bbox_transform`, which unwraps an overflowed
     /// rect (UPSTREAM U31): every route to it is refused when the box,
     /// measured by usvg itself (`svg_boxes`), is too large for its factors.
@@ -3607,7 +3613,7 @@ mod tests {
         }
     }
 
-    /// resvg 0.49's box blur adds past `i32::MAX` for a deviation of ~1.4·10⁹
+    /// resvg 0.50's box blur adds past `i32::MAX` for a deviation of ~1.4·10⁹
     /// px at the drawn size (UPSTREAM U32): refused past [`MAX_SVG_BLUR`],
     /// measured through the same transforms resvg scales it by.
     #[test]
@@ -3704,7 +3710,7 @@ mod tests {
         assert!((56..=96).contains(&dashes), "{dashes}");
     }
 
-    /// resvg 0.49 draws a pattern's tile into a pixmap of its own at the
+    /// resvg 0.50 draws a pattern's tile into a pixmap of its own at the
     /// drawn size (`render_pattern_pixmap`: the pattern rect × the scale of
     /// the path's transform with the pattern's), with no limit; a failed
     /// allocation aborts the process (bug_0200, found by
@@ -3747,7 +3753,7 @@ mod tests {
         }
     }
 
-    /// resvg 0.49 turns each filter region and primitive subregion into an
+    /// resvg 0.50 turns each filter region and primitive subregion into an
     /// `IntRect` in pixels with tiny-skia-path's `to_int_rect`, which unwraps
     /// once `x + width` passes `i32::MAX` (UPSTREAM U35, bug_0201, found by
     /// `properties::hostile_magnitudes_never_panic`). Refused past

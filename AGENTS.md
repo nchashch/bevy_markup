@@ -572,7 +572,7 @@ fuzz/
                      (every driver's `svg` target is `fuzz::svg_target`: it asserts each
                      input finishes in 5 s, and `fuzz::excuse_known_upstream_panics`
                      lets the debug-only upstream panic U20 unwind into `svg::guarded` —
-                     `fuzz::is_known_upstream_panic`, pinned to resvg 0.49.0 —
+                     `fuzz::is_known_upstream_panic`, pinned to resvg 0.50.0 —
                      every other panic aborts, tiny-skia's included)
   seeds/<target>/    committed minimized seed corpora (read-only extra input to every
                      cargo-fuzz run; copied into honggfuzz's working corpus, and `svg`'s

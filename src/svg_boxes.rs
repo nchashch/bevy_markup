@@ -1,7 +1,7 @@
 //! usvg's own object bounding boxes, measured before usvg uses them
 //! (ADR 0042, bug_0197, UPSTREAM U31).
 //!
-//! usvg 0.49 maps every `objectBoundingBox` region onto an element's box
+//! usvg 0.50 maps every `objectBoundingBox` region onto an element's box
 //! with tiny-skia-path's `NonZeroRect::bbox_transform`, which unwraps the
 //! product: a filter region (−10%, 120%), a mask region, a pattern tile,
 //! an `feImage` or primitive subregion, a CSS filter function's region. A
@@ -71,9 +71,11 @@ pub(crate) fn largest_box(
 /// Folds every group's box (and those of the groups below it, and of the
 /// sub-trees usvg hangs off its nodes) into `largest`.
 fn group_boxes(group: &usvg::Group, largest: &mut f64) {
-    let rect = group.bounding_box();
-    for side in [rect.left(), rect.top(), rect.right(), rect.bottom()] {
-        *largest = largest.max(f64::from(side).abs());
+    // usvg 0.50 has no box for an empty group; its children are still walked.
+    if let Some(rect) = group.bounding_box() {
+        for side in [rect.left(), rect.top(), rect.right(), rect.bottom()] {
+            *largest = largest.max(f64::from(side).abs());
+        }
     }
     for node in group.children() {
         if let usvg::Node::Group(child) = node {

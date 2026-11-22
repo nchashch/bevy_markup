@@ -82,6 +82,7 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     image fails with an error, instead of a renderer panic.
 
 ### Changed
+- The `svg` feature now uses resvg and usvg 0.50.
 - **No `[patch]` for fluent-syntax needed any more**: remove the
   `fluent-syntax` entry from your app's `[patch.crates-io]` if you added
   it. bevy_markup now uses upstream fluent-syntax and refuses, at load, the

@@ -541,7 +541,7 @@ pub fn svg(source: &[u8]) -> Result<String, String> {
 /// inputs before drawing, so one reaching tiny-skia is a miss to report.
 pub fn is_known_upstream_panic(file: &str, message: &str) -> bool {
     let file = file.replace('\\', "/");
-    let turbulence = file.contains("/resvg-0.49.0/")
+    let turbulence = file.contains("/resvg-0.50.0/")
         && file.ends_with("/src/filter/turbulence.rs")
         && message.starts_with("attempt to ")
         && message.ends_with(" with overflow");
@@ -735,7 +735,7 @@ mod svg_tests {
             assert!(err.contains("with overflow"), "U20: {err}");
             let panic = err.trim_start_matches("the SVG renderer panicked: ");
             assert!(
-                super::is_known_upstream_panic("/r/resvg-0.49.0/src/filter/turbulence.rs", panic),
+                super::is_known_upstream_panic("/r/resvg-0.50.0/src/filter/turbulence.rs", panic),
                 "U20: {panic}"
             );
         }
@@ -779,7 +779,7 @@ mod svg_tests {
             "index out of bounds"
         ));
         assert!(!super::is_known_upstream_panic(
-            "/r/usvg-0.49.0/src/parser/filter.rs",
+            "/r/usvg-0.50.0/src/parser/filter.rs",
             "called `Option::unwrap()` on a `None` value"
         ));
         assert!(!super::is_known_upstream_panic(
@@ -787,7 +787,7 @@ mod svg_tests {
             "assertion failed: edges[curr_idx].last_y >= curr_y as i32"
         ));
         assert!(!super::is_known_upstream_panic(
-            "/r/resvg-0.50.0/src/filter/turbulence.rs",
+            "/r/resvg-0.51.0/src/filter/turbulence.rs",
             "attempt to add with overflow"
         ));
     }

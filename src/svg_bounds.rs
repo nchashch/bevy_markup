@@ -1,4 +1,4 @@
-//! What usvg 0.49 will do with an SVG document, bounded from its XML before
+//! What usvg 0.50 will do with an SVG document, bounded from its XML before
 //! usvg runs (ADR 0038 §5, ADR 0040): how deeply its converter recurses
 //! (`depth`, against a stack overflow) and how much it builds (`work`,
 //! against a conversion that takes seconds or never ends).
