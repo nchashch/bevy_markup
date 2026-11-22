@@ -89,6 +89,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   Fluent files that would crash it (ADR 0045).
 
 ### Security
+- SVG documents with very many `<text>` elements are refused at load
+  instead of taking seconds and hundreds of MB to convert. Each `<text>`
+  now counts toward `MAX_SVG_WORK`, so an inline `<svg>` with more than
+  about 40 labels converts on a background task.
 - **Fluent files are checked when they load** (ADR 0045): placeables and
   function calls nested deeper than `ftl_check::MAX_FTL_NESTING` (64), or
   an incomplete `\u`/`\U` escape right before a non-ASCII character in a

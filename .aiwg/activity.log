@@ -49,3 +49,4 @@
 ## [2026-11-22 17:54] update | Record that lightningcss master fixes U49, awaiting release
 ## [2026-11-22 21:19] update | Bump resvg/usvg to 0.50: U23 fixed upstream, U17 still present and guarded
 ## [2026-11-22 21:58] update | Remeasure SVG render cost on resvg 0.50: limit unchanged, slowest accepted draw about 0.85 s
+## [2026-11-22 22:24] update | Charge each SVG text element in the conversion work bound (bug_0248)

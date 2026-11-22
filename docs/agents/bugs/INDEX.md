@@ -287,6 +287,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0243](bug_0243.md) | Wide Fluent calls make the safety check and parser quadratic | `src/ftl_check.rs`; fluent-syntax 0.11.1 | medium (DoS) | fixed | review_0009 M05 |
 | [bug_0244](bug_0244.md) | The DOM outline's size is quadratic in the document's depth | `src/template.rs` | high (DoS) | fixed | cargo-fuzz `html`, nightly 2026-11-20 |
 | [bug_0245](bug_0245.md) | A NaN argument to `min()`, `max()` or `clamp()` panics the CSS parse | `src/cascade.rs`; lightningcss 1.0.0-alpha.72 (U49) | high | fixed (guarded; `panic = "abort"` builds exposed) | honggfuzz `css`, nightly 2026-11-22 |
+| [bug_0248](bug_0248.md) | The SVG work bound undercharges short `<text>` elements | `src/svg_bounds.rs` | medium | fixed | remeasuring `MAX_SVG_WORK` on usvg 0.50, 2026-11-23 |
 
 ## Discovery session metadata: bug_0239–0243 (2026-11-12)
 

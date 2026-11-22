@@ -3840,6 +3840,10 @@ mod tests {
                 "<rect width='100%' height='100%' rx='2em'/><circle r='45%'/>".repeat(1000),
             ),
             (
+                "labels",
+                "<text x='4' y='12' font-size='10'>Sector seven gate</text>".repeat(2000),
+            ),
+            (
                 // An editor's export: a class rule per style.
                 "classes",
                 format!(

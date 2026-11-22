@@ -99,6 +99,10 @@ const TEXT_SQUARE_PER_WORK: u64 = 32;
 /// (UPSTREAM U43); 4 000 one-character `<tspan>`s took 2.0 s (~120 ns a
 /// pair).
 const SPAN_RESHAPE_WORK: u64 = 2;
+/// Work of one `<text>` instance, for the tree and glyph paths usvg builds
+/// for it whatever its length: a one-letter `<text>` costs ~5 µs and ~4 KB
+/// in release (bug_0248).
+const TEXT_ELEMENT_WORK: u64 = 256;
 /// usvg's default `font-size` (`Options::font_size`), the base of `em`.
 const DEFAULT_FONT_SIZE: f64 = 12.0;
 /// usvg's viewport when the root has no size: 100 × 100.
@@ -724,7 +728,8 @@ impl<'a, 'input> Graph<'a, 'input> {
             chars += node.text().map_or(0, |text| text.chars().count()) as u64;
             spans += 1;
         }
-        own.saturating_add(chars.saturating_mul(chars) / TEXT_SQUARE_PER_WORK)
+        own.saturating_add(TEXT_ELEMENT_WORK)
+            .saturating_add(chars.saturating_mul(chars) / TEXT_SQUARE_PER_WORK)
             .saturating_add(
                 spans
                     .saturating_mul(chars)
@@ -1455,6 +1460,26 @@ mod tests {
         assert!(
             work(&format!("<text>{spans}</text>")) > max,
             "one-character spans"
+        );
+    }
+
+    /// Every `<text>` builds a tree and glyph paths of its own, however
+    /// short (bug_0248): many of them are refused, a page of labels isn't.
+    #[test]
+    fn each_text_element_is_charged() {
+        let work = |body: &str| {
+            let svg = format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>{body}</svg>"
+            );
+            let document = roxmltree::Document::parse(&svg).unwrap();
+            bounds(&document, MAX_REFERENCES, u64::MAX).unwrap().work
+        };
+        let max = crate::svg::MAX_SVG_WORK;
+        assert!(work(&"<text>a</text>".repeat(40_000)) > max);
+        assert!(work(&"<text>a</text>".repeat(20_000)) < max);
+        assert!(
+            work("<text>a</text>") >= TEXT_ELEMENT_WORK,
+            "the charge applies to a single element"
         );
     }
 }

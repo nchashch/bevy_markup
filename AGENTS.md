@@ -216,7 +216,7 @@ src/
                    segments + 2 — per vertex, bug_0189; paint server 0 — converted once, a
                    shape's own work gains 2 × the server's content); own work = 16 per element,
                    1 per stop, 4 per path segment, (arc cubics)²/64 per path arc (svgtypes'
-                   quadratic drain), 16 per text byte, a `<text>`'s characters² ÷ 32 + spans ×
+                   quadratic drain), 16 per text byte, 256 per `<text>` (bug_0248), a `<text>`'s characters² ÷ 32 + spans ×
                    characters × 2 (usvg's layout, U41, U43, bug_0232); plus the `<style>`
                    sheets, charged before simplecss runs: its parse by `style_scan_bytes`
                    (the offsets where it raises errors, U42) and its matching by
