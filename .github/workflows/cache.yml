@@ -139,6 +139,8 @@ jobs:
           - driver: test-fuzz
             workspaces: test-fuzz
             directories: ~/.local/share/afl.rs
+            # Retires the caches built with `target-cpu=native`.
+            cache-suffix: -x86-64
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -147,7 +149,7 @@ jobs:
       - id: cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: fuzz-${{ matrix.driver }}
+          shared-key: fuzz-${{ matrix.driver }}${{ matrix.cache-suffix }}
           workspaces: ${{ matrix.workspaces }}
           cache-directories: ${{ matrix.directories }}
       - name: Install the honggfuzz build dependencies

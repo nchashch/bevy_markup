@@ -61,6 +61,7 @@ the issue may already be fixed or reported.
 | U45 | lightningcss 1.0.0-alpha.72 / cssparser-color 0.5.0 | An infinite `hsl()`/`hwb()` hue normalizes to NaN, and `hsl_to_rgb` `debug_assert!`s its hue range | panic at parse time in debug builds, from any CSS text ([bug_0238](bug_0238.md)) | `cascade::guarded_parse` (catch_unwind around the three lightningcss parses); the fuzz targets let it unwind (`fuzz::is_known_upstream_debug_panic`, pinned to cssparser-color 0.5.0) | unreported |
 | U46 | Tera 2.4.0 | `unique` compares every pair of distinct items ([bug_0241](bug_0241.md)) | unmodeled quadratic render work | charge comparisons, refuse context-sized `unique` (ADR 0047) | unreported |
 | U47 | fluent-syntax 0.11.1 | Duplicate named-argument scan is quadratic ([bug_0243](bug_0243.md)) | flat FTL call stalls resource loading | `MAX_FTL_ARGUMENTS` = 64 in the pre-check (ADR 0047) | unreported |
+| U48 | cargo-afl 0.18.2 | `target-cpu=native` also reaches proc macros and build scripts | cached test-fuzz builds hit SIGILL on runners with older CPUs | append `-C target-cpu=x86-64` in `scripts/fuzz-{setup,test-fuzz}.sh` | unreported |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -1071,3 +1072,25 @@ CI clippy command and workspace tests pass on both.
   ordered output vector and the current duplicate-name error position.
 - **On a bump:** compare the port with upstream again and reconsider
   `MAX_FTL_ARGUMENTS` after both scans have bounded cost.
+
+## U48 — cargo-afl: `target-cpu=native` reaches proc macros and build scripts
+
+- **Project/version:** cargo-afl 0.18.2, `src/main.rs` (the `RUSTFLAGS` it
+  builds, `-C target-cpu=native` at line 287).
+- **Status:** unreported; latest upstream release/default branch not
+  checked.
+- **Reproduction:** build a crate using a proc macro with `cargo afl test
+  --no-run` (no `--target`, so `RUSTFLAGS` also apply to host artifacts),
+  restore `target/` on a machine whose CPU lacks an instruction the build
+  machine had. rustc loads the macro and dies with SIGILL. Nightly runs
+  2026-11-16 to 2026-11-21 failed this way in `test-fuzz-macro`, on a
+  different target each night, depending on the runner's CPU.
+- **Local workaround:** `scripts/fuzz-setup.sh` and
+  `scripts/fuzz-test-fuzz.sh` export `RUSTFLAGS` ending in `-C
+  target-cpu=x86-64` for the AFL builds; cargo-afl appends the user's flags
+  after its own, and rustc's last `target-cpu` wins. The `-x86-64` suffix on
+  the `fuzz-test-fuzz` cache key retires the caches built with `native`.
+- **PR sketch:** make `target-cpu=native` opt-out (an environment variable
+  like `AFL_OPT_LEVEL`), or pass `--target` so the flags skip host artifacts.
+- **On a bump:** check whether cargo-afl still sets `native`; if not, drop
+  the override.

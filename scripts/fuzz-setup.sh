@@ -53,6 +53,11 @@ case "$driver" in
         # The corpus seeds: `#[test_fuzz]` records the arguments of
         # ordinary test runs under target/corpus.
         cargo "+$toolchain" test
+        # = scripts/fuzz-test-fuzz.sh: cargo-afl builds with
+        # `target-cpu=native`, proc macros included, and a cached macro
+        # hits SIGILL on a runner with an older CPU. Its flags come first,
+        # so this one wins.
+        export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
         for target in html css ftl svg; do
             cargo "+$toolchain" test-fuzz --no-run "tests::fuzz_$target"
         done

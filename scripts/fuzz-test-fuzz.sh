@@ -24,6 +24,10 @@ export AFL_SKIP_CPUFREQ=1
 # without this afl-fuzz refuses to start over an output directory holding
 # more than 25 minutes of results.
 export AFL_AUTORESUME=1
+# = scripts/fuzz-setup.sh: cargo-afl builds with `target-cpu=native`, proc
+# macros included, and a cached macro hits SIGILL on a runner with an older
+# CPU. Its flags come first, so this one wins.
+export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
 # Build first (unbounded: a cold build can exceed the run budget); the
 # timeout then bounds only the run. `timeout` exits 124 when the budget
 # elapses — that is a normal, successful end for a fuzz campaign.
