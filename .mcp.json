@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "bevy_mcp_harness": {
+      "type": "http",
+      "url": "http://127.0.0.1:15710/mcp"
+    },
     "graft": {
       "command": "graft",
       "args": [
