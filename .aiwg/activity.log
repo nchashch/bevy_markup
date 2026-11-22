@@ -44,3 +44,4 @@
 ## [2026-11-11 23:17] update | Fixed review_0008 bugs 0223-0237 (uncommitted); ADR 0046; UPSTREAM U40-U43 (simplecss match/parse, usvg text)
 ## [2026-11-12 17:54] update | bug_0238: guard lightningcss parses against the infinite-hue debug panic (honggfuzz css, first full nightly); UPSTREAM U45
 ## [2026-11-22 04:53] update | Nightly test-fuzz SIGILL: AFL builds target x86-64, cache key retired; UPSTREAM U48
+## [2026-11-22 05:12] update | bug_0244: DOM outline bounded at 1 MiB (cargo-fuzz html OOM); honggfuzz runs under a 4 GiB address-space limit

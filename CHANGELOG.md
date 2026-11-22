@@ -135,6 +135,9 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   skipped (each costs the document's depth squared per element).
 
 ### Fixed
+- `HtmlDebugOutline` no longer runs out of memory on deeply nested HTML:
+  the outline stops at 1 MiB with a closing "outline truncated" note
+  (bug_0244).
 - Template safety checks preserve bounds at `break`/`continue` exits and
   include map keys in iteration bounds, closing two intermediate-value
   memory-limit bypasses (bug_0239, bug_0240).

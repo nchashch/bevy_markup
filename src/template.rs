@@ -142,12 +142,19 @@ impl HtmlDocument {
     /// Indented outline of the DOM: one line per element (with attributes),
     /// text node, and comment. Whitespace-only text is skipped. Elements in
     /// `localized` show their translation (`l10n "…"`) instead of children.
+    /// Stops at 1 MiB with a closing note: indentation makes an outline
+    /// quadratic in the document's depth (bug_0244).
     pub fn outline(&self, localized: &LocalizedText) -> String {
         let dom = self.dom();
         let parser = dom.parser();
         let mut out = String::new();
-        for handle in dom.children() {
-            write_node(&mut out, parser, &localized.0, *handle);
+        let mut writer = OutlineWriter(&mut out);
+        let complete = dom
+            .children()
+            .iter()
+            .all(|handle| write_node(&mut writer, parser, &localized.0, *handle).is_ok());
+        if !complete {
+            out.push_str(OUTLINE_TRUNCATED);
         }
         out
     }
@@ -356,50 +363,75 @@ pub(crate) fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
     message
 }
 
+/// The most text a DOM outline holds, before [`OUTLINE_TRUNCATED`].
+const MAX_OUTLINE_BYTES: usize = 1 << 20;
+
+/// Closes an outline cut at [`MAX_OUTLINE_BYTES`].
+const OUTLINE_TRUNCATED: &str = "\n… outline truncated\n";
+
+/// A `String` that takes [`MAX_OUTLINE_BYTES`], then fails the write.
+struct OutlineWriter<'a>(&'a mut String);
+
+impl Write for OutlineWriter<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        let room = MAX_OUTLINE_BYTES.saturating_sub(self.0.len());
+        if text.len() <= room {
+            self.0.push_str(text);
+            return Ok(());
+        }
+        self.0.push_str(&text[..text.floor_char_boundary(room)]);
+        Err(std::fmt::Error)
+    }
+}
+
+/// Two spaces per level; the writer's limit ends a deep indent early.
+fn write_indent(out: &mut OutlineWriter, depth: usize) -> std::fmt::Result {
+    for _ in 0..depth {
+        out.write_str("  ")?;
+    }
+    Ok(())
+}
+
 /// The DOM outline (depth-first, document order), iterative: the
-/// document's depth costs heap, not stack.
+/// document's depth costs heap, not stack. Stack entries carry the depth,
+/// not the indent text, which would cost depth × width (bug_0244).
 fn write_node(
-    out: &mut String,
+    out: &mut OutlineWriter,
     parser: &tl::Parser,
     localized: &HashMap<tl::NodeHandle, Result<String, String>>,
     handle: tl::NodeHandle,
-) {
-    // The indent is carried per stack entry (a child's is its parent's
-    // plus two spaces): "  ".repeat(depth) per node recomputed the
-    // prefix over and over.
-    let mut stack = vec![(handle, String::new())];
-    while let Some((handle, indent)) = stack.pop() {
+) -> std::fmt::Result {
+    let mut stack = vec![(handle, 0usize)];
+    while let Some((handle, depth)) = stack.pop() {
         let Some(node) = handle.get(parser) else {
             continue;
         };
         match node {
             tl::Node::Tag(tag) => {
-                let _ = write!(out, "{indent}{}", tag.name().as_utf8_str());
+                write_indent(out, depth)?;
+                write!(out, "{}", tag.name().as_utf8_str())?;
                 for (key, value) in tag.attributes().iter() {
                     match value {
-                        Some(value) => {
-                            let _ = write!(out, " {key}=\"{value}\"");
-                        }
-                        None => {
-                            let _ = write!(out, " {key}");
-                        }
+                        Some(value) => write!(out, " {key}=\"{value}\"")?,
+                        None => write!(out, " {key}")?,
                     }
                 }
-                out.push('\n');
-                let child_indent = format!("{indent}  ");
+                out.write_char('\n')?;
                 match localized.get(&handle) {
                     Some(Ok(text)) => {
-                        let _ = writeln!(out, "{child_indent}l10n {text:?}");
+                        write_indent(out, depth + 1)?;
+                        writeln!(out, "l10n {text:?}")?;
                     }
                     Some(Err(err)) => {
-                        let _ = writeln!(out, "{child_indent}l10n error: {err}");
+                        write_indent(out, depth + 1)?;
+                        writeln!(out, "l10n error: {err}")?;
                     }
                     None => {
                         // Reversed: the leftmost child pops first.
                         let children: Vec<tl::NodeHandle> =
                             tag.children().top().iter().copied().collect();
                         for child in children.into_iter().rev() {
-                            stack.push((child, child_indent.clone()));
+                            stack.push((child, depth + 1));
                         }
                     }
                 }
@@ -408,14 +440,17 @@ fn write_node(
                 let text = text.as_utf8_str();
                 let text = text.trim();
                 if !text.is_empty() {
-                    let _ = writeln!(out, "{indent}{text:?}");
+                    write_indent(out, depth)?;
+                    writeln!(out, "{text:?}")?;
                 }
             }
             tl::Node::Comment(text) => {
-                let _ = writeln!(out, "{indent}{}", text.as_utf8_str());
+                write_indent(out, depth)?;
+                writeln!(out, "{}", text.as_utf8_str())?;
             }
         }
     }
+    Ok(())
 }
 
 /// Whether `path` names one of Bevy's network asset sources (`http://`,
@@ -1497,6 +1532,29 @@ mod tests {
     /// The DOM outline indents each level by two spaces, skips blank text
     /// (formatting whitespace between tags), quotes text, and shows a
     /// translated element's translation (or error) instead of its children.
+    #[test]
+    fn outline_size_is_bounded() {
+        let limit = MAX_OUTLINE_BYTES + OUTLINE_TRUNCATED.len();
+        // Deep (2 × 20 000² / 2 = 400 MB of indent unbounded, bug_0244),
+        // wide, and one long line cut inside a multi-byte character.
+        for source in [
+            "<b>".repeat(20_000),
+            "<i></i>".repeat(600_000),
+            format!("<p>x{}</p>", "é".repeat(MAX_OUTLINE_BYTES)),
+        ] {
+            let outline = HtmlDocument::parse(source)
+                .unwrap()
+                .outline(&LocalizedText::default());
+            assert!(outline.len() <= limit, "{} bytes", outline.len());
+            assert!(outline.ends_with(OUTLINE_TRUNCATED));
+        }
+        // An outline that fits has no note.
+        let outline = HtmlDocument::parse("<p>short</p>".to_owned())
+            .unwrap()
+            .outline(&LocalizedText::default());
+        assert_eq!(outline, "p\n  \"short\"\n");
+    }
+
     #[test]
     fn outline_indents_levels_and_shows_translations() {
         let document = HtmlDocument::parse(

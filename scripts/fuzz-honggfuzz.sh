@@ -28,8 +28,10 @@ mkdir -p "hfuzz_workspace/$target/input"
 cp -n "fuzz/seeds/$target"/* "hfuzz_workspace/$target/input/" 2>/dev/null || true
 # honggfuzz kills an input after 1 s by default: too tight for a loaded
 # machine or a CI runner (and under the svg target's own 5 s assertion).
-# = cargo-fuzz's -timeout.
-export HFUZZ_RUN_ARGS="${HFUZZ_RUN_ARGS:--t 10}"
+# = cargo-fuzz's -timeout. The 4 GiB address-space limit (= its
+# -rss_limit_mb) makes a memory blowup a saved crash: without it the input
+# starved the CI runner, which died with no artifact (bug_0244).
+export HFUZZ_RUN_ARGS="${HFUZZ_RUN_ARGS:--t 10 --rlimit_as 4096}"
 # honggfuzz keeps fuzzing after a crash and writes each one as a `*.fuzz`
 # file in the target's workspace, so the exit status says nothing about
 # crashes: count the files before and after (earlier runs' crashes are

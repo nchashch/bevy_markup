@@ -94,7 +94,8 @@ src/
                    64 operators fails the load before Tera compiles it (tera_tag_over_limit,
                    bug_0182); after Tera compiles the set, `tera_check::check` bounds it (ADR
                    0044); `render_source` renders through `BoundedOutput`, refused past
-                   `MAX_RENDERED_BYTES` 16 MiB (bug_0220), HtmlDocument (+ outline),
+                   `MAX_RENDERED_BYTES` 16 MiB (bug_0220), HtmlDocument (+ outline, cut at
+                   1 MiB, bug_0244),
                    decode_text / decode_attribute (htmlize, ADR 0036)
   md.rs            Markdown → HTML (ADR 0014, 0020): `to_html` / `to_html_template` (pulldown-cmark,
                    Tera syntax kept verbatim), `code_ranges`, `dedent_blocks` (ADR 0024)

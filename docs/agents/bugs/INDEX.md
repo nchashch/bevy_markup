@@ -285,6 +285,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0241](bug_0241.md) | Tera unique performs quadratic work charged as linear | `src/tera_check/analysis.rs`; Tera 2.4.0 `filters::unique` | medium (DoS) | fixed | review_0009 M03 |
 | [bug_0242](bug_0242.md) | Hidden controls receive focus and emit activation signals | `src/focus.rs` | medium | fixed | review_0009 M04 |
 | [bug_0243](bug_0243.md) | Wide Fluent calls make the safety check and parser quadratic | `src/ftl_check.rs`; fluent-syntax 0.11.1 | medium (DoS) | fixed | review_0009 M05 |
+| [bug_0244](bug_0244.md) | The DOM outline's size is quadratic in the document's depth | `src/template.rs` | high (DoS) | fixed | cargo-fuzz `html`, nightly 2026-11-20 |
 
 ## Discovery session metadata: bug_0239–0243 (2026-11-12)
 
