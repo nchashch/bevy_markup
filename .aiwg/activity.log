@@ -48,3 +48,4 @@
 ## [2026-11-22 17:43] update | Guard and report lightningcss NaN math panic from nightly honggfuzz css (bug_0245, U49)
 ## [2026-11-22 17:54] update | Record that lightningcss master fixes U49, awaiting release
 ## [2026-11-22 21:19] update | Bump resvg/usvg to 0.50: U23 fixed upstream, U17 still present and guarded
+## [2026-11-22 21:58] update | Remeasure SVG render cost on resvg 0.50: limit unchanged, slowest accepted draw about 0.85 s

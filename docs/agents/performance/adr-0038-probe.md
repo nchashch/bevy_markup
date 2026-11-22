@@ -291,6 +291,27 @@ proportional budget, and asserts each input finishes within 5 s: a miss
 of the estimate by more than ~1000× fails it. First run: 144,475 inputs
 in 180 s, no failures.
 
+### Remeasured on resvg 0.50 (2026-11-23)
+
+The same comparison ran on 0.49.0 (`dc8db68`) and 0.50.0 (`3571f6d`), one
+after the other on the same machine: 32 document families × 256², 1024²,
+2048², release, best of three. Two chain families (50 masks, 100 clip
+paths) are refused by the depth check on both versions and have no
+timing. SVG `<text>` was not measured.
+
+- **The estimate is unchanged.** Every family gets the same units on both
+  versions.
+- **Render time is unchanged.** Times agree within about 6%, with two
+  outliers: one blur sample (+27%, gone on three reruns) and a 0.25 ms
+  plain fill (+12%, not rerun).
+- **`MAX_SVG_COST` stays 2²⁷.**
+
+This run adds a slower case than the table above: a stroked path of
+200,000 short segments in a small area costs 3.9–6.3 ns per unit on both
+versions. Ten such paths estimate 136M units at 256² (just over the limit)
+and draw in 0.86 s, so **the slowest accepted draw is about 0.85 s**, not
+the ≈ 0.5 s stated above. It is still on an IO thread, not a frame.
+
 ## 8. Panics in the renderer (step 2)
 
 A step-2 test drew a 16 × 16 SVG with `feTurbulence numOctaves="100"`
