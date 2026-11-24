@@ -1160,13 +1160,10 @@ pub(crate) fn var_names(sheet: &Sheet) -> Vec<String> {
     for rule in &sheet.rules {
         for declaration in rule.declarations.iter() {
             match declaration {
-                Declaration::Var { value, .. } => {
-                    names.extend(crate::css::sheet::var_names(&value.0));
-                }
-                Declaration::Custom { name, value } => {
-                    let refs = crate::css::sheet::var_names(&value.0);
+                Declaration::Var { refs, .. } => names.extend(refs.iter().cloned()),
+                Declaration::Custom { name, refs, .. } => {
                     if !refs.is_empty() {
-                        declarations.push((name.clone(), refs));
+                        declarations.push((name.clone(), refs.clone()));
                     }
                 }
                 _ => {}
@@ -1271,9 +1268,8 @@ impl InlineStyle {
     pub(crate) fn var_names(&self) -> BTreeSet<String> {
         let mut names = BTreeSet::new();
         for declaration in self.0.iter() {
-            if let Declaration::Var { value, .. } | Declaration::Custom { value, .. } = declaration
-            {
-                names.extend(crate::css::sheet::var_names(&value.0));
+            if let Declaration::Var { refs, .. } | Declaration::Custom { refs, .. } = declaration {
+                names.extend(refs.iter().cloned());
             }
         }
         names
@@ -1392,7 +1388,7 @@ impl<'a> HtmlStyles<'a> {
             // selector filtering, so a rule with an unsupported selector
             // still registers its variables.
             for declaration in rule.declarations.iter() {
-                if let Declaration::Custom { name, value } = declaration {
+                if let Declaration::Custom { name, value, .. } = declaration {
                     variables.insert(name.clone(), value.clone());
                 }
             }
@@ -1734,7 +1730,7 @@ fn apply_resolved(
         // consumers resolve against the raw sheet values (a 2000-link
         // consumed chain cost 3.45 s per element, review_0003 G29).
         Declaration::Custom { .. } => return,
-        Declaration::Var { name, value } => (name, value),
+        Declaration::Var { name, value, .. } => (name, value),
     };
     let mut substitution = Substitution {
         variables,

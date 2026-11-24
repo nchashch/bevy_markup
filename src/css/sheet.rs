@@ -65,9 +65,20 @@ pub(crate) enum Declaration {
     /// `initial`/`inherit`/`unset`/`revert` for the named property.
     Keyword(String),
     /// A value holding `var()`: parsed after substitution, per element.
-    Var { name: String, value: Raw },
-    /// A custom property `--name` (its name keeps its case).
-    Custom { name: String, value: Raw },
+    /// `refs`: the custom properties it references (fallbacks included),
+    /// noted when its text was read.
+    Var {
+        name: String,
+        value: Raw,
+        refs: Vec<String>,
+    },
+    /// A custom property `--name` (its name keeps its case), with the
+    /// custom properties its value references.
+    Custom {
+        name: String,
+        value: Raw,
+        refs: Vec<String>,
+    },
 }
 
 /// Parses a stylesheet. `Err` carries a message with the error's position.
@@ -200,11 +211,14 @@ impl<'i> DeclarationParser<'i> for Body {
         // the declaration's tokens. Only a value they refuse (one holding
         // `var()`, or an invalid one) and a custom property's value are
         // read again, as text.
+        // Filled only when the value is read as text.
+        let mut refs = Vec::new();
+        let mut var = false;
         let typed = input.parse_until_before(Delimiter::Bang, |value| {
             if !custom && let Ok(declaration) = value.try_parse(|v| typed(&lower, v)) {
                 return Ok::<_, ParseError<'i, CssError<'i>>>(Some(declaration));
             }
-            while value.next_including_whitespace_and_comments().is_ok() {}
+            var = read_as_text(value, &mut refs);
             Ok(None)
         })?;
         let declaration = match typed {
@@ -215,11 +229,13 @@ impl<'i> DeclarationParser<'i> for Body {
                     Some(Declaration::Custom {
                         name: name.as_ref().to_owned(),
                         value: Raw(text),
+                        refs,
                     })
-                } else if contains_var(&text) {
+                } else if var {
                     Some(Declaration::Var {
                         name: lower,
                         value: Raw(text),
+                        refs,
                     })
                 } else {
                     None
@@ -302,6 +318,48 @@ impl<'i> RuleBodyItemParser<'i, (), CssError<'i>> for Body {
     }
 }
 
+/// The value read once more, as text: a custom property's, or a refused
+/// one: whether it holds a `var()`, each one's name added to `refs`. Cold:
+/// ordinary declarations parse in place, and keeping this out of line keeps
+/// their path small.
+#[cold]
+#[inline(never)]
+fn read_as_text(value: &mut Parser<'_, '_>, refs: &mut Vec<String>) -> bool {
+    consume_noting_vars(value, refs)
+}
+
+/// Consumes the rest of `input`, nested blocks included: whether a
+/// `var()` appears, with each one's custom-property name added to `refs`
+/// (fallbacks included). The pre-scan bounds the nesting it recurses
+/// through.
+fn consume_noting_vars(input: &mut Parser<'_, '_>, refs: &mut Vec<String>) -> bool {
+    let mut found = false;
+    loop {
+        let (nested, var) = match input.next_including_whitespace_and_comments() {
+            Err(_) => return found,
+            Ok(Token::Function(name)) => (true, name.eq_ignore_ascii_case("var")),
+            Ok(Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock) => {
+                (true, false)
+            }
+            Ok(_) => (false, false),
+        };
+        found |= var;
+        if nested {
+            let _ = input.parse_nested_block(|inner| {
+                if var
+                    && let Ok(name) =
+                        inner.try_parse(|i| i.expect_ident().map(|name| name.as_ref().to_owned()))
+                    && name.starts_with("--")
+                {
+                    refs.push(name);
+                }
+                found |= consume_noting_vars(inner, refs);
+                Ok::<_, ParseError<()>>(())
+            });
+        }
+    }
+}
+
 /// A declaration read in place: a CSS-wide keyword or the property's
 /// value, filling the whole value. `Ok(None)`: a property bevy_markup
 /// doesn't map (dropped).
@@ -324,77 +382,6 @@ fn typed<'i>(
     let decl = property::parse_in(name, input)?;
     input.expect_exhausted()?;
     Ok(decl.map(Declaration::Value))
-}
-
-/// Walks every token of `text`, nested blocks included, while `visit`
-/// returns `true`; `visit` sees each token with the parser positioned
-/// after it (a function's arguments not yet entered).
-fn walk<'i>(
-    input: &mut Parser<'i, '_>,
-    visit: &mut dyn FnMut(&Token<'i>, &mut Parser<'i, '_>) -> bool,
-) -> bool {
-    loop {
-        let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
-            return true;
-        };
-        if !visit(&token, input) {
-            return false;
-        }
-        if matches!(
-            token,
-            Token::Function(_)
-                | Token::ParenthesisBlock
-                | Token::SquareBracketBlock
-                | Token::CurlyBracketBlock
-        ) {
-            let mut go_on = true;
-            let _ = input.parse_nested_block(|inner| {
-                go_on = walk(inner, visit);
-                Ok::<_, ParseError<()>>(())
-            });
-            if !go_on {
-                return false;
-            }
-        }
-    }
-}
-
-/// Whether `text` holds a `var()` (in any nested block).
-pub(crate) fn contains_var(text: &str) -> bool {
-    let mut input = ParserInput::new(text);
-    let mut parser = Parser::new(&mut input);
-    let mut found = false;
-    walk(&mut parser, &mut |token, _| {
-        if matches!(token, Token::Function(name) if name.eq_ignore_ascii_case("var")) {
-            found = true;
-        }
-        !found
-    });
-    found
-}
-
-/// The custom-property names `text`'s `var()`s reference, fallbacks
-/// included.
-pub(crate) fn var_names(text: &str) -> Vec<String> {
-    let mut input = ParserInput::new(text);
-    let mut parser = Parser::new(&mut input);
-    let mut names = Vec::new();
-    let mut expect_name = false;
-    walk(&mut parser, &mut |token, _| {
-        match token {
-            Token::Function(name) if name.eq_ignore_ascii_case("var") => expect_name = true,
-            Token::WhiteSpace(_) | Token::Comment(_) => {}
-            Token::Ident(name) if expect_name => {
-                if name.starts_with("--") {
-                    names.push(name.as_ref().to_owned());
-                }
-                expect_name = false;
-            }
-            _ => expect_name = false,
-        }
-        true
-    });
-    names
 }
 
 /// The `url(…)`s at `text`'s top level, as written.
