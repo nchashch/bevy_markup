@@ -1503,16 +1503,11 @@ fn resolve_url(css: &str, url: &str) -> Result<String, String> {
 }
 
 /// Problems with the stylesheet at asset path `css` (source `source`) under
-/// the asset root `root`: parse errors (lightningcss, as the `Stylesheet`
-/// loader parses) and `url()`s that don't resolve to a file.
+/// the asset root `root`: parse errors (as the `Stylesheet` loader
+/// parses) and `url()`s that don't resolve to a file.
 fn stylesheet_problems(root: &Path, css: &str, source: &str) -> Vec<String> {
-    use bevy_markup::lightningcss::stylesheet::{ParserOptions, StyleSheet};
     let mut problems = Vec::new();
-    let options = ParserOptions {
-        filename: css.to_owned(),
-        ..ParserOptions::default()
-    };
-    if let Err(err) = StyleSheet::parse(source, options) {
+    if let Err(err) = bevy_markup::style::Stylesheet::check(source) {
         problems.push(format!("{css}: {err}"));
     }
     for url in css_urls(source) {

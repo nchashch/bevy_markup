@@ -604,7 +604,7 @@ html-ui
     );
     assert!(
         start.elapsed().as_secs() < 30,
-        "the load fails before lightningcss parses it"
+        "the load fails before the parser reads it"
     );
 }
 
@@ -631,7 +631,7 @@ html-ui
     );
     assert!(
         start.elapsed().as_secs() < 30,
-        "the load fails before lightningcss parses it"
+        "the load fails before the parser reads it"
     );
 }
 
@@ -659,7 +659,7 @@ html-ui
     );
     assert!(
         start.elapsed().as_secs() < 30,
-        "the load fails before lightningcss parses it"
+        "the load fails before the parser reads it"
     );
 }
 
@@ -4245,11 +4245,11 @@ html-ui
     );
 }
 
-/// bug_0238: an `hsl()` hue that overflows to infinity panics inside
-/// lightningcss's colour conversion in debug builds (UPSTREAM U45). In a
-/// `style` attribute and in a context `var()` value the declaration is
-/// dropped (the text keeps the inherited colour); a sheet holding one
-/// fails its load, and the UI builds unstyled, as for any broken sheet.
+/// bug_0238: an `hsl()` hue that overflows to infinity panicked inside
+/// lightningcss's colour conversion in debug builds (UPSTREAM U45).
+/// bevy_markup's parser (ADR 0048) refuses a non-finite number in every
+/// build: in a `style` attribute, a context `var()` value or a sheet, the
+/// declaration is dropped and the text keeps the inherited colour.
 #[test]
 fn an_infinite_hue_never_panics_the_build() {
     let files = [
@@ -4271,19 +4271,15 @@ fn an_infinite_hue_never_panics_the_build() {
             Node::default(),
         );
     ui.settle();
-    // Release builds don't assert: the colours parse (to whatever a NaN
-    // hue gives), so only the debug build's outcome is pinned.
-    if cfg!(debug_assertions) {
-        ui.assert_dump(
-            r#"
+    ui.assert_dump(
+        r#"
 html-ui
   p
     "inline" default 16px #00ff00
   p
     "var" default 16px #00ff00
 "#,
-        );
-    }
+    );
     let mut ui = TestUi::new("infinite-hue-sheet", &files)
         .stylesheet("broken.css")
         .spawn(
@@ -4292,22 +4288,21 @@ html-ui
             Node::default(),
         );
     ui.settle();
-    if cfg!(debug_assertions) {
-        ui.assert_dump(
-            r#"
+    ui.assert_dump(
+        r#"
 html-ui
   p
-    "inline" default 16px #ffffff
+    "inline" default 16px #00ff00
   p
-    "var" default 16px #ffffff
+    "var" default 16px #00ff00
 "#,
-        );
-    }
+    );
 }
 
-/// bug_0245 / UPSTREAM U49: a NaN in `min()` panics lightningcss in every
-/// build profile. The `style` attribute, the context `var()` and the sheet
-/// are each dropped like unparseable CSS, and the app keeps running.
+/// bug_0245 / UPSTREAM U49: a NaN in `min()` panicked lightningcss in every
+/// build profile. bevy_markup's parser (ADR 0048) refuses NaN: in the
+/// `style` attribute, the context `var()` and the sheet only the
+/// declaration drops, and the rest of the sheet applies.
 #[test]
 fn a_nan_math_argument_never_panics_the_build() {
     let files = [
@@ -4343,9 +4338,9 @@ html-ui
         r#"
 html-ui
   p
-    "inline" default 16px #ffffff
+    "inline" default 16px #00ff00
   p
-    "var" default 16px #ffffff
+    "var" default 16px #00ff00
 "#,
     );
 }

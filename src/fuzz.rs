@@ -83,13 +83,10 @@ pub fn render_html(source: &str, context_json: &str) -> Result<String, String> {
     Ok(outline)
 }
 
-/// lightningcss parse + cascade over synthetic elements + the `html` root
+/// The CSS parse + cascade over synthetic elements + the `html` root
 /// box, with every `url()` bound to the fake frame image (exercises slice
 /// arithmetic and the style cache). Errors are values, not crashes.
 pub fn cascade(css: &str) -> Result<String, String> {
-    use lightningcss::stylesheet::{ParserOptions, StyleSheet};
-    use lightningcss::traits::IntoOwned;
-
     // The loader's pre-scan, so the harness parses what an app would
     // (bug_0179: without it, corpus inputs nested ~500 deep overflowed
     // the 2 MB replay threads and nested functions timed the fuzzer out,
@@ -97,13 +94,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
     if nesting_over_limit(css) {
         return Err("stylesheet nests too deeply".into());
     }
-    // Guarded as the loader's parse is (bug_0238): the known debug-only
-    // panic unwinds into it instead of aborting the fuzz target.
-    excuse_known_upstream_panics();
-    let parsed = crate::cascade::guarded_parse(|| {
-        StyleSheet::parse(css, ParserOptions::default()).map_err(|err| err.to_string())
-    })??;
-    let sheet = parsed.into_owned();
+    let sheet = crate::css::sheet::parse_sheet(css)?;
     // The load-time scans: untrusted CSS, must not panic or hang. The
     // url → handle map mirrors the loader's (skipped URLs get no entry).
     let mut images = bevy::platform::collections::HashMap::new();
@@ -519,8 +510,8 @@ pub fn svg(source: &[u8]) -> Result<String, String> {
 }
 
 /// Whether a panic is one of the known upstream panics that the fuzz
-/// targets let unwind into the library's guard (`svg::guarded`,
-/// `cascade::guarded_parse`) instead of aborting: the guard already turns
+/// targets let unwind into the library's guard (`svg::guarded`) instead
+/// of aborting: the guard already turns
 /// it into an error. `file` is the panic location's path; the crate
 /// directory name pins the version, so a bump makes the fuzzer report it
 /// again until rechecked.
@@ -528,13 +519,6 @@ pub fn svg(source: &[u8]) -> Result<String, String> {
 /// - UPSTREAM U20 (resvg #1185): resvg's turbulence overflows `i32`
 ///   lattice indices after many octaves or on a huge `baseFrequency`
 ///   (release wraps, then masks into range).
-/// - UPSTREAM U45 (bug_0238): cssparser-color's `hsl_to_rgb`
-///   `debug_assert!`s the hue lightningcss hands it, NaN for an infinite
-///   `hsl()`/`hwb()` hue.
-/// - UPSTREAM U49 (bug_0245): lightningcss's `Percentage::parse` reaches
-///   `unreachable!()` on a NaN argument to `min()`, `max()` or `clamp()`.
-///   Unlike the two above this panics in release builds too, so an app
-///   built with `panic = "abort"` still aborts on it.
 ///
 /// tiny-skia's far-off-canvas panics (U24, U27, U28) are not excused: they
 /// panic in release builds too, and `svg::check_extent` refuses their
@@ -545,13 +529,7 @@ pub fn is_known_upstream_panic(file: &str, message: &str) -> bool {
         && file.ends_with("/src/filter/turbulence.rs")
         && message.starts_with("attempt to ")
         && message.ends_with(" with overflow");
-    let hue = file.contains("/cssparser-color-0.5.0/")
-        && file.ends_with("/lib.rs")
-        && message == "assertion failed: (0.0..=1.0).contains(&hue)";
-    let nan_math = file.contains("/lightningcss-1.0.0-alpha.72/")
-        && file.ends_with("/src/values/percentage.rs")
-        && message == "internal error: entered unreachable code";
-    turbulence || hue || nan_math
+    turbulence
 }
 
 /// Makes the driver's panic hook skip the known upstream debug-only panics
@@ -739,39 +717,13 @@ mod svg_tests {
                 "U20: {panic}"
             );
         }
-        // U45 (bug_0238): an infinite hue. The harness's guard turns the
-        // panic into an error; the hook excuses exactly that assertion.
-        let hue = super::cascade("p { color: hsl(1e39 50% 50%) }");
-        if cfg!(debug_assertions) {
-            let err = hue.expect_err("U45");
-            let panic = err.trim_start_matches("the CSS parser panicked: ");
-            assert!(
-                super::is_known_upstream_panic("/r/cssparser-color-0.5.0/lib.rs", panic),
-                "U45: {err}"
-            );
-        }
-        assert!(!super::is_known_upstream_panic(
-            "/r/cssparser-color-0.6.0/lib.rs",
-            "assertion failed: (0.0..=1.0).contains(&hue)"
-        ));
-        // U49 (bug_0245): a NaN math argument, in every build profile.
-        let nan = super::cascade("p { opacity: min(1, NaN) }").expect_err("U49");
-        let panic = nan.trim_start_matches("the CSS parser panicked: ");
-        assert!(
-            super::is_known_upstream_panic(
-                "/r/lightningcss-1.0.0-alpha.72/src/values/percentage.rs",
-                panic
-            ),
-            "U49: {nan}"
-        );
-        for file in [
-            "/r/lightningcss-1.0.0-alpha.73/src/values/percentage.rs",
-            "/r/lightningcss-1.0.0-alpha.72/src/values/number.rs",
+        // bevy_markup's CSS parser (ADR 0048) refuses the inputs that
+        // panicked lightningcss (U45, U49): no panic, the declaration drops.
+        for css in [
+            "p { color: hsl(1e39 50% 50%) }",
+            "p { opacity: min(1, NaN) }",
         ] {
-            assert!(!super::is_known_upstream_panic(
-                file,
-                "internal error: entered unreachable code"
-            ));
+            assert!(super::cascade(css).is_ok(), "{css}");
         }
         // Anything else still aborts the fuzz target.
         assert!(!super::is_known_upstream_panic(

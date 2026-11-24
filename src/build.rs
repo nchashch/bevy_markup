@@ -4,6 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::css::property::{Easing as EasingFunction, StepPosition};
 use bevy::asset::{AssetEvent, AssetPath, LoadState};
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::{HashMap, HashSet};
@@ -14,7 +15,6 @@ use bevy::text::{InlineBox, InlineBoxKind};
 use bevy::text::{LetterSpacing, LineHeight};
 #[cfg(feature = "text-input")]
 use bevy::ui_widgets::TextInput;
-use lightningcss::values::easing::{EasingFunction, StepPosition};
 
 use crate::cascade::{
     self, Ancestor, CalcBasis, CalcExpr, CalcProp, CssPosition, DecorationDecl, ElementState,
@@ -7506,8 +7506,8 @@ fn collapse_runs(runs: Vec<Run>) -> Vec<Run> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::css::property::Easing as CssEasing;
     use bevy::ecs::system::RunSystemOnce;
-    use lightningcss::values::easing::EasingFunction as CssEasing;
     use std::time::Duration;
 
     /// ADR 0031: the measured heights are logical pixels — `ComputedNode`
@@ -7682,7 +7682,6 @@ mod tests {
 #[cfg(test)]
 mod ua_default_tests {
     use super::*;
-    use lightningcss::traits::IntoOwned;
 
     /// ADR 0028: a `th`'s text is bold unless a rule declares the weight
     /// (the UA sheet). The visual check needs a registered family (a
@@ -7690,12 +7689,7 @@ mod ua_default_tests {
     /// computed style is the contract here.
     #[test]
     fn th_text_is_bold_by_default() {
-        let sheet = lightningcss::stylesheet::StyleSheet::parse(
-            "th {}",
-            lightningcss::stylesheet::ParserOptions::default(),
-        )
-        .expect("css")
-        .into_owned();
+        let sheet = crate::css::sheet::parse_sheet("th {}").expect("css");
         let styles = HtmlStyles::from_sheet(&sheet);
         let fonts = FontFamilies::default();
         let images = Assets::<Image>::default();
@@ -7736,12 +7730,7 @@ mod ua_default_tests {
         );
         assert!(style.bold, "a th's text is bold by default");
         // An explicit weight wins.
-        let sheet = lightningcss::stylesheet::StyleSheet::parse(
-            "th { font-weight: normal }",
-            lightningcss::stylesheet::ParserOptions::default(),
-        )
-        .expect("css")
-        .into_owned();
+        let sheet = crate::css::sheet::parse_sheet("th { font-weight: normal }").expect("css");
         let styles = HtmlStyles::from_sheet(&sheet);
         let styler = Styler {
             styles: &styles,

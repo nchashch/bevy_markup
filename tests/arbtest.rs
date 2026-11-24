@@ -54,7 +54,7 @@ fn arbitrary_html_never_panics() {
     .size_max(1 << 14);
 }
 
-/// Arbitrary CSS: lightningcss parsing, the cascade and the box properties
+/// Arbitrary CSS: parsing, the cascade and the box properties
 /// all consume attacker-controlled stylesheets without panicking.
 #[test]
 fn arbitrary_css_never_panics() {

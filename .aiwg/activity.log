@@ -51,3 +51,4 @@
 ## [2026-11-22 21:58] update | Remeasure SVG render cost on resvg 0.50: limit unchanged, slowest accepted draw about 0.85 s
 ## [2026-11-22 22:24] update | Charge each SVG text element in the conversion work bound (bug_0248)
 ## [2026-11-24 17:21] create | ADR 0048 (Proposed): parse CSS on cssparser, phase out lightningcss
+## [2026-11-24 18:27] update | Replace lightningcss with bevy_markup's own CSS parser (ADR 0048, branch css-own-parser)

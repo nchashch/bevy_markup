@@ -1,6 +1,6 @@
-//! Selector matching on lightningcss's parsed selectors with its selector
-//! engine, parcel_selectors (ADR 0034). lightningcss parses each rule's
-//! selectors; [`Selector::from_parsed`] keeps the ones the cascade
+//! Selector matching with parcel_selectors (ADR 0034). bevy_markup's CSS
+//! parser parses each rule's selectors into parcel's types (`css::select`,
+//! ADR 0048); [`Selector::from_parsed`] keeps the ones the cascade
 //! supports (the allowlist) and records what they read; matching runs
 //! parcel's `matches_selector` over [`Node`], an `Element` implementation
 //! on the build walk's own structures: the element, its ancestor chain
@@ -9,33 +9,21 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use lightningcss::selector::{Combinator as CssCombinator, Component, PseudoClass};
 use parcel_selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
 use parcel_selectors::context::{MatchingContext, MatchingMode, QuirksMode};
 use parcel_selectors::matching::{
     CompoundSelectorMatchingResult, ElementSelectorFlags, matches_compound_selector_from,
     matches_selector,
 };
-use parcel_selectors::parser::{NthType, SelectorImpl};
+use parcel_selectors::parser::{Combinator as CssCombinator, NthType, SelectorImpl};
 use parcel_selectors::{Element, OpaqueElement};
 
 use super::{Ancestor, ElementState, Position, Pseudo, SelectorReads, SiblingList, Siblings};
+use crate::css::select::{Component, Impl, PseudoClass};
 use crate::html::HtmlElement;
 
-/// A parsed selector as lightningcss hands it over.
-type Parsed = lightningcss::selector::Selector<'static>;
-
-/// lightningcss's `SelectorImpl` lives in a private module; its public
-/// `Selector` alias names it.
-pub trait ImplOf {
-    type Impl;
-}
-
-impl<'i, I: SelectorImpl<'i>> ImplOf for parcel_selectors::parser::Selector<'i, I> {
-    type Impl = I;
-}
-
-type Impl = <Parsed as ImplOf>::Impl;
+/// A parsed selector.
+type Parsed = crate::css::select::Selector;
 
 /// A selector the cascade supports, with what it reads.
 #[derive(Clone, Debug)]
@@ -146,20 +134,12 @@ impl Selector {
         self.combinator_arguments
     }
 
-    /// Parses `text` with lightningcss (tests).
+    /// Parses `text` as one selector (tests).
     #[cfg(test)]
     pub(super) fn parse(text: &str) -> Option<Self> {
-        use lightningcss::rules::CssRule;
-        use lightningcss::stylesheet::{ParserOptions, StyleSheet};
-        use lightningcss::traits::IntoOwned;
         let css = format!("{text} {{}}");
-        let sheet = StyleSheet::parse(&css, ParserOptions::default())
-            .ok()?
-            .into_owned();
-        let CssRule::Style(rule) = sheet.rules.0.first()? else {
-            return None;
-        };
-        match rule.selectors.0.as_slice() {
+        let sheet = crate::css::sheet::parse_sheet(&css).ok()?;
+        match sheet.rules.first()?.selectors.0.as_slice() {
             [only] => Self::from_parsed(only),
             _ => None,
         }
@@ -295,7 +275,7 @@ impl PartReads {
 /// record answers by negation parity, and parcel tracks one level).
 /// `depth`: how many `:is()`/`:where()`/`:not()` arguments hold the
 /// component (0 at the selector's top level).
-fn compound_part(component: &Component<'static>, negated: bool, depth: u32) -> Option<PartReads> {
+fn compound_part(component: &Component, negated: bool, depth: u32) -> Option<PartReads> {
     let reads = |attributes, structural, pseudo| PartReads {
         attributes,
         structural,

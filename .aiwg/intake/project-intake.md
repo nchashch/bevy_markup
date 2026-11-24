@@ -30,7 +30,7 @@ A Bevy 0.20 library that turns HTML templates (Tera, or Markdown), CSS and Fluen
 |---|---|---|
 | Tera templates (the crate's `json` filter prints argument attributes), Markdown templates (pulldown-cmark, converted at load) | built | ADR 0001, 0014, 0020; CHANGELOG |
 | HTML parsing: `astral-tl` (tag soup, no tree construction); character references decoded by the HTML spec's text and attribute rules (`htmlize`) | built (htmlize since 2026-10-29; a switch to html5ever was measured and rejected) | ADR 0035, 0036 |
-| CSS selectors matched by lightningcss's engine (parcel_selectors) within an allowlist: combinators (`+`/`~` next to the subject), `:is()`/`:where()`/`:not()` with lists, structural incl. `:nth-last-*`/`:only-*`, interaction pseudo-classes, `data-*` attributes with every operator | built (engine since 2026-10-28) | ADR 0007, 0028, 0030, 0034 |
+| CSS selectors parsed and matched by parcel_selectors within an allowlist: combinators (`+`/`~` next to the subject), `:is()`/`:where()`/`:not()` with lists, structural incl. `:nth-last-*`/`:only-*`, interaction pseudo-classes, `data-*` attributes with every operator | built (engine since 2026-10-28) | ADR 0007, 0028, 0030, 0034, 0048 |
 | Sibling combinators away from the subject, non-`data-*` attributes, `:has()`, `:root` | not supported (restyle invalidation; the element model; engine gaps) | ADR 0034 |
 | Layout: flex, grid (named lines and areas), positioning, `calc()`; tables and lists on the flex model | built | ADR 0007, 0027, 0028 |
 | Text: fonts with fallback lists, `text-align`, `line-height`, `white-space`, `text-transform` (`capitalize` on Unicode word boundaries, as Chrome), decorations | built | ADR 0015, 0027, 0028 |
@@ -67,9 +67,9 @@ One developer with AI coding agents (Claude Code, omp with other models); ADRs, 
 | Dependency | Use |
 |---|---|
 | Bevy 0.20 (`default-features = false`, `ui_api` and a few more) | engine, UI, picking |
-| tera, astral-tl, lightningcss, fluent, pulldown-cmark | templates, HTML parsing, CSS, localization, Markdown |
+| tera, astral-tl, cssparser (bevy_markup's own CSS parser on it, ADR 0048), fluent, pulldown-cmark | templates, HTML parsing, CSS, localization, Markdown |
 | htmlize 1.1 (`unescape`, phf table) | character references (ADR 0036; replaced a 2,134-line generated table) |
-| parcel_selectors `=0.28.3` (lightningcss's selector engine, pinned to its version) | selector matching (ADR 0034) |
+| parcel_selectors `=0.28.3` (with `static-self`; pinned with cssparser) | selector parsing and matching (ADR 0034, 0048) |
 | fluent-syntax fork (`[patch.crates-io]`) | fixes for U1, U2 |
 | bevy_mcp_harness (`dev-tools`) | agent QA of the examples |
 | GitHub Actions (Ubuntu runner, lavapipe as the canonical renderer) | CI, nightly, mutants |

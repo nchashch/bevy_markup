@@ -11,56 +11,22 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::css::grid::{
+    GridAutoFlow as CssGridAutoFlow, GridLine, GridTemplateAreas, RepeatCount, TrackBreadth,
+    TrackList, TrackListItem, TrackSize, TrackSizing,
+};
+use crate::css::property::{Decl, Easing, Length};
+use crate::css::sheet::{Declaration, Declarations, Raw, Sheet};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::ui::{GridTrackRepetition, MaxTrackSizingFunction, MinTrackSizingFunction};
-use lightningcss::declaration::DeclarationBlock;
-use lightningcss::properties::Property;
-use lightningcss::properties::PropertyId;
-use lightningcss::properties::align::{
-    self as css_align, BaselinePosition, ContentDistribution, ContentPosition, GapValue,
-    SelfPosition,
-};
-use lightningcss::properties::border::BorderSideWidth;
-use lightningcss::properties::border_image::{
-    BorderImageRepeat, BorderImageRepeatKeyword, BorderImageSlice,
-};
-use lightningcss::properties::custom::CustomPropertyName;
-use lightningcss::properties::custom::Token;
-use lightningcss::properties::custom::{TokenList, TokenOrValue};
-use lightningcss::properties::display::{self as css_display, DisplayInside, DisplayOutside};
-use lightningcss::properties::flex as css_flex;
-use lightningcss::properties::font::{
-    AbsoluteFontSize, AbsoluteFontWeight, FontFamily, FontSize, FontStyle, FontWeight,
-    GenericFontFamily, RelativeFontSize,
-};
-use lightningcss::properties::grid::{
-    self as css_grid, RepeatCount, TrackBreadth, TrackListItem, TrackSize, TrackSizing,
-};
-use lightningcss::properties::overflow::OverflowKeyword;
-use lightningcss::properties::position as css_position;
-use lightningcss::properties::size::{self as css_size, MaxSize, Size};
-use lightningcss::properties::text::TextDecorationLine;
-use lightningcss::properties::transition::Transition;
-use lightningcss::rules::CssRule;
-use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleAttribute, StyleSheet};
-use lightningcss::traits::IntoOwned;
-use lightningcss::traits::ToCss;
-use lightningcss::values::calc::{Calc, MathFunction};
-use lightningcss::values::color::{CssColor, RGBA};
-use lightningcss::values::easing::EasingFunction;
-use lightningcss::values::ident::CustomIdent;
-use lightningcss::values::image::Image;
-use lightningcss::values::length::{LengthPercentage, LengthPercentageOrAuto, LengthValue};
-use lightningcss::values::percentage::NumberOrPercentage;
-use lightningcss::values::size::Size2D;
 use selector::Selector;
 
-use crate::fonts::{FamilyRef, GenericFamily};
+use crate::fonts::FamilyRef;
 use crate::html::HtmlElement;
 
 /// A declared `font-size`, resolved against inherited/root sizes later.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum FontSizeSpec {
     Px(f32),
     /// Multiple of the inherited size (`em`, `%`, `smaller`/`larger`).
@@ -80,7 +46,7 @@ impl FontSizeSpec {
 }
 
 /// One `border-image-slice` offset.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum SliceValue {
     /// Image pixels (a plain number).
     Px(f32),
@@ -90,7 +56,7 @@ pub(crate) enum SliceValue {
 
 /// Declared `border-image` (shorthand and/or longhands; each part optional so
 /// longhands override parts of an earlier shorthand).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct BorderImageDecl {
     /// The `url(...)` as written; `Some(None)` = `none`.
     pub source: Option<Option<String>>,
@@ -198,14 +164,14 @@ enum Side {
     End,
 }
 
-/// A calc() expression, flattened from lightningcss's `Calc` AST: sums,
+/// A calc() expression, as `css::value` folds it (numbers folded into
+/// the terms, same-unit terms combined): sums,
 /// products by a number, min()/max()/clamp(), and leaves in the units
 /// `Val` carries. Anything else (round()/mod()/abs()/…, bare constants in
 /// sums) is skipped at parse with a debug log.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CalcExpr {
     Val(Val),
-    Number(f32),
     Sum(Box<CalcExpr>, Box<CalcExpr>),
     /// A product: the expression times a number (`/ n` is `× 1/n`).
     Product(f32, Box<CalcExpr>),
@@ -268,7 +234,6 @@ impl CalcExpr {
     pub fn collapse(&self) -> Option<Val> {
         match self {
             CalcExpr::Val(val) => Some(val.clone()),
-            CalcExpr::Number(_) => None,
             CalcExpr::Sum(a, b) => match (a.collapse()?, b.collapse()?) {
                 (Val::Px(a), Val::Px(b)) => Some(Val::Px(a + b)),
                 (Val::Em(a), Val::Em(b)) => Some(Val::Em(a + b)),
@@ -317,7 +282,6 @@ impl CalcExpr {
             CalcExpr::Val(Val::VMin(f)) => Some(f / 100.0 * basis.viewport.x.min(basis.viewport.y)),
             CalcExpr::Val(Val::VMax(f)) => Some(f / 100.0 * basis.viewport.x.max(basis.viewport.y)),
             CalcExpr::Val(_) => None,
-            CalcExpr::Number(n) => Some(*n),
             CalcExpr::Sum(a, b) => {
                 Some(a.resolve(basis, horizontal)? + b.resolve(basis, horizontal)?)
             }
@@ -1110,9 +1074,9 @@ pub(crate) struct TransitionDecl {
     pub duration: f32,
     /// Seconds, before the animation starts.
     pub delay: f32,
-    /// lightningcss's parsed easing curve (`linear`, the named curves, and
-    /// `cubic-bezier(a, b, c, d)`).
-    pub easing: EasingFunction,
+    /// The easing curve (`linear`, the named curves, `cubic-bezier()`,
+    /// `steps()`).
+    pub easing: Easing,
 }
 
 /// Declared `outline` parts (each optional so longhands override parts of
@@ -1130,31 +1094,26 @@ pub(crate) struct OutlineDecl {
     pub offset: Option<f32>,
 }
 
-/// Every `border-image-source` URL in `sheet`, as written.
-pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
+/// Every `border-image-source` and background URL in `sheet`, as written.
+pub(crate) fn image_urls(sheet: &Sheet) -> Vec<String> {
     let mut urls = Vec::new();
-    for rule in &sheet.rules.0 {
-        let CssRule::Style(rule) = rule else {
-            continue;
-        };
-        let declarations = rule
-            .declarations
-            .declarations
-            .iter()
-            .chain(&rule.declarations.important_declarations);
-        for declaration in declarations {
+    for rule in &sheet.rules {
+        for declaration in rule.declarations.iter() {
             // ADR 0028: a background image is a sheet dependency like a
             // border-image's (a schemed URL is skipped by the loader, so
             // the rest of the sheet applies).
-            let image = match declaration {
-                Property::BorderImage(border_image, _) => Some(&border_image.source),
-                Property::BorderImageSource(image) => Some(image),
-                Property::BackgroundImage(images) => images.first(),
-                Property::Background(backgrounds) => backgrounds.first().map(|layer| &layer.image),
+            let url = match declaration {
+                Declaration::Value(Decl::BorderImage(border_image)) => {
+                    border_image.source.clone().flatten()
+                }
+                Declaration::Value(
+                    Decl::BorderImageSource(url)
+                    | Decl::BackgroundImage(url)
+                    | Decl::Background { image: url, .. },
+                ) => url.clone(),
                 _ => None,
             };
-            let Some(image) = image else { continue };
-            if let Some(url) = image_url(image)
+            if let Some(url) = url
                 && !urls.contains(&url)
             {
                 urls.push(url);
@@ -1170,27 +1129,16 @@ pub(crate) fn image_urls(sheet: &StyleSheet) -> Vec<String> {
 /// scheme the resolver rejects) — the loader skips the unresolvable ones
 /// instead of failing the sheet (the `var()` consumer drops the
 /// declaration then, like any unresolvable reference).
-pub(crate) fn custom_image_urls(sheet: &StyleSheet) -> Vec<String> {
+pub(crate) fn custom_image_urls(sheet: &Sheet) -> Vec<String> {
     let mut urls = Vec::new();
-    for rule in &sheet.rules.0 {
-        let CssRule::Style(rule) = rule else {
-            continue;
-        };
-        let declarations = rule
-            .declarations
-            .declarations
-            .iter()
-            .chain(&rule.declarations.important_declarations);
-        for declaration in declarations {
-            let Property::Custom(custom) = declaration else {
+    for rule in &sheet.rules {
+        for declaration in rule.declarations.iter() {
+            let Declaration::Custom { value, .. } = declaration else {
                 continue;
             };
-            for token in &custom.value.0 {
-                if let TokenOrValue::Url(url) = token {
-                    let url = url.url.to_string();
-                    if !urls.contains(&url) {
-                        urls.push(url);
-                    }
+            for url in crate::css::sheet::urls(&value.0) {
+                if !urls.contains(&url) {
+                    urls.push(url);
                 }
             }
         }
@@ -1204,43 +1152,21 @@ pub(crate) fn custom_image_urls(sheet: &StyleSheet) -> Vec<String> {
 /// declaration contributes `--brand` when `--a` is itself referenced.
 /// A name a sheet-level `--` declaration references but nothing reads is
 /// not tracked. Computed once at load (cached on `Stylesheet`).
-pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
+pub(crate) fn var_names(sheet: &Sheet) -> Vec<String> {
     let mut names = BTreeSet::new();
     // The sheet's `--` declarations: name → the `var()` names their
     // values reference (joined into the set by the fixpoint below).
     let mut declarations: Vec<(String, Vec<String>)> = Vec::new();
-    for rule in sheet.rules.0.iter() {
-        let CssRule::Style(rule) = rule else {
-            continue;
-        };
-        for declaration in rule
-            .declarations
-            .declarations
-            .iter()
-            .chain(&rule.declarations.important_declarations)
-        {
+    for rule in &sheet.rules {
+        for declaration in rule.declarations.iter() {
             match declaration {
-                Property::Unparsed(unparsed) => {
-                    collect_var_names(&unparsed.value, &mut names);
+                Declaration::Var { value, .. } => {
+                    names.extend(crate::css::sheet::var_names(&value.0));
                 }
-                Property::Custom(custom) => {
-                    let mut refs = BTreeSet::new();
-                    collect_var_names(&custom.value, &mut refs);
-                    match &custom.name {
-                        CustomPropertyName::Custom(dashed) => {
-                            if !refs.is_empty() {
-                                declarations.push((
-                                    dashed.0.as_ref().to_owned(),
-                                    refs.into_iter().collect(),
-                                ));
-                            }
-                        }
-                        // An unknown property the build reads raw
-                        // (`pointer-events`, `outline-offset`): its refs
-                        // are direct dependencies of the declaration.
-                        CustomPropertyName::Unknown(_) => {
-                            names.extend(refs);
-                        }
+                Declaration::Custom { name, value } => {
+                    let refs = crate::css::sheet::var_names(&value.0);
+                    if !refs.is_empty() {
+                        declarations.push((name.clone(), refs));
                     }
                 }
                 _ => {}
@@ -1262,22 +1188,6 @@ pub(crate) fn var_names(sheet: &StyleSheet) -> Vec<String> {
         }
     }
     names.into_iter().collect()
-}
-
-/// The `var()` names a token list references, function arguments included.
-fn collect_var_names(tokens: &TokenList, names: &mut BTreeSet<String>) {
-    for token in &tokens.0 {
-        match token {
-            TokenOrValue::Var(variable) => {
-                names.insert(variable.name.ident.as_ref().to_owned());
-                if let Some(fallback) = &variable.fallback {
-                    collect_var_names(fallback, names);
-                }
-            }
-            TokenOrValue::Function(function) => collect_var_names(&function.arguments, names),
-            _ => {}
-        }
-    }
 }
 
 /// Interaction pseudo-classes a compound selector requires: the rule only
@@ -1352,56 +1262,22 @@ impl Ancestor {
 /// element only, after every normal rule and — for `!important` ones — after
 /// every rule.
 #[derive(Debug)]
-pub(crate) struct InlineStyle(DeclarationBlock<'static>);
+pub(crate) struct InlineStyle(Declarations);
 
 impl InlineStyle {
-    /// The `var(--name)` names the declarations reference, from
-    /// lightningcss's *parsed* tokens: the raw text scan missed
-    /// non-ASCII names (`--café`) and escapes (review_0003 G30).
+    /// The `var(--name)` names the declarations reference, read from
+    /// cssparser's tokens (a raw text scan missed non-ASCII names
+    /// (`--café`) and escapes, review_0003 G30).
     pub(crate) fn var_names(&self) -> BTreeSet<String> {
         let mut names = BTreeSet::new();
-        let block = &self.0;
-        for declaration in block
-            .declarations
-            .iter()
-            .chain(&block.important_declarations)
-        {
-            match declaration {
-                Property::Unparsed(unparsed) => collect_var_names(&unparsed.value, &mut names),
-                Property::Custom(custom) => collect_var_names(&custom.value, &mut names),
-                _ => {}
+        for declaration in self.0.iter() {
+            if let Declaration::Var { value, .. } | Declaration::Custom { value, .. } = declaration
+            {
+                names.extend(crate::css::sheet::var_names(&value.0));
             }
         }
         names
     }
-}
-
-/// Runs a lightningcss parse, turning a panic into an error (bug_0238).
-/// lightningcss 1.0.0-alpha.72 hands cssparser-color's `hsl_to_rgb` a NaN
-/// hue when an `hsl()`/`hwb()` hue is infinite (`hsl(1e39 50% 50%)`,
-/// `calc(infinity)`, arithmetic that overflows), and that function
-/// `debug_assert!`s its range (UPSTREAM U45): a panic in every debug
-/// build, from any CSS text. No scan of the text can refuse every route
-/// to an infinite hue without evaluating `calc()`, so the parse is
-/// guarded, as usvg and resvg are (`svg::guarded`). The callers — the
-/// sheet loader, a `style` attribute, a substituted `var()` value — treat
-/// the error like unparseable CSS.
-///
-/// The same guard covers a panic in every build profile (bug_0245,
-/// UPSTREAM U49): a NaN argument to `min()`, `max()` or `clamp()` reaches an
-/// `unreachable!()` in `Percentage::parse`, and NaN is also computed
-/// (`sqrt(-1)`, `mod(1, 0)`), so no text scan refuses it. With
-/// `panic = "abort"` nothing can catch that one: such an app aborts on
-/// this CSS until lightningcss is fixed.
-pub(crate) fn guarded_parse<T>(parse: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse)).map_err(|payload| {
-        let message = payload
-            .downcast_ref::<&str>()
-            .map(|message| message.to_string())
-            .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "(no message)".to_string());
-        format!("the CSS parser panicked: {message}")
-    })
 }
 
 /// `tag`'s `style` attribute, if it has declarations.
@@ -1413,15 +1289,8 @@ pub(crate) fn inline_style(tag: &tl::HTMLTag) -> Option<InlineStyle> {
         debug!("html css: style attribute nests too deeply: {text:?}");
         return None;
     }
-    let parsed = guarded_parse(|| {
-        StyleAttribute::parse(&text, ParserOptions::default())
-            .map(|attribute| attribute.declarations.into_owned())
-            .map_err(|error| error.to_string())
-    })
-    .and_then(|parsed| parsed);
-    match parsed {
-        Ok(block) => (!block.declarations.is_empty() || !block.important_declarations.is_empty())
-            .then_some(InlineStyle(block)),
+    match crate::css::sheet::parse_declarations(&text) {
+        Ok(block) => (!block.is_empty()).then_some(InlineStyle(block)),
         Err(error) => {
             debug!("html css: invalid style attribute ({error}): {text:?}");
             None
@@ -1434,7 +1303,7 @@ struct Rule<'a> {
     selector: Selector,
     /// Sort key: importance, then specificity, then source order.
     rank: (bool, (u32, u32, u32), usize),
-    declarations: &'a [Property<'static>],
+    declarations: &'a [Declaration],
 }
 
 /// What a sheet's selectors read beyond tag/id/classes/pseudo-state.
@@ -1486,7 +1355,7 @@ pub(crate) struct HtmlStyles<'a> {
     /// The sheet's custom properties (`--x: …`, any top-level rule; last
     /// declaration wins): what `var(--x)` falls back to after the UI's
     /// [`TemplateContext`](crate::html::TemplateContext).
-    variables: HashMap<String, TokenList<'static>>,
+    variables: HashMap<String, Raw>,
     /// The context's values by name, per UI (per build). Looked up before
     /// `variables`; values interpolate as written (strings raw, numbers
     /// and bools as their CSS spelling). `None` = no context.
@@ -1511,48 +1380,27 @@ impl<'a> HtmlStyles<'a> {
         self
     }
 
-    pub fn from_sheet(sheet: &'a StyleSheet<'static>) -> Self {
+    pub fn from_sheet(sheet: &'a Sheet) -> Self {
         let mut rules = Vec::new();
-        let mut variables: HashMap<String, TokenList<'static>> = HashMap::default();
+        let mut variables: HashMap<String, Raw> = HashMap::default();
         let mut combinator_arguments = 0;
         let mut over_combinator_budget = false;
-        for (order, rule) in sheet.rules.0.iter().enumerate() {
-            let CssRule::Style(rule) = rule else {
-                // ADR 0028: an `@font-face` rule (or any other at-rule) is
-                // skipped with a note — the crate's fonts come from the
-                // `FontFamilies` resource, and a copied web stylesheet
-                // must not fail its whole load over one.
-                if matches!(rule, CssRule::FontFace(_)) {
-                    debug!(
-                        "html css: @font-face is a no-op (register the family in the                          `FontFamilies` resource instead)"
-                    );
-                }
-                continue;
-            };
+        for (order, rule) in sheet.rules.iter().enumerate() {
             // Custom properties (`--x: …`) are sheet-level here, whatever
             // rule they sit in (last wins): this cascade has no
             // per-element custom-property inheritance. Collected before
             // selector filtering, so a rule with an unsupported selector
             // still registers its variables.
-            for declaration in rule
-                .declarations
-                .declarations
-                .iter()
-                .chain(&rule.declarations.important_declarations)
-            {
-                if let Property::Custom(custom) = declaration {
-                    if let CustomPropertyName::Custom(name) = &custom.name {
-                        variables.insert(name.0.as_ref().to_owned(), custom.value.clone());
-                    }
+            for declaration in rule.declarations.iter() {
+                if let Declaration::Custom { name, value } = declaration {
+                    variables.insert(name.clone(), value.clone());
                 }
             }
             for selector in rule.selectors.0.iter() {
                 let Some(selector) = Selector::from_parsed(selector) else {
                     debug!(
                         "html css: skipping unsupported selector `{}`",
-                        selector
-                            .to_css_string(PrinterOptions::default())
-                            .unwrap_or_default()
+                        cssparser::ToCss::to_css_string(selector)
                     );
                     continue;
                 };
@@ -1575,8 +1423,8 @@ impl<'a> HtmlStyles<'a> {
                 }
                 let specificity = selector.specificity();
                 for (important, declarations) in [
-                    (false, &rule.declarations.declarations),
-                    (true, &rule.declarations.important_declarations),
+                    (false, &rule.declarations.normal),
+                    (true, &rule.declarations.important),
                 ] {
                     if declarations.is_empty() {
                         continue;
@@ -1743,25 +1591,13 @@ impl<'a> HtmlStyles<'a> {
         };
         for declaration in rules(normal)
             .into_iter()
-            .chain(&block.declarations)
+            .chain(&block.normal)
             .chain(rules(important))
-            .chain(&block.important_declarations)
+            .chain(&block.important)
         {
             apply_resolved(&mut style, declaration, &self.variables, self.context);
         }
         style
-    }
-}
-
-/// CSS `overflow` per axis (ADR 0027: `auto` keeps its own declaration —
-/// the build clips and the promotion system scrolls if needed).
-fn overflow_axis(keyword: &OverflowKeyword) -> OverflowAxisDecl {
-    match keyword {
-        OverflowKeyword::Visible => OverflowAxisDecl::Visible,
-        OverflowKeyword::Hidden => OverflowAxisDecl::Hidden,
-        OverflowKeyword::Clip => OverflowAxisDecl::Clip,
-        OverflowKeyword::Scroll => OverflowAxisDecl::Scroll,
-        OverflowKeyword::Auto => OverflowAxisDecl::Auto,
     }
 }
 
@@ -1773,150 +1609,6 @@ fn bevy_overflow(axis: OverflowAxisDecl) -> OverflowAxis {
         OverflowAxisDecl::Hidden | OverflowAxisDecl::Auto => OverflowAxis::Hidden,
         OverflowAxisDecl::Clip => OverflowAxis::Clip,
         OverflowAxisDecl::Scroll => OverflowAxis::Scroll,
-    }
-}
-
-/// `text-transform` (ADR 0028): the four case mappings; lightningcss's
-/// other variants (`full-width`, `full-size-kana`) drop the declaration.
-fn text_transform_decl(
-    transform: &lightningcss::properties::text::TextTransform,
-) -> Option<TextTransformSpec> {
-    use lightningcss::properties::text::TextTransform as Css;
-    match transform {
-        Css { case, .. }
-            if *case == lightningcss::properties::text::TextTransformCase::None
-                && transform.other
-                    == lightningcss::properties::text::TextTransformOther::empty() =>
-        {
-            Some(TextTransformSpec::None)
-        }
-        Css {
-            case: lightningcss::properties::text::TextTransformCase::Uppercase,
-            other,
-        } if *other == lightningcss::properties::text::TextTransformOther::empty() => {
-            Some(TextTransformSpec::Uppercase)
-        }
-        Css {
-            case: lightningcss::properties::text::TextTransformCase::Lowercase,
-            other,
-        } if *other == lightningcss::properties::text::TextTransformOther::empty() => {
-            Some(TextTransformSpec::Lowercase)
-        }
-        Css {
-            case: lightningcss::properties::text::TextTransformCase::Capitalize,
-            other,
-        } if *other == lightningcss::properties::text::TextTransformOther::empty() => {
-            Some(TextTransformSpec::Capitalize)
-        }
-        // full-width / full-size-kana / mixed forms: unsupported.
-        _ => unsupported("text-transform value"),
-    }
-}
-
-/// `white-space` (ADR 0028): the four forms the crate distinguishes;
-/// `break-spaces`/`pre-line` drop the declaration.
-fn white_space_decl(
-    white_space: &lightningcss::properties::text::WhiteSpace,
-) -> Option<WhiteSpaceSpec> {
-    use lightningcss::properties::text::WhiteSpace as Css;
-    match white_space {
-        Css::Normal => Some(WhiteSpaceSpec::Normal),
-        Css::Pre => Some(WhiteSpaceSpec::Preserve),
-        Css::NoWrap => Some(WhiteSpaceSpec::NoWrap),
-        Css::PreWrap => Some(WhiteSpaceSpec::PreserveWrap),
-        Css::BreakSpaces | Css::PreLine => unsupported("white-space value"),
-    }
-}
-
-/// `text-align` (ADR 0027): `Start`/`End` map to `Left`/`Right` (the
-/// crate's text is LTR; there is no `direction` support).
-fn text_align(align: lightningcss::properties::text::TextAlign) -> Option<TextAlignSpec> {
-    use lightningcss::properties::text::TextAlign as Css;
-    match align {
-        Css::Start | Css::Left => Some(TextAlignSpec::Left),
-        Css::End | Css::Right => Some(TextAlignSpec::Right),
-        Css::Center => Some(TextAlignSpec::Center),
-        Css::Justify => Some(TextAlignSpec::Justify),
-        // `match-parent`/`justify-all` need `direction`/`text-justify`
-        // support the crate doesn't have: drop the declaration.
-        Css::MatchParent | Css::JustifyAll => unsupported("text-align value"),
-    }
-}
-
-/// `line-height` (ADR 0027): a multiplier inherits re-multiplied per
-/// element (`normal`, a unitless number, `%`, `em`); a length inherits as
-/// pixels (`px`, `rem`; other absolute units convert; viewport units are
-/// unsupported and drop the declaration).
-fn line_height_decl(
-    line_height: &lightningcss::properties::font::LineHeight,
-) -> Option<LineHeightSpec> {
-    use lightningcss::properties::font::LineHeight as Css;
-    match line_height {
-        Css::Normal => Some(LineHeightSpec::Normal),
-        Css::Number(number) => Some(LineHeightSpec::Relative(*number)),
-        Css::Length(LengthPercentage::Dimension(length)) => match length {
-            LengthValue::Px(px) => Some(LineHeightSpec::Px(*px)),
-            // `em` is a multiple of the element's own font size — the
-            // same computation a unitless number is.
-            LengthValue::Em(em) => Some(LineHeightSpec::Relative(*em)),
-            LengthValue::Rem(rem) => Some(LineHeightSpec::Rem(*rem)),
-            length => {
-                // Other absolute units (pt, cm, …) convert; relative ones
-                // (vw, …) drop the declaration.
-                length.to_px().map(|px| LineHeightSpec::Px(px))
-            }
-        },
-        // A percentage of the element's font size: the same computation a
-        // unitless number is.
-        Css::Length(LengthPercentage::Percentage(percentage)) => {
-            Some(LineHeightSpec::Relative(percentage.0))
-        }
-        Css::Length(LengthPercentage::Calc(_)) => unsupported("line-height calc()"),
-    }
-}
-
-/// `letter-spacing` (ADR 0027): the computed length inherits; `normal` is
-/// zero. Viewport units are unsupported and drop the declaration.
-fn letter_spacing_decl(
-    spacing: &lightningcss::properties::text::Spacing,
-) -> Option<LetterSpacingSpec> {
-    match spacing {
-        lightningcss::properties::text::Spacing::Normal => Some(LetterSpacingSpec::Normal),
-        lightningcss::properties::text::Spacing::Length(length) => match length {
-            lightningcss::values::length::Length::Value(value) => match value {
-                LengthValue::Px(px) => Some(LetterSpacingSpec::Px(*px)),
-                LengthValue::Em(em) => Some(LetterSpacingSpec::Em(*em)),
-                LengthValue::Rem(rem) => Some(LetterSpacingSpec::Rem(*rem)),
-                value => value.to_px().map(LetterSpacingSpec::Px),
-            },
-            // `letter-spacing: calc(…)` (a length calc) — unsupported
-            // (drops the declaration, like the other calc properties do
-            // when unresolvable at apply time).
-            lightningcss::values::length::Length::Calc(_) => unsupported("letter-spacing calc()"),
-        },
-    }
-}
-
-/// `list-style-type` (ADR 0027): the four marker kinds the crate draws
-/// plus `none`; an explicit marker string or another counter style drops
-/// the declaration.
-fn list_style_decl(
-    list_style: &lightningcss::properties::list::ListStyleType,
-) -> Option<ListStyleSpec> {
-    use lightningcss::properties::list::PredefinedCounterStyle;
-    use lightningcss::properties::list::{CounterStyle, ListStyleType as Css};
-    match list_style {
-        Css::None => Some(ListStyleSpec::None),
-        Css::CounterStyle(CounterStyle::Predefined(style)) => match style {
-            PredefinedCounterStyle::Disc => Some(ListStyleSpec::Disc),
-            PredefinedCounterStyle::Circle => Some(ListStyleSpec::Circle),
-            PredefinedCounterStyle::Square => Some(ListStyleSpec::Square),
-            PredefinedCounterStyle::Decimal | PredefinedCounterStyle::DecimalLeadingZero => {
-                Some(ListStyleSpec::Decimal)
-            }
-            _ => unsupported("list-style-type counter style"),
-        },
-        Css::CounterStyle(_) | Css::String(_) => unsupported("list-style-type counter style"),
     }
 }
 
@@ -2027,76 +1719,22 @@ pub(crate) fn layout_field(layout: &mut LayoutDecl, prop: CalcProp, value: Val) 
 /// show through).
 fn apply_resolved(
     style: &mut ElementStyle,
-    declaration: &Property<'static>,
-    variables: &HashMap<String, TokenList<'static>>,
+    declaration: &Declaration,
+    variables: &HashMap<String, Raw>,
     context: Option<&dyn Fn(&str) -> Option<String>>,
 ) {
-    // `initial`/`inherit`/`unset`/`revert` arrive as unparsed bare
-    // keywords: the field returns to its initial value (the cascade has
-    // no parent computed style, so `inherit`/`unset` on inherited
-    // properties resolve to it too — documented deviation). Unknown
-    // properties (`pointer-events`, `outline-offset`) arrive as a Custom
-    // with an Unknown name: a bare keyword there takes the same path, or
-    // it fell through to substitution and F38's keep-earlier rule kept
-    // the old value (review_0003 G32).
-    let custom_keyword = if let Property::Custom(custom) = declaration
-        && matches!(&custom.name, CustomPropertyName::Unknown(_))
-        && custom.value.0.len() == 1
-        && let TokenOrValue::Token(token) = &custom.value.0[0]
-        && matches!(token, Token::Ident(ident)
-            if matches!(ident.as_ref().to_ascii_lowercase().as_str(),
-                "initial" | "inherit" | "unset" | "revert"))
-    {
-        Some(PropertyId::Custom(custom.name.clone()))
-    } else {
-        None
-    };
-    if custom_keyword.is_some() {
-        apply_keyword(style, custom_keyword.as_ref().unwrap());
-        return;
-    }
-    if let Property::Unparsed(unparsed) = declaration
-        && unparsed.value.0.len() == 1
-        && let TokenOrValue::Token(token) = &unparsed.value.0[0]
-        && matches!(token, Token::Ident(ident)
-            if matches!(ident.as_ref().to_ascii_lowercase().as_str(),
-                "initial" | "inherit" | "unset" | "revert"))
-    {
-        apply_keyword(style, &unparsed.property_id);
-        return;
-    }
-    // The tokens to substitute: an unparsed value, or an unknown/custom
-    // property's raw tokens (`pointer-events` has no typed form in
-    // lightningcss and arrives as a custom property).
-    let (reparse, tokens) = match declaration {
-        Property::Unparsed(unparsed) => {
-            if !contains_var(&unparsed.value) {
-                apply(style, declaration);
-                return;
-            }
-            (Some(unparsed.property_id.clone()), &unparsed.value)
-        }
-        Property::Custom(custom) => {
-            if !contains_var(&custom.value) {
-                apply(style, declaration);
-                return;
-            }
-            // A dashed custom declaration's substituted value is re-parsed
-            // and discarded (`apply` has no arm for it — the consumers
-            // resolve against the raw sheet values), so it is never
-            // substituted, consumed or not: a 2000-link consumed chain
-            // cost 3.45 s per element (review_0003 G29). Unknown names
-            // (`pointer-events`) map to real properties and substitute.
-            match &custom.name {
-                CustomPropertyName::Custom(_) => return,
-                CustomPropertyName::Unknown(_) => {}
-            }
-            (Some(PropertyId::Custom(custom.name.clone())), &custom.value)
-        }
-        _ => {
-            apply(style, declaration);
-            return;
-        }
+    let (name, value) = match declaration {
+        Declaration::Value(decl) => return apply(style, decl),
+        // `initial`/`inherit`/`unset`/`revert`: the field returns to its
+        // initial value (the cascade has no parent computed style, so
+        // `inherit`/`unset` on inherited properties resolve to it too —
+        // documented deviation).
+        Declaration::Keyword(name) => return apply_keyword(style, name),
+        // A custom declaration is never substituted on its own: the
+        // consumers resolve against the raw sheet values (a 2000-link
+        // consumed chain cost 3.45 s per element, review_0003 G29).
+        Declaration::Custom { .. } => return,
+        Declaration::Var { name, value } => (name, value),
     };
     let mut substitution = Substitution {
         variables,
@@ -2108,7 +1746,7 @@ fn apply_resolved(
         depth: 0,
         depth_failure: false,
     };
-    let Some(text) = substitution.substitute(tokens) else {
+    let Some(text) = substitution.substitute(&value.0) else {
         debug!("html css: `var()` substitution failed");
         return;
     };
@@ -2116,26 +1754,10 @@ fn apply_resolved(
         debug!("html css: substituted value nests too deeply: {text:?}");
         return;
     }
-    let parsed = guarded_parse(|| {
-        Property::parse_string(reparse.unwrap(), &text, ParserOptions::default())
-            .map(|property| property.into_owned())
-            .ok()
-    });
-    match parsed {
-        Ok(Some(property)) => apply(style, &property),
-        Ok(None) | Err(_) => {
-            debug!("html css: `var()` substitution produced an invalid value: {text:?}");
-        }
+    match crate::css::property::parse(name, &text) {
+        Some(decl) => apply(style, &decl),
+        None => debug!("html css: `var()` substitution produced an invalid value: {text:?}"),
     }
-}
-
-/// Whether any `var()` appears in the tokens (function arguments included).
-fn contains_var(tokens: &TokenList) -> bool {
-    tokens.0.iter().any(|token| match token {
-        TokenOrValue::Var(_) => true,
-        TokenOrValue::Function(function) => contains_var(&function.arguments),
-        _ => false,
-    })
 }
 
 /// The total substitution output one declaration may produce: a `var()`
@@ -2154,27 +1776,25 @@ const MAX_VAR_DEPTH: usize = 64;
 /// The nesting pre-scan's bound (see `nesting_over_limit`): far beyond
 /// any authored CSS (a nested rule inside `@media` inside `@supports`
 /// with a `calc(min(…))` value is ~6), but a few thousand blocks are
-/// rejected before lightningcss's own unbounded parser sees them.
+/// rejected before the parsers, which recurse once per block, see them.
 pub(crate) const MAX_CSS_NESTING: usize = 32;
 /// The pre-scan's bound on `(…)` blocks alone (functions included):
 /// authored values nest ~4 (`calc(var(--a) * clamp(1px, calc(…), 3px))`).
-/// lightningcss re-parses some functions' arguments on failure, so its
-/// parse time doubles per level: nested `light-dark(` (lightningcss#1382)
-/// and `calc(` around a `var()` (#1389) took 0.55 s at depth 18 and hours
-/// at 32 (bug_0179). At 8 the worst case is ~0.3 ms per declaration.
+/// lightningcss, the parser before ADR 0048, re-parsed some functions'
+/// arguments on failure, so its parse time doubled per level (bug_0179);
+/// the bound stays as a cap on every parser's recursion.
 pub(crate) const MAX_CSS_PAREN_NESTING: usize = 8;
 
 /// Whether `text` nests blocks — `(…)` (functions included), `[…]` and
 /// `{…}` (nested style rules) — deeper than `MAX_CSS_NESTING`, or `(…)`
-/// blocks alone deeper than `MAX_CSS_PAREN_NESTING`. lightningcss's
-/// parser recurses once per block with no bound, so a few KB of `((((`
-/// or of nested rules `a { a { …` abort the app at parse time, and a
-/// few hundred bytes of nested functions can take hours (bug_0179);
-/// sheet sources, `style=` attributes and substituted `var()` values
-/// are scanned before it (review_0003 G08, review_0004 H02).
+/// blocks alone deeper than `MAX_CSS_PAREN_NESTING`. The CSS parsers
+/// (`crate::css`) recurse once per nested block, so sheet sources,
+/// `style=` attributes and substituted `var()` values are scanned before
+/// them (review_0003 G08, review_0004 H02; under lightningcss, a few KB
+/// of `((((` aborted the app and nested functions took hours, bug_0179).
 ///
 /// The blocks are cssparser's own: the scan walks the tokens of the
-/// tokenizer lightningcss parses with (the same cssparser version), so
+/// tokenizer the parsers read (the same cssparser), so
 /// strings, comments, escapes, names and `url(…)` tokens hide or count
 /// exactly what they do for the parser. A hand-written scan of the same
 /// tokens disagreed with it twice (bug_0183, bug_0184). Recursion is
@@ -2212,19 +1832,6 @@ pub(crate) fn nesting_over_limit(text: &str) -> bool {
     over(&mut Parser::new(&mut input), 0, 0)
 }
 
-/// A compile-time check that the pre-scan's cssparser is lightningcss's
-/// (ADR 0039): lightningcss's `Parse::parse` takes a `cssparser::Parser`,
-/// and this hands it ours, which type-checks only when both are the same
-/// crate. If a lightningcss release moves to another cssparser, Cargo keeps
-/// two copies and every build (apps that depend on bevy_markup included)
-/// fails here with a type mismatch: bump the `cssparser` pin in
-/// `Cargo.toml` to lightningcss's. Never called.
-#[allow(dead_code)]
-fn pre_scan_tokenizes_with_lightningcss_cssparser(input: &mut cssparser::Parser<'_, '_>) {
-    use lightningcss::traits::Parse;
-    let _ = lightningcss::values::number::CSSNumber::parse(input);
-}
-
 /// The total recursion bound of one declaration's `var()` substitution
 /// (`substitute` → function arguments / fallbacks → `var`): every level
 /// of nesting is a stack frame, and content can nest ~500 levels per
@@ -2239,7 +1846,7 @@ const MAX_SUBSTITUTE_DEPTH: usize = 256;
 /// output is budget-capped. Linear in the sheet, where the naive
 /// depth-bounded recursion was exponential.
 struct Substitution<'a> {
-    variables: &'a HashMap<String, TokenList<'static>>,
+    variables: &'a HashMap<String, Raw>,
     context: &'a dyn Fn(&str) -> Option<String>,
     /// Resolved values by name; `None` = unresolvable (memoized). Keys
     /// are owned: the names borrow the tokens being substituted.
@@ -2292,7 +1899,7 @@ impl<'a> Substitution<'a> {
             let value = self
                 .variables
                 .get(name)
-                .and_then(|tokens| self.substitute(tokens));
+                .and_then(|raw| self.substitute(&raw.0));
             self.resolving.pop();
             // A cycle member is invalid even when a fallback rescued its
             // own text.
@@ -2307,28 +1914,55 @@ impl<'a> Substitution<'a> {
         value
     }
 
-    /// The tokens' CSS text with every `var()` replaced, else `None`
-    /// (unresolvable, over budget, or past the recursion bound). All
-    /// recursion (function arguments, fallbacks, chained `var()`)
-    /// funnels through here, so one counter bounds the stack.
-    fn substitute(&mut self, tokens: &TokenList) -> Option<String> {
+    /// `text` with every `var()` replaced, else `None` (unresolvable,
+    /// over budget, or past the recursion bound). All recursion (nested
+    /// blocks, fallbacks, chained `var()`) funnels through here, so one
+    /// counter bounds the stack.
+    fn substitute(&mut self, text: &str) -> Option<String> {
+        let mut input = cssparser::ParserInput::new(text);
+        let mut parser = cssparser::Parser::new(&mut input);
+        self.substitute_tokens(&mut parser)
+    }
+
+    fn substitute_tokens(&mut self, input: &mut cssparser::Parser<'_, '_>) -> Option<String> {
         if self.depth >= MAX_SUBSTITUTE_DEPTH {
             self.depth_failure = true;
             return None;
         }
         self.depth += 1;
-        let result = self.substitute_inner(tokens);
+        let result = self.substitute_inner(input);
         self.depth -= 1;
         result
     }
 
-    fn substitute_inner(&mut self, tokens: &TokenList) -> Option<String> {
+    fn substitute_inner(&mut self, input: &mut cssparser::Parser<'_, '_>) -> Option<String> {
+        use cssparser::{ParseError, Token};
         let mut out = String::new();
-        for token in &tokens.0 {
+        loop {
+            let start = input.position();
+            let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
+                break;
+            };
             let piece = match token {
-                TokenOrValue::Var(variable) => {
-                    let name = variable.name.ident.as_ref();
-                    match self.var(name) {
+                Token::Function(function) if function.eq_ignore_ascii_case("var") => {
+                    let (name, fallback) = input
+                        .parse_nested_block(|args| {
+                            let name = args.expect_ident()?.as_ref().to_owned();
+                            let fallback = if args.try_parse(|a| a.expect_comma()).is_ok() {
+                                let from = args.position();
+                                while args.next_including_whitespace_and_comments().is_ok() {}
+                                Some(args.slice_from(from).trim().to_owned())
+                            } else {
+                                args.expect_exhausted()?;
+                                None
+                            };
+                            Ok::<_, ParseError<()>>((name, fallback))
+                        })
+                        .ok()?;
+                    if !name.starts_with("--") {
+                        return None;
+                    }
+                    let value = match self.var(&name) {
                         Some(value) => value,
                         // Inside a cycle member, nothing rescues the value
                         // (it is discarded): skip the fallback.
@@ -2339,52 +1973,38 @@ impl<'a> Substitution<'a> {
                         {
                             return None;
                         }
-                        None => match &variable.fallback {
-                            Some(fallback) => self.substitute(fallback)?,
-                            None => return None,
-                        },
-                    }
+                        None => self.substitute(&fallback?)?,
+                    };
+                    // A substituted value is its own tokens: the comments
+                    // keep it from merging with its neighbours (`1` and
+                    // `px` stay two tokens), and every parser skips them.
+                    format!("/**/{value}/**/")
                 }
-                TokenOrValue::Function(function) => {
-                    let arguments = self.substitute(&function.arguments)?;
-                    format!("{}({arguments})", function.name.as_ref())
+                Token::Function(_)
+                | Token::ParenthesisBlock
+                | Token::SquareBracketBlock
+                | Token::CurlyBracketBlock => {
+                    let open = input.slice_from(start).to_owned();
+                    let close = match token {
+                        Token::SquareBracketBlock => ']',
+                        Token::CurlyBracketBlock => '}',
+                        _ => ')',
+                    };
+                    let inner = input
+                        .parse_nested_block(|inner| {
+                            Ok::<_, ParseError<()>>(self.substitute_tokens(inner))
+                        })
+                        .ok()??;
+                    format!("{open}{inner}{close}")
                 }
-                TokenOrValue::Token(token) => {
-                    token.to_css_string(PrinterOptions::default()).ok()?
-                }
-                TokenOrValue::Color(color) => {
-                    color.to_css_string(PrinterOptions::default()).ok()?
-                }
-                TokenOrValue::Url(url) => url.to_css_string(PrinterOptions::default()).ok()?,
-                TokenOrValue::Length(value) => {
-                    value.to_css_string(PrinterOptions::default()).ok()?
-                }
-                TokenOrValue::Angle(value) => {
-                    value.to_css_string(PrinterOptions::default()).ok()?
-                }
-                TokenOrValue::Time(value) => value.to_css_string(PrinterOptions::default()).ok()?,
-                TokenOrValue::Resolution(value) => {
-                    value.to_css_string(PrinterOptions::default()).ok()?
-                }
-                TokenOrValue::DashedIdent(name) => {
-                    name.to_css_string(PrinterOptions::default()).ok()?
-                }
-                TokenOrValue::AnimationName(name) => {
-                    name.to_css_string(PrinterOptions::default()).ok()?
-                }
-                // `UnresolvedColor` and `env()` serialize only
-                // crate-internally: a `var()` among their components can't
-                // be resolved here, so the declaration is dropped (as an
-                // unresolvable one is).
-                TokenOrValue::UnresolvedColor(_) | TokenOrValue::Env(_) => return None,
+                Token::Comment(_) => continue,
+                Token::WhiteSpace(_) => " ".to_owned(),
+                _ => input.slice_from(start).to_owned(),
             };
             self.budget = self.budget.checked_sub(piece.len())?;
-            if !out.is_empty() {
-                out.push(' ');
-            }
-            out.push_str(piece.trim());
+            out.push_str(&piece);
         }
-        Some(out)
+        Some(out.trim().to_owned())
     }
 }
 
@@ -2423,10 +2043,8 @@ fn calc_props(name: &str) -> &'static [CalcProp] {
 /// cascade keeps no parent computed style to inherit from (a documented
 /// deviation; the earlier rule's value no longer shows through either
 /// way). Unknown properties are ignored.
-fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
-    // Matched by name: `PropertyId`'s variants carry vendor prefixes for
-    // some properties and not others; the names are stable.
-    match id.name() {
+fn apply_keyword(style: &mut ElementStyle, name: &str) {
+    match name {
         "color" => style.color = None,
         "background-color" => style.background = None,
         "opacity" => style.opacity = None,
@@ -2586,402 +2204,239 @@ fn apply_keyword(style: &mut ElementStyle, id: &PropertyId) {
     // A keyword also drops the property's `calc()` entries: the field
     // and its calc expression reset together (`width: initial` after
     // `width: calc(50% + 10px)` used to keep resolving the calc).
-    for prop in calc_props(id.name()) {
+    for prop in calc_props(name) {
         style.calc.retain(|(p, _)| p != prop);
     }
 }
 
-fn apply(style: &mut ElementStyle, declaration: &Property) {
+fn apply(style: &mut ElementStyle, declaration: &Decl) {
     match declaration {
-        Property::Opacity(alpha) => {
-            style.opacity = Some(alpha.0.clamp(0.0, 1.0));
-        }
-        Property::Color(color) => {
-            if let Some(color) = to_color(color) {
-                style.color = Some(color);
+        Decl::Opacity(alpha) => style.opacity = Some(alpha.clamp(0.0, 1.0)),
+        Decl::Color(color) => {
+            if let Some(color) = color {
+                style.color = Some(*color);
             }
         }
-        Property::BackgroundColor(color) => {
-            if let Some(color) = to_color(color) {
-                style.background = Some(color);
+        Decl::BackgroundColor(color) => {
+            if let Some(color) = color {
+                style.background = Some(*color);
             }
         }
-        Property::BackgroundImage(images) => {
-            style.background_image = images
-                .first()
-                .and_then(|image| image_url(image).map(|url| background_image(url, None)));
+        Decl::BackgroundImage(url) => {
+            style.background_image = url.clone().map(|url| background_image(url, None));
         }
-        Property::Background(backgrounds) => {
+        Decl::Background { color, image } => {
             // The shorthand resets `background-repeat` and `background-clip`
             // to their initials (CSS reset semantics); its first layer's
             // color and image apply when supported.
-            let Some(background) = backgrounds.first() else {
-                return;
-            };
-            if let Some(color) = to_color(&background.color) {
-                style.background = Some(color);
+            if let Some(color) = color {
+                style.background = Some(*color);
             }
-            style.background_image =
-                image_url(&background.image).map(|url| background_image(url, None));
+            style.background_image = image.clone().map(|url| background_image(url, None));
         }
-        Property::BackgroundRepeat(repeats) => {
-            if let Some(repeat) = repeats.first() {
-                if let Some(image) = &style.background_image {
-                    style.background_image = Some(BackgroundImageDecl {
-                        tiled: repeat_tiled(repeat),
-                        ..image.clone()
-                    });
-                }
+        Decl::BackgroundRepeat(tiled) => {
+            if let Some(image) = &style.background_image {
+                style.background_image = Some(BackgroundImageDecl {
+                    tiled: *tiled,
+                    ..image.clone()
+                });
             }
         }
-        Property::BackgroundClip(clips, _) => {
-            if let Some(clip) = clips.first() {
-                if let Some(image) = &style.background_image {
-                    if let Some(box_) = background_clip(clip) {
-                        style.background_image = Some(BackgroundImageDecl {
-                            clip: box_,
-                            ..image.clone()
-                        });
-                    }
-                }
+        Decl::BackgroundClip(clip) => {
+            if let (Some(image), Some(clip)) = (&style.background_image, clip) {
+                style.background_image = Some(BackgroundImageDecl {
+                    clip: *clip,
+                    ..image.clone()
+                });
             }
         }
-        Property::TextDecoration(decoration, _) => {
-            style.text_decoration = Some(decoration_decl(decoration.line, Some(&decoration.color)));
-        }
-        Property::TextAlign(align) => {
-            if let Some(spec) = text_align(*align) {
-                style.text_align = Some(spec);
+        Decl::TextDecoration(decoration) => style.text_decoration = Some(decoration.clone()),
+        Decl::TextAlign(spec) => {
+            if let Some(spec) = spec {
+                style.text_align = Some(*spec);
             }
         }
-        Property::LineHeight(line_height) => {
-            if let Some(spec) = line_height_decl(line_height) {
-                style.line_height = Some(spec);
+        Decl::LineHeight(spec) => {
+            if let Some(spec) = spec {
+                style.line_height = Some(*spec);
             }
         }
-        Property::LetterSpacing(spacing) => {
-            if let Some(spec) = letter_spacing_decl(spacing) {
-                style.letter_spacing = Some(spec);
+        Decl::LetterSpacing(spec) => {
+            if let Some(spec) = spec {
+                style.letter_spacing = Some(*spec);
             }
         }
-        Property::TextTransform(transform) => {
-            if let Some(spec) = text_transform_decl(transform) {
-                style.text_transform = Some(spec);
+        Decl::TextTransform(spec) => {
+            if let Some(spec) = spec {
+                style.text_transform = Some(*spec);
             }
         }
-        Property::WhiteSpace(white_space) => {
-            if let Some(spec) = white_space_decl(white_space) {
-                style.white_space = Some(spec);
+        Decl::WhiteSpace(spec) => {
+            if let Some(spec) = spec {
+                style.white_space = Some(*spec);
             }
         }
-        Property::ListStyleType(list_style) => {
-            if let Some(spec) = list_style_decl(list_style) {
-                style.list_style = Some(spec);
+        Decl::ListStyle(spec) => {
+            if let Some(spec) = spec {
+                style.list_style = Some(*spec);
             }
         }
-        Property::ListStyle(style_decl) => {
-            // The shorthand's position/image halves are unsupported; its
-            // type half applies when declared.
-            if let Some(spec) = list_style_decl(&style_decl.list_style_type) {
-                style.list_style = Some(spec);
-            }
-        }
-        Property::TextDecorationLine(line, _) => {
+        Decl::TextDecorationLine {
+            underline,
+            line_through,
+        } => {
             let mut declared = style.text_decoration.take().unwrap_or_default();
-            let next = decoration_decl(*line, None);
-            declared.underline = next.underline;
-            declared.line_through = next.line_through;
+            declared.underline = *underline;
+            declared.line_through = *line_through;
             style.text_decoration = Some(declared);
         }
-        Property::TextDecorationColor(color, _) => {
+        Decl::TextDecorationColor(color) => {
             let mut declared = style.text_decoration.take().unwrap_or_default();
-            declared.color = to_color(color);
+            declared.color = *color;
             style.text_decoration = Some(declared);
         }
-        Property::FontFamily(families) => {
-            let list: Vec<FamilyRef> = families.iter().filter_map(family_ref).collect();
+        Decl::FontFamily(list) => {
             if !list.is_empty() {
-                style.font_family = Some(list);
+                style.font_family = Some(list.clone());
             }
         }
-        Property::FontSize(size) => {
-            if let Some(size) = font_size(size) {
-                style.font_size = Some(size);
+        Decl::FontSize(size) => {
+            if let Some(size) = size {
+                style.font_size = Some(*size);
             }
         }
-        Property::FontWeight(weight) => {
-            style.bold = Some(match weight {
-                FontWeight::Absolute(AbsoluteFontWeight::Bold) | FontWeight::Bolder => true,
-                FontWeight::Absolute(AbsoluteFontWeight::Normal) | FontWeight::Lighter => false,
-                // CSS font matching: above 500 prefers the heavier face.
-                FontWeight::Absolute(AbsoluteFontWeight::Weight(weight)) => *weight > 500.0,
-            });
+        Decl::Bold(bold) => style.bold = Some(*bold),
+        Decl::Italic(italic) => style.italic = Some(*italic),
+        Decl::BorderImage(border_image) => style.border_image = Some(border_image.clone()),
+        Decl::BorderImageSource(url) => {
+            style.border_image.get_or_insert_default().source = Some(url.clone());
         }
-        Property::FontStyle(font_style) => {
-            style.italic = Some(!matches!(font_style, FontStyle::Normal));
+        Decl::BorderImageSlice(slice) => {
+            style.border_image.get_or_insert_default().slice = Some(*slice);
         }
-        Property::BorderImage(border_image, _) => {
-            style.border_image = Some(BorderImageDecl {
-                source: Some(image_url(&border_image.source)),
-                slice: Some(slice(&border_image.slice)),
-                tile: Some(tile(&border_image.repeat)),
-            });
+        Decl::BorderImageRepeat(tile) => {
+            style.border_image.get_or_insert_default().tile = Some(*tile);
         }
-        Property::BorderImageSource(image) => {
-            style.border_image.get_or_insert_default().source = Some(image_url(image));
-        }
-        Property::BorderImageSlice(value) => {
-            style.border_image.get_or_insert_default().slice = Some(slice(value));
-        }
-        Property::BorderImageRepeat(repeat) => {
-            style.border_image.get_or_insert_default().tile = Some(tile(repeat));
-        }
-        Property::BorderImageWidth(_) | Property::BorderImageOutset(_) => {
+        Decl::BorderImageIgnored => {
             debug!("html css: border-image-width/-outset unsupported (corners draw at image size)");
         }
-        Property::BorderWidth(width) => {
-            let sides = [&width.top, &width.right, &width.bottom, &width.left].map(side_width);
+        Decl::BorderWidth(sides) => {
             // An unsupported value on one side drops the declaration.
             if sides.iter().all(Option::is_some) {
-                style.border_width = sides;
+                style.border_width = *sides;
             }
         }
-        Property::BorderTopWidth(width) => {
-            if let Some(width) = side_width(width) {
-                style.border_width[0] = Some(width);
+        Decl::BorderSideWidth(side, width) => {
+            if let Some(width) = width {
+                style.border_width[*side] = Some(*width);
             }
         }
-        Property::BorderRightWidth(width) => {
-            if let Some(width) = side_width(width) {
-                style.border_width[1] = Some(width);
-            }
-        }
-        Property::BorderBottomWidth(width) => {
-            if let Some(width) = side_width(width) {
-                style.border_width[2] = Some(width);
-            }
-        }
-        Property::BorderLeftWidth(width) => {
-            if let Some(width) = side_width(width) {
-                style.border_width[3] = Some(width);
-            }
-        }
-        Property::Padding(padding) => {
-            let sides =
-                [&padding.top, &padding.right, &padding.bottom, &padding.left].map(length_px);
+        Decl::Padding(sides) => {
             if sides.iter().all(Option::is_some) {
-                style.padding = sides;
+                style.padding = *sides;
             }
         }
-        Property::PaddingTop(value) => {
-            if let Some(value) = length_px(value) {
-                style.padding[0] = Some(value);
+        Decl::PaddingSide(side, value) => {
+            if let Some(value) = value {
+                style.padding[*side] = Some(*value);
             }
         }
-        Property::PaddingRight(value) => {
-            if let Some(value) = length_px(value) {
-                style.padding[1] = Some(value);
-            }
-        }
-        Property::PaddingBottom(value) => {
-            if let Some(value) = length_px(value) {
-                style.padding[2] = Some(value);
-            }
-        }
-        Property::PaddingLeft(value) => {
-            if let Some(value) = length_px(value) {
-                style.padding[3] = Some(value);
-            }
-        }
-        Property::RowGap(gap) => {
+        Decl::RowGap(gap) => {
             // An unsupported value (`%` gap) drops the declaration: the
             // earlier value stands.
-            if let Some(gap) = gap_px(gap) {
-                style.row_gap = Some(gap);
+            if let Some(gap) = gap {
+                style.row_gap = Some(*gap);
             }
         }
-        Property::ColumnGap(gap) => {
-            if let Some(gap) = gap_px(gap) {
-                style.layout.column_gap = Some(gap);
+        Decl::ColumnGap(gap) => {
+            if let Some(gap) = gap {
+                style.layout.column_gap = Some(*gap);
             }
         }
-        Property::Gap(gap) => {
-            if let Some(row) = gap_px(&gap.row) {
-                style.row_gap = Some(row);
+        Decl::Gap(row, column) => {
+            if let Some(row) = row {
+                style.row_gap = Some(*row);
             }
-            if let Some(column) = gap_px(&gap.column) {
-                style.layout.column_gap = Some(column);
-            }
-        }
-        Property::Display(value) => {
-            if let Some(display) = display(value) {
-                style.layout.display = Some(display);
+            if let Some(column) = column {
+                style.layout.column_gap = Some(*column);
             }
         }
-        Property::Visibility(visibility) => {
+        Decl::Display(display) => {
+            if let Some(display) = display {
+                style.layout.display = Some(*display);
+            }
+        }
+        Decl::Visibility(visible) => {
             // `subtree-hide` semantics: `hidden` maps to Bevy's propagating
-            // `Visibility::Hidden`; `collapse` (table-specific) is skipped.
-            let visible = match visibility {
-                lightningcss::properties::display::Visibility::Visible => Some(true),
-                lightningcss::properties::display::Visibility::Hidden => Some(false),
-                // `collapse` is unsupported: the declaration is dropped,
-                // the earlier value stands.
-                lightningcss::properties::display::Visibility::Collapse => {
-                    debug!("html css: unsupported visibility: collapse");
-                    None
-                }
-            };
-            if visible.is_some() {
-                style.layout.visibility = visible;
-            };
+            // `Visibility::Hidden`; `collapse` (table-specific) is skipped
+            // and the earlier value stands.
+            match visible {
+                Some(_) => style.layout.visibility = *visible,
+                None => debug!("html css: unsupported visibility: collapse"),
+            }
         }
-        Property::Transition(entries, _) => {
-            style.transitions = entries
-                .iter()
-                .filter_map(transition_decl)
-                // A repeated property keeps the last declaration.
-                .fold(Vec::new(), |mut list, decl| {
-                    list.retain(|kept: &TransitionDecl| kept.property != decl.property);
-                    list.push(decl);
-                    list
-                });
-        }
-        Property::TransitionProperty(..)
-        | Property::TransitionDuration(..)
-        | Property::TransitionDelay(..)
-        | Property::TransitionTimingFunction(..) => {
+        Decl::Transition(entries) => style.transitions = entries.clone(),
+        Decl::TransitionLonghand => {
             let _: Option<()> =
                 unsupported("transition longhands (declare the `transition` shorthand)");
         }
-        Property::FlexDirection(direction, _) => {
-            style.layout.flex_direction = Some(flex_direction(direction));
+        Decl::FlexDirection(direction) => style.layout.flex_direction = Some(*direction),
+        Decl::FlexWrap(wrap) => style.layout.flex_wrap = Some(*wrap),
+        Decl::FlexFlow(direction, wrap) => {
+            style.layout.flex_direction = Some(*direction);
+            style.layout.flex_wrap = Some(*wrap);
         }
-        Property::FlexWrap(wrap, _) => style.layout.flex_wrap = Some(flex_wrap(wrap)),
-        Property::Overflow(overflow) => {
-            style.layout.overflow = [
-                Some(overflow_axis(&overflow.x)),
-                Some(overflow_axis(&overflow.y)),
-            ];
+        Decl::FlexGrow(grow) => style.layout.flex_grow = Some(*grow),
+        Decl::FlexShrink(shrink) => style.layout.flex_shrink = Some(*shrink),
+        Decl::Flex {
+            grow,
+            shrink,
+            basis,
+        } => {
+            style.layout.flex_grow = Some(*grow);
+            style.layout.flex_shrink = Some(*shrink);
+            style.set_length(CalcProp::FlexBasis, basis);
         }
-        Property::OverflowX(x) => style.layout.overflow[0] = Some(overflow_axis(x)),
-        Property::OverflowY(y) => style.layout.overflow[1] = Some(overflow_axis(y)),
-        Property::FlexFlow(flow, _) => {
-            style.layout.flex_direction = Some(flex_direction(&flow.direction));
-            style.layout.flex_wrap = Some(flex_wrap(&flow.wrap));
-        }
-        Property::FlexGrow(grow, _) => style.layout.flex_grow = Some(*grow),
-        Property::FlexShrink(shrink, _) => style.layout.flex_shrink = Some(*shrink),
-        Property::FlexBasis(basis, _) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(basis, &mut exprs);
-            style.set_calc(CalcProp::FlexBasis, value, exprs);
-        }
-        Property::Flex(flex, _) => {
-            style.layout.flex_grow = Some(flex.grow);
-            style.layout.flex_shrink = Some(flex.shrink);
-            let mut exprs = Vec::new();
-            let value = auto_val(&flex.basis, &mut exprs);
-            style.set_calc(CalcProp::FlexBasis, value, exprs);
-        }
-        Property::JustifyContent(value, _) => {
-            if let Some(value) = justify_content(value) {
-                style.layout.justify_content = Some(value);
+        Decl::Overflow([x, y]) => style.layout.overflow = [Some(*x), Some(*y)],
+        Decl::OverflowX(x) => style.layout.overflow[0] = Some(*x),
+        Decl::OverflowY(y) => style.layout.overflow[1] = Some(*y),
+        Decl::Lengths(lengths) => {
+            for (prop, length) in lengths {
+                style.set_length(*prop, length);
             }
         }
-        Property::AlignItems(value, _) => {
-            if let Some(value) = align_items(value) {
-                style.layout.align_items = Some(value);
+        Decl::JustifyContent(value) => {
+            if let Some(value) = value {
+                style.layout.justify_content = Some(*value);
             }
         }
-        Property::AlignContent(value, _) => {
-            if let Some(value) = align_content(value) {
-                style.layout.align_content = Some(value);
+        Decl::AlignItems(value) => {
+            if let Some(value) = value {
+                style.layout.align_items = Some(*value);
             }
         }
-        Property::AlignSelf(value, _) => {
-            if let Some(value) = align_self(value) {
-                style.layout.align_self = Some(value);
+        Decl::AlignContent(value) => {
+            if let Some(value) = value {
+                style.layout.align_content = Some(*value);
             }
         }
-        Property::Width(size) => {
-            let mut exprs = Vec::new();
-            let value = size_val(size, &mut exprs);
-            style.set_calc(CalcProp::Width, value, exprs);
-        }
-        Property::Height(size) => {
-            let mut exprs = Vec::new();
-            let value = size_val(size, &mut exprs);
-            style.set_calc(CalcProp::Height, value, exprs);
-        }
-        Property::MinWidth(size) => {
-            let mut exprs = Vec::new();
-            let value = size_val(size, &mut exprs);
-            style.set_calc(CalcProp::MinWidth, value, exprs);
-        }
-        Property::MinHeight(size) => {
-            let mut exprs = Vec::new();
-            let value = size_val(size, &mut exprs);
-            style.set_calc(CalcProp::MinHeight, value, exprs);
-        }
-        Property::MaxWidth(size) => {
-            let mut exprs = Vec::new();
-            let value = max_size_val(size, &mut exprs);
-            style.set_calc(CalcProp::MaxWidth, value, exprs);
-        }
-        Property::MaxHeight(size) => {
-            let mut exprs = Vec::new();
-            let value = max_size_val(size, &mut exprs);
-            style.set_calc(CalcProp::MaxHeight, value, exprs);
-        }
-        Property::Margin(margin) => {
-            for (side, value) in [
-                (CalcProp::MarginTop, &margin.top),
-                (CalcProp::MarginRight, &margin.right),
-                (CalcProp::MarginBottom, &margin.bottom),
-                (CalcProp::MarginLeft, &margin.left),
-            ] {
-                let mut exprs = Vec::new();
-                let value = auto_val(value, &mut exprs);
-                style.set_calc(side, value, exprs);
+        Decl::AlignSelf(value) => {
+            if let Some(value) = value {
+                style.layout.align_self = Some(*value);
             }
         }
-        Property::MarginTop(value) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(value, &mut exprs);
-            style.set_calc(CalcProp::MarginTop, value, exprs);
-        }
-        Property::MarginRight(value) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(value, &mut exprs);
-            style.set_calc(CalcProp::MarginRight, value, exprs);
-        }
-        Property::MarginBottom(value) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(value, &mut exprs);
-            style.set_calc(CalcProp::MarginBottom, value, exprs);
-        }
-        Property::MarginLeft(value) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(value, &mut exprs);
-            style.set_calc(CalcProp::MarginLeft, value, exprs);
-        }
-        Property::BoxSizing(sizing, _) => {
-            style.layout.box_sizing = Some(match sizing {
-                css_size::BoxSizing::ContentBox => BoxSizing::ContentBox,
-                css_size::BoxSizing::BorderBox => BoxSizing::BorderBox,
-            });
-        }
-        Property::JustifyItems(value) => {
-            if let Some(value) = justify_items(value) {
-                style.layout.justify_items = Some(value);
+        Decl::JustifyItems(value) => {
+            if let Some(value) = value {
+                style.layout.justify_items = Some(*value);
             }
         }
-        Property::JustifySelf(value) => {
-            if let Some(value) = justify_self(value) {
-                style.layout.justify_self = Some(value);
+        Decl::JustifySelf(value) => {
+            if let Some(value) = value {
+                style.layout.justify_self = Some(*value);
             }
         }
-        Property::GridTemplateRows(rows) => {
+        Decl::BoxSizing(sizing) => style.layout.box_sizing = Some(*sizing),
+        Decl::GridTemplateRows(rows) => {
             let (tracks, names) = track_sizing(rows, Axis::Row);
             // One unsupported track drops the declaration: the earlier
             // track list (and names) stand.
@@ -2996,7 +2451,7 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 table.rows = names.map(|names| names.rows).unwrap_or_default();
             }
         }
-        Property::GridTemplateColumns(columns) => {
+        Decl::GridTemplateColumns(columns) => {
             let (tracks, names) = track_sizing(columns, Axis::Column);
             if let Some(tracks) = tracks {
                 style.layout.grid_template_columns = Some(tracks);
@@ -3007,7 +2462,7 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 table.columns = names.map(|names| names.columns).unwrap_or_default();
             }
         }
-        Property::GridTemplate(template) => {
+        Decl::GridTemplate(template) => {
             let (rows, row_lines) = track_sizing(&template.rows, Axis::Row);
             let (columns, column_lines) = track_sizing(&template.columns, Axis::Column);
             // One unsupported track drops the declaration.
@@ -3032,18 +2487,18 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 names.implied_columns = areas.implied_columns;
             }
         }
-        Property::GridAutoRows(tracks) => {
+        Decl::GridAutoRows(tracks) => {
             if let Some(tracks) = track_size_list(tracks) {
                 style.layout.grid_auto_rows = Some(tracks);
             }
         }
-        Property::GridAutoColumns(tracks) => {
+        Decl::GridAutoColumns(tracks) => {
             if let Some(tracks) = track_size_list(tracks) {
                 style.layout.grid_auto_columns = Some(tracks);
             }
         }
-        Property::GridAutoFlow(flow) => style.layout.grid_auto_flow = Some(grid_auto_flow(*flow)),
-        Property::Grid(grid) => {
+        Decl::GridAutoFlow(flow) => style.layout.grid_auto_flow = Some(grid_auto_flow(*flow)),
+        Decl::Grid(grid) => {
             let (rows, row_names) = track_sizing(&grid.rows, Axis::Row);
             let (columns, column_names) = track_sizing(&grid.columns, Axis::Column);
             // One unsupported track drops the declaration.
@@ -3084,9 +2539,9 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 table.columns = names.columns;
             }
         }
-        Property::GridTemplateAreas(areas) => {
+        Decl::GridTemplateAreas(areas) => {
             // A later declaration replaces the areas and the tracks they
-            // implied; `none` (or an unparsable matrix) takes them back.
+            // implied; `none` takes them back.
             let names = style
                 .layout
                 .grid_names
@@ -3103,20 +2558,20 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
         }
         // An unsupported line drops the declaration: the earlier side
         // keeps its value.
-        Property::GridRowStart(line) => {
+        Decl::GridRowStart(line) => {
             style.layout.grid_row[0] = grid_line(line).or(style.layout.grid_row[0].take())
         }
-        Property::GridRowEnd(line) => {
+        Decl::GridRowEnd(line) => {
             style.layout.grid_row[1] = grid_line(line).or(style.layout.grid_row[1].take())
         }
-        Property::GridColumnStart(line) => {
+        Decl::GridColumnStart(line) => {
             style.layout.grid_column[0] = grid_line(line).or(style.layout.grid_column[0].take())
         }
-        Property::GridColumnEnd(line) => {
+        Decl::GridColumnEnd(line) => {
             style.layout.grid_column[1] = grid_line(line).or(style.layout.grid_column[1].take())
         }
-        Property::GridRow(row) => {
-            let sides = [grid_line(&row.start), grid_line(&row.end)];
+        Decl::GridRow(row) => {
+            let sides = [grid_line(&row[0]), grid_line(&row[1])];
             // A shorthand applies only if EVERY side parses (`span x` is
             // unsupported): a per-side `.or(take)` half-applied —
             // `2 / 3` then `span x / 5` gave [2, 5], neither rule's
@@ -3127,21 +2582,16 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 }
             }
         }
-        Property::GridColumn(column) => {
-            let sides = [grid_line(&column.start), grid_line(&column.end)];
+        Decl::GridColumn(column) => {
+            let sides = [grid_line(&column[0]), grid_line(&column[1])];
             if let Some(sides) = sides.into_iter().collect::<Option<Vec<_>>>() {
                 for (side, value) in sides.into_iter().enumerate() {
                     style.layout.grid_column[side] = Some(value);
                 }
             }
         }
-        Property::GridArea(area) => {
-            let sides = [
-                grid_line(&area.row_start),
-                grid_line(&area.row_end),
-                grid_line(&area.column_start),
-                grid_line(&area.column_end),
-            ];
+        Decl::GridArea(area) => {
+            let sides = area.each_ref().map(grid_line);
             if let Some(sides) = sides.into_iter().collect::<Option<Vec<_>>>() {
                 for (side, value) in sides.into_iter().enumerate() {
                     let target = if side < 2 {
@@ -3153,396 +2603,63 @@ fn apply(style: &mut ElementStyle, declaration: &Property) {
                 }
             }
         }
-        Property::Position(position) => {
-            style.layout.position = match position {
-                css_position::Position::Static => Some(CssPosition::Static),
-                css_position::Position::Relative => Some(CssPosition::Relative),
-                css_position::Position::Absolute => Some(CssPosition::Absolute),
-                css_position::Position::Fixed => Some(CssPosition::Fixed),
-                css_position::Position::Sticky(_) => unsupported("position sticky"),
-            };
-        }
-        Property::Top(value) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(value, &mut exprs);
-            style.set_calc(CalcProp::Top, value, exprs);
-        }
-        Property::Right(value) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(value, &mut exprs);
-            style.set_calc(CalcProp::Right, value, exprs);
-        }
-        Property::Bottom(value) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(value, &mut exprs);
-            style.set_calc(CalcProp::Bottom, value, exprs);
-        }
-        Property::Left(value) => {
-            let mut exprs = Vec::new();
-            let value = auto_val(value, &mut exprs);
-            style.set_calc(CalcProp::Left, value, exprs);
-        }
-        Property::Inset(inset) => {
-            for (side, value) in [
-                (CalcProp::Top, &inset.top),
-                (CalcProp::Right, &inset.right),
-                (CalcProp::Bottom, &inset.bottom),
-                (CalcProp::Left, &inset.left),
-            ] {
-                let mut exprs = Vec::new();
-                let value = auto_val(value, &mut exprs);
-                style.set_calc(side, value, exprs);
-            }
-        }
-        Property::ZIndex(z) => {
-            style.z_index = Some(match z {
-                css_position::ZIndex::Auto => None,
-                css_position::ZIndex::Integer(z) => Some(*z),
-            });
-        }
-        Property::BorderColor(colors) => {
-            style.border_color =
-                [&colors.top, &colors.right, &colors.bottom, &colors.left].map(to_color);
-        }
-        Property::BorderTopColor(color) => style.border_color[0] = to_color(color),
-        Property::BorderRightColor(color) => style.border_color[1] = to_color(color),
-        Property::BorderBottomColor(color) => style.border_color[2] = to_color(color),
-        Property::BorderLeftColor(color) => style.border_color[3] = to_color(color),
-        Property::BorderRadius(radius, _) => {
+        Decl::Position(position) => style.layout.position = *position,
+        Decl::ZIndex(z) => style.z_index = Some(*z),
+        Decl::BorderColor(colors) => style.border_color = *colors,
+        Decl::BorderSideColor(side, color) => style.border_color[*side] = *color,
+        Decl::BorderRadius(corners) => {
             // An unsupported corner drops the whole declaration (the
             // earlier corners keep their values); a per-side `.or(take)`
             // half-applied — `8px` then `calc(10% + 2px) 4px` gave
             // [8, 4, 8, 4], neither rule's value (review_0003 G33).
-            let corners = [
-                &radius.top_left,
-                &radius.top_right,
-                &radius.bottom_right,
-                &radius.bottom_left,
-            ]
-            .map(corner_radius);
-            if let Some(corners) = corners.into_iter().collect::<Option<Vec<_>>>() {
-                for (corner, value) in corners.into_iter().enumerate() {
-                    style.layout.border_radius[corner] = Some(value);
-                }
+            if corners.iter().all(Option::is_some) {
+                style.layout.border_radius = *corners;
             }
         }
         // An unsupported value drops the declaration: the earlier
-        // corners keep their values.
-        Property::BorderTopLeftRadius(radius, _) => {
-            style.layout.border_radius[0] =
-                corner_radius(radius).or(style.layout.border_radius[0].take());
+        // corner keeps its value.
+        Decl::CornerRadius(corner, radius) => {
+            style.layout.border_radius[*corner] =
+                radius.or(style.layout.border_radius[*corner].take());
         }
-        Property::BorderTopRightRadius(radius, _) => {
-            style.layout.border_radius[1] =
-                corner_radius(radius).or(style.layout.border_radius[1].take());
-        }
-        Property::BorderBottomRightRadius(radius, _) => {
-            style.layout.border_radius[2] =
-                corner_radius(radius).or(style.layout.border_radius[2].take());
-        }
-        Property::BorderBottomLeftRadius(radius, _) => {
-            style.layout.border_radius[3] =
-                corner_radius(radius).or(style.layout.border_radius[3].take());
-        }
-        Property::Outline(outline) => {
+        Decl::Outline {
+            visible,
+            width,
+            color,
+        } => {
             style.outline = OutlineDecl {
-                visible: Some(outline_visible(&outline.style)),
-                width: side_width(&outline.width),
-                color: Some(to_color(&outline.color)),
+                visible: Some(*visible),
+                width: *width,
+                color: Some(*color),
                 offset: style.outline.offset,
             };
         }
-        Property::OutlineStyle(outline_style) => {
-            style.outline.visible = Some(outline_visible(outline_style));
-        }
-        Property::OutlineWidth(width) => {
-            style.outline.width = side_width(width).or(style.outline.width.take())
-        }
-        Property::OutlineColor(color) => style.outline.color = Some(to_color(color)),
-        // lightningcss has no typed `outline-offset` either.
-        Property::Custom(custom) if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "outline-offset") =>
-        {
-            let value = declaration
-                .value_to_css_string(PrinterOptions::default())
-                .unwrap_or_default();
-            let offset = match value.trim().strip_suffix("px").map(str::parse::<f32>) {
-                Some(Ok(px)) => Some(px),
-                _ if value.trim() == "0" => Some(0.0),
-                _ => unsupported("outline-offset value (px only)"),
-            };
+        Decl::OutlineStyle(visible) => style.outline.visible = Some(*visible),
+        Decl::OutlineWidth(width) => style.outline.width = width.or(style.outline.width.take()),
+        Decl::OutlineColor(color) => style.outline.color = Some(*color),
+        Decl::OutlineOffset(offset) => {
             if offset.is_some() {
-                style.outline.offset = offset;
+                style.outline.offset = *offset;
             }
         }
-        // lightningcss has no typed `pointer-events` (it's SVG/UI-only): it
-        // arrives as an unknown property with its raw value.
-        Property::Custom(custom) if matches!(&custom.name, CustomPropertyName::Unknown(name) if name.as_ref() == "pointer-events") =>
-        {
-            let value = declaration
-                .value_to_css_string(PrinterOptions::default())
-                .unwrap_or_default();
-            let pointer_events = match value.trim().to_ascii_lowercase().as_str() {
-                "none" => Some(false),
-                "auto" => Some(true),
-                _ => unsupported("pointer-events value (only `auto`/`none`)"),
-            };
+        Decl::PointerEvents(pointer_events) => {
             if pointer_events.is_some() {
-                style.pointer_events = pointer_events;
+                style.pointer_events = *pointer_events;
             }
         }
-        _ => {}
     }
 }
 
 /// ADR 0028: a background image's declaration — `background-repeat`
 /// defaults to tiling both axes (CSS's initial) and the clip to the
 /// border box. `background-size` is unsupported (bevy's `ImageNode` has
-/// no crop: `cover`/`contain`/a length would need it) and drops the
-/// declaration.
+/// no crop: `cover`/`contain`/a length would need it).
 fn background_image(url: String, tiled: Option<(bool, bool)>) -> BackgroundImageDecl {
     BackgroundImageDecl {
         url,
         tiled: tiled.unwrap_or((true, true)),
         clip: VisualBox::BorderBox,
     }
-}
-
-/// `background-repeat`'s two axes → bevy's `Tiled` flags. `space`/`round`
-/// approximate to `repeat`.
-fn repeat_tiled(repeat: &lightningcss::properties::background::BackgroundRepeat) -> (bool, bool) {
-    use lightningcss::properties::background::BackgroundRepeatKeyword as Css;
-    let axis = |keyword: &Css| !matches!(keyword, Css::NoRepeat);
-    (axis(&repeat.x), axis(&repeat.y))
-}
-
-/// `background-clip` → the `ImageNode`'s visual box (`text` drops the
-/// declaration).
-fn background_clip(
-    clip: &lightningcss::properties::background::BackgroundClip,
-) -> Option<VisualBox> {
-    use lightningcss::properties::background::BackgroundClip as Css;
-    match clip {
-        Css::BorderBox | Css::Border => Some(VisualBox::BorderBox),
-        Css::PaddingBox => Some(VisualBox::PaddingBox),
-        Css::ContentBox => Some(VisualBox::ContentBox),
-        Css::Text => unsupported("background-clip: text"),
-    }
-}
-
-fn image_url(image: &Image) -> Option<String> {
-    match image {
-        Image::Url(url) => Some(url.url.to_string()),
-        Image::None => None,
-        _ => {
-            debug!("html css: only url() image sources are supported");
-            None
-        }
-    }
-}
-
-fn slice(value: &BorderImageSlice) -> ([SliceValue; 4], bool) {
-    let offsets = &value.offsets;
-    let side = |offset: &NumberOrPercentage| match offset {
-        NumberOrPercentage::Number(px) => SliceValue::Px(*px),
-        NumberOrPercentage::Percentage(percent) => SliceValue::Fraction(percent.0),
-    };
-    (
-        [
-            side(&offsets.0),
-            side(&offsets.1),
-            side(&offsets.2),
-            side(&offsets.3),
-        ],
-        value.fill,
-    )
-}
-
-fn tile(repeat: &BorderImageRepeat) -> bool {
-    // Bevy has one scale mode for all sides: tile if either axis tiles.
-    [repeat.horizontal, repeat.vertical]
-        .iter()
-        .any(|keyword| !matches!(keyword, BorderImageRepeatKeyword::Stretch))
-}
-
-fn side_width(width: &BorderSideWidth) -> Option<f32> {
-    match width {
-        BorderSideWidth::Thin => Some(1.0),
-        BorderSideWidth::Medium => Some(3.0),
-        BorderSideWidth::Thick => Some(5.0),
-        BorderSideWidth::Length(length) => length.to_px(),
-    }
-}
-
-/// `row-gap` in px; `normal` (= no override), `%` and `calc()` give `None`.
-fn gap_px(gap: &GapValue) -> Option<f32> {
-    match gap {
-        GapValue::LengthPercentage(LengthPercentage::Dimension(length)) => length.to_px(),
-        GapValue::Normal => None,
-        GapValue::LengthPercentage(_) => {
-            debug!("html css: only absolute lengths are supported for gap");
-            None
-        }
-    }
-}
-
-/// `display`: `none`, block-level `flow`/`flow-root` (Bevy block layout),
-/// `flex` and `grid` (inline variants too); other values (inline, table, …)
-/// are unsupported.
-fn display(value: &css_display::Display) -> Option<Display> {
-    match value {
-        css_display::Display::Keyword(css_display::DisplayKeyword::None) => Some(Display::None),
-        css_display::Display::Pair(pair) => match (&pair.outside, &pair.inside) {
-            (_, DisplayInside::Flex(_)) => Some(Display::Flex),
-            (_, DisplayInside::Grid) => Some(Display::Grid),
-            (DisplayOutside::Block, DisplayInside::Flow | DisplayInside::FlowRoot) => {
-                Some(Display::Block)
-            }
-            _ => unsupported("display value"),
-        },
-        css_display::Display::Keyword(_) => unsupported("display value"),
-    }
-}
-
-fn flex_direction(direction: &css_flex::FlexDirection) -> FlexDirection {
-    match direction {
-        css_flex::FlexDirection::Row => FlexDirection::Row,
-        css_flex::FlexDirection::RowReverse => FlexDirection::RowReverse,
-        css_flex::FlexDirection::Column => FlexDirection::Column,
-        css_flex::FlexDirection::ColumnReverse => FlexDirection::ColumnReverse,
-    }
-}
-
-fn flex_wrap(wrap: &css_flex::FlexWrap) -> FlexWrap {
-    match wrap {
-        css_flex::FlexWrap::NoWrap => FlexWrap::NoWrap,
-        css_flex::FlexWrap::Wrap => FlexWrap::Wrap,
-        css_flex::FlexWrap::WrapReverse => FlexWrap::WrapReverse,
-    }
-}
-
-fn justify_content(value: &css_align::JustifyContent) -> Option<JustifyContent> {
-    Some(match value {
-        css_align::JustifyContent::Normal => JustifyContent::Default,
-        css_align::JustifyContent::ContentDistribution(distribution) => match distribution {
-            ContentDistribution::SpaceBetween => JustifyContent::SpaceBetween,
-            ContentDistribution::SpaceAround => JustifyContent::SpaceAround,
-            ContentDistribution::SpaceEvenly => JustifyContent::SpaceEvenly,
-            ContentDistribution::Stretch => JustifyContent::Stretch,
-        },
-        css_align::JustifyContent::ContentPosition { value, .. } => match value {
-            ContentPosition::Center => JustifyContent::Center,
-            ContentPosition::Start => JustifyContent::Start,
-            ContentPosition::End => JustifyContent::End,
-            ContentPosition::FlexStart => JustifyContent::FlexStart,
-            ContentPosition::FlexEnd => JustifyContent::FlexEnd,
-        },
-        css_align::JustifyContent::Left { .. } | css_align::JustifyContent::Right { .. } => {
-            return unsupported("justify-content left/right");
-        }
-    })
-}
-
-fn align_content(value: &css_align::AlignContent) -> Option<AlignContent> {
-    Some(match value {
-        css_align::AlignContent::Normal => AlignContent::Default,
-        css_align::AlignContent::ContentDistribution(distribution) => match distribution {
-            ContentDistribution::SpaceBetween => AlignContent::SpaceBetween,
-            ContentDistribution::SpaceAround => AlignContent::SpaceAround,
-            ContentDistribution::SpaceEvenly => AlignContent::SpaceEvenly,
-            ContentDistribution::Stretch => AlignContent::Stretch,
-        },
-        css_align::AlignContent::ContentPosition { value, .. } => match value {
-            ContentPosition::Center => AlignContent::Center,
-            ContentPosition::Start => AlignContent::Start,
-            ContentPosition::End => AlignContent::End,
-            ContentPosition::FlexStart => AlignContent::FlexStart,
-            ContentPosition::FlexEnd => AlignContent::FlexEnd,
-        },
-        css_align::AlignContent::BaselinePosition(_) => {
-            return unsupported("align-content baseline");
-        }
-    })
-}
-
-fn align_items(value: &css_align::AlignItems) -> Option<AlignItems> {
-    Some(match value {
-        css_align::AlignItems::Normal => AlignItems::Default,
-        css_align::AlignItems::Stretch => AlignItems::Stretch,
-        css_align::AlignItems::BaselinePosition(BaselinePosition::First) => AlignItems::Baseline,
-        css_align::AlignItems::BaselinePosition(BaselinePosition::Last) => {
-            return unsupported("last baseline");
-        }
-        css_align::AlignItems::SelfPosition { value, .. } => match value {
-            SelfPosition::Center => AlignItems::Center,
-            SelfPosition::Start | SelfPosition::SelfStart => AlignItems::Start,
-            SelfPosition::End | SelfPosition::SelfEnd => AlignItems::End,
-            SelfPosition::FlexStart => AlignItems::FlexStart,
-            SelfPosition::FlexEnd => AlignItems::FlexEnd,
-        },
-    })
-}
-
-fn align_self(value: &css_align::AlignSelf) -> Option<AlignSelf> {
-    Some(match value {
-        css_align::AlignSelf::Auto => AlignSelf::Auto,
-        // `normal` behaves as `stretch` for flex items.
-        css_align::AlignSelf::Normal | css_align::AlignSelf::Stretch => AlignSelf::Stretch,
-        css_align::AlignSelf::BaselinePosition(BaselinePosition::First) => AlignSelf::Baseline,
-        css_align::AlignSelf::BaselinePosition(BaselinePosition::Last) => {
-            return unsupported("last baseline");
-        }
-        css_align::AlignSelf::SelfPosition { value, .. } => match value {
-            SelfPosition::Center => AlignSelf::Center,
-            SelfPosition::Start | SelfPosition::SelfStart => AlignSelf::Start,
-            SelfPosition::End | SelfPosition::SelfEnd => AlignSelf::End,
-            SelfPosition::FlexStart => AlignSelf::FlexStart,
-            SelfPosition::FlexEnd => AlignSelf::FlexEnd,
-        },
-    })
-}
-
-fn justify_items(value: &css_align::JustifyItems) -> Option<JustifyItems> {
-    Some(match value {
-        css_align::JustifyItems::Normal => JustifyItems::Default,
-        css_align::JustifyItems::Stretch => JustifyItems::Stretch,
-        css_align::JustifyItems::BaselinePosition(BaselinePosition::First) => {
-            JustifyItems::Baseline
-        }
-        css_align::JustifyItems::SelfPosition { value, .. } => match value {
-            SelfPosition::Center => JustifyItems::Center,
-            SelfPosition::Start | SelfPosition::SelfStart | SelfPosition::FlexStart => {
-                JustifyItems::Start
-            }
-            SelfPosition::End | SelfPosition::SelfEnd | SelfPosition::FlexEnd => JustifyItems::End,
-        },
-        css_align::JustifyItems::BaselinePosition(BaselinePosition::Last)
-        | css_align::JustifyItems::Left { .. }
-        | css_align::JustifyItems::Right { .. }
-        | css_align::JustifyItems::Legacy(_) => {
-            return unsupported("justify-items last baseline/left/right/legacy");
-        }
-    })
-}
-
-fn justify_self(value: &css_align::JustifySelf) -> Option<JustifySelf> {
-    Some(match value {
-        css_align::JustifySelf::Auto => JustifySelf::Auto,
-        // `normal` behaves as `stretch` for grid items.
-        css_align::JustifySelf::Normal | css_align::JustifySelf::Stretch => JustifySelf::Stretch,
-        css_align::JustifySelf::BaselinePosition(BaselinePosition::First) => JustifySelf::Baseline,
-        css_align::JustifySelf::SelfPosition { value, .. } => match value {
-            SelfPosition::Center => JustifySelf::Center,
-            SelfPosition::Start | SelfPosition::SelfStart | SelfPosition::FlexStart => {
-                JustifySelf::Start
-            }
-            SelfPosition::End | SelfPosition::SelfEnd | SelfPosition::FlexEnd => JustifySelf::End,
-        },
-        css_align::JustifySelf::BaselinePosition(BaselinePosition::Last)
-        | css_align::JustifySelf::Left { .. }
-        | css_align::JustifySelf::Right { .. } => {
-            return unsupported("justify-self last baseline/left/right");
-        }
-    })
 }
 
 /// The most tracks one axis may declare: beyond it the declaration drops
@@ -3580,10 +2697,10 @@ fn track_sizing(
     };
     // Registers a 0-based line index under its names: as the 1-based line
     // and its negative (from the end).
-    let register = |line: usize, names: &[CustomIdent<'_>], map: &mut HashMap<String, Vec<i16>>| {
+    let register = |line: usize, names: &[String], map: &mut HashMap<String, Vec<i16>>| {
         for name in names {
             let lower = (line + 1) as i16;
-            let entries = map.entry(name.0.to_string()).or_default();
+            let entries = map.entry(name.clone()).or_default();
             // A merged repeat boundary is one line: the same name on it
             // registers once (a duplicate occurrence made `3 a` resolve
             // to the first occurrence instead of the third). Lines
@@ -3655,7 +2772,7 @@ fn track_sizing(
                 if before_or_at_first_repeat {
                     // Positive spelling only: the negative spelling
                     // depends on the (layout-dependent) total line count.
-                    let entries = map.entry(name.0.to_string()).or_default();
+                    let entries = map.entry(name.clone()).or_default();
                     entries.push((line + 1) as i16);
                 }
             }
@@ -3668,7 +2785,7 @@ fn track_sizing(
         }
         let last = list.items.len();
         for name in &list.line_names[last] {
-            let entries = map.entry(name.0.to_string()).or_default();
+            let entries = map.entry(name.clone()).or_default();
             entries.push(-1);
         }
     }
@@ -3700,7 +2817,7 @@ fn track_sizing(
 /// Saturating: the caller caps the total at `MAX_GRID_TRACKS`, and a
 /// wrapped product on a 32-bit target (wasm32: `repeat(1431655766, 1px
 /// 1px 1px)` is 2³² + 2) slipped under that cap (review_0003 G38).
-fn total_lines(list: &css_grid::TrackList) -> usize {
+fn total_lines(list: &TrackList) -> usize {
     list.items
         .iter()
         .map(|item| match item {
@@ -3717,8 +2834,8 @@ fn total_lines(list: &css_grid::TrackList) -> usize {
 }
 
 /// `grid-auto-rows`/`-columns`.
-fn track_size_list(list: &css_grid::TrackSizeList) -> Option<Vec<GridTrack>> {
-    list.0.iter().map(grid_track).collect()
+fn track_size_list(list: &[TrackSize]) -> Option<Vec<GridTrack>> {
+    list.iter().map(grid_track).collect()
 }
 
 /// One track size: a breadth (`<length>`, `%`, viewport units, `fr`,
@@ -3734,7 +2851,7 @@ fn grid_track(size: &TrackSize) -> Option<GridTrack> {
         TrackSize::MinMax { min, max } => {
             Some(GridTrack::minmax(min_breadth(min)?, max_breadth(max)?))
         }
-        TrackSize::FitContent(limit) => match length_percentage_val(limit, &mut Vec::new())? {
+        TrackSize::FitContent(limit) => match limit.val()? {
             Val::Px(px) => Some(GridTrack::fit_content_px(px)),
             Val::Percent(percent) => Some(GridTrack::fit_content_percent(percent)),
             _ => unsupported("fit-content() limit"),
@@ -3745,7 +2862,7 @@ fn grid_track(size: &TrackSize) -> Option<GridTrack> {
 /// A track's minimum: never `fr` (invalid CSS there).
 fn min_breadth(breadth: &TrackBreadth) -> Option<MinTrackSizingFunction> {
     Some(match breadth {
-        TrackBreadth::Length(length) => match length_percentage_val(length, &mut Vec::new())? {
+        TrackBreadth::Length(length) => match length.val()? {
             Val::Px(v) => MinTrackSizingFunction::Px(v),
             Val::Percent(v) => MinTrackSizingFunction::Percent(v),
             Val::Vw(v) => MinTrackSizingFunction::Vw(v),
@@ -3765,7 +2882,7 @@ fn min_breadth(breadth: &TrackBreadth) -> Option<MinTrackSizingFunction> {
 
 fn max_breadth(breadth: &TrackBreadth) -> Option<MaxTrackSizingFunction> {
     Some(match breadth {
-        TrackBreadth::Length(length) => match length_percentage_val(length, &mut Vec::new())? {
+        TrackBreadth::Length(length) => match length.val()? {
             Val::Px(v) => MaxTrackSizingFunction::Px(v),
             Val::Percent(v) => MaxTrackSizingFunction::Percent(v),
             Val::Vw(v) => MaxTrackSizingFunction::Vw(v),
@@ -3783,9 +2900,8 @@ fn max_breadth(breadth: &TrackBreadth) -> Option<MaxTrackSizingFunction> {
     })
 }
 
-fn grid_auto_flow(flow: css_grid::GridAutoFlow) -> GridAutoFlow {
-    let column = flow.contains(css_grid::GridAutoFlow::Column);
-    match (column, flow.contains(css_grid::GridAutoFlow::Dense)) {
+fn grid_auto_flow(flow: CssGridAutoFlow) -> GridAutoFlow {
+    match (flow.column, flow.dense) {
         (false, false) => GridAutoFlow::Row,
         (true, false) => GridAutoFlow::Column,
         (false, true) => GridAutoFlow::RowDense,
@@ -3796,40 +2912,33 @@ fn grid_auto_flow(flow: css_grid::GridAutoFlow) -> GridAutoFlow {
 /// One placement side: `auto`, a line number, a named line or area (resolved
 /// against the parent grid's `GridNames` at collection — see
 /// `LayoutDecl::resolve_names`) or a span.
-fn grid_line(line: &css_grid::GridLine) -> Option<GridLineDecl> {
+fn grid_line(line: &GridLine) -> Option<GridLineDecl> {
     match line {
-        css_grid::GridLine::Auto => Some(GridLineDecl::Auto),
-        // A named grid area (lightningcss postfixed it `-start`/`-end`?
-        // No — the plain name): resolved against the parent grid.
-        css_grid::GridLine::Area { name } => Some(GridLineDecl::Named {
-            name: name.0.to_string(),
+        GridLine::Auto => Some(GridLineDecl::Auto),
+        // A named grid area (the plain name): resolved against the parent
+        // grid.
+        GridLine::Area { name } => Some(GridLineDecl::Named {
+            name: name.clone(),
             index: None,
         }),
-        css_grid::GridLine::Line { index, name: None } => {
-            i16::try_from(*index).ok().map(GridLineDecl::Line)
-        }
+        GridLine::Line { index, name: None } => i16::try_from(*index).ok().map(GridLineDecl::Line),
         // A named line filtered to an occurrence (`2 main-start`).
-        css_grid::GridLine::Line {
+        GridLine::Line {
             index,
             name: Some(name),
         } => Some(GridLineDecl::Named {
-            name: name.0.to_string(),
+            name: name.clone(),
             index: i16::try_from(*index).ok(),
         }),
-        css_grid::GridLine::Span { index, name: None } => {
-            u16::try_from(*index).ok().map(GridLineDecl::Span)
-        }
-        css_grid::GridLine::Span { .. } => {
-            unsupported::<GridLineDecl>("a span anchored at a named line")
-        }
+        GridLine::Span { index, name: None } => u16::try_from(*index).ok().map(GridLineDecl::Span),
+        GridLine::Span { .. } => unsupported::<GridLineDecl>("a span anchored at a named line"),
     }
 }
 
 /// `grid-template-areas`: the areas' line bounds and the implied track
-/// counts. Invalid areas (a non-rectangular region can't reach here —
-/// lightningcss rejects them at parse; an empty declaration is `None`).
-fn parse_areas(areas: &css_grid::GridTemplateAreas) -> Option<GridNames> {
-    let css_grid::GridTemplateAreas::Areas { columns, areas } = areas else {
+/// counts (`None` for `none`).
+fn parse_areas(areas: &GridTemplateAreas) -> Option<GridNames> {
+    let GridTemplateAreas::Areas { columns, areas } = areas else {
         return None;
     };
     let columns = *columns as usize;
@@ -3870,248 +2979,21 @@ fn parse_areas(areas: &css_grid::GridTemplateAreas) -> Option<GridNames> {
     })
 }
 
-/// `width`/`height`/`min-*`: `auto`, lengths, `%`.
-fn size_val(size: &Size, sink: &mut Vec<CalcExpr>) -> Option<Val> {
-    match size {
-        Size::Auto => Some(Val::Auto),
-        Size::LengthPercentage(value) => length_percentage_val(value, sink),
-        _ => unsupported("intrinsic size keyword"),
-    }
-}
-
-/// `max-*`: `none` (no limit), lengths, `%`.
-fn max_size_val(size: &MaxSize, sink: &mut Vec<CalcExpr>) -> Option<Val> {
-    match size {
-        MaxSize::None => Some(Val::Auto),
-        MaxSize::LengthPercentage(value) => length_percentage_val(value, sink),
-        _ => unsupported("intrinsic size keyword"),
-    }
-}
-
-/// `margin`/`flex-basis`: `auto`, lengths, `%`.
-fn auto_val(value: &LengthPercentageOrAuto, sink: &mut Vec<CalcExpr>) -> Option<Val> {
-    match value {
-        LengthPercentageOrAuto::Auto => Some(Val::Auto),
-        LengthPercentageOrAuto::LengthPercentage(value) => length_percentage_val(value, sink),
-    }
-}
-
-/// Absolute lengths, viewport units and `%` (of the parent, as in CSS);
-/// font-relative units are leaves and `calc()` flattens into the crate's
-/// expression tree (mixed-unit sums resolve at layout time).
-/// Converts lightningcss's `Calc` AST into the crate's expression tree,
-/// through `leaf` for the value leaves. `None` for anything unsupported
-/// (round()/mod()/abs()/… — logged).
-fn calc_expr<V>(calc: &Calc<V>, leaf: &impl Fn(&V) -> Option<CalcExpr>) -> Option<CalcExpr> {
-    match calc {
-        Calc::Value(value) => leaf(value),
-        Calc::Number(n) => Some(CalcExpr::Number(*n as f32)),
-        Calc::Sum(a, b) => Some(CalcExpr::Sum(
-            Box::new(calc_expr(a, leaf)?),
-            Box::new(calc_expr(b, leaf)?),
-        )),
-        Calc::Product(n, v) => Some(CalcExpr::Product(*n as f32, Box::new(calc_expr(v, leaf)?))),
-        Calc::Function(function) => match &**function {
-            MathFunction::Calc(inner) => calc_expr(inner, leaf),
-            MathFunction::Min(args) => Some(CalcExpr::Min(calc_args(args, leaf)?)),
-            MathFunction::Max(args) => Some(CalcExpr::Max(calc_args(args, leaf)?)),
-            MathFunction::Clamp(min, value, max) => Some(CalcExpr::Max(vec![
-                calc_expr(min, leaf)?,
-                CalcExpr::Min(vec![calc_expr(value, leaf)?, calc_expr(max, leaf)?]),
-            ])),
-            _ => {
-                unsupported::<GridPlacement>("math function in calc()");
-                None
-            }
-        },
-    }
-}
-
-fn calc_args<'i, V>(
-    args: &[Calc<V>],
-    leaf: &impl Fn(&V) -> Option<CalcExpr>,
-) -> Option<Vec<CalcExpr>> {
-    args.iter().map(|arg| calc_expr(arg, leaf)).collect()
-}
-
-fn length_percentage_val(value: &LengthPercentage, sink: &mut Vec<CalcExpr>) -> Option<Val> {
-    match value {
-        LengthPercentage::Dimension(length) => match length {
-            LengthValue::Vw(vw) => Some(Val::Vw(*vw)),
-            LengthValue::Vh(vh) => Some(Val::Vh(*vh)),
-            LengthValue::Vmin(v) => Some(Val::VMin(*v)),
-            LengthValue::Vmax(v) => Some(Val::VMax(*v)),
-            // Bevy resolves `em` against the node's `EmSize` (which the
-            // build sets from the cascade's computed font-size) and `rem`
-            // against the `RemSize` resource (synced to the root rule's
-            // font-size).
-            LengthValue::Em(em) => Some(Val::Em(*em)),
-            LengthValue::Rem(rem) => Some(Val::Rem(*rem)),
-            length => length
-                .to_px()
-                .map(Val::Px)
-                .or_else(|| unsupported("relative length")),
-        },
-        LengthPercentage::Percentage(percentage) => Some(Val::Percent(percentage.0 * 100.0)),
-        LengthPercentage::Calc(calc) => {
-            let expr = calc_expr(calc, &length_percentage_leaf)?;
-            sink.push(expr);
-            None
+impl ElementStyle {
+    /// A length-valued property: a plain value, a `calc()` expression, or
+    /// nothing for an unsupported one (the earlier value stands).
+    fn set_length(&mut self, prop: CalcProp, length: &Length) {
+        match length {
+            Length::Val(value) => self.set_calc(prop, Some(*value), Vec::new()),
+            Length::Calc(expr) => self.set_calc(prop, None, vec![expr.clone()]),
+            Length::Unsupported => {}
         }
     }
-}
-
-/// A `LengthPercentage`'s leaf as a calc term.
-fn length_percentage_leaf(value: &LengthPercentage) -> Option<CalcExpr> {
-    match value {
-        LengthPercentage::Dimension(length) => length_val(length),
-        LengthPercentage::Percentage(percentage) => {
-            Some(CalcExpr::Val(Val::Percent(percentage.0 * 100.0)))
-        }
-        LengthPercentage::Calc(calc) => calc_expr(calc, &length_percentage_leaf),
-    }
-}
-
-/// A `LengthValue` leaf as a calc term.
-fn length_val(length: &LengthValue) -> Option<CalcExpr> {
-    Some(CalcExpr::Val(match length {
-        LengthValue::Vw(vw) => Val::Vw(*vw),
-        LengthValue::Vh(vh) => Val::Vh(*vh),
-        LengthValue::Vmin(v) => Val::VMin(*v),
-        LengthValue::Vmax(v) => Val::VMax(*v),
-        LengthValue::Em(em) => Val::Em(*em),
-        LengthValue::Rem(rem) => Val::Rem(*rem),
-        length => length.to_px().map(Val::Px)?,
-    }))
 }
 
 fn unsupported<T>(what: &str) -> Option<T> {
     debug!("html css: unsupported {what}");
     None
-}
-
-/// One declared `transition` entry over the properties the crate animates;
-/// every other property (and `all`) is skipped, logged.
-fn transition_decl(entry: &Transition) -> Option<TransitionDecl> {
-    let property = match &entry.property {
-        PropertyId::Color => TransitionProp::TextColor,
-        PropertyId::BackgroundColor => TransitionProp::BackgroundColor,
-        PropertyId::BorderColor => TransitionProp::BorderColor,
-        id => {
-            let _: Option<()> = unsupported(&format!("transition on {id:?}"));
-            return None;
-        }
-    };
-    Some(TransitionDecl {
-        property,
-        duration: entry.duration.to_ms() / 1000.0,
-        delay: entry.delay.to_ms() / 1000.0,
-        easing: entry.timing_function.clone(),
-    })
-}
-
-/// Whether an `outline-style` draws anything (`none` doesn't; every other
-/// style draws Bevy's solid outline).
-fn outline_visible(style: &lightningcss::properties::outline::OutlineStyle) -> bool {
-    use lightningcss::properties::border::LineStyle;
-    use lightningcss::properties::outline::OutlineStyle;
-    !matches!(
-        style,
-        OutlineStyle::LineStyle(LineStyle::None | LineStyle::Hidden)
-    )
-}
-
-/// One `border-*-radius` corner as CSS's `[horizontal, vertical]` pair.
-/// `%` resolves per-axis against the node's dimensions, as CSS does.
-fn corner_radius(radius: &Size2D<LengthPercentage>) -> Option<(Val, Val)> {
-    Some((
-        length_percentage_val(&radius.0, &mut Vec::new())?,
-        length_percentage_val(&radius.1, &mut Vec::new())?,
-    ))
-}
-
-/// `text-decoration-line` bits (and the shorthand's color): Bevy draws
-/// underline and line-through; `overline`, `blink` and the spelling/grammar
-/// decorations have no Bevy counterpart and are skipped.
-fn decoration_decl(line: TextDecorationLine, color: Option<&CssColor>) -> DecorationDecl {
-    DecorationDecl {
-        underline: line.contains(TextDecorationLine::Underline),
-        line_through: line.contains(TextDecorationLine::LineThrough),
-        color: color.and_then(to_color),
-    }
-}
-
-/// `padding` in px; `auto`, `%` and `calc()` are unsupported.
-fn length_px(value: &LengthPercentageOrAuto) -> Option<f32> {
-    match value {
-        LengthPercentageOrAuto::LengthPercentage(LengthPercentage::Dimension(length)) => {
-            length.to_px()
-        }
-        _ => {
-            debug!("html css: only absolute lengths are supported for padding");
-            None
-        }
-    }
-}
-
-/// `None` for colors without a fixed sRGB value (`currentColor`, system colors).
-fn to_color(color: &CssColor) -> Option<Color> {
-    let rgba = RGBA::try_from(color).ok()?;
-    Some(Color::srgba_u8(rgba.red, rgba.green, rgba.blue, rgba.alpha))
-}
-
-fn family_ref(family: &FontFamily) -> Option<FamilyRef> {
-    Some(match family {
-        FontFamily::FamilyName(name) => FamilyRef::Named(
-            name.to_css_string(PrinterOptions::default())
-                .ok()?
-                .trim_matches(['"', '\''])
-                .to_owned(),
-        ),
-        FontFamily::Generic(generic) => FamilyRef::Generic(match generic {
-            GenericFontFamily::Serif => GenericFamily::Serif,
-            GenericFontFamily::SansSerif => GenericFamily::SansSerif,
-            GenericFontFamily::Monospace => GenericFamily::Monospace,
-            GenericFontFamily::Cursive => GenericFamily::Cursive,
-            GenericFontFamily::Fantasy => GenericFamily::Fantasy,
-            GenericFontFamily::SystemUI => GenericFamily::SystemUi,
-            _ => return None,
-        }),
-    })
-}
-
-fn font_size(size: &FontSize) -> Option<FontSizeSpec> {
-    Some(match size {
-        FontSize::Length(LengthPercentage::Dimension(length)) => match length {
-            LengthValue::Px(px) => FontSizeSpec::Px(*px),
-            LengthValue::Em(em) => FontSizeSpec::Inherited(*em),
-            LengthValue::Rem(rem) => FontSizeSpec::Root(*rem),
-            _ => {
-                debug!("html css: unsupported font-size unit");
-                return None;
-            }
-        },
-        FontSize::Length(LengthPercentage::Percentage(percent)) => {
-            FontSizeSpec::Inherited(percent.0)
-        }
-        FontSize::Length(LengthPercentage::Calc(_)) => {
-            debug!("html css: calc() font-size unsupported");
-            return None;
-        }
-        // CSS Fonts 4 keyword scale with `medium` = 16px.
-        FontSize::Absolute(keyword) => FontSizeSpec::Px(match keyword {
-            AbsoluteFontSize::XXSmall => 9.0,
-            AbsoluteFontSize::XSmall => 10.0,
-            AbsoluteFontSize::Small => 13.0,
-            AbsoluteFontSize::Medium => 16.0,
-            AbsoluteFontSize::Large => 18.0,
-            AbsoluteFontSize::XLarge => 24.0,
-            AbsoluteFontSize::XXLarge => 32.0,
-            AbsoluteFontSize::XXXLarge => 48.0,
-        }),
-        FontSize::Relative(RelativeFontSize::Smaller) => FontSizeSpec::Inherited(1.0 / 1.2),
-        FontSize::Relative(RelativeFontSize::Larger) => FontSizeSpec::Inherited(1.2),
-    })
 }
 
 #[cfg(test)]
@@ -4187,12 +3069,13 @@ mod tests {
         );
     }
 
-    use lightningcss::stylesheet::ParserOptions;
-
     use super::*;
+    use crate::css::property::Easing;
+    use crate::css::sheet::parse_sheet;
+    use crate::fonts::GenericFamily;
 
-    fn sheet(css: &'static str) -> StyleSheet<'static> {
-        StyleSheet::parse(css, ParserOptions::default()).expect("valid css")
+    fn sheet(css: &'static str) -> Sheet {
+        parse_sheet(css).expect("valid css")
     }
 
     fn element(tag: &str, id: Option<&str>, classes: &[&str]) -> HtmlElement {
@@ -4450,11 +3333,8 @@ mod tests {
     }
 
     /// `css` parsed and owned (no borrowed input), like the asset loader does.
-    fn owned_sheet(css: &str) -> StyleSheet<'static> {
-        use lightningcss::traits::IntoOwned;
-        StyleSheet::parse(css, ParserOptions::default())
-            .expect("valid css")
-            .into_owned()
+    fn owned_sheet(css: &str) -> Sheet {
+        parse_sheet(css).expect("valid css")
     }
 
     /// Parses a selector the test expects to be supported.
@@ -5210,35 +4090,25 @@ mod tests {
         )
     }
 
-    /// bug_0238 (honggfuzz, CI): an `hsl()`/`hwb()` hue that overflows to
-    /// infinity makes lightningcss hand cssparser-color a NaN hue, which
-    /// it `debug_assert!`s (UPSTREAM U45) — a panic in debug builds from a
-    /// sheet, a `style` attribute or a substituted `var()` value. Each
-    /// parse is guarded: the CSS is dropped like unparseable CSS. Release
-    /// builds don't assert, and parse it.
+    /// bug_0238 (honggfuzz, CI): an `hsl()`/`hwb()` hue that overflowed to
+    /// infinity made lightningcss hand cssparser-color a NaN hue, which it
+    /// `debug_assert!`ed (UPSTREAM U45). bevy_markup's parser (ADR 0048)
+    /// refuses a non-finite number anywhere: the declaration drops, in
+    /// every build, from a sheet, a `style` attribute or a substituted
+    /// `var()` value; the rest of the sheet applies.
     #[test]
-    fn an_infinite_hue_is_an_error_not_a_panic() {
-        let asserts = cfg!(debug_assertions);
+    fn an_infinite_hue_drops_its_declaration() {
         for color in [
             "hsl(1e39 50% 50%)",
             "hsl(1e39, 50%, 50%)",
             "hwb(1e39 2% 8%)",
             "hsl(calc(infinity) 50% 50%)",
+            "hsl(calc(NaN) 50% 50%)",
         ] {
-            // The sheet loader's parse.
-            let css = format!("p {{ color: {color} }}");
-            let sheet = guarded_parse(|| {
-                StyleSheet::parse(&css, ParserOptions::default())
-                    .map(|_| ())
-                    .map_err(|err| err.to_string())
-            });
-            assert_eq!(sheet.is_err(), asserts, "{color}: {sheet:?}");
-            if let Err(message) = sheet {
-                assert!(
-                    message.starts_with("the CSS parser panicked: "),
-                    "{message}"
-                );
-            }
+            // The sheet loader's parse: the sheet loads, the color drops.
+            let style = declared(&format!("color: {color}; opacity: 0.5"));
+            assert!(style.color.is_none(), "{color}: {:?}", style.color);
+            assert_eq!(style.opacity, Some(0.5), "{color}");
             // A `style` attribute.
             let html = format!(r#"<p style="color: {color}">x</p>"#);
             let dom = tl::parse(&html, tl::ParserOptions::default()).unwrap();
@@ -5247,31 +4117,24 @@ mod tests {
                 .iter()
                 .find_map(|handle| handle.get(dom.parser()).and_then(|node| node.as_tag()))
                 .expect("the <p>");
-            assert_eq!(inline_style(tag).is_none(), asserts, "{color}");
+            assert!(inline_style(tag).is_none(), "{color}");
         }
-        // A substituted `var()` value (a context variable's text; a sheet's
-        // own `--h: 1e39` is re-serialized finite): the declaration is
-        // dropped.
+        // A substituted `var()` value: the declaration is dropped.
         let style = declared_with_context("color: hsl(var(--h) 50% 50%)", &[("--h", "1e39")]);
-        assert_eq!(style.color.is_none(), asserts, "{:?}", style.color);
-        // Finite hues, however large, and NaN were never a problem.
-        for color in [
-            "hsl(1e30 50% 50%)",
-            "hwb(-1e30 2% 8%)",
-            "hsl(calc(NaN) 50% 50%)",
-        ] {
-            let css = format!("p {{ color: {color} }}");
-            let sheet = guarded_parse(|| StyleSheet::parse(&css, ParserOptions::default()).is_ok());
-            assert_eq!(sheet, Ok(true), "{color}");
+        assert!(style.color.is_none(), "{:?}", style.color);
+        // Finite hues, however large, are colors.
+        for color in ["hsl(1e30 50% 50%)", "hwb(-1e30 2% 8%)"] {
+            let style = declared(&format!("color: {color}"));
+            assert!(style.color.is_some(), "{color}");
         }
     }
 
-    /// bug_0245 (honggfuzz, CI): a NaN in `min()`/`max()`/`clamp()` stays an
-    /// unevaluated function, and lightningcss's `Percentage::parse` calls
-    /// that `unreachable!()` (UPSTREAM U49), in release builds too. Each
-    /// parse is guarded, so the CSS is dropped like unparseable CSS.
+    /// bug_0245 (honggfuzz, CI): a NaN in `min()`/`max()`/`clamp()` reached
+    /// an `unreachable!()` in lightningcss (UPSTREAM U49), in release builds
+    /// too. bevy_markup's math refuses NaN and infinity, and parses the
+    /// other math functions as unsupported: each declaration drops.
     #[test]
-    fn a_nan_math_argument_is_an_error_not_a_panic() {
+    fn a_nan_math_argument_drops_its_declaration() {
         for value in [
             "min(1, NaN)",
             "min(1%, nan)",
@@ -5281,18 +4144,9 @@ mod tests {
             "min(1, mod(1, 0))",
             "min(1, calc(infinity - infinity))",
         ] {
-            // The sheet loader's parse.
-            let css = format!("p {{ opacity: {value} }}");
-            let sheet = guarded_parse(|| {
-                StyleSheet::parse(&css, ParserOptions::default())
-                    .map(|_| ())
-                    .map_err(|err| err.to_string())
-            });
-            let message = sheet.expect_err(value);
-            assert!(
-                message.starts_with("the CSS parser panicked: "),
-                "{value}: {message}"
-            );
+            let style = declared(&format!("opacity: {value}; color: red"));
+            assert!(style.opacity.is_none(), "{value}: {:?}", style.opacity);
+            assert!(style.color.is_some(), "{value}: the rest applies");
             // A `style` attribute.
             let html = format!(r#"<p style="opacity: {value}">x</p>"#);
             let dom = tl::parse(&html, tl::ParserOptions::default()).unwrap();
@@ -5307,9 +4161,9 @@ mod tests {
         let style = declared_with_context("color: hsl(0 min(1%, var(--n)) 50%)", &[("--n", "NaN")]);
         assert!(style.color.is_none(), "{:?}", style.color);
         // Finite arguments are ordinary CSS.
-        let css = "p { opacity: min(1, 2); color: hsl(0 min(1%, 2%) 50%) }";
-        let sheet = guarded_parse(|| StyleSheet::parse(css, ParserOptions::default()).is_ok());
-        assert_eq!(sheet, Ok(true));
+        let style = declared("opacity: min(1, 2); color: hsl(0 min(1%, 2%) 50%)");
+        assert_eq!(style.opacity, Some(1.0));
+        assert!(style.color.is_some());
     }
 
     /// A `var()` graph can be exponential: a self-reference with two
@@ -6198,11 +5052,11 @@ mod tests {
         );
         assert!((style.transitions[0].duration - 0.2).abs() < 1e-5);
         assert_eq!(style.transitions[0].delay, 0.0);
-        assert_eq!(style.transitions[0].easing, EasingFunction::EaseIn);
+        assert_eq!(style.transitions[0].easing, Easing::EaseIn);
         assert_eq!(style.transitions[1].property, TransitionProp::TextColor);
         assert!((style.transitions[1].duration - 0.1).abs() < 1e-5);
         assert!((style.transitions[1].delay - 0.05).abs() < 1e-5);
-        assert_eq!(style.transitions[1].easing, EasingFunction::Linear);
+        assert_eq!(style.transitions[1].easing, Easing::Linear);
 
         // Unanimatable properties and `all` are dropped; border-color (all
         // four sides at once) is animatable.
@@ -6504,8 +5358,9 @@ mod tests {
         for (value, expected) in [
             ("row", GridAutoFlow::Row),
             ("column", GridAutoFlow::Column),
-            // Bare `dense` (= `row dense`) fails lightningcss's parser
-            // (UPSTREAM.md U3): the declaration is dropped before us.
+            // Bare `dense` is `row dense` (lightningcss refused it,
+            // UPSTREAM U10).
+            ("dense", GridAutoFlow::RowDense),
             ("dense row", GridAutoFlow::RowDense),
             ("column dense", GridAutoFlow::ColumnDense),
         ] {
@@ -7264,10 +6119,9 @@ mod tests {
         assert!(Selector::parse("li:nth-child(-n+3)").is_some());
         // The whole path, as the fuzzer reached it: the sheet's rule skips.
         let css = String::from_utf8_lossy(b":not\0(){");
-        let sheet = StyleSheet::parse(&css, ParserOptions::default())
-            .expect("lightningcss parses it")
-            .into_owned();
-        let _ = HtmlStyles::from_sheet(&sheet);
+        if let Ok(sheet) = parse_sheet(&css) {
+            let _ = HtmlStyles::from_sheet(&sheet);
+        }
     }
 
     /// ADR 0034's allowlist: parts parcel's matcher panics on (`NthOf`,

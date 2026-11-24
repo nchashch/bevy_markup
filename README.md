@@ -239,12 +239,10 @@ underneath, and the reviews keep finding inputs they miss
   arguments, and a broken `\u` escape in a string literal that
   would crash the Fluent parser, fail the bundle's load. No `[patch]` is
   needed in your app.
-- **CSS**: nesting, `var()` substitution, grid tracks and selector forms
-  whose matching cost explodes are bounded or skipped. A panic inside the
-  CSS parser drops the CSS, which needs unwinding: **with `panic = "abort"`,
-  a stylesheet such as `p { opacity: min(1, NaN) }` aborts the app** until
-  this is fixed in lightningcss. Keep the default `panic = "unwind"` if you
-  load CSS you don't control.
+- **CSS** is parsed by bevy_markup's own parser, which reads only the
+  properties it maps and refuses infinite and NaN values: nesting,
+  `var()` substitution, `calc()`, grid tracks and selector forms whose
+  matching cost explodes are bounded or skipped.
 - **SVG**: no external resources, size, depth, conversion-work (style
   sheets and text included) and render-cost limits, and a memory budget for
   all drawn rasters (`svg::MAX_SVG_RASTER_BYTES`).
@@ -360,8 +358,8 @@ flowchart LR
    of Mozilla's `fluent-dom`. Translations may carry inline markup, styled
    like the rest of the page; the element's own content is the fallback
    when a message is missing.
-3. **Style + build.** The CSS is parsed with
-   [lightningcss](https://lightningcss.dev) and cascaded the way a browser
+3. **Style + build.** The CSS is parsed (bevy_markup's own parser on
+   Servo's [cssparser](https://crates.io/crates/cssparser)) and cascaded the way a browser
    would (specificity, `!important`, source order, inheritance), then built
    into Bevy UI entities: blocks become `Text` nodes with one `TextSpan`
    per styled run, containers become flex nodes, each carrying an

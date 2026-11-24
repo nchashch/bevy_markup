@@ -168,7 +168,7 @@ impl FontFamilies {
 }
 
 /// One entry of a CSS `font-family` list.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FamilyRef {
     Named(String),
     Generic(GenericFamily),

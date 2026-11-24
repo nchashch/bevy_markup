@@ -65,6 +65,6 @@ as `[INFERENCE]`.
 | [0046](./0046-template-check-nesting-and-depth.md) | The template check: loops over context data nest only over their element; one depth budget | Accepted |
 
 | [0047](./0047-bound-quadratic-template-and-fluent-operations.md) | Bound quadratic template and Fluent operations before execution | Accepted |
-| [0048](./0048-own-css-value-parsing-on-cssparser.md) | CSS is parsed on cssparser by bevy_markup; lightningcss leaves gradually | Proposed |
+| [0048](./0048-own-css-value-parsing-on-cssparser.md) | CSS is parsed on cssparser by bevy_markup; lightningcss is removed | Accepted |
 
 Add new records to this index in the same commit that adds the file.

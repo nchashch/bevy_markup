@@ -247,6 +247,7 @@ pub mod canvas;
 #[doc(hidden)]
 pub use build::{Skeleton, WindowKey, WindowModel, WindowSpacer};
 mod cascade;
+mod css;
 pub mod custom_elements;
 pub mod focus;
 pub mod fonts;
@@ -272,7 +273,7 @@ pub mod tera_check;
 pub mod tooltips;
 
 /// Dependencies whose types appear in this crate's API.
-pub use {fluent, lightningcss, tera, tl};
+pub use {fluent, tera, tl};
 
 /// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {

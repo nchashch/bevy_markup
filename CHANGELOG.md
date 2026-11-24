@@ -82,13 +82,32 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     image fails with an error, instead of a renderer panic.
 
 ### Changed
+- CSS is parsed by bevy_markup's own parser instead of lightningcss
+  (ADR 0048). It reads only the properties bevy_markup maps. What you may
+  notice: an infinite or NaN value (`hsl(1e39 50% 50%)`,
+  `min(1, NaN)`) drops only its declaration, where it used to fail the
+  whole stylesheet; math functions other than `calc()`, `min()`, `max()`
+  and `clamp()` (`round()`, `abs()`, …) are unsupported and drop their
+  declaration; an error inside an at-rule such as `@media` no longer fails
+  the sheet; negative widths, heights and paddings are invalid, as in
+  browsers; `color()` supports `srgb`, `srgb-linear`, `display-p3` and the
+  XYZ spaces, and `color-mix()` has no fixed color.
 - The `svg` feature now uses resvg and usvg 0.50.
 - **No `[patch]` for fluent-syntax needed any more**: remove the
   `fluent-syntax` entry from your app's `[patch.crates-io]` if you added
   it. bevy_markup now uses upstream fluent-syntax and refuses, at load, the
   Fluent files that would crash it (ADR 0045).
 
+### Removed
+- **Breaking:** the `bevy_markup::lightningcss` re-export and
+  `Stylesheet::sheet()`. bevy_markup now parses CSS itself (see Changed);
+  depend on `lightningcss` directly if your app used it.
+
 ### Security
+- Untrusted CSS can no longer crash the app through the CSS parser: the
+  inputs that panicked lightningcss (a NaN in `min()`/`max()`/`clamp()`,
+  which aborted apps built with `panic = "abort"`, and an infinite hue)
+  are refused, and no value carries NaN or infinity into the cascade.
 - SVG documents with very many `<text>` elements are refused at load
   instead of taking seconds and hundreds of MB to convert. Each `<text>`
   now counts toward `MAX_SVG_WORK`, so an inline `<svg>` with more than
@@ -140,10 +159,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   skipped (each costs the document's depth squared per element).
 
 ### Fixed
+- `grid-auto-flow: dense` means `row dense`, as in CSS (it used to be
+  dropped).
 - CSS: a NaN inside `min()`, `max()` or `clamp()` (`min(1, NaN)`,
-  `min(1, sqrt(-1))`) panicked the CSS parser. The declaration or sheet is
-  now dropped like unparseable CSS. **Apps built with `panic = "abort"`
-  still abort on such CSS** until lightningcss fixes it (bug_0245).
+  `min(1, sqrt(-1))`) panicked the CSS parser, in every build. Only the
+  declaration is dropped now (bug_0245).
 - `HtmlDebugOutline` no longer runs out of memory on deeply nested HTML:
   the outline stops at 1 MiB with a closing "outline truncated" note
   (bug_0244).
@@ -158,9 +178,8 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   hiding the focused control repairs focus to a visible one (bug_0242).
 - CSS: an `hsl()` or `hwb()` colour whose hue overflows to infinity
   (`hsl(1e39 50% 50%)`, `calc(infinity)`) panicked in debug builds — in a
-  stylesheet, a `style` attribute or a context `var()` value. The
-  declaration (or the sheet) is now dropped like unparseable CSS
-  (bug_0238).
+  stylesheet, a `style` attribute or a context `var()` value. Only the
+  declaration is dropped now (bug_0238).
 - A template set nesting loops through a chain of includes no longer
   crashes the app with a stack overflow while it loads; past
   `MAX_DEPTH` levels (96, across includes) it fails to load.

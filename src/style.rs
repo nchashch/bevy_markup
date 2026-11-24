@@ -13,7 +13,9 @@
 //! rules target the
 //! generated tags exactly like hand-written HTML.
 //!
-//! Supported CSS (parsed with lightningcss; a syntax error fails the load):
+//! Supported CSS (parsed by bevy_markup's own parser, ADR 0048; a syntax
+//! error fails the load, an invalid or unsupported value drops only its
+//! declaration):
 //! - selectors: compound selectors — a type (or `*`) plus any `.class` /
 //!   `#id` parts: `p`, `.note`, `#title`, `p.note`, `.a.b`, `h1#x.big` — joined
 //!   by descendant (a space) or child (`>`) combinators: `.panel p`,
@@ -158,8 +160,7 @@
 //!   template don't resolve — they place `auto`), and `span`:
 //!   `grid-row`/`-column` (+ `-start`/`-end`), `grid-area`;
 //!   `grid-template-areas` defines the named areas and implies the
-//!   explicit tracks it spans (sized `auto`). Bare `grid-auto-flow: dense`
-//!   doesn't parse (lightningcss); write `row dense`.
+//!   explicit tracks it spans (sized `auto`).
 //! - cascade: `!important` beats normal declarations, then higher specificity
 //!   (ids, classes, type) wins, then the later rule. `initial`/`inherit`/
 //!   `unset`/`revert` clear the field back to the initial value — one
@@ -224,15 +225,13 @@ use bevy::platform::collections::HashMap;
 
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
-use lightningcss::stylesheet::{ParserOptions, StyleSheet};
-use lightningcss::traits::IntoOwned;
 
 /// A parsed `.css` file, plus the images its `border-image-source: url(...)`
 /// declarations reference (resolved relative to the `.css` file, loaded as
 /// dependencies).
 #[derive(Asset, TypePath)]
 pub struct Stylesheet {
-    pub(crate) sheet: StyleSheet<'static>,
+    pub(crate) sheet: crate::css::sheet::Sheet,
     /// The `var()` names the sheet (transitively, through its own `--`
     /// declarations) reads from the context — computed once at load.
     pub(crate) var_names: Vec<String>,
@@ -246,9 +245,21 @@ pub struct Stylesheet {
 }
 
 impl Stylesheet {
-    /// The lightningcss stylesheet tree.
-    pub fn sheet(&self) -> &StyleSheet<'static> {
+    /// The parsed rules.
+    pub(crate) fn sheet(&self) -> &crate::css::sheet::Sheet {
         &self.sheet
+    }
+
+    /// Whether `source` parses as the `.css` loader parses it (the nesting
+    /// pre-scan, then the parser): `Err` carries the loader's message.
+    /// For tooling that checks stylesheets without an app (the content
+    /// lint); not a stable API.
+    #[doc(hidden)]
+    pub fn check(source: &str) -> Result<(), String> {
+        if crate::cascade::nesting_over_limit(source) {
+            return Err("stylesheet nests too deeply".into());
+        }
+        crate::css::sheet::parse_sheet(source).map(drop)
     }
 
     /// The image a `url(...)` in this sheet refers to (`None`: the URL
@@ -297,22 +308,14 @@ impl AssetLoader for StylesheetLoader {
         reader.read_to_end(&mut bytes).await?;
         let source = String::from_utf8(bytes)?;
 
-        let options = ParserOptions {
-            filename: load_context.path().to_string(),
-            ..ParserOptions::default()
-        };
-        // The parse error borrows `source`; render it before `source` drops.
-        // lightningcss's parser recurses per parenthesis with no bound:
-        // reject pathological nesting before it (review_0003 G08). The
-        // sheet fails its load, like unparseable CSS.
+        // The parsers recurse once per nested block: reject pathological
+        // nesting before them (review_0003 G08). The sheet fails its
+        // load, like unparseable CSS.
         if crate::cascade::nesting_over_limit(&source) {
             return Err("stylesheet nests too deeply".into());
         }
-        // Guarded: lightningcss panics on some values in debug builds
-        // (bug_0238); the sheet fails its load with the message.
-        let sheet = crate::cascade::guarded_parse(|| {
-            StyleSheet::parse(&source, options).map_err(|err| err.to_string())
-        })??;
+        let sheet = crate::css::sheet::parse_sheet(&source)
+            .map_err(|error| format!("{}: {error}", load_context.path()))?;
         // Border-image URLs: a dependency of the sheet (an unresolvable
         // one fails the load, as before). Custom-property URLs: a
         // `--icon: url(...)` can be anything (a data URI, a scheme) —
@@ -348,7 +351,7 @@ impl AssetLoader for StylesheetLoader {
         }
         Ok(Stylesheet {
             var_names: crate::cascade::var_names(&sheet),
-            sheet: sheet.into_owned(),
+            sheet,
             images,
         })
     }

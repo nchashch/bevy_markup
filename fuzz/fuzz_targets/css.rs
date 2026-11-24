@@ -1,4 +1,4 @@
-//! Fuzzes CSS: lightningcss parse → cascade matching → root box, including
+//! Fuzzes CSS: bevy_markup's parse → cascade matching → root box, including
 //! `border-image` slice arithmetic against a fake 32×24 image.
 //!
 //! Contract: never panics. Parse errors are fine.

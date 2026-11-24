@@ -1,13 +1,13 @@
-# 48. CSS is parsed on cssparser by bevy_markup; lightningcss leaves gradually
+# 48. CSS is parsed on cssparser by bevy_markup; lightningcss is removed
 
 | Field | Content |
 |---|---|
 | `ADR` | `0048` |
-| `Title` | CSS is parsed on cssparser by bevy_markup; lightningcss leaves gradually |
-| `Date` | 2026-11-24 21:17 +0400 |
-| `Author` | Claude Opus 5.5 (Anthropic), via Claude Code. The direction is the user's decision: keep Servo's tokenizer and the selector engine, and write typed parsing only for the properties bevy_markup supports, done gradually |
-| `Commit` | `a76df61 graft -> trail update` |
-| `Status` | Proposed |
+| `Title` | CSS is parsed on cssparser by bevy_markup; lightningcss is removed |
+| `Date` | 2026-11-24 21:17 +0400; revised 2026-11-24 22:10 +0400 (single pass, implemented) |
+| `Author` | Claude Opus 5.5 (Anthropic), via Claude Code. The direction is the user's decision: keep Servo's tokenizer and the selector engine, and write typed parsing only for the properties bevy_markup supports; then "rip lightningcss out entirely … keeping all the tests, with them failing and then iteratively rebuilding the functionality until tests pass" |
+| `Commit` | `22a04b0 Propose ADR 0048: parse CSS on cssparser, phase out lightningcss` + uncommitted: the parser (branch `css-own-parser`) |
+| `Status` | Accepted |
 | `Related` | ADR 0001 (lightningcss chosen), ADR 0034 (selectors), ADR 0039 (pre-scan on cssparser), ADR 0044 (every input is untrusted); bug_0092, bug_0179, bug_0238, bug_0245; UPSTREAM U10, U14, U15, U45, U49 |
 
 ## Context
@@ -53,108 +53,79 @@ untrusted text, before bevy_markup sees the result.
 
 ## Decision
 
-bevy_markup parses CSS itself on `cssparser` (0.37, already a direct
-dependency for the pre-scan). It parses only the properties it maps, with
-its own bounds on depth and work. lightningcss leaves in steps, each
-shippable on its own.
+bevy_markup parses CSS itself, in `src/css/`, on `cssparser` 0.37 (already a
+direct dependency for the pre-scan) and parcel_selectors' selector parser.
+lightningcss and its re-export are removed in one change. The proposed
+gradual plan (below, under Alternatives) was dropped at the user's request:
+the existing tests are the specification, and the parser was rebuilt until
+they pass.
 
-### 1. bevy_markup owns rules and declarations; lightningcss gets single declarations behind a gate
+### 1. Sheets and declarations (`css/sheet.rs`)
 
-- **Rules.** A `cssparser` `StyleSheetParser` builds bevy_markup's own
-  sheet: style rules with their selectors and declarations, in source
-  order. At-rules are consumed and skipped; the pre-scan still bounds their
-  nesting.
-- **Selectors.** Each rule's prelude is parsed with lightningcss's public
-  `SelectorList` parser (`ParseWithOptions`), so ADR 0034's matcher and
-  allowlist don't change in this step. Selector parsing has no reported
-  defect, and it never reaches the value layer.
-- **Declarations.** A `RuleBodyParser` records each declaration as name,
-  importance and its raw value: the value's source text plus its
-  `cssparser` tokens. The `style` attribute goes through the same
-  declaration parser.
-- **`var()`.** Substitution runs on raw tokens instead of `TokenList`. The
-  existing limits stay: `MAX_VAR_DEPTH`, `MAX_SUBSTITUTE_DEPTH`, the
-  64 KiB budget and cycle detection.
-- **Dispatch.** Each declaration is parsed after substitution. A ported
-  property goes to bevy_markup's parser. Any other goes to
-  `Property::parse_string` under `guarded_parse`, but only through the
-  **gate**. The gate refuses a value holding any CSS math function or
-  constant (`calc`, `min`, `max`, `clamp` and the rest of CSS Values 4),
-  or a numeric token that isn't finite as `f32`. A refused declaration
-  drops like any unsupported value: an earlier rule's value stands.
-- **Math and lengths are ported in this step.** Without them, the gate
-  would drop `calc()` from the 17 properties that support it today
-  (`calc_props`: sizes, `flex-basis`/`flex`, margins, insets, the `calc`
-  example). The ported grammar is lengths in every unit, percentages,
-  numbers, and `calc()`/`min()`/`max()`/`clamp()` parsed straight into
-  `CalcExpr`. Parenthesis depth is already bounded by
-  `MAX_CSS_PAREN_NESTING` (8), and every operation is checked for NaN and
-  infinity.
-- **Public API.** `Stylesheet::sheet()` returns bevy_markup's own sheet type
-  or is removed. That is a breaking change, marked in the CHANGELOG.
+`cssparser`'s `StyleSheetParser` and `RuleBodyParser` build a `Sheet` of
+style rules in source order. A syntax error fails the sheet or `style`
+attribute, as lightningcss did without error recovery. At-rules and nested
+rules are accepted and skipped without parsing their contents. Each
+declaration becomes one of:
 
-After this step, no `calc()` and no non-finite number reaches lightningcss's
-value layer. U49 can't be reached, and neither can U45 (an infinite hue
-needs a non-finite number) [INFERENCE: check U45's inputs against the gate
-when implementing].
+- `Value(Decl)`: parsed once, at load.
+- `Keyword(name)`: `initial`/`inherit`/`unset`/`revert`.
+- `Var { name, value: Raw }`: a value holding `var()`, kept as source text
+  and parsed per element after substitution. Substitution walks
+  cssparser's tokens and wraps each substituted value in empty comments,
+  so it never merges with a neighbouring token. The existing bounds stay:
+  `MAX_VAR_DEPTH`, `MAX_SUBSTITUTE_DEPTH`, the 64 KiB budget, cycle
+  detection.
+- `Custom { name, value: Raw }`: a `--name` declaration.
 
-### 2. Properties are ported group by group
+### 2. Selectors (`css/select.rs`)
 
-Each group replaces lightningcss for its properties in one change. That
-change adds a differential property test that compares bevy_markup's parse
-with lightningcss's on generated values: same `ElementStyle` fields,
-lightningcss under `guarded_parse` and skipped where it fails. The browser
-oracle vectors cover the group, and the group's `cascade::tests` keep
-passing unchanged.
+parcel_selectors parses into bevy_markup's own `SelectorImpl` (owned
+`String` names; its `into_owned` feature, with the `static-self` crate,
+lifts a parsed list to `'static`). Unknown pseudo-classes and
+pseudo-elements parse and are skipped by ADR 0034's allowlist, so they skip
+their rule instead of failing the sheet. The matcher in
+`cascade/selector.rs` is unchanged apart from its types.
 
-1. **Colors:** hex, the named colors, `rgb()`/`hsl()`/`hwb()` in both
-   syntaxes, `lab`/`lch`/`oklab`/`oklch`, `color()`, `currentColor`,
-   `transparent`.
-2. **Box, flex, text and keywords:** padding, borders and radii,
-   `border-image`, background, outline, display, position, overflow,
-   visibility, `z-index`, opacity, alignment, the flex family, the font and
-   text properties, `list-style`, `white-space`, transitions and easing.
-3. **Grid:** track lists with `repeat()`, `minmax()`, `fit-content()`,
-   named lines, `grid-template-areas`, placements and the `grid`,
-   `grid-template` and `grid-area` shorthands. This fixes U10 along the way.
+### 3. Properties and values (`css/property.rs`, `value.rs`, `color.rs`, `grid.rs`)
 
-### 3. Selectors, then the dependency
+One parser per property the cascade maps produces a `Decl` that
+`cascade::apply` writes into an `ElementStyle`. Every other property is
+dropped without parsing. A value inside the grammar that bevy_markup can't
+map carries `None` and keeps the earlier value, as before.
 
-Selectors are parsed with `parcel_selectors`' parser directly. bevy_markup
-implements its `SelectorImpl` and `Parser`, because lightningcss's are
-private (`cascade/selector.rs` already works around that). Then
-lightningcss, the `lightningcss` re-export and `cssparser-color` leave
-`Cargo.toml`, and `parcel_selectors` stays.
-
-### Estimates
-
-[INFERENCE: sized from the code each step replaces; new code including its
-tests, one session ≈ one agent working day with the suite run per change.]
-
-| Step | Replaces | New code | Sessions |
-|---|---|---|---|
-| 1. Rules, declarations, raw `var()`, gate, math and lengths | `from_sheet`, `inline_style`, `substitute_inner`, `var_names`, `image_urls`, `calc_expr`, `length_percentage_val`, the loader, the fuzz glue | 1,500–2,100 lines | 3–5 |
-| 2.1 Colors | `CssColor` paths | 700–1,000 | 2–3 |
-| 2.2 Box, flex, text, keywords | most of `apply`, `apply_keyword`, `apply_resolved` | 1,200–1,800 | 3–5 |
-| 2.3 Grid | `track_sizing`, `parse_areas`, `grid_line`, `grid_placement`, `min_breadth` | 900–1,300 | 2–4 |
-| 3. Selectors, removal | the `SelectorList` parse, `cascade/selector.rs`'s workaround | 400–700 | 1–2 |
-| **Total** | | **4,700–6,900** | **11–19** |
+- **Math.** `calc()`, `min()`, `max()` and `clamp()` parse into a tree and
+  evaluate with CSS's types: numbers fold, a length-percentage becomes
+  `CalcExpr` with same-unit terms combined. Depth is bounded
+  (`MAX_CALC_DEPTH` 32, under the pre-scan's 8 parentheses). Every literal
+  and result must be finite, so no value carries NaN or infinity. The other
+  math functions parse as unsupported.
+- **Lengths.** A unitless number is pixels, as lightningcss read it:
+  `TemplateContext` numbers reach `var()` unitless (`--px: 24`), and the
+  tests pin that.
+- **Colors.** CSS Color 4's formulas, quantized to 8-bit sRGB like
+  lightningcss's `RGBA`.
+- **Grid.** lightningcss's grammar, with one fix: a bare
+  `grid-auto-flow: dense` is `row dense` (U10).
 
 ## Alternatives considered
 
+- **The gradual plan this record first proposed.** Own the rule layer first,
+  gate lightningcss's value parser away from math and non-finite numbers,
+  then port property groups and selectors. Dropped by the user in favour of
+  one pass: the intermediate states needed throwaway gating code, and the
+  test suite could drive a full rewrite directly.
 - **Keep lightningcss and keep guarding it.** The guard doesn't work under
   `panic = "abort"` or for a stack overflow. Scans before the parse can't
   cover every math route (bug_0245), and every lightningcss upgrade
   re-opens the question.
 - **Take over `calc()` first, leaving the sheet to lightningcss.** Ruled
   out: `StyleSheet::parse` parses every declaration's value before
-  bevy_markup sees any of it, so the panic happens inside lightningcss.
-  The rule layer has to move first.
+  bevy_markup sees any of it.
 - **Stylo (Servo and Firefox's style engine, crate `stylo`).** The most
-  heavily used Rust CSS code, but it is a whole style engine built around
-  a browser DOM. Its supporting crates are described upstream as
-  implementation details, it is MPL-2.0, and it makes frequent breaking
-  releases. The input surface would grow, not shrink.
+  heavily used Rust CSS code, but a whole style engine built around a
+  browser DOM, MPL-2.0, with frequent breaking releases. The input surface
+  would grow, not shrink.
 - **swc_css_parser, Biome's CSS parser, raffia.** Syntax trees for build
   tools, with mostly untyped values and no published security or fuzzing
   record. The typed value parsing would still be bevy_markup's.
@@ -165,19 +136,25 @@ tests, one session ≈ one agent working day with the suite run per change.]
 
 ## Consequences
 
-- **Gained:** the CSS that runs on untrusted input is the tokenizer, the
-  selector parser and bevy_markup's own value code, bounded like the
-  template, FTL and SVG checks (ADR 0044–0047). After step 1, lightningcss's
-  math layer can't be reached.
-- **Cost:** 4,700–6,900 lines of parser code to own, and bugs of its own.
-  The browser oracle, `tests/properties.rs`, the quickcheck cascade models,
-  the fuzz targets and the differential tests are what catch them.
-- **Breaking:** `Stylesheet::sheet()` in step 1, and the `lightningcss`
-  re-export in step 3.
-- **Behavior:** a value lightningcss simplified but bevy_markup doesn't
-  port, such as `calc()` in `padding` or `border-width` (absolute lengths
-  only today), is dropped by the gate until its group lands. Step 1 lists
-  each such drop in the CHANGELOG.
-- **Open:** whether to fuzz the CSS target in CI again after step 1 is a
-  separate decision. ADR 0039's pre-scan stays, since bevy_markup's own
-  parsers recurse on cssparser's nested blocks too.
+- **Gained:** untrusted CSS reaches only the tokenizer, parcel_selectors'
+  selector parser and bevy_markup's own value code. lightningcss's panics
+  (U45, U49) can't be reached; a non-finite value drops its declaration in
+  every build, where it used to fail the whole sheet or abort a
+  `panic = "abort"` app. `cascade::guarded_parse` is gone.
+- **Measured:** all 657 tests pass with `--features svg-text,fuzzing`, as
+  do the plain and `text-input` suites. The golden images are identical.
+  The pre-existing tests changed only where they pinned lightningcss
+  itself: the two crash-path tests now expect only the declaration to
+  drop, and the fuzz harness no longer excuses lightningcss panics. The
+  parser is 4,378 lines (`src/css/`); the cascade lost 1,700 lines of
+  lightningcss mapping.
+- **Breaking:** the `lightningcss` re-export and `Stylesheet::sheet()` are
+  gone (`Stylesheet::check`, hidden, validates a sheet for tooling).
+- **Behavior:** math functions other than `calc()`/`min()`/`max()`/
+  `clamp()` aren't evaluated (lightningcss folded constant ones); errors
+  inside an at-rule no longer fail a sheet; `color()` knows `srgb`,
+  `srgb-linear`, `display-p3` and XYZ only; `color-mix()` has no fixed
+  color; negative widths, heights and paddings are invalid, as in CSS.
+- **Open:** whether to fuzz the CSS target in CI again. ADR 0039's
+  pre-scan stays, since bevy_markup's parsers recurse on cssparser's
+  nested blocks too.

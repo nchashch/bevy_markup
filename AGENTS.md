@@ -62,7 +62,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 
 Re-exported crates (their types appear in the API): `tera`, `tl` (the
 `astral-tl` fork, bug_0019 / UPSTREAM.md U11),
-`fluent`, `lightningcss`. Cargo features: `system_fonts` (Bevy's
+`fluent`. Cargo features: `system_fonts` (Bevy's
 `system_font_discovery`), `text-input` (the editable-text widget),
 `hot-reload` (the file watcher), `svg` (`.svg` images via usvg/resvg,
 ADR 0038), `svg-text` (`svg` + SVG `<text>`; `fuzzing` implies it, and the harness draws
@@ -141,6 +141,8 @@ src/
                    selects, adjacent placeables, term/message references and values whose
                    marker would land in a link destination convert per value) (ADR 0020)
   style.rs         Stylesheet asset + loader, DefaultStylesheet, HtmlStylesheet; CSS subset docs
+  css/             (ADR 0048) bevy_markup's CSS parser: sheet.rs, select.rs, property.rs,
+                   value.rs, color.rs, grid.rs (see Pipeline, CSS parser)
   cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
   cascade/selector.rs (internal) selector allowlist + parcel_selectors matching (ADR 0034)
   fonts.rs         FontFamilies, FontFaces, GenericFamily
@@ -740,7 +742,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   state, bug_0018), nested `HtmlUi` children are skipped (bug_0017).
 - Inline styles and opacity (`cascade.rs` `InlineStyle`/`HtmlStyles::get_with`,
   `build.rs` `Style::opacity`/`BoxStyle::fade`/`faded`): the `style`
-  attribute is parsed per element (lightningcss `StyleAttribute`) and applied
+  attribute is parsed per element (`css::sheet::parse_declarations`) and applied
   after normal rules / after `!important` rules for its `!important` part
   (uncached). `opacity` multiplies down the tree in the computed `Style`
   (the `<html>` element reuses the root style, or its opacity would square)
@@ -872,8 +874,23 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   sanitizing (nested markup, `class`/`id`, any element kept), string args
   HTML-escaped, fluent-rs number formatting (no grouping). CJK paragraphs go
   on one line (a wrapped line becomes a stray space).
-- CSS subset (`style.rs` docs): selectors as lightningcss parses them,
-  matched by its engine (parcel_selectors, ADR 0034) within an allowlist
+- CSS parser (`src/css/`, ADR 0048): bevy_markup's own, on cssparser's
+  tokenizer and rule parsers. `sheet.rs` (rules, declarations, `!important`;
+  a syntax error fails the sheet or attribute, at-rules and nested rules
+  are skipped; a value holding `var()` is kept as raw text, `Raw`, and so
+  is a `--name` declaration), `select.rs` (parcel_selectors' parser over
+  bevy_markup's own `SelectorImpl`; unknown pseudo-classes and elements
+  parse and the allowlist skips them), `property.rs` (one parser per mapped
+  property into `Decl`, which `cascade::apply` writes; any other property
+  is dropped unparsed), `value.rs` (lengths — a unitless number is px, as
+  context numbers rely on —, numbers, angles, times, URLs and typed
+  `calc()`/`min()`/`max()`/`clamp()` folded into `CalcExpr`; other math
+  functions are unsupported; every literal and result must be finite, so
+  no value carries NaN or infinity), `color.rs` (CSS Color 4 to 8-bit
+  sRGB), `grid.rs` (track lists, areas, placements, `grid`/`grid-template`;
+  a bare `grid-auto-flow: dense` is `row dense`).
+- CSS subset (`style.rs` docs): selectors parsed by parcel_selectors and
+  matched by its engine (ADR 0034) within an allowlist
   (`cascade/selector.rs`): types, classes, ids, comma lists, descendant/child
   combinators, `data-*` attribute selectors, `+`/`~` next to the subject,
   `:is()`/`:where()`/`:not()` and the structural pseudo-classes per the
@@ -902,21 +919,11 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   output at every level and abort the process (bug_0092);
   CSS text (sheet sources, `style=` attributes, substituted values) nesting
   blocks deeper than `MAX_CSS_NESTING` (32) or parentheses deeper than
-  `MAX_CSS_PAREN_NESTING` (8) is rejected before lightningcss parses it:
-  its parser recurses without bound and parses nested `light-dark(` /
-  `calc(var(…))` in exponential time (`nesting_over_limit`, a walk over
+  `MAX_CSS_PAREN_NESTING` (8) is rejected before the parsers read it:
+  they recurse once per nested block (`nesting_over_limit`, a walk over
   cssparser's own tokens with recursion bounded by the limits — ADR 0039,
   after a hand-written scan disagreed with the tokenizer in bug_0183 and
-  bug_0184; `pre_scan_tokenizes_with_lightningcss_cssparser` fails the
-  build if bevy_markup's cssparser pin and lightningcss's ever differ;
-  bug_0092, bug_0106, bug_0179; UPSTREAM.md U14, U15); the three
-  lightningcss parses of untrusted text (the sheet loader, `style`
-  attributes, substituted `var()` values) run under
-  `cascade::guarded_parse` (`catch_unwind`): lightningcss panics in debug
-  builds on an infinite `hsl()`/`hwb()` hue (bug_0238, U45) and in every
-  build on a NaN `min()`/`max()`/`clamp()` argument (bug_0245, U49), and
-  no scan can refuse every `calc()` route to them — a panic drops the CSS
-  like a parse error (under `panic = "abort"`, U49 aborts the app);
+  bug_0184; bug_0092, bug_0106, bug_0179, from lightningcss's time);
   `transition` (the shorthand) animates a restyled color's change
   (`color`/`background-color`/`border-color`), driven by an
   `advance_transitions` system after `Build`.
@@ -925,8 +932,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   families, generics via `set_generic`; nothing registered → Bevy's
   default font, as browsers do), `font-size` (`px`, `em`/`%`, `rem`, keywords
   with medium = 16px, `smaller`/`larger`), `font-weight` (bold above 500, CSS
-  font matching), `font-style`, `pointer-events` (`none`/`auto`; arrives as
-  an unknown property — lightningcss has no typed one); blocks:
+  font matching), `font-style`, `pointer-events` (`none`/`auto`); blocks:
   `background-color`. `html` is the
   starting point even without `<html>`; nothing declared → white, Bevy's
   default font, 16px. Missing font faces fall back as CSS font matching does
@@ -957,8 +963,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `auto-fill`/`auto-fit` repeat (its count is layout-dependent) or an
   occurrence past the template — places `auto`; `span` anchored at a named
   line is unsupported. `grid-template`/`grid` reset the name table, a later
-  nameless track list clears that axis's names. Bare
-  `grid-auto-flow: dense` fails lightningcss's parser (UPSTREAM.md U10).
+  nameless track list clears that axis's names.
   `position` (`CssPosition`: static/relative/absolute/fixed) + insets
   (`top`/`right`/`bottom`/`left`/`inset`), and `border-radius` corners
   (circular or the CSS `h / v` elliptical syntax), are
@@ -1860,8 +1865,8 @@ Known limits (each skipped/ignored value is logged at `debug`):
   indent is CSS-overridable per side. A nested list inside an `li`
   renders as inline content (containers inside blocks are inline — the
   mixed-content rule).
-- **Selectors:** lightningcss parses them and its engine,
-  parcel_selectors, matches them (ADR 0034) over `cascade/selector.rs`
+- **Selectors:** parcel_selectors parses them (over `css::select`'s
+  `SelectorImpl`, ADR 0048) and matches them (ADR 0034) over `cascade/selector.rs`
   `Node`: an `Element` implementation on the walk's own structures — the
   element, its ancestor chain (nearest first; each `Ancestor` carries a
   `SiblingLink` into its parent's `SiblingList`) and stand-in siblings from
