@@ -211,8 +211,8 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: fuzz/corpus/css
-          key: fuzz-corpus-css-for-coverage-${{ github.run_id }}
-          restore-keys: fuzz-corpus-css-
+          key: fuzz-corpus-css-own-for-coverage-${{ github.run_id }}
+          restore-keys: fuzz-corpus-css-own-
       - name: Restore the ftl fuzz corpus
         uses: actions/cache/restore@v6
         with:
@@ -246,8 +246,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # css is paused for now.
-        target: [html, ftl, svg]
+        target: [html, css, ftl, svg]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -265,12 +264,15 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
+      # The css corpus restarted under `css-own` (ADR 0048): the
+      # lightningcss-era corpus isn't carried into the new parser's runs or
+      # its public artifacts.
       - name: Restore the corpus from the last run
         uses: actions/cache/restore@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: fuzz-corpus-${{ matrix.target }}-
+          key: fuzz-corpus-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-
       # Weekly (Sundays, UTC): drop inputs that add no coverage
       # (libFuzzer -merge=1), so the corpus stays small and fast to replay.
       - name: Minimize the corpus (Sundays)
@@ -295,7 +297,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: fuzz-corpus-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Caches can't be downloaded; the artifact can (`gh run download <run>
       # -n fuzz-corpus-<target>`), to fold into fuzz/seeds (see
       # docs/agents/skills/testing.md, fuzzing).
@@ -328,8 +330,7 @@ jobs:
       fail-fast: false
       matrix:
         driver: [honggfuzz, fuzzcheck, test-fuzz]
-        # css is paused for now.
-        target: [html, ftl, svg]
+        target: [html, css, ftl, svg]
         include: # = cache.yml `fuzz-drivers`
           - driver: honggfuzz
             workspaces: honggfuzz -> ../hfuzz_target
@@ -383,8 +384,8 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ steps.paths.outputs.corpus }}
-          key: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target }}-
+          key: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-
       # Each script exits non-zero when its driver saved a new crashing
       # input (and only then: a time budget that runs out is success).
       - name: Fuzz
@@ -394,7 +395,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.paths.outputs.corpus }}
-          key: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
       # As a tarball: AFL's file names hold `:`, which artifacts refuse.
       - name: Pack crashing inputs
         if: failure()

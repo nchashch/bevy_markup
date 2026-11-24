@@ -2053,7 +2053,8 @@ Next steps (roughly in order of value):
   `fuzz-artifacts-<driver>-<target>` (a tarball). Nightly failures are reports to triage, not merge blockers.
   Fuzz corpora persist across nights as GitHub caches
   (`fuzz-corpus-<target>-<run>`; restored from the newest, saved after
-  every run, also after a crash) and are minimized with `cargo fuzz cmin`
+  every run, also after a crash; `css` restarted as `css-own` with ADR 0048,
+  so the lightningcss-era corpus isn't carried on) and are minimized with `cargo fuzz cmin`
   on Sundays. Before this (2026-10-05) every night started from an empty
   corpus: 60 s reached cov 3830 on `html` vs 5572 for the local corpus.
   nightly
