@@ -243,6 +243,13 @@ pub(crate) fn parse(name: &str, text: &str) -> Option<Decl> {
         .flatten()
 }
 
+/// [`parse`] on a parser already positioned at the value (the sheet's
+/// declaration parser reads each value once, in place). `Ok(None)`: a
+/// property bevy_markup doesn't map. The caller checks exhaustion.
+pub(crate) fn parse_in<'i>(name: &str, input: &mut Parser<'i, '_>) -> Parsed<'i, Option<Decl>> {
+    value(unprefixed(name), input)
+}
+
 /// `Ok(None)`: a property bevy_markup doesn't map.
 fn value<'i>(name: &str, input: &mut Parser<'i, '_>) -> Parsed<'i, Option<Decl>> {
     use CalcProp::*;

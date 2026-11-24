@@ -190,14 +190,45 @@ impl<'i> DeclarationParser<'i> for Body {
         _start: &ParserState,
     ) -> Result<(), ParseError<'i, CssError<'i>>> {
         let start = input.position();
-        input.parse_until_before(Delimiter::Bang, |value| {
+        let custom = name.starts_with("--");
+        let lower = if custom {
+            String::new()
+        } else {
+            name.to_ascii_lowercase()
+        };
+        // One read: the keyword check and the property's own parser run on
+        // the declaration's tokens. Only a value they refuse (one holding
+        // `var()`, or an invalid one) and a custom property's value are
+        // read again, as text.
+        let typed = input.parse_until_before(Delimiter::Bang, |value| {
+            if !custom && let Ok(declaration) = value.try_parse(|v| typed(&lower, v)) {
+                return Ok::<_, ParseError<'i, CssError<'i>>>(Some(declaration));
+            }
             while value.next_including_whitespace_and_comments().is_ok() {}
-            Ok::<_, ParseError<'i, CssError<'i>>>(())
+            Ok(None)
         })?;
-        let text = input.slice_from(start).trim().to_owned();
+        let declaration = match typed {
+            Some(declaration) => declaration,
+            None => {
+                let text = input.slice_from(start).trim().to_owned();
+                if custom {
+                    Some(Declaration::Custom {
+                        name: name.as_ref().to_owned(),
+                        value: Raw(text),
+                    })
+                } else if contains_var(&text) {
+                    Some(Declaration::Var {
+                        name: lower,
+                        value: Raw(text),
+                    })
+                } else {
+                    None
+                }
+            }
+        };
         let important = input.try_parse(cssparser::parse_important).is_ok();
         input.expect_exhausted()?;
-        if let Some(declaration) = declaration(&name, text) {
+        if let Some(declaration) = declaration {
             if important {
                 self.declarations.important.push(declaration);
             } else {
@@ -271,42 +302,28 @@ impl<'i> RuleBodyItemParser<'i, (), CssError<'i>> for Body {
     }
 }
 
-/// One declaration from its property name and value text: `None` drops it
-/// (an unmapped property or an invalid value).
-fn declaration(name: &str, text: String) -> Option<Declaration> {
-    if name.starts_with("--") {
-        return Some(Declaration::Custom {
-            name: name.to_owned(),
-            value: Raw(text),
-        });
+/// A declaration read in place: a CSS-wide keyword or the property's
+/// value, filling the whole value. `Ok(None)`: a property bevy_markup
+/// doesn't map (dropped).
+fn typed<'i>(
+    name: &str,
+    input: &mut Parser<'i, '_>,
+) -> Result<Option<Declaration>, ParseError<'i, CssError<'i>>> {
+    let keyword = input.try_parse(|i| {
+        let ident = i.expect_ident()?.to_ascii_lowercase();
+        i.expect_exhausted()?;
+        if matches!(ident.as_str(), "initial" | "inherit" | "unset" | "revert") {
+            Ok(())
+        } else {
+            Err(i.new_custom_error::<_, CssError<'i>>(CssError::Invalid))
+        }
+    });
+    if keyword.is_ok() {
+        return Ok(Some(Declaration::Keyword(name.to_owned())));
     }
-    let name = name.to_ascii_lowercase();
-    if is_wide_keyword(&text) {
-        return Some(Declaration::Keyword(name));
-    }
-    if contains_var(&text) {
-        return Some(Declaration::Var {
-            name,
-            value: Raw(text),
-        });
-    }
-    property::parse(&name, &text).map(Declaration::Value)
-}
-
-/// Whether `text` is one CSS-wide keyword.
-fn is_wide_keyword(text: &str) -> bool {
-    let mut input = ParserInput::new(text);
-    let mut parser = Parser::new(&mut input);
-    parser
-        .parse_entirely(|input| {
-            let ident = input.expect_ident()?.to_ascii_lowercase();
-            if matches!(ident.as_str(), "initial" | "inherit" | "unset" | "revert") {
-                Ok(())
-            } else {
-                Err(input.new_custom_error::<_, ()>(()))
-            }
-        })
-        .is_ok()
+    let decl = property::parse_in(name, input)?;
+    input.expect_exhausted()?;
+    Ok(decl.map(Declaration::Value))
 }
 
 /// Walks every token of `text`, nested blocks included, while `visit`
