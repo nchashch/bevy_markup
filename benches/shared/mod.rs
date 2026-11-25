@@ -340,6 +340,106 @@ pub(crate) fn selectors_template(size: usize) -> String {
     )
 }
 
+/// `selectors-deep`: 24 nested `div`s per repeat (classes cycling
+/// `l0`…`l5`) over a templated leaf, so every frame re-collects ~25
+/// elements per repeat with ancestor chains up to 25 long.
+pub(crate) fn deep_template(size: usize) -> String {
+    let repeats = (size / 25).max(1);
+    let open: String = (0..24)
+        .map(|k| format!("<div class=\"l{}\">", k % 6))
+        .collect();
+    let close = "</div>".repeat(24);
+    format!(
+        "<main>{{% for s in range(end={repeats}) %}}{open}<span class=\"leaf\">{{{{ n + s }}}}</span>{close}{{% endfor %}}</main>"
+    )
+}
+
+/// `selectors-deep`'s sheet: long descendant chains, most of them
+/// near-misses that fail at the leftmost compound, after walking the whole
+/// chain (the backtracking the matcher bounds).
+pub(crate) fn deep_css() -> String {
+    let mut css = String::from(
+        "html { color: #ffffff; font-size: 16px }
+.l0 .l1 .l2 span.leaf { color: #ff0000 }
+main .l2 > .l3 .leaf { padding: 1px }
+.l0 .l0 .l0 .l0 .l0 .leaf { color: #00ff00 }
+.l5 .l4 .l3 .l2 .l1 .l0 span { padding: 2px }
+div > div > div > div > .leaf { margin: 1px 0 }\n",
+    );
+    for k in 0..60 {
+        css.push_str(&format!(
+            ".l{} .l{} .l{} .l{} .miss{k} {{ color: #0000{:02x} }}\n.nope{k} .l{} span.leaf {{ padding: {}px }}\n",
+            k % 6,
+            (k + 1) % 6,
+            (k + 3) % 6,
+            (k + 5) % 6,
+            k * 4,
+            k % 6,
+            k % 4
+        ));
+    }
+    css
+}
+
+/// `selectors-siblings`: lists of 60 items with interleaved `p`s, every
+/// item templated (sibling lists, positions, `~` scans).
+pub(crate) fn siblings_template(size: usize) -> String {
+    let lists = (size / 72).max(1);
+    format!(
+        "<main>{{% for s in range(end={lists}) %}}<ul class=\"list\">{{% for i in range(end=60) %}}<li class=\"{{% if i % 7 == 0 %}}mark{{% endif %}}\" data-n=\"{{{{ i }}}}\">{{{{ n + i }}}}</li>{{% if i % 5 == 0 %}}<p>x</p>{{% endif %}}{{% endfor %}}</ul>{{% endfor %}}</main>"
+    )
+}
+
+/// `selectors-siblings`' sheet: `+`/`~` next to the subject, the
+/// positional pseudo-classes, attribute prefixes; near-miss `~` rules.
+pub(crate) fn siblings_css() -> String {
+    let mut css = String::from(
+        "html { color: #ffffff; font-size: 16px }
+li.mark ~ li { color: #ff0000 }
+li.mark + li { padding: 1px }
+p ~ li:nth-of-type(3n) { color: #00ff00 }
+li:nth-last-child(-n+5) { margin: 1px 0 }
+li:first-of-type, li:last-of-type { padding: 2px }
+p + li:nth-child(odd) { color: #0000ff }
+li[data-n^=\"1\"] { color: #eeeeee }
+li[data-n$=\"9\"] + p { padding: 3px }
+ul > li:not(.mark):nth-child(4n+2) { color: #cccccc }\n",
+    );
+    for k in 0..40 {
+        css.push_str(&format!(
+            "li.mark{k} ~ li {{ color: #{:02x}0000 }}\nli[data-n=\"{}\"] + li.mark {{ padding: {}px }}\n",
+            k * 6,
+            k + 100,
+            k % 4
+        ));
+    }
+    css
+}
+
+/// `selectors-functional`'s sheet over the `selectors` cards: `:is()`,
+/// `:where()` and `:not()` with lists and (within the budget of 64)
+/// combinators inside.
+pub(crate) fn functional_css() -> String {
+    let mut css = String::from(
+        "html { color: #ffffff; font-size: 16px; padding: 4px }
+:is(.card, .other) :is(li.todo, li.done) > :where(.label, .value) { color: #ff0000 }
+section:not(.muted, .x) p:not(.muted) { color: #dddddd }
+li:is([data-kind=\"a\"], .done):not(:hover) .value { padding: 1px }
+:is(section .list, aside) li .value { color: #00ff00 }
+:where(main > section) header { padding: 2px }
+li:not(:first-child, :last-child):is(.todo) .label { color: #0000ff }
+:is(.card li, .other li):not(.done) span:empty { padding: 1px }\n",
+    );
+    for k in 0..40 {
+        css.push_str(&format!(
+            ":is(.card.c{k}, .x{k}) :is(li.todo, li.miss{k}) > :where(.label) {{ color: #{:02x}0000 }}\n:not(.c{k}) > :is(.miss{k}, .nope{k}) {{ padding: {}px }}\n",
+            k * 6,
+            k % 4
+        ));
+    }
+    css
+}
+
 /// The frame workloads' file lists: `workload` ∈ idle/changing/
 /// changing-nested/rebuilding —
 /// the same documents at the given size (the `changing` one differs only in
@@ -352,13 +452,17 @@ pub(crate) fn frame_files(size: usize, workload: &str) -> Vec<(String, String)> 
         // reuse (bug_0150: they re-collected — reuse worked only for
         // top-level siblings, which is all `changing` exercised).
         "changing-nested" => format!("<main>{}</main>", shell_template(size, true)),
-        "selectors" => selectors_template(size),
+        "selectors" | "selectors-functional" => selectors_template(size),
+        "selectors-deep" => deep_template(size),
+        "selectors-siblings" => siblings_template(size),
         _ => shell_template(size, false),
     };
-    let css = if workload == "selectors" {
-        selector_css()
-    } else {
-        CSS.to_owned()
+    let css = match workload {
+        "selectors" => selector_css(),
+        "selectors-deep" => deep_css(),
+        "selectors-siblings" => siblings_css(),
+        "selectors-functional" => functional_css(),
+        _ => CSS.to_owned(),
     };
     vec![
         ("page.html".to_owned(), page),

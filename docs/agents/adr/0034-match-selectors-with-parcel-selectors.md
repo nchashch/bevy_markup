@@ -7,7 +7,7 @@
 | `Date` | 2026-10-28 18:35 +0400 |
 | `Author` | Claude Opus 5.5 (Anthropic), via Claude Code |
 | `Commit` | `cfab1ec Fix bug 179 and 180` |
-| `Status` | Accepted (2026-10-28, after the trial; decision 2 as amended by the trial: no arena) |
+| `Status` | Accepted (2026-10-28, after the trial; decision 2 as amended by the trial: no arena); superseded by ADR 0050 (2026-11-25) |
 | `Related` | ADR 0006, 0028, 0029, 0030; bug_0002, bug_0180; review_0005 (I03, I05–I08, I13); UPSTREAM.md U14, U15 |
 
 ## Context

@@ -98,22 +98,17 @@ htmlize = { version = "1.1.0", features = ["unescape"] }
 fluent = "0.17.0"
 # Locale identifiers: the `*.ftl.ron` manifest's `locale` field.
 unic-langid = { version = "0.9", features = ["serde"] }
-# CSS (ADR 0048): bevy_markup's own parser (`src/css/`) on Servo's
-# tokenizer and rule parsers. The nesting pre-scan walks the same tokens
-# (`cascade::nesting_over_limit`, ADR 0039), so it can't disagree with the
-# parser about what a block is (bug_0183, bug_0184). Pinned to the version
-# parcel_selectors uses, so there is one copy: bump the two together.
-cssparser = "=0.37.0"
+# CSS (ADR 0048, 0050): bevy_markup's own parsers (`src/css/`, selectors
+# included) on Servo's tokenizer and rule parsers. The nesting pre-scan
+# walks the same tokens (`cascade::nesting_over_limit`, ADR 0039), so it
+# can't disagree with the parser about what a block is (bug_0183,
+# bug_0184).
+cssparser = "0.37.0"
 # `text-transform: capitalize` as Chrome does it: ICU's word boundaries and
 # simple titlecasing (ICU4X; `icu_segmenter` is already in the tree through
 # Bevy's text stack, parley).
 icu_segmenter = "2.3"
 icu_casemap = "2"
-# Selector parsing and matching (ADR 0034, 0048), over bevy_markup's own
-# `SelectorImpl` (`css::select`). `into_owned` (with `static-self`, its
-# trait) makes a parsed selector outlive its source text.
-parcel_selectors = { version = "=0.28.3", features = ["into_owned"] }
-static-self = { version = "0.1.2", features = ["smallvec"] }
 # Markdown as a source syntax (ADR 0014): `.md` templates and Markdown in
 # Fluent values convert to the HTML the pipeline already parses. `html`
 # renders to HTML; no CLI parser (`getopts`).

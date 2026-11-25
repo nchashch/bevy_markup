@@ -1,25 +1,17 @@
-//! Selector matching with parcel_selectors (ADR 0034). bevy_markup's CSS
-//! parser parses each rule's selectors into parcel's types (`css::select`,
-//! ADR 0048); [`Selector::from_parsed`] keeps the ones the cascade
-//! supports (the allowlist) and records what they read; matching runs
-//! parcel's `matches_selector` over [`Node`], an `Element` implementation
-//! on the build walk's own structures: the element, its ancestor chain
-//! (nearest first) and the shared sibling lists.
+//! Selector matching (ADR 0034, 0050). bevy_markup's CSS parser parses
+//! each rule's selectors (`css::select`); [`Selector::from_parsed`] keeps
+//! the ones the cascade supports (the allowlist) and records what they
+//! read; matching runs right to left over [`Node`], a view of the build
+//! walk's own structures: the element, its ancestor chain (nearest first)
+//! and the shared sibling lists.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use parcel_selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
-use parcel_selectors::context::{MatchingContext, MatchingMode, QuirksMode};
-use parcel_selectors::matching::{
-    CompoundSelectorMatchingResult, ElementSelectorFlags, matches_compound_selector_from,
-    matches_selector,
-};
-use parcel_selectors::parser::{Combinator as CssCombinator, NthType, SelectorImpl};
-use parcel_selectors::{Element, OpaqueElement};
-
 use super::{Ancestor, ElementState, Position, Pseudo, SelectorReads, SiblingList, Siblings};
-use crate::css::select::{Component, Impl, PseudoClass};
+use std::sync::Arc;
+
+use crate::css::select::{Attribute, AttributeOperator, Combinator, Nth, PseudoClass, Simple};
 use crate::html::HtmlElement;
 
 /// A parsed selector.
@@ -28,17 +20,18 @@ type Parsed = crate::css::select::Selector;
 /// A selector the cascade supports, with what it reads.
 #[derive(Clone, Debug)]
 pub(super) struct Selector {
-    parsed: Parsed,
+    /// Shared with the sheet: keeping it costs a reference count.
+    parsed: Arc<Parsed>,
     specificity: (u32, u32, u32),
     /// An interaction pseudo-class anywhere (ADR 0029's pseudo rules).
     pseudo: bool,
     reads: SelectorReads,
-    /// `X ~ subject` with an `X` that reads only the sibling itself: the
-    /// match-order offset of `X`. Its sibling test is answered from a scan
-    /// cached on the sibling list ([`SiblingList::any_before`]): parcel
-    /// walks every preceding sibling per element, O(n²) over a list that
-    /// has no match (review_0005 I03's test, failing in CI).
-    later_sibling: Option<usize>,
+    /// `X ~ subject` where `X` is the only other compound and reads only
+    /// the sibling itself: its sibling test is answered from a scan cached
+    /// on the sibling list ([`SiblingList::any_before`]) instead of a walk
+    /// back per element, O(n²) over a list that has no match (review_0005
+    /// I03).
+    later_sibling: bool,
     /// Identifies the selector in sibling-list caches.
     id: u64,
     /// `:is()`/`:where()`/`:not()` arguments holding a combinator: each
@@ -47,9 +40,9 @@ pub(super) struct Selector {
 }
 
 /// The `:is()`/`:where()`/`:not()` arguments holding a combinator a
-/// stylesheet may use, in all its rules. parcel walks such an argument to
-/// the root at every ancestor the enclosing selector tries, so each costs
-/// depth² per element (≈1.5 ms per build over 95 nested elements);
+/// stylesheet may use, in all its rules. An argument is matched by a call
+/// of its own, from every ancestor the enclosing selector tries, so each
+/// costs depth² per element (≈1.5 ms per build over 95 nested elements);
 /// past the cap a rule is skipped (bug_0235: 400 rules took 0.6 s per
 /// build where plain ones took 33 ms).
 pub(crate) const MAX_COMBINATOR_ARGUMENTS: u32 = 64;
@@ -59,47 +52,29 @@ static NEXT_SELECTOR_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 
 impl Selector {
     /// `None` for a selector outside the supported grammar: its rule is
-    /// skipped (logged by the caller). The allowlist is also what keeps
-    /// parts parcel's matcher panics on (`NthOf`, `Has`, `Nesting`,
-    /// `:nth-col()`) away from it.
-    pub(super) fn from_parsed(parsed: &Parsed) -> Option<Self> {
+    /// skipped (logged by the caller).
+    pub(super) fn from_parsed(parsed: &Arc<Parsed>) -> Option<Self> {
         let mut reads = SelectorReads::default();
         let mut pseudo = false;
-        let mut subject = true;
-        let mut sibling_seen_away = false;
-        // The `X ~ subject` shape: where `X` starts, whether a combinator
-        // follows it, whether it reads context through `:is()` & co.
-        let mut later_sibling = None;
         let mut combinator_arguments = 0;
-        let mut beyond_x = false;
         let mut x_reads_context = false;
-        for (index, component) in parsed.iter_raw_match_order().enumerate() {
-            if let Component::Combinator(combinator) = component {
-                if subject && *combinator == CssCombinator::LaterSibling {
-                    later_sibling = Some(index + 1);
-                } else if !subject {
-                    beyond_x = true;
-                }
+        // Which compound (0: the subject) the parts belong to.
+        let mut compound = 0;
+        for part in &parsed.parts {
+            if let Simple::Combinator(combinator) = part {
+                compound += 1;
                 match combinator {
-                    CssCombinator::Descendant | CssCombinator::Child => {}
-                    CssCombinator::NextSibling | CssCombinator::LaterSibling => {
-                        // ADR 0028's limit, kept for parity: a sibling
-                        // combinator only next to the subject.
-                        if !subject {
-                            sibling_seen_away = true;
-                        }
-                        if *combinator == CssCombinator::NextSibling {
-                            reads.adjacent_siblings = true;
-                        } else {
-                            reads.general_siblings = true;
-                        }
-                    }
-                    _ => return None,
+                    Combinator::Descendant | Combinator::Child => {}
+                    // ADR 0028's limit: a sibling combinator only next to
+                    // the subject.
+                    Combinator::NextSibling if compound == 1 => reads.adjacent_siblings = true,
+                    Combinator::LaterSibling if compound == 1 => reads.general_siblings = true,
+                    Combinator::NextSibling | Combinator::LaterSibling => return None,
                 }
-                subject = false;
                 continue;
             }
-            let part = compound_part(component, false, 0)?;
+            let subject = compound == 0;
+            let part = compound_part(part, false, 0)?;
             reads.dataset |= part.attributes;
             if part.structural {
                 if subject {
@@ -113,14 +88,13 @@ impl Selector {
             pseudo |= part.pseudo;
             combinator_arguments += part.combinator_arguments;
         }
-        let later_sibling = later_sibling.filter(|_| !beyond_x && !x_reads_context);
-        if sibling_seen_away {
-            return None;
-        }
-        let packed = parsed.specificity();
+        let mut combinators = parsed.combinators();
+        let later_sibling = combinators.next() == Some(Combinator::LaterSibling)
+            && combinators.next().is_none()
+            && !x_reads_context;
         Some(Self {
             parsed: parsed.clone(),
-            specificity: (packed >> 20, (packed >> 10) & 0x3ff, packed & 0x3ff),
+            specificity: parsed.specificity(),
             pseudo,
             reads,
             later_sibling,
@@ -202,20 +176,14 @@ impl Selector {
             scope: &scope,
             kind: Kind::Subject,
         };
-        let mut context =
-            MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
-        if let (Some(offset), Some(siblings)) = (self.later_sibling, &state.previous_siblings) {
+        if let (true, Some(siblings)) = (self.later_sibling, &state.previous_siblings) {
             // The subject's own compound, then "some preceding sibling
-            // matches `X`" from the list's cached scan. Offsets: this one
-            // counts in parse order (the subject's compound starts right
-            // after the `~`, which is match-order index `offset - 1`);
-            // `matches_selector`'s counts in match order.
-            let subject_start = self.parsed.len() - (offset - 1);
-            // The subject's compound is the rightmost, so a match reads
-            // `FullyMatched` (it ends the selector), not `Matched`.
-            if let CompoundSelectorMatchingResult::NotMatched =
-                matches_compound_selector_from(&self.parsed, subject_start, &mut context, &node)
-            {
+            // matches `X`" from the list's cached scan.
+            let mut compounds = self.parsed.compounds();
+            let (Some(subject), Some(x)) = (compounds.next(), compounds.next()) else {
+                return false;
+            };
+            if !compound_matches(subject, &node, false) {
                 return false;
             }
             let list = &siblings.list;
@@ -225,19 +193,10 @@ impl Selector {
                     index,
                     level: 0,
                 });
-                let mut context =
-                    MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
-                matches_selector(
-                    &self.parsed,
-                    offset,
-                    None,
-                    &sibling,
-                    &mut context,
-                    &mut |_, _| {},
-                )
+                compound_matches(x, &sibling, false)
             });
         }
-        matches_selector(&self.parsed, 0, None, &node, &mut context, &mut |_, _| {})
+        matches_selector(&self.parsed.parts, &node, false)
     }
 }
 
@@ -268,94 +227,73 @@ impl PartReads {
     }
 }
 
-/// One compound part against the allowlist: `None` when unsupported.
-/// The allowlist is also what keeps parts parcel's matcher panics on
-/// (`NthOf`, `Has`, `Nesting`, `:nth-col()`) away from it. `negated`:
-/// inside a `:not()`, which may not hold another (ADR 0029's reactivity
-/// record answers by negation parity, and parcel tracks one level).
-/// `depth`: how many `:is()`/`:where()`/`:not()` arguments hold the
-/// component (0 at the selector's top level).
-fn compound_part(component: &Component, negated: bool, depth: u32) -> Option<PartReads> {
+/// One simple selector against the allowlist: `None` when unsupported.
+/// `negated`: inside a `:not()`, which may not hold another (ADR 0029's
+/// reactivity record answers by negation parity, exact at one level).
+/// `depth`: how many `:is()`/`:where()`/`:not()` arguments hold it (0 at
+/// the selector's top level).
+fn compound_part(part: &Simple, negated: bool, depth: u32) -> Option<PartReads> {
     let reads = |attributes, structural, pseudo| PartReads {
         attributes,
         structural,
         pseudo,
         ..PartReads::default()
     };
-    Some(match component {
-        Component::LocalName(_)
-        | Component::ExplicitUniversalType
-        | Component::ID(_)
-        | Component::Class(_) => PartReads::default(),
+    Some(match part {
+        Simple::Type(_) | Simple::Universal | Simple::Id(_) | Simple::Class(_) => {
+            PartReads::default()
+        }
         // Any operator and case flag on a `data-*` attribute (the element
         // model carries only those; other attributes skip the rule).
-        Component::AttributeInNoNamespaceExists { local_name, .. }
-        | Component::AttributeInNoNamespace { local_name, .. } => {
-            data_attribute(local_name.as_ref())?;
+        Simple::Attribute(Attribute { name, .. }) => {
+            data_attribute(name)?;
             reads(true, false, false)
         }
-        Component::NonTSPseudoClass(class) => match class {
-            PseudoClass::Hover
-            | PseudoClass::Active
-            | PseudoClass::Focus
-            | PseudoClass::FocusVisible => reads(false, false, true),
-            // A position-like state (`Position::focus_within`), not
-            // wildcarded by the reactivity record.
-            PseudoClass::FocusWithin => reads(false, true, false),
-            _ => return None,
-        },
-        Component::Nth(data) => match data.ty {
-            NthType::Child
-            | NthType::LastChild
-            | NthType::OnlyChild
-            | NthType::OfType
-            | NthType::LastOfType
-            | NthType::OnlyOfType => reads(false, true, false),
-            // `:nth-col()`/`:nth-last-col()`: parcel's matcher has no arm.
-            _ => return None,
-        },
-        Component::Empty => reads(false, true, false),
-        Component::Negation(list) if !negated => nested(list, true, depth + 1)?,
-        Component::Is(list) | Component::Where(list) => nested(list, negated, depth + 1)?,
-        _ => return None,
+        Simple::Pseudo(PseudoClass::FocusWithin) => reads(false, true, false),
+        Simple::Pseudo(_) => reads(false, false, true),
+        Simple::Nth(_) | Simple::Empty => reads(false, true, false),
+        Simple::Not(list) if !negated => nested(list, true, depth + 1)?,
+        Simple::Not(_) => return None,
+        Simple::Is(list) | Simple::Where(list) => nested(list, negated, depth + 1)?,
+        Simple::Unsupported { .. } | Simple::Combinator(_) => return None,
     })
 }
 
 /// The selectors of a `:not()`/`:is()`/`:where()` argument: descendant and
 /// child combinators only (a sibling combinator would need invalidation
 /// the cascade doesn't have, ADR 0034), and only in an argument at the
-/// first level (`depth` 1). parcel matches an argument by a call of its
-/// own whose failure is local, so the enclosing walk calls it again at
-/// every ancestor: an argument with a combinator inside another costs
+/// first level (`depth` 1). An argument is matched by a call of its own
+/// whose failure is local, so the enclosing walk calls it again at every
+/// ancestor: an argument with a combinator inside another costs
 /// depth^levels (bug_0213: six levels of `:is(… div) div`, 104 bytes of
 /// CSS over 95 nested `<div>`s, took two minutes). Nested lists of
 /// compounds (`:is(.a, :not(.b))`) stay free.
 fn nested(list: &[Parsed], negated: bool, depth: u32) -> Option<PartReads> {
     let mut reads = PartReads::default();
     for selector in list {
+        let mut combinators = selector.combinators().peekable();
+        if combinators.peek().is_some() {
+            if depth != 1
+                || combinators.any(|c| !matches!(c, Combinator::Descendant | Combinator::Child))
+            {
+                return None;
+            }
+            reads.combinator_arguments += 1;
+        }
         // The argument's own subject compound tests the same element as
         // the compound holding it; parts past a combinator, its ancestors.
         let mut subject = true;
-        for part in selector.iter_raw_match_order() {
-            match part {
-                Component::Combinator(CssCombinator::Descendant | CssCombinator::Child)
-                    if depth == 1 =>
-                {
-                    if subject {
-                        reads.combinator_arguments += 1;
-                    }
-                    subject = false;
-                }
-                Component::Combinator(_) => return None,
-                part => {
-                    let mut part = compound_part(part, negated, depth)?;
-                    if !subject {
-                        part.context_structural |= part.structural;
-                        part.structural = false;
-                    }
-                    reads = reads.or(part);
-                }
+        for part in &selector.parts {
+            if let Simple::Combinator(_) = part {
+                subject = false;
+                continue;
             }
+            let mut part = compound_part(part, negated, depth)?;
+            if !subject {
+                part.context_structural |= part.structural;
+                part.structural = false;
+            }
+            reads = reads.or(part);
         }
     }
     Some(reads)
@@ -365,6 +303,176 @@ fn nested(list: &[Parsed], negated: bool, depth: u32) -> Option<PartReads> {
 /// carries only those).
 fn data_attribute(name: &str) -> Option<&str> {
     name.strip_prefix("data-").filter(|key| !key.is_empty())
+}
+
+/// How a match attempt from one element failed (Servo's
+/// `SelectorMatchingResult`): where the walk may retry. Without it, a
+/// selector with several descendant combinators backtracks over every
+/// combination of ancestors.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Matched,
+    /// Try the next candidate of the nearest `~` to the right.
+    RestartFromLaterSibling,
+    /// Try the next candidate of the nearest descendant combinator.
+    RestartFromDescendant,
+    /// No candidate further up can match: stop.
+    NotMatchedGlobally,
+}
+
+/// A selector's parts (match order) against `node`. `negated`: inside a
+/// `:not()`.
+fn matches_selector(parts: &[Simple], node: &Node<'_>, negated: bool) -> bool {
+    matches_from(parts, node, negated) == Outcome::Matched
+}
+
+/// `parts` (a selector's tail, from a compound on) with its first compound
+/// at `node`.
+fn matches_from(parts: &[Simple], node: &Node<'_>, negated: bool) -> Outcome {
+    let end = parts
+        .iter()
+        .position(|part| matches!(part, Simple::Combinator(_)))
+        .unwrap_or(parts.len());
+    if !compound_matches(&parts[..end], node, negated) {
+        return Outcome::RestartFromLaterSibling;
+    }
+    let Some(Simple::Combinator(combinator)) = parts.get(end) else {
+        return Outcome::Matched;
+    };
+    let (combinator, rest) = (*combinator, &parts[end + 1..]);
+    fn next<'a>(node: &Node<'a>, combinator: Combinator) -> Option<Node<'a>> {
+        match combinator {
+            Combinator::Descendant | Combinator::Child => node.parent(),
+            Combinator::NextSibling | Combinator::LaterSibling => node.sibling(true),
+        }
+    }
+    let none_left = match combinator {
+        Combinator::NextSibling | Combinator::LaterSibling => Outcome::RestartFromDescendant,
+        Combinator::Descendant | Combinator::Child => Outcome::NotMatchedGlobally,
+    };
+    let mut candidate = next(node, combinator);
+    loop {
+        let Some(element) = candidate else {
+            return none_left;
+        };
+        let outcome = matches_from(rest, &element, negated);
+        match (outcome, combinator) {
+            (Outcome::Matched | Outcome::NotMatchedGlobally, _) | (_, Combinator::NextSibling) => {
+                return outcome;
+            }
+            (_, Combinator::Child) => return Outcome::RestartFromDescendant,
+            (Outcome::RestartFromDescendant, Combinator::LaterSibling) => return outcome,
+            _ => {}
+        }
+        candidate = next(&element, combinator);
+    }
+}
+
+/// Every simple selector of a compound at `node`.
+fn compound_matches(compound: &[Simple], node: &Node<'_>, negated: bool) -> bool {
+    compound
+        .iter()
+        .all(|part| simple_matches(part, node, negated))
+}
+
+fn simple_matches(part: &Simple, node: &Node<'_>, negated: bool) -> bool {
+    // One field per test (a whole `View` per simple selector was a copy
+    // the optimizer kept: +6% on plain sheets).
+    let state = |actual: bool| {
+        if node.scope.wild { !negated } else { actual }
+    };
+    match part {
+        Simple::Type(name) => node.tag() == name,
+        Simple::Universal => true,
+        Simple::Id(id) => node.id() == Some(id.as_str()),
+        Simple::Class(class) => node.classes().iter().any(|own| own == class),
+        Simple::Attribute(attribute) => attribute_matches(attribute, node.dataset()),
+        Simple::Pseudo(PseudoClass::Hover) => state(node.pseudo().hover),
+        Simple::Pseudo(PseudoClass::Active) => state(node.pseudo().active),
+        Simple::Pseudo(PseudoClass::Focus) => state(node.pseudo().focus),
+        Simple::Pseudo(PseudoClass::FocusVisible) => state(node.pseudo().focus_visible),
+        Simple::Pseudo(PseudoClass::FocusWithin) => node.position().focus_within,
+        Simple::Nth(nth) => nth_matches(nth, node),
+        Simple::Empty => node.position().empty,
+        Simple::Not(list) => !list
+            .iter()
+            .any(|selector| matches_selector(&selector.parts, node, true)),
+        Simple::Is(list) | Simple::Where(list) => list
+            .iter()
+            .any(|selector| matches_selector(&selector.parts, node, negated)),
+        Simple::Unsupported { .. } | Simple::Combinator(_) => false,
+    }
+}
+
+fn attribute_matches(attribute: &Attribute, dataset: Option<&BTreeMap<String, String>>) -> bool {
+    let Some(value) = data_attribute(&attribute.name)
+        .and_then(|key| dataset.and_then(|dataset| dataset.get(key)))
+    else {
+        return false;
+    };
+    let Some(test) = &attribute.test else {
+        return true;
+    };
+    if test.never {
+        return false;
+    }
+    let expected = test.value.as_str();
+    let fold = test.case_insensitive;
+    let eq = |a: &str, b: &str| {
+        if fold {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+    let starts = |text: &str, prefix: &str| {
+        text.len() >= prefix.len()
+            && text.is_char_boundary(prefix.len())
+            && eq(&text[..prefix.len()], prefix)
+    };
+    let ends = |text: &str, suffix: &str| {
+        let at = text.len().wrapping_sub(suffix.len());
+        text.len() >= suffix.len() && text.is_char_boundary(at) && eq(&text[at..], suffix)
+    };
+    match test.operator {
+        AttributeOperator::Equal => eq(value, expected),
+        AttributeOperator::Includes => value
+            .split([' ', '\t', '\n', '\r', '\x0C'])
+            .any(|word| eq(word, expected)),
+        AttributeOperator::DashMatch => {
+            eq(value, expected)
+                || (starts(value, expected) && value.as_bytes().get(expected.len()) == Some(&b'-'))
+        }
+        AttributeOperator::Prefix => starts(value, expected),
+        AttributeOperator::Suffix => ends(value, expected),
+        AttributeOperator::Substring => {
+            if fold {
+                value
+                    .to_ascii_lowercase()
+                    .contains(&expected.to_ascii_lowercase())
+            } else {
+                value.contains(expected)
+            }
+        }
+    }
+}
+
+/// `An+B` at `node`'s 1-based index among its siblings (or those of its
+/// type), counted from the start or the end. The arithmetic is exact
+/// (`i64`): parcel_selectors' checked `i32` answered "no" past `i32`'s
+/// range (`:nth-child(n-2147483647)` matched nothing; CSS: everything).
+fn nth_matches(nth: &Nth, node: &Node<'_>) -> bool {
+    let index = |from_end| node.nth_index(nth.of_type, from_end);
+    if nth.only {
+        return index(false) == 1 && index(true) == 1;
+    }
+    let index = index(nth.from_end) as i64;
+    let (a, b) = (i64::from(nth.a), i64::from(nth.b));
+    if a == 0 {
+        return index == b;
+    }
+    let steps = index - b;
+    steps % a == 0 && steps / a >= 0
 }
 
 /// What one match runs against.
@@ -411,16 +519,6 @@ enum Kind<'a> {
     },
 }
 
-/// The facts a compound reads, for any node kind.
-struct View<'a> {
-    tag: &'a str,
-    id: Option<&'a str>,
-    classes: &'a [String],
-    pseudo: Pseudo,
-    dataset: Option<&'a BTreeMap<String, String>>,
-    position: Position,
-}
-
 /// A stand-in's tag when it isn't of the element's type: matches no type
 /// selector and no real tag.
 const OTHER_TYPE: &str = "\0";
@@ -430,30 +528,6 @@ impl<'a> Node<'a> {
         Self {
             scope: self.scope,
             kind,
-        }
-    }
-
-    fn view(&self) -> View<'a> {
-        let scope = self.scope;
-        match self.kind {
-            Kind::Subject => View {
-                tag: &scope.element.tag,
-                id: scope.element.id.as_deref(),
-                classes: &scope.element.classes,
-                pseudo: scope.pseudo,
-                dataset: Some(&scope.element.dataset),
-                position: scope.state.position(),
-            },
-            Kind::Chain(index) => ancestor_view(&scope.ancestors[index]),
-            Kind::Listed { list, index, .. } => ancestor_view(&list.list[index]),
-            Kind::Phantom { tag, same, .. } => View {
-                tag: if same { tag } else { OTHER_TYPE },
-                id: None,
-                classes: &[],
-                pseudo: Pseudo::default(),
-                dataset: None,
-                position: Position::default(),
-            },
         }
     }
 
@@ -482,7 +556,7 @@ impl<'a> Node<'a> {
         let is_same = same > 0;
         Some(self.with(Kind::Phantom {
             level,
-            tag: self.view().tag,
+            tag: self.tag(),
             same: is_same,
             backward,
             rest: total - 1,
@@ -569,177 +643,120 @@ impl<'a> Node<'a> {
     }
 }
 
-fn ancestor_view(ancestor: &Ancestor) -> View<'_> {
-    View {
-        tag: &ancestor.tag,
-        id: ancestor.id.as_deref(),
-        classes: &ancestor.classes,
-        pseudo: ancestor.pseudo,
-        dataset: ancestor.dataset.as_deref(),
-        position: ancestor.position,
-    }
-}
-
 impl fmt::Debug for Node<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Node({:?})", self.kind)
     }
 }
 
-impl<'a> Element<'static> for Node<'a> {
-    type Impl = Impl;
-
-    fn opaque(&self) -> OpaqueElement {
+impl<'a> Node<'a> {
+    /// The element, ancestor or sibling list entry a non-stand-in node is.
+    #[inline]
+    fn entry(&self) -> Option<&'a Ancestor> {
         match self.kind {
-            Kind::Subject => OpaqueElement::new(self.scope.element),
-            Kind::Chain(index) => OpaqueElement::new(&self.scope.ancestors[index]),
-            Kind::Listed { list, index, .. } => OpaqueElement::new(&list.list[index]),
-            Kind::Phantom { .. } => OpaqueElement::new(self.scope),
+            Kind::Subject | Kind::Phantom { .. } => None,
+            Kind::Chain(index) => Some(&self.scope.ancestors[index]),
+            Kind::Listed { list, index, .. } => Some(&list.list[index]),
         }
     }
 
-    fn parent_element(&self) -> Option<Self> {
+    #[inline]
+    fn tag(&self) -> &'a str {
+        match self.kind {
+            Kind::Subject => &self.scope.element.tag,
+            Kind::Phantom { tag, same, .. } => {
+                if same {
+                    tag
+                } else {
+                    OTHER_TYPE
+                }
+            }
+            Kind::Chain(index) => &self.scope.ancestors[index].tag,
+            Kind::Listed { list, index, .. } => &list.list[index].tag,
+        }
+    }
+
+    #[inline]
+    fn id(&self) -> Option<&'a str> {
+        match self.kind {
+            Kind::Subject => self.scope.element.id.as_deref(),
+            Kind::Phantom { .. } => None,
+            _ => self.entry().and_then(|entry| entry.id.as_deref()),
+        }
+    }
+
+    #[inline]
+    fn classes(&self) -> &'a [String] {
+        match self.kind {
+            Kind::Subject => &self.scope.element.classes,
+            Kind::Phantom { .. } => &[],
+            _ => self.entry().map_or(&[], |entry| &entry.classes),
+        }
+    }
+
+    #[inline]
+    fn pseudo(&self) -> Pseudo {
+        match self.kind {
+            Kind::Subject => self.scope.pseudo,
+            Kind::Phantom { .. } => Pseudo::default(),
+            _ => self
+                .entry()
+                .map_or_else(Pseudo::default, |entry| entry.pseudo),
+        }
+    }
+
+    #[inline]
+    fn dataset(&self) -> Option<&'a BTreeMap<String, String>> {
+        match self.kind {
+            Kind::Subject => Some(&self.scope.element.dataset),
+            Kind::Phantom { .. } => None,
+            _ => self.entry().and_then(|entry| entry.dataset.as_deref()),
+        }
+    }
+
+    #[inline]
+    fn position(&self) -> Position {
+        match self.kind {
+            Kind::Subject => self.scope.state.position(),
+            Kind::Phantom { .. } => Position::default(),
+            _ => self
+                .entry()
+                .map_or_else(Position::default, |entry| entry.position),
+        }
+    }
+
+    fn parent(&self) -> Option<Self> {
         let level = self.level();
         (level < self.scope.ancestors.len()).then(|| self.with(Kind::Chain(level)))
     }
 
-    fn parent_node_is_shadow_root(&self) -> bool {
-        false
-    }
-
-    fn containing_shadow_host(&self) -> Option<Self> {
-        None
-    }
-
-    fn is_pseudo_element(&self) -> bool {
-        false
-    }
-
-    fn prev_sibling_element(&self) -> Option<Self> {
-        self.sibling(true)
-    }
-
-    fn next_sibling_element(&self) -> Option<Self> {
-        self.sibling(false)
-    }
-
-    fn is_html_element_in_html_document(&self) -> bool {
-        true
-    }
-
-    fn has_local_name(
-        &self,
-        local_name: &<Impl as SelectorImpl<'static>>::BorrowedLocalName,
-    ) -> bool {
-        self.view().tag == local_name.as_ref()
-    }
-
-    fn has_namespace(&self, _ns: &<Impl as SelectorImpl<'static>>::BorrowedNamespaceUrl) -> bool {
-        true
-    }
-
-    fn is_same_type(&self, other: &Self) -> bool {
-        self.view().tag == other.view().tag
-    }
-
-    fn attr_matches(
-        &self,
-        _ns: &NamespaceConstraint<&<Impl as SelectorImpl<'static>>::NamespaceUrl>,
-        local_name: &<Impl as SelectorImpl<'static>>::LocalName,
-        operation: &AttrSelectorOperation<&<Impl as SelectorImpl<'static>>::AttrValue>,
-    ) -> bool {
-        let Some(key) = data_attribute(local_name.as_ref()) else {
-            return false;
-        };
-        let Some(value) = self.view().dataset.and_then(|dataset| dataset.get(key)) else {
-            return false;
-        };
-        match operation {
-            AttrSelectorOperation::Exists => true,
-            AttrSelectorOperation::WithValue {
-                operator,
-                case_sensitivity,
-                expected_value,
-            } => operator.eval_str(value, expected_value.as_ref(), *case_sensitivity),
+    /// The node's 1-based index among its siblings (`of_type`: those of
+    /// its tag), from the start or the end: from its [`Position`] where it
+    /// has one, else by walking its stand-in siblings (as parcel did).
+    fn nth_index(&self, of_type: bool, from_end: bool) -> usize {
+        if !matches!(self.kind, Kind::Phantom { .. }) {
+            let position = self.position();
+            // As a walk would count: an unset position (0) is the first.
+            return match (of_type, from_end) {
+                (false, false) => position.tag_index.max(1),
+                (false, true) => {
+                    position.tag_count + 1 - position.tag_index.min(position.tag_count)
+                }
+                (true, false) => position.type_index.max(1),
+                (true, true) => {
+                    position.type_count + 1 - position.type_index.min(position.type_count)
+                }
+            };
         }
-    }
-
-    fn match_non_ts_pseudo_class<F>(
-        &self,
-        class: &<Impl as SelectorImpl<'static>>::NonTSPseudoClass,
-        context: &mut MatchingContext<'_, 'static, Impl>,
-        _flags_setter: &mut F,
-    ) -> bool
-    where
-        F: FnMut(&Self, ElementSelectorFlags),
-    {
-        let view = self.view();
-        let state = |actual: bool| {
-            if self.scope.wild {
-                !context.in_negation()
-            } else {
-                actual
+        let tag = self.tag();
+        let mut index = 1;
+        let mut current = *self;
+        while let Some(sibling) = current.sibling(!from_end) {
+            if !of_type || sibling.tag() == tag {
+                index += 1;
             }
-        };
-        match class {
-            PseudoClass::Hover => state(view.pseudo.hover),
-            PseudoClass::Active => state(view.pseudo.active),
-            PseudoClass::Focus => state(view.pseudo.focus),
-            PseudoClass::FocusVisible => state(view.pseudo.focus_visible),
-            PseudoClass::FocusWithin => view.position.focus_within,
-            _ => false,
+            current = sibling;
         }
-    }
-
-    fn match_pseudo_element(
-        &self,
-        _pe: &<Impl as SelectorImpl<'static>>::PseudoElement,
-        _context: &mut MatchingContext<'_, 'static, Impl>,
-    ) -> bool {
-        false
-    }
-
-    fn is_link(&self) -> bool {
-        false
-    }
-
-    fn is_html_slot_element(&self) -> bool {
-        false
-    }
-
-    fn has_id(
-        &self,
-        id: &<Impl as SelectorImpl<'static>>::Identifier,
-        _case: CaseSensitivity,
-    ) -> bool {
-        self.view().id == Some(id.as_ref())
-    }
-
-    fn has_class(
-        &self,
-        name: &<Impl as SelectorImpl<'static>>::Identifier,
-        _case: CaseSensitivity,
-    ) -> bool {
-        let name: &str = name.as_ref();
-        self.view().classes.iter().any(|class| class == name)
-    }
-
-    fn imported_part(
-        &self,
-        _name: &<Impl as SelectorImpl<'static>>::Identifier,
-    ) -> Option<<Impl as SelectorImpl<'static>>::Identifier> {
-        None
-    }
-
-    fn is_part(&self, _name: &<Impl as SelectorImpl<'static>>::Identifier) -> bool {
-        false
-    }
-
-    fn is_empty(&self) -> bool {
-        self.view().position.empty
-    }
-
-    fn is_root(&self) -> bool {
-        false
+        index
     }
 }

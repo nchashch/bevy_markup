@@ -1416,10 +1416,7 @@ impl<'a> HtmlStyles<'a> {
             }
             for selector in rule.selectors.0.iter() {
                 let Some(selector) = Selector::from_parsed(selector) else {
-                    debug!(
-                        "html css: skipping unsupported selector `{}`",
-                        cssparser::ToCss::to_css_string(selector)
-                    );
+                    debug!("html css: skipping unsupported selector `{selector}`",);
                     continue;
                 };
                 // bug_0235: combinators inside `:is()` & co. cost depth²
@@ -6024,15 +6021,13 @@ mod tests {
     /// review_0005 I02: offsets near `i32`'s bounds once overflowed and
     /// panicked the build. `a*n + b == index` for a non-negative integer
     /// `n`: `n-2147483647` reaches every index; `-n-2147483647` none;
-    /// `-n+2147483647` every index (ADR 0034: now parcel's arithmetic).
+    /// `-n+2147483647` every index. ADR 0050's matcher computes in `i64`,
+    /// as CSS defines it (parcel_selectors' checked `i32` answered no for
+    /// `n-2147483647`).
     #[test]
     fn an_b_extreme_offsets_match_without_overflow() {
         for index in [1, 2, 7] {
-            // parcel computes `index - b` in checked i32: it overflows here,
-            // and the engine answers no where CSS says yes (the crate's own
-            // matcher used i64). No document has the 2^31 siblings that
-            // would tell; recorded with the ADR 0034 trial.
-            assert!(!nth_child("n-2147483647", index), "n-2147483647 at {index}");
+            assert!(nth_child("n-2147483647", index), "n-2147483647 at {index}");
             assert!(
                 !nth_child("-n-2147483647", index),
                 "-n-2147483647 at {index}"

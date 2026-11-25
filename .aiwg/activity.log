@@ -57,3 +57,4 @@
 ## [2026-11-25 00:36] update | Added HtmlFontLimits: bounded font sizes and distinct sizes against Bevy's unbounded font atlases (bug_0250, U55)
 ## [2026-11-25 01:13] update | Optional hotpath (0.33); fluent 0.17 / fluent-syntax 0.12 (ftl_check port verified, U1/U2/U47 still present)
 ## [2026-11-25 01:23] update | ADR 0049 proposed: MiniJinja with fuel instead of Tera + tera_check (measured fuel bounds; two upstream issues filed privately, U56, U57)
+## [2026-11-25 03:07] update | ADR 0050: own selector parser and matcher replace parcel_selectors (4M differential cases agree; parse up to -28%, match -7..-14%; 11 crates removed)

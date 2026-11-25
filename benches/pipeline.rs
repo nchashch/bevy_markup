@@ -140,6 +140,27 @@ fn frames(c: &mut Criterion) {
                 black_box(app.update())
             })
         });
+
+        // The matcher under specific loads (ADR 0050): long ancestor
+        // chains of near-misses, long sibling lists, functional
+        // pseudo-classes.
+        for workload in [
+            "selectors-deep",
+            "selectors-siblings",
+            "selectors-functional",
+        ] {
+            let workload_files = shared::frame_files(size, workload);
+            let files = shared::borrowed(&workload_files);
+            let (mut app, root) = bench_app(&files);
+            let mut n = 0_i64;
+            group.bench_function(BenchmarkId::new(workload, size), |b| {
+                b.iter(|| {
+                    n += 1;
+                    set_n(&mut app, root, n);
+                    black_box(app.update())
+                })
+            });
+        }
     }
 
     // Localized (the Fluent stage) and markdown (the pulldown-cmark

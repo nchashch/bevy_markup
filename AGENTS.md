@@ -146,7 +146,7 @@ src/
   css/             (ADR 0048) bevy_markup's CSS parser: sheet.rs, select.rs, property.rs,
                    value.rs, color.rs, grid.rs (see Pipeline, CSS parser)
   cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
-  cascade/selector.rs (internal) selector allowlist + parcel_selectors matching (ADR 0034)
+  cascade/selector.rs (internal) selector allowlist + bevy_markup's matcher (ADR 0034, 0050)
   fonts.rs         FontFamilies, FontFaces, GenericFamily, HtmlFontLimits + FontSizeBudget
   build.rs         (internal) DOM + styles → Bevy UI children; HtmlUiBuilt trigger
   rebuild.rs       (internal) pure rebuild decision: Frame (load phases + change signals) → Build/Skip/Wait
@@ -881,9 +881,13 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   tokenizer and rule parsers. `sheet.rs` (rules, declarations, `!important`;
   a syntax error fails the sheet or attribute, at-rules and nested rules
   are skipped; a value holding `var()` is kept as raw text, `Raw`, and so
-  is a `--name` declaration), `select.rs` (parcel_selectors' parser over
-  bevy_markup's own `SelectorImpl`; unknown pseudo-classes and elements
-  parse and the allowlist skips them), `property.rs` (one parser per mapped
+  is a `--name` declaration), `select.rs` (ADR 0050: selectors into
+  bevy_markup's own types, one flat `Vec<Simple>` per selector in match
+  order with `Simple::Combinator` separators, sheet selectors behind
+  `Arc`; it accepts exactly the grammar parcel_selectors accepted —
+  unknown pseudo-classes, pseudo-elements, `:has()`, `of S`, `&`,
+  namespaces parse to `Simple::Unsupported` and the allowlist skips their
+  rule; invalid syntax fails the sheet), `property.rs` (one parser per mapped
   property into `Decl`, which `cascade::apply` writes; any other property
   is dropped unparsed), `value.rs` (lengths — a unitless number is px, as
   context numbers rely on —, numbers, angles, times, URLs and typed
@@ -895,8 +899,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `color.rs` (CSS Color 4 to 8-bit
   sRGB), `grid.rs` (track lists, areas, placements, `grid`/`grid-template`;
   a bare `grid-auto-flow: dense` is `row dense`).
-- CSS subset (`style.rs` docs): selectors parsed by parcel_selectors and
-  matched by its engine (ADR 0034) within an allowlist
+- CSS subset (`style.rs` docs): selectors parsed and matched by
+  bevy_markup (ADR 0050, replacing ADR 0034's parcel_selectors) within an
+  allowlist
   (`cascade/selector.rs`): types, classes, ids, comma lists, descendant/child
   combinators, `data-*` attribute selectors, `+`/`~` next to the subject,
   `:is()`/`:where()`/`:not()` and the structural pseudo-classes per the
@@ -1874,9 +1879,11 @@ Known limits (each skipped/ignored value is logged at `debug`):
   indent is CSS-overridable per side. A nested list inside an `li`
   renders as inline content (containers inside blocks are inline — the
   mixed-content rule).
-- **Selectors:** parcel_selectors parses them (over `css::select`'s
-  `SelectorImpl`, ADR 0048) and matches them (ADR 0034) over `cascade/selector.rs`
-  `Node`: an `Element` implementation on the walk's own structures — the
+- **Selectors:** `css::select` parses them and `cascade/selector.rs`
+  matches them (ADR 0050) right to left, with Servo's restart outcomes
+  (`Outcome`: a failed descendant chain stops instead of backtracking),
+  over `Node`: a view of the walk's own structures, read one field at a
+  time — the
   element, its ancestor chain (nearest first; each `Ancestor` carries a
   `SiblingLink` into its parent's `SiblingList`) and stand-in siblings from
   `Position` where no list is threaded (tests, image runs, the root).
@@ -1890,16 +1897,14 @@ Known limits (each skipped/ignored value is logged at `debug`):
   `:nth-last-of-type()`, `:first-/last-/only-child`, `:first-/last-/only-of-type`,
   `:empty`; `:is()`/`:where()`/`:not()` with lists and descendant/child
   combinators inside — at the first level only, a combinator in an argument
-  nested in another skips the rule (`nested`'s depth: parcel re-matches an
-  argument per ancestor, so each level multiplied by the depth; bug_0213,
+  nested in another skips the rule (`nested`'s depth: an argument is
+  re-matched per ancestor, so each level multiplied by the depth; bug_0213,
   ADR 0044), and a sheet holds at most `MAX_COMBINATOR_ARGUMENTS` (64) such
   arguments in all (each costs depth² per element; the rules past it skip,
   bug_0235) — but no `:not()` within a `:not()` (ADR 0029's
   reactivity answers a pseudo-class by `!in_negation()`, exact only at one
-  level). The allowlist also keeps out what parcel's matcher panics on
-  (`:nth-child(… of S)`, `:has()`, `&` nesting, `:nth-col()`).
-  parcel's `An+B` arithmetic is checked `i32`: `:nth-child(n-2147483647)`
-  matches nothing (CSS: everything); no page can tell. The style cache keys on what the
+  level). `An+B` is computed in `i64`, as CSS defines it
+  (`:nth-child(n-2147483647)` matches every element). The style cache keys on what the
   sheet's selectors read (`SelectorReads`). For the skeleton, a sibling
   list whose shape changes (length, node kind, tag) un-cleans its children
   when the sheet is sibling-dependent; an attribute-only change un-cleans

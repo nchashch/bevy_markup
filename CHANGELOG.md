@@ -88,6 +88,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     image fails with an error, instead of a renderer panic.
 
 ### Changed
+- Selectors are parsed and matched by bevy_markup itself (ADR 0050);
+  `parcel_selectors` and `static-self` are no longer dependencies (11
+  fewer crates in a build, `syn` 1 among them). The same selectors are
+  accepted and match as before; selector-heavy sheets parse up to ~28%
+  faster and match 7–14% faster.
 - fluent 0.16 → 0.17 (fluent-bundle 0.16, fluent-syntax 0.12): no API
   change for bevy_markup users; two duplicate dependencies (`thiserror` 1,
   `self_cell` 0.10) leave the tree. The load-time FTL check still applies:
@@ -183,6 +188,9 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   skipped (each costs the document's depth squared per element).
 
 ### Fixed
+- `:nth-child()` and friends with offsets near ±2³¹ (`n-2147483647`)
+  match the elements CSS says they match (the old engine's 32-bit
+  arithmetic overflowed and matched nothing).
 - `grid-auto-flow: dense` means `row dense`, as in CSS (it used to be
   dropped).
 - CSS: a NaN inside `min()`, `max()` or `clamp()` (`min(1, NaN)`,

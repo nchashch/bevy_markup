@@ -50,7 +50,7 @@ as `[INFERENCE]`.
 | [0031](./0031-windowed-build-spec-level-culling.md) | Windowed build: spec-level viewport culling with height-preserving spacers | Accepted; amended by 0032 |
 | [0032](./0032-windowed-build-revised.md) | Windowed build, revised: one unit system, nested culling, scroll reuse and slack | Accepted; amended by 0033 |
 | [0033](./0033-sibling-alignment-and-height-estimates.md) | Sibling alignment and height estimates for content changes | Accepted |
-| [0034](./0034-match-selectors-with-parcel-selectors.md) | Match selectors with lightningcss's selector engine (parcel_selectors) | Accepted |
+| [0034](./0034-match-selectors-with-parcel-selectors.md) | Match selectors with lightningcss's selector engine (parcel_selectors) | Superseded by [0050](./0050-own-selector-engine.md) |
 | [0035](./0035-replace-tl-with-html5ever.md) | Replace tl with html5ever | Rejected |
 | [0036](./0036-decode-character-references-with-htmlize.md) | Decode character references with htmlize | Accepted |
 | [0037](./0037-anchored-overlays-with-bevy-popover.md) | Anchored overlays with Bevy's Popover | Rejected |
@@ -67,5 +67,6 @@ as `[INFERENCE]`.
 | [0047](./0047-bound-quadratic-template-and-fluent-operations.md) | Bound quadratic template and Fluent operations before execution | Accepted |
 | [0048](./0048-own-css-value-parsing-on-cssparser.md) | CSS is parsed on cssparser by bevy_markup; lightningcss is removed | Accepted |
 | [0049](./0049-minijinja-with-fuel-instead-of-tera.md) | Templates on MiniJinja with fuel instead of Tera and a static check | Proposed |
+| [0050](./0050-own-selector-engine.md) | Selectors are parsed and matched by bevy_markup; parcel_selectors is removed | Accepted |
 
 Add new records to this index in the same commit that adds the file.

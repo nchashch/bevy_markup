@@ -17,20 +17,14 @@ pub(crate) mod sheet;
 pub(crate) mod value;
 
 use cssparser::{BasicParseErrorKind, ParseError, ParseErrorKind, Parser};
-use parcel_selectors::parser::SelectorParseErrorKind;
-
-/// Why a parse failed: a selector error from parcel_selectors, or a value
-/// outside the grammar bevy_markup parses.
+/// Why a parse failed: an invalid selector, or a value outside the
+/// grammar bevy_markup parses. The lifetime is cssparser's error type's.
 #[derive(Clone, Debug)]
 pub(crate) enum CssError<'i> {
-    Selector(SelectorParseErrorKind<'i>),
+    Selector(select::SelectorError),
     Invalid,
-}
-
-impl<'i> From<SelectorParseErrorKind<'i>> for CssError<'i> {
-    fn from(kind: SelectorParseErrorKind<'i>) -> Self {
-        CssError::Selector(kind)
-    }
+    #[doc(hidden)]
+    _Source(std::marker::PhantomData<&'i ()>),
 }
 
 /// A parse error in any of the CSS parsers.
@@ -60,7 +54,7 @@ pub(crate) fn describe(error: &Error<'_>) -> String {
         }
         ParseErrorKind::Basic(BasicParseErrorKind::QualifiedRuleInvalid) => "invalid rule".into(),
         ParseErrorKind::Custom(CssError::Selector(kind)) => format!("invalid selector ({kind:?})"),
-        ParseErrorKind::Custom(CssError::Invalid) => "invalid value".into(),
+        ParseErrorKind::Custom(CssError::Invalid | CssError::_Source(_)) => "invalid value".into(),
     };
     format!(
         "{what} at {}:{}",

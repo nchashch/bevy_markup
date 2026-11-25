@@ -7793,14 +7793,13 @@ mod review_0005 {
             page,
             &format!("{WHITE} p:nth-child(n-2147483647) {{ background-color: #ff0000 }}"),
         );
-        // CSS: every index is reachable (n large), so every `p` matches.
-        // ADR 0034's engine (parcel_selectors) computes `index - b` in
-        // checked i32, overflows and answers no; no document has the 2^31
-        // siblings that would tell. The property this guards is the panic.
+        // CSS: every index is reachable (n large), so every `p` matches
+        // (ADR 0050's matcher computes in i64; parcel_selectors' checked
+        // i32 answered no).
         for text in ["1", "2", "3"] {
             assert!(
-                !red_before(&all, text),
-                "the engine's answer for n-2147483647 changed:\n{all}"
+                red_before(&all, text),
+                "n-2147483647 matches every p:\n{all}"
             );
         }
         let none = built(

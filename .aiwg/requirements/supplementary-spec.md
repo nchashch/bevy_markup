@@ -25,7 +25,7 @@ Numbered, testable statements with what verifies each ("—" = no automated chec
 |---|---|---|---|
 | NFR-CONF-001 | Computed styles (font, size, color, box widths, border-image) match Chromium for every plain-HTML vector | ADR 0004 | `browser_oracle` (`tests/vectors/*/browser.json`); nightly re-checks against current Chrome |
 | NFR-CONF-002 | Layout boxes match Chromium's within 1px | ADR 0004, 0007 | `layout_oracle` (`tests/vectors/layout_*`) |
-| NFR-CONF-006 | Selectors match as parcel_selectors parses them, with spec specificity (`:where()` zero, `:is()` its most specific argument); `:nth-child(0)` matches nothing | ADR 0034 | `browser_oracle` on `tests/vectors/selectors_level4`; `nth_child_zero_matches_no_element`; `tests/selector_model.rs` (Level 4 grammar) |
+| NFR-CONF-006 | Selectors match as Selectors 4 defines them (bevy_markup's own engine, ADR 0050, accepting what parcel_selectors accepted), with spec specificity (`:where()` zero, `:is()` its most specific argument); `:nth-child(0)` matches nothing | ADR 0034, 0050 | `browser_oracle` on `tests/vectors/selectors_level4`; `nth_child_zero_matches_no_element`; `tests/selector_model.rs` (Level 4 grammar) |
 | NFR-CONF-007 | Character references decode as the HTML spec (and Chrome) decodes them: legacy names without `;` in text, kept verbatim in attribute values before an alphanumeric or `=` | ADR 0036 | `browser_oracle` on `tests/vectors/character_references` (attribute values through attribute selectors); `template::tests::references_decode_as_the_spec_says` |
 | NFR-CONF-008 | `text-transform: capitalize` titlecases on Unicode word boundaries as Chrome does, continuing a word across elements | CHANGELOG | `browser_oracle` on `tests/vectors/text_transform_unicode` |
 | NFR-CONF-003 | Localized output equals `@fluent/dom`'s for the same inputs | ADR 0004, 0013 | `fluent_oracle`; CI checks `fluent.html` is what `scripts/fluent_oracle.sh` produces |
@@ -59,7 +59,7 @@ Numbered, testable statements with what verifies each ("—" = no automated chec
 | NFR-SEC-001 | Template input is treated as untrusted: a panic reachable from user data is high severity | `AGENTS.md` Bug reports | fuzzing (NFR-REL-001) |
 | NFR-SEC-002 | Tera autoescaping round-trips; character references are decoded one level only (htmlize, the spec's algorithm) | `AGENTS.md` Testing, ADR 0036 | `template.rs` unit tests and proptest; `entity_decoding_stays_linear_without_terminators` |
 | NFR-SEC-006 | Argument attributes (`data-with`, `data-l10n-args`, `data-tooltip-args`) are parsed as strict JSON, printed by the `json` filter; any string a template variable holds round-trips | CHANGELOG (bug_0128's class) | `template::tests::json_filter_round_trips_any_string`, `malformed_attribute_json_is_an_error`; the testbench's hostile-args scenarios |
-| NFR-SEC-005 | Selector forms parcel's matcher panics on (`:nth-child(… of S)`, `:has()`, `&` nesting, `:nth-col()`) never reach it: the allowlist skips their rules | ADR 0034 | `cascade::tests::the_engine_allowlist`; the testbench's selector-engine scenario |
+| NFR-SEC-005 | Selector forms outside the supported grammar (`:nth-child(… of S)`, `:has()`, `&` nesting, `:nth-col()`, pseudo-elements) parse to `Unsupported` and the allowlist skips their rules; the matcher has no panic paths (ADR 0050) | ADR 0034, 0050 | `cascade::tests::the_engine_allowlist`; the testbench's selector-engine scenario |
 | NFR-SEC-003 | Known upstream panics are patched locally until fixed upstream, and apps are told to apply the patch | `UPSTREAM.md` U1, U2 | `[patch.crates-io]` in `Cargo.toml`; README section |
 | NFR-SEC-004 | The `dev-tools` surface (localhost BRP + MCP) is never enabled in a shipped build | `Cargo.toml` features | — (opt-in feature) |
 
@@ -81,6 +81,7 @@ Numbered, testable statements with what verifies each ("—" = no automated chec
 - @docs/agents/adr/0021-per-element-dirty-tracking.md
 - @docs/agents/adr/0031-windowed-build-spec-level-culling.md
 - @docs/agents/adr/0034-match-selectors-with-parcel-selectors.md
+- @docs/agents/adr/0050-own-selector-engine.md
 - @docs/agents/adr/0036-decode-character-references-with-htmlize.md
 - @docs/agents/bugs/bug_0001.md
 - @docs/agents/bugs/bug_0170.md
