@@ -28,8 +28,9 @@ install() {
 case "$driver" in
     honggfuzz)
         install cargo-hfuzz honggfuzz 0.5.62
-        # = scripts/fuzz-honggfuzz.sh
+        # = scripts/fuzz-honggfuzz.sh (its RUSTFLAGS too: UPSTREAM U58)
         export HFUZZ_BUILD_ARGS='--manifest-path honggfuzz/Cargo.toml --config target.x86_64-unknown-linux-gnu.linker="cc"'
+        export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
         for target in html css ftl svg; do
             cargo "+$toolchain" hfuzz build --bin "$target"
         done

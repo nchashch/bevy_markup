@@ -139,6 +139,8 @@ jobs:
         include: # = nightly.yml `fuzz-drivers`
           - driver: honggfuzz
             workspaces: honggfuzz -> ../hfuzz_target
+            # Retires the caches built with `target-cpu=native` (U58).
+            cache-suffix: -x86-64
           - driver: fuzzcheck
             workspaces: fuzzcheck
           - driver: test-fuzz

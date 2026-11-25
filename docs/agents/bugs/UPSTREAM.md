@@ -67,6 +67,7 @@ the issue may already be fixed or reported.
 | U53 | parley 0.11.1 (via bevy_text) | `BreakLines::break_next_line_or_box` `assert!`s on its line widths, which an infinite or NaN layout width breaks ([bug_0249](bug_0249.md)) | panic in every build from text in a node whose width overflows (`3e38em`, width + margin near `f32::MAX`) | same bounds | unreported |
 | U54 | zeno 0.3.3 / swash 0.2.10 (via bevy_text) | Glyph rasterization sizes its bitmap with `u32` arithmetic: past ~32,768 px per side it overflows ([bug_0249](bug_0249.md)) | debug: panic from `font-size: 2e5px`; release: hangs past 2 min at 1.4–2.4 GB; `50000px` costs 3.5 s and 6.9 GB | computed font size clamped to `MAX_FONT_SIZE` (8192 px) | unreported |
 | U55 | bevy_text 0.20.1 | Font atlases are kept per exact font size and never freed; each new size costs at least a 512² RGBA atlas, a glyph gets an atlas as large as itself (2× the font size for tall glyphs), possibly past the device's texture limit ([bug_0250](bug_0250.md)) | memory grows with the distinct sizes and glyphs ever drawn: 2,000 sizes took 2 GB, 16 letters at 8192 px 2.3 GB; animated font sizes leak | `HtmlFontLimits` (default 2048 px, 128 distinct sizes) | unreported |
+| U58 | honggfuzz-rs 0.5.62 (`cargo-hfuzz`) | Release builds add `-C target-cpu=native` | targets built on a runner with AVX-512 crash with SIGILL on every input on one without, so a cached build fails the nightly fuzz jobs | append `-C target-cpu=x86-64` in `scripts/fuzz-{setup,honggfuzz}.sh` (later flags win), cache suffix `-x86-64` | unreported |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -1216,4 +1217,23 @@ CI clippy command and workspace tests pass on both.
   rasterization such as SDF/MSDF for large text), packing large glyphs
   instead of one atlas each, and refusing or downscaling a glyph larger than
   the device's `max_texture_dimension_2d`.
+
+## U58 — honggfuzz-rs: `cargo hfuzz build` compiles for the build machine's CPU
+
+- **Project/version:** [rust-fuzz/honggfuzz-rs](https://github.com/rust-fuzz/honggfuzz-rs)
+  0.5.62, `src/bin/cargo-hfuzz.rs` (the release and instrumented branches
+  push `-C target-cpu=native` before the user's `RUSTFLAGS`).
+- **Problem:** a target binary uses whatever the build machine's CPU
+  supports. Built once and reused elsewhere (a CI build cache), it dies on
+  the first unsupported instruction. Nightly run 45522952063
+  (2026-11-25): the `ftl` and `svg` honggfuzz jobs saved 22 and 2 "crashes",
+  all `SIGILL` on `vmovups …, %zmm0` (AVX-512) within seconds of starting;
+  every input replays cleanly on a normal build, debug and release.
+- **Local workaround:** `RUSTFLAGS` gains `-C target-cpu=x86-64` in
+  `scripts/fuzz-setup.sh` and `scripts/fuzz-honggfuzz.sh` (cargo-hfuzz
+  appends the user's flags last, and the last `target-cpu` wins); the
+  honggfuzz build cache gets the suffix `-x86-64` so native builds aren't
+  restored. Same class as U48 (cargo-afl).
+- **PR sketch:** make `target-cpu=native` opt-in (an `HFUZZ_NATIVE` switch),
+  or put it before a documented override point.
 

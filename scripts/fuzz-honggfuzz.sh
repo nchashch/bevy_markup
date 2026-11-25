@@ -18,6 +18,10 @@ duration=${2:-60}
 toolchain=${BEVY_MARKUP_NIGHTLY:-nightly}
 
 export HFUZZ_BUILD_ARGS='--manifest-path honggfuzz/Cargo.toml --config target.x86_64-unknown-linux-gnu.linker="cc"'
+# cargo-hfuzz builds with `-C target-cpu=native` (UPSTREAM U58): a
+# build cached on a runner with AVX-512 died with SIGILL on every input
+# on one without. Our RUSTFLAGS come after its own, so this one wins.
+export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
 # Build first (unbounded: a cold build can exceed the run budget); the
 # timeout then bounds only the run. `timeout` exits 124 when the budget
 # elapses — that is a normal, successful end for a fuzz campaign.
