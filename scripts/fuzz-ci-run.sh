@@ -7,8 +7,7 @@
 # The job log and the job summary get counts only: coverage at the start
 # and end, corpus size, crashes found.
 # Usage: scripts/fuzz-ci-run.sh <libfuzzer|honggfuzz|fuzzcheck|test-fuzz> <target> <seconds> [driver args...]
-# Env: CORPUS (the working corpus directory, for its size), CRASHES (the
-# directory the driver writes crashing inputs to).
+# Env: CORPUS (the working corpus directory, for its size).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,11 +16,22 @@ shift 3
 mkdir -p fuzz-private
 log="fuzz-private/$driver-$target.log"
 count() { find "$1" -type f 2>/dev/null | wc -l; }
-crashes_before=$(count "${CRASHES:-/nonexistent}")
+# Where each driver saves a crashing input (the same places its
+# scripts/fuzz-<driver>.sh counts; the rest of those directories is corpus).
+crash_count() {
+    case $driver in
+        libfuzzer) find "fuzz/artifacts/$target" -maxdepth 1 -type f ;;
+        honggfuzz) find "hfuzz_workspace/$target" -maxdepth 1 -name '*.fuzz' ;;
+        fuzzcheck) find "fuzzcheck/fuzz/fuzz_$target/artifacts" -type f ;;
+        test-fuzz) find test-fuzz/target/afl/output -path "*fuzz_$target/*/crashes/*" \
+            -type f ! -name README.txt ;;
+    esac 2>/dev/null | wc -l
+}
+crashes_before=$(crash_count)
 
 "scripts/fuzz-$driver.sh" "$target" "$seconds" "$@" >"$log" 2>&1
 status=$?
-crashes=$(($(count "${CRASHES:-/nonexistent}") - crashes_before))
+crashes=$(($(crash_count) - crashes_before))
 # libFuzzer's fork mode keeps going after a crash (-ignore_crashes=1):
 # a new file in its artifact directory is what reports one.
 if [ "$crashes" -gt 0 ] && [ "$status" -eq 0 ]; then

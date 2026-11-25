@@ -154,6 +154,8 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   depend on `lightningcss` directly if your app used it.
 
 ### Security
+- The `format` filter only accepts ASCII `%(key)` names; a format string
+  with another character in a key fails the render.
 - Template renders are bounded by fuel (instructions, data produced,
   items visited) instead of a load-time model of what a Tera render could
   cost: hostile templates fail their render instead of stalling or

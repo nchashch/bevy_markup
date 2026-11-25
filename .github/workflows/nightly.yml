@@ -324,7 +324,6 @@ jobs:
         env:
           FUZZ_EXTRA_CORPUS: hfuzz_workspace/${{ matrix.target }}/input
           CORPUS: fuzz/corpus/${{ matrix.target }}
-          CRASHES: fuzz/artifacts/${{ matrix.target }}
         run: >-
           scripts/fuzz-ci-run.sh libfuzzer ${{ matrix.target }} $(( ${{ matrix.minutes }} * 60 ))
           -fork=4 -ignore_crashes=1 -rss_limit_mb=3072
@@ -449,7 +448,6 @@ jobs:
           HFUZZ_RUN_ARGS: -t 10 --rlimit_as 3072 -n 4
           FUZZ_EXTRA_CORPUS: ${{ matrix.driver == 'honggfuzz' && format('fuzz/corpus/{0}', matrix.target) || '' }}
           CORPUS: ${{ steps.paths.outputs.corpus }}
-          CRASHES: ${{ steps.paths.outputs.crashes }}
         run: >-
           scripts/fuzz-ci-run.sh ${{ matrix.driver }} ${{ matrix.target }}
           ${{ steps.paths.outputs.seconds }}

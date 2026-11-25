@@ -221,6 +221,7 @@ pub fn new_environment(fuel: u64) -> minijinja::Environment<'static> {
     env.add_filter("lines", fueled_lines);
     env.add_filter("escape", fueled_escape);
     env.add_filter("e", fueled_escape);
+    env.add_filter("format", ascii_keyed_format);
     env.set_fuel(Some(fuel));
     env
 }
@@ -323,6 +324,51 @@ fn fueled_escape(
         charge_bytes(state, (text.len() as u64).saturating_add(grown))?;
     }
     minijinja::filters::escape(state, value)
+}
+
+/// `format`, with its `%(key)` mapping keys limited to ASCII: a key holding
+/// another character fails the filter before MiniJinja parses the format
+/// string.
+fn ascii_keyed_format(
+    state: &mut minijinja::State,
+    format: &minijinja::Value,
+    args: minijinja::value::Rest<minijinja::value::ValueOrKwargs>,
+) -> Result<minijinja::Value, minijinja::Error> {
+    if let Some(text) = format.as_str()
+        && !format_keys_are_ascii(text)
+    {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "format: a %(key) name must be ASCII",
+        ));
+    }
+    minijinja::filters::format(state, format, args)
+}
+
+/// Whether every `%(key)` in a printf-style format string (up to its `)`,
+/// or the end) is ASCII. `%%` is a literal percent sign.
+fn format_keys_are_ascii(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'%' {
+            at += 1;
+            continue;
+        }
+        match bytes.get(at + 1) {
+            Some(b'%') => at += 2,
+            Some(b'(') => {
+                let key = &bytes[at + 2..];
+                let end = key.iter().position(|&b| b == b')').unwrap_or(key.len());
+                if !key[..end].is_ascii() {
+                    return false;
+                }
+                at += 2 + end;
+            }
+            _ => at += 1,
+        }
+    }
+    true
 }
 
 /// The template limits an app may set (ADR 0049): how much work and
@@ -1324,6 +1370,31 @@ pub(crate) fn normalize_self_closing(html: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::normalize_self_closing as norm;
+
+    /// `format` takes printf-style formats with ASCII `%(key)` names;
+    /// another character in a key fails the render.
+    #[test]
+    fn format_keys_must_be_ascii() {
+        let render = |template: &str| test_render("t.html", template, serde_json::json!({}));
+        assert_eq!(render(r#"{{ "%s-%d" | format("a", 2) }}"#).unwrap(), "a-2");
+        assert_eq!(
+            render(r#"{{ "%(name)s!" | format(name="Ann") }}"#).unwrap(),
+            "Ann!"
+        );
+        assert_eq!(render(r#"{{ "%%(é)" | format() }}"#).unwrap(), "%(é)");
+        assert_eq!(render(r#"{{ "é %s" | format(1) }}"#).unwrap(), "é 1");
+        for template in [
+            r#"{{ "%(é" | format(1) }}"#,
+            r#"{{ "%(aé)s" | format(1) }}"#,
+            r#"{{ "%s %(名)s" | format(1) }}"#,
+        ] {
+            let err = render(template).unwrap_err();
+            assert!(
+                err.to_string().contains("must be ASCII"),
+                "{template}: {err}"
+            );
+        }
+    }
 
     /// bug_0185: what `tl` misreads gets a space; nothing else changes.
     #[test]

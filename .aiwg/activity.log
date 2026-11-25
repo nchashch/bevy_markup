@@ -61,3 +61,4 @@
 ## [2026-11-25 03:22] update | Nightly honggfuzz ftl/svg failures: SIGILL from cargo-hfuzz target-cpu=native on a cached build (U58); pinned x86-64, retired the cache
 ## [2026-11-25 04:50] update | ADR 0049 accepted: templates on MiniJinja with per-render fuel; tera_check, tera and nom removed; U56 workaround in, repro kept private
 ## [2026-11-25 05:42] update | Nightly fuzzing: 4 workers, weighted durations (css/html 120 min), shared cargo-fuzz/honggfuzz corpora, findings encrypted (age), local triage script
+## [2026-11-25 21:19] update | Nightly fuzzing fixes: libFuzzer skips missing extra corpora, crash counts per driver's crash directory, triage reads only crash directories; format filter takes ASCII %(key) names only

@@ -27,6 +27,13 @@ host=$(rustc "+$toolchain" -vV | sed -n 's/^host: //p')
 # first: libFuzzer writes new inputs only there. The committed seeds
 # (fuzz/seeds/<target>, minimized) are read-only extra input.
 mkdir -p "fuzz/corpus/$target"
+# Extra directories that don't exist are skipped: libFuzzer exits on a
+# missing corpus directory (the other driver's corpus cache misses on
+# the first night).
+extra=()
+for dir in ${FUZZ_EXTRA_CORPUS:-}; do
+    [ -d "$dir" ] && extra+=("$dir")
+done
 exec cargo "+$toolchain" fuzz run --target "$host" "$target" \
-    "fuzz/corpus/$target" "fuzz/seeds/$target" ${FUZZ_EXTRA_CORPUS:-} -- \
+    "fuzz/corpus/$target" "fuzz/seeds/$target" "${extra[@]}" -- \
     -max_total_time="$duration" -max_len=65536 -timeout=10 "$@"

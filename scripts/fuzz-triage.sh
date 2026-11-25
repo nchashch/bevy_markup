@@ -75,12 +75,15 @@ for dir in "$inbox"/*/; do
     driver=${bundle%-*}
     target=${bundle##*-}
     case $driver in
-        libfuzzer) files=$(find "$dir" -path '*fuzz/artifacts/*' -type f) ;;
-        honggfuzz) files=$(find "$dir" -name '*.fuzz' -type f) ;;
+        # Only where each driver saves crashing inputs: the bundles also
+        # hold corpus files (honggfuzz's input/, AFL's queue/).
+        libfuzzer) files=$(find "$dir/fuzz/artifacts" -mindepth 2 -maxdepth 2 -type f 2>/dev/null) ;;
+        honggfuzz) files=$(find "$dir/hfuzz_workspace" -mindepth 2 -maxdepth 2 -name '*.fuzz' 2>/dev/null) ;;
         fuzzcheck | test-fuzz)
             while IFS= read -r file; do
                 [ -n "$file" ] && manual+=("$driver $target: $file")
-            done < <(find "$dir" -type f ! -path '*fuzz-private*' ! -name '*.log')
+            done < <(find "$dir" \( -path '*fuzzcheck/fuzz/*/artifacts/*' -o -path '*/crashes/*' \) \
+                -type f ! -name README.txt 2>/dev/null)
             continue ;;
         *) continue ;;
     esac
