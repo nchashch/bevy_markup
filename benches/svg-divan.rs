@@ -21,7 +21,7 @@ fn main() {
 const DOCUMENTS: [&str; 6] = [
     "icon",
     "illustration",
-    "shadowed",
+    "clipped",
     "deep",
     "background",
     "sheet",

@@ -21,22 +21,21 @@ pub(crate) fn illustration() -> String {
     format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512">{body}</svg>"#)
 }
 
-/// A 512×512 panel with a drop shadow (a blur filter over the layer).
-pub(crate) const SHADOWED: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><filter id="s"><feDropShadow dx="6" dy="6" stdDeviation="8"/></filter><rect x="32" y="32" width="448" height="448" rx="24" fill="#334" filter="url(#s)"/></svg>"##;
+/// A 512×512 panel clipped to a rounded rect, with a gradient and a
+/// translucent highlight (an offscreen layer and a clip mask).
+pub(crate) const CLIPPED: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#556"/><stop offset="1" stop-color="#223"/></linearGradient><clipPath id="c"><rect x="32" y="32" width="448" height="448" rx="24"/></clipPath></defs><g clip-path="url(#c)" opacity="0.95"><rect width="512" height="512" fill="url(#g)"/><circle cx="96" cy="64" r="200" fill="#fff" fill-opacity="0.08"/></g></svg>"##;
 
-/// A chain of 30 patterns, each filled with the previous one: close to the
-/// recursion-depth limit (the check's worst accepted case).
+/// A chain of 30 clip paths, each clipped by the previous one: close to
+/// the recursion-depth limit (the check's worst accepted case).
 pub(crate) fn deep() -> String {
-    let mut body = String::from(
-        "<pattern id='p0' width='8' height='8' patternUnits='userSpaceOnUse'><rect width='8' height='8' fill='red'/></pattern>",
-    );
+    let mut body = String::from("<clipPath id='c0'><rect width='64' height='64'/></clipPath>");
     for i in 1..30 {
         body += &format!(
-            "<pattern id='p{i}' width='8' height='8' patternUnits='userSpaceOnUse'><rect width='8' height='8' fill='url(#p{})'/></pattern>",
+            "<clipPath id='c{i}' clip-path='url(#c{})'><rect width='64' height='64'/></clipPath>",
             i - 1
         );
     }
-    body += "<rect width='64' height='64' fill='url(#p29)'/>";
+    body += "<rect width='64' height='64' fill='red' clip-path='url(#c29)'/>";
     format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">{body}</svg>"#)
 }
 
@@ -87,7 +86,7 @@ pub(crate) fn documents() -> Vec<(&'static str, String)> {
     vec![
         ("icon", ICON.to_owned()),
         ("illustration", illustration()),
-        ("shadowed", SHADOWED.to_owned()),
+        ("clipped", CLIPPED.to_owned()),
         ("deep", deep()),
         ("background", background()),
         ("sheet", sheet()),

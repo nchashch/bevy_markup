@@ -49,7 +49,7 @@
 //!   nothing. `xmlns` (and `xmlns:xlink`) may be left out, as in HTML.
 //! - `currentColor` is the element's computed CSS `color`, so CSS
 //!   recolors it (`:hover`, themes) like text. Other page CSS doesn't reach
-//!   inside it; the SVG's own attributes and `<style>` do.
+//!   inside it; the SVG's own attributes and `style` declarations do.
 //! - It's sized like an `<img>`: CSS `width`/`height`, else the document's
 //!   own `width`/`height`, else its `viewBox` (not the browser's 300 × 150
 //!   default or its stretch to the container).
@@ -62,49 +62,47 @@
 //!
 //! Static SVG only: no animation, no scripts.
 //!
-//! # Text
+//! # The icon subset
 //!
-//! `<text>` inside an SVG needs the `svg-text` feature (resvg's font stack);
-//! without it, text draws nothing. With it, an SVG's `font-family`
-//! resolves like the page's CSS: through the families registered in
-//! [`FontFamilies`](crate::fonts::FontFamilies) (any case), the generic
-//! keywords mapped with `set_generic`, and CSS's face fallback; a family
-//! nobody registered uses Bevy's default font. A face given as a font file
-//! (`FontSource::Handle`) is that file; one given as a family
-//! (`FontSource::Family`, `Generic`, …: system fonts) is that family's face
-//! closest to the text's weight and style in Bevy's own font collection,
-//! the face page text uses. A font that loads after an SVG was drawn draws
-//! it again: `.svg` files with text are reloaded, and inline `<svg>` with
-//! text is redrawn.
+//! SVGs are drawn in an icon subset (ADR 0051): `svg`, `g`, `defs`,
+//! `symbol`, `use`, `a`, `path`, `rect`, `circle`, `ellipse`, `line`,
+//! `polyline`, `polygon`, `linearGradient`, `radialGradient`, `stop` and
+//! `clipPath` (plus `title`, `desc` and `metadata`, which draw nothing),
+//! with their presentation attributes and `style` declarations: fill and
+//! stroke (colors, gradients, dashes), opacity, transforms, blend modes,
+//! `currentColor`. Every document of seven popular icon and emoji sets
+//! (Lucide, Tabler, Material Design Icons, game-icons.net, Font Awesome,
+//! Twemoji, OpenMoji) fits it. A document with anything else — a filter
+//! or `filter` property, a mask, pattern, marker, `<text>`, `<style>`
+//! sheet, `<image>` or `<foreignObject>` — fails to load, with an error
+//! naming it. Elements in an editor's own namespace (Inkscape's, say) are
+//! ignored.
 //!
 //! # Limits
 //!
 //! SVG content may come from mods or players, so the loader treats every
 //! file as untrusted:
 //!
-//! - **No external resources.** `<image href>` is never resolved: not file
-//!   paths (usvg would read any file the process can), not `data:` URLs.
-//!   Such an image is left out.
+//! - **No external resources.** `<image>` is outside the subset, and even
+//!   past it an `href` is never resolved: not file paths (usvg would read
+//!   any file the process can), not `data:` URLs.
 //! - **Size.** Neither side exceeds [`MAX_SVG_SIDE`] px; a larger document
 //!   is drawn scaled down to fit, with a warning.
-//! - **Render cost.** Filters, masks, clip paths and group opacity each draw
-//!   offscreen layers, and some filter parameters (`numOctaves`, morphology
-//!   radius, convolution order) multiply the work per pixel. Before drawing,
+//! - **Render cost.** Clip paths and group opacity each draw offscreen
+//!   layers, and dashed strokes cut paths into many pieces. Before drawing,
 //!   the loader estimates the cost from the parsed document; one over
 //!   [`MAX_SVG_COST`] fails to load, with an error naming the estimate.
 //!   resvg can't stop a render once it starts, so the estimate is the only
 //!   bound.
 //! - **Conversion work.** Before the document is converted at all, the
 //!   loader bounds what conversion would build: each `<use>` copies its
-//!   target, a marker is converted once per vertex of every path carrying
-//!   it, an inherited pattern or gradient once per shape, and an elliptical
+//!   target, an inherited gradient's stops are copied per shape, and an elliptical
 //!   arc splits into more curves the larger its radius. A document whose
 //!   estimate exceeds [`MAX_SVG_WORK`] (a few KB can describe millions of
 //!   copies) fails to load, with an error naming the estimate.
 //! - **Structure.** Nesting deeper than usvg's converter can recurse on a
-//!   2 MB stack, and a reference cycle — including a pattern or marker that
-//!   inherits a `fill`, `stroke` or `marker-*` naming itself from an
-//!   ancestor — fail to load. Entity expansion past usvg's limits fails
+//!   2 MB stack, and a reference cycle — including a gradient whose content
+//!   inherits a `fill` or `stroke` naming it — fail to load. Entity expansion past usvg's limits fails
 //!   in usvg's parser.
 //!
 //! # Another `.svg` loader in the app
@@ -129,7 +127,6 @@ use serde::{Deserialize, Serialize};
 use usvg::roxmltree;
 
 use crate::svg_bounds;
-use crate::svg_boxes;
 
 /// The largest width or height an SVG is drawn at, in px. A larger
 /// document (or a larger [`SvgLoaderSettings::scale`]) is scaled down to fit,
@@ -182,23 +179,6 @@ fn raster_bytes(size: UVec2) -> u64 {
 /// miter limit; the smallest extent seen to panic is ~1.8·10⁶ px.
 pub const MAX_SVG_EXTENT: f32 = 524_288.0;
 
-/// The largest Gaussian blur, in pixels of standard deviation at the drawn
-/// size, an `.svg` may ask for (`feGaussianBlur`, `feDropShadow`). resvg
-/// 0.50's box blur sizes its boxes as `i32`s and adds past `i32::MAX` for a
-/// σ of ~1.4·10⁹ px (UPSTREAM U32: a panic where overflow checks are on, a
-/// wrapped, negative box in release). 2²⁰ px is far below that and far
-/// beyond any layer resvg blurs (at most 5 × [`MAX_SVG_SIDE`] per side).
-pub const MAX_SVG_BLUR: f32 = 1_048_576.0;
-
-/// How far a filter region or primitive subregion may reach from the image,
-/// in pixels at the drawn size. resvg 0.50 converts both to `IntRect`s with
-/// tiny-skia-path's `NonZeroRect::to_int_rect`, which unwraps
-/// `IntRect::from_xywh` and panics in every build once `x + width` passes
-/// `i32::MAX` (UPSTREAM U35, bug_0201). 2²⁴ px leaves room for the regions of
-/// large blurred shapes (128 × [`MAX_SVG_EXTENT`]) and is far below the
-/// overflow.
-pub const MAX_SVG_FILTER_REGION: f32 = 16_777_216.0;
-
 /// Settings for loading an `.svg` as an [`Image`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SvgLoaderSettings {
@@ -216,9 +196,7 @@ impl Default for SvgLoaderSettings {
 
 /// Loads `.svg` files as [`Image`]s.
 #[derive(Default, TypePath)]
-pub(crate) struct SvgLoader {
-    pub(crate) fonts: SvgFonts,
-}
+pub(crate) struct SvgLoader;
 
 impl AssetLoader for SvgLoader {
     type Asset = Image;
@@ -233,8 +211,7 @@ impl AssetLoader for SvgLoader {
     ) -> Result<Image, BevyError> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        self.fonts.note(&bytes, load_context.path());
-        let raster = rasterize_with(&bytes, settings.scale, Limits::DEFAULT, &self.fonts)
+        let raster = rasterize_with(&bytes, settings.scale, Limits::DEFAULT)
             .map_err(|err| format!("svg {}: {err}", load_context.path()))?;
         debug!(
             "svg {}: {}x{}, estimated cost {} of {MAX_SVG_COST}",
@@ -285,33 +262,18 @@ pub(crate) enum SvgError {
     TooManyReferences {
         max: usize,
     },
-    /// A path reaches farther from the image than [`MAX_SVG_EXTENT`], or a
-    /// filter region farther than [`MAX_SVG_FILTER_REGION`] (`max` says which).
+    /// A path reaches farther from the image than [`MAX_SVG_EXTENT`].
     TooFarOut {
         extent: f32,
         max: f32,
     },
-    /// An object bounding box × a region factor that could overflow `f32`
-    /// in usvg (UPSTREAM U30, U31; [`check_regions`]).
-    RegionOverflow {
-        largest: f64,
-        regions: f64,
-    },
-    /// A blur wider than [`MAX_SVG_BLUR`] at the drawn size (UPSTREAM U32).
-    TooBlurred {
-        sigma: f32,
-        max: f32,
-    },
-    /// A value usvg would panic on (UPSTREAM U26), refused before it runs.
-    OutOfRange {
-        element: &'static str,
-        attribute: &'static str,
-        value: String,
-        /// What the value must be, as the end of a sentence.
-        reason: &'static str,
-    },
     /// usvg or resvg panicked (caught by [`guarded`]).
     Panicked(String),
+    /// Something outside the icon subset bevy_markup renders (ADR 0051): an
+    /// element not in [`ALLOWED_ELEMENTS`], a `filter` property, or (should
+    /// one get past those) a filter, mask, pattern, text or image in the
+    /// converted tree. Names it (`<filter>`, `the filter property`).
+    Unsupported(String),
 }
 
 impl fmt::Display for SvgError {
@@ -335,15 +297,14 @@ impl fmt::Display for SvgError {
             Self::TooLarge { work, max } => write!(
                 f,
                 "expands too far to convert (estimated work {work}, limit {max}): \
-                 reduce its <use> copies, its markers × path vertices, the shapes \
-                 inheriting a pattern or gradient, its arcs' radii, or its <style> \
-                 sheet (rules × elements, descendant selectors over deep nesting)"
+                 reduce its <use> copies, the shapes inheriting a gradient, or its \
+                 arcs' radii"
             ),
             Self::ReferenceCycle => {
                 write!(
                     f,
-                    "a url(#…)/href reference (or an inherited fill, stroke or marker) \
-                     leads back to an element it came from"
+                    "a url(#…)/href reference (or an inherited fill or stroke) leads \
+                     back to an element it came from"
                 )
             }
             Self::TooManyReferences { max } => {
@@ -351,31 +312,15 @@ impl fmt::Display for SvgError {
             }
             Self::TooFarOut { extent, max } => write!(
                 f,
-                "draws too far outside the image (a path or filter region reaches {extent:.0} px \
-                 from it at this size, limit {max:.0}): reduce its coordinates, radii, stroke \
-                 widths or filter regions"
-            ),
-            Self::TooBlurred { sigma, max } => write!(
-                f,
-                "blurs too much (a standard deviation of {sigma:.3e} px at this size, limit \
-                 {max:.0}): reduce its stdDeviation"
-            ),
-            Self::RegionOverflow { largest, regions } => write!(
-                f,
-                "a filter, mask or pattern region is too large to compute (a shape's box \
-                 reaches {largest:.3e} units, a region factor is {regions:.3e}): reduce its \
-                 coordinates or transforms"
-            ),
-            Self::OutOfRange {
-                element,
-                attribute,
-                value,
-                reason,
-            } => write!(
-                f,
-                "<{element}> has an out-of-range {attribute} ({value:?}): {reason}"
+                "draws too far outside the image (a path reaches {extent:.0} px from it at \
+                 this size, limit {max:.0}): reduce its coordinates, radii or stroke widths"
             ),
             Self::Panicked(message) => write!(f, "the SVG renderer panicked: {message}"),
+            Self::Unsupported(what) => write!(
+                f,
+                "{what} isn't in the SVG subset bevy_markup renders (shapes, paths, \
+                 groups, use, gradients, clip paths)"
+            ),
         }
     }
 }
@@ -410,71 +355,18 @@ pub(crate) struct Raster {
     pub cost: u64,
 }
 
-/// The fonts SVG `<text>` is drawn with (the `svg-text` feature,
-/// [`svg_fonts`](crate::svg_fonts)), shared by the loaders, the inline
-/// cache and the system that keeps it current. Without the feature it's
-/// empty and `<text>` draws nothing.
-#[derive(Resource, Clone, Default)]
-pub(crate) struct SvgFonts {
-    #[cfg(feature = "svg-text")]
-    shared: std::sync::Arc<crate::svg_fonts::Shared>,
-}
-
-impl SvgFonts {
-    #[cfg(feature = "svg-text")]
-    pub(crate) fn shared(&self) -> &crate::svg_fonts::Shared {
-        &self.shared
-    }
-
-    /// Bevy's default font only (the fuzz harness's fonts).
-    #[cfg(feature = "fuzzing")]
-    pub(crate) fn default_font() -> Self {
-        Self {
-            shared: std::sync::Arc::new(crate::svg_fonts::Shared::fixed(
-                crate::svg_fonts::SvgFontSet::default_font(),
-            )),
-        }
-    }
-
-    /// The font set's generation: inline `<svg>` with text keys its drawing
-    /// by it (0 without `svg-text`).
-    fn generation(&self) -> u64 {
-        #[cfg(feature = "svg-text")]
-        return self.shared.current().generation;
-        #[cfg(not(feature = "svg-text"))]
-        0
-    }
-
-    /// Notes a loaded file whose text the fonts affect.
-    fn note(&self, bytes: &[u8], path: &bevy::asset::AssetPath<'_>) {
-        #[cfg(feature = "svg-text")]
-        if crate::svg_fonts::has_text(bytes) {
-            self.shared.note_text(path.clone_owned());
-        }
-        #[cfg(not(feature = "svg-text"))]
-        let _ = (bytes, path);
-    }
-}
-
 /// usvg options that resolve no `<image href>`: usvg's default resolver
 /// reads any file path the process can (absolute, cwd-relative, `..`) and
-/// embeds `data:` URLs (probe report §2). With `svg-text`, `<text>` uses
-/// the app's fonts.
-fn options(fonts: &SvgFonts) -> usvg::Options<'static> {
-    #[cfg_attr(not(feature = "svg-text"), allow(unused_mut))]
-    let mut options = usvg::Options {
+/// embeds `data:` URLs (probe report §2).
+fn options() -> usvg::Options<'static> {
+    usvg::Options {
         resources_dir: None,
         image_href_resolver: usvg::ImageHrefResolver {
             resolve_data: Box::new(|_, _, _| None),
             resolve_string: Box::new(|_, _| None),
         },
         ..usvg::Options::default()
-    };
-    #[cfg(feature = "svg-text")]
-    fonts.shared.current().apply(&mut options);
-    #[cfg(not(feature = "svg-text"))]
-    let _ = fonts;
-    options
+    }
 }
 
 /// Parses an SVG the way `usvg::Tree::from_data` does, with one step in
@@ -484,37 +376,24 @@ fn options(fonts: &SvgFonts) -> usvg::Options<'static> {
 /// convert that same document (`Tree::from_xmltree`). One parse, so the
 /// check and usvg can't disagree about the document's structure (a DTD
 /// entity expanding into markup, say).
-#[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn parse(bytes: &[u8]) -> Result<usvg::Tree, SvgError> {
-    parse_with(bytes, &SvgFonts::default())
+    parse_within(bytes, MAX_SVG_WORK)
 }
 
-/// [`parse`] with the fonts `<text>` resolves against.
-pub(crate) fn parse_with(bytes: &[u8], fonts: &SvgFonts) -> Result<usvg::Tree, SvgError> {
-    parse_within(bytes, fonts, MAX_SVG_WORK)
-}
-
-/// [`parse_with`] within a conversion budget other than [`MAX_SVG_WORK`].
+/// [`parse`] within a conversion budget other than [`MAX_SVG_WORK`].
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub(crate) fn parse_within(
-    bytes: &[u8],
-    fonts: &SvgFonts,
-    max_work: u64,
-) -> Result<usvg::Tree, SvgError> {
-    guarded(|| {
-        parse_unguarded(bytes, fonts, max_work, u64::MAX).map(|tree| tree.expect("no deferral"))
-    })
+pub(crate) fn parse_within(bytes: &[u8], max_work: u64) -> Result<usvg::Tree, SvgError> {
+    guarded(|| parse_unguarded(bytes, max_work, u64::MAX).map(|tree| tree.expect("no deferral")))
 }
 
-/// [`parse_with`], unless its conversion work is over `sync_work`: then
+/// [`parse`], unless its conversion work is over `sync_work`: then
 /// `Ok(None)`, after only the XML parse and the bounds (an inline
 /// document converts on a task then, bug_0208).
 pub(crate) fn parse_unless_costly(
     bytes: &[u8],
-    fonts: &SvgFonts,
     sync_work: u64,
 ) -> Result<Option<usvg::Tree>, SvgError> {
-    guarded(|| parse_unguarded(bytes, fonts, MAX_SVG_WORK, sync_work))
+    guarded(|| parse_unguarded(bytes, MAX_SVG_WORK, sync_work))
 }
 
 /// Runs usvg or resvg work, turning a panic into [`SvgError::Panicked`].
@@ -543,7 +422,6 @@ fn guarded<T>(work: impl FnOnce() -> Result<T, SvgError>) -> Result<T, SvgError>
 /// `defer_over`.
 fn parse_unguarded(
     bytes: &[u8],
-    fonts: &SvgFonts,
     max_work: u64,
     defer_over: u64,
 ) -> Result<Option<usvg::Tree>, SvgError> {
@@ -558,7 +436,8 @@ fn parse_unguarded(
     };
     let document = roxmltree::Document::parse_with_options(text, xml_options)
         .map_err(|err| SvgError::Parse(usvg::Error::ParsingFailed(err)))?;
-    let bounds = svg_bounds::bounds(&document, svg_bounds::MAX_REFERENCES, max_work)?;
+    check_subset(&document)?;
+    let bounds = svg_bounds::bounds(&document, svg_bounds::MAX_REFERENCES)?;
     if bounds.depth > svg_bounds::MAX_DEPTH {
         return Err(SvgError::TooDeep {
             depth: bounds.depth,
@@ -574,27 +453,109 @@ fn parse_unguarded(
     if bounds.work > defer_over {
         return Ok(None);
     }
-    let options = options(fonts);
-    if bounds.boxes {
-        let largest = svg_boxes::largest_box(&document, &options)?;
-        check_regions(largest, bounds.regions)?;
-    }
-    usvg::Tree::from_xmltree(&document, &options)
-        .map(Some)
-        .map_err(SvgError::Parse)
+    let tree = usvg::Tree::from_xmltree(&document, &options()).map_err(SvgError::Parse)?;
+    check_tree(tree.root())?;
+    Ok(Some(tree))
 }
 
-/// Refuses a document where usvg's `objectBoundingBox` arithmetic could
-/// overflow `f32` (UPSTREAM U30, U31; bug_0197): a region is at most
-/// `(regions + 1) × 2 × largest` after `bbox_transform` (or `regions` in
-/// user space), a primitive subregion that times `regions` again, and a
-/// morphology radius `regions × largest`. `largest` is the biggest box
-/// coordinate [`svg_boxes::largest_box`] measured.
-fn check_regions(largest: f64, regions: f64) -> Result<(), SvgError> {
-    let region = (regions + 1.0) * 2.0 * largest.max(1.0) + regions;
-    let subregion = (region + 1.0) * (regions + 1.0);
-    if subregion > f64::from(f32::MAX) / 2.0 || !subregion.is_finite() {
-        return Err(SvgError::RegionOverflow { largest, regions });
+/// The SVG elements bevy_markup renders (ADR 0051): shapes and paths,
+/// groups, `defs`/`symbol`/`use`, gradients and clip paths, and the
+/// elements usvg ignores (`title`, `desc`, `metadata`). Every document of
+/// seven public icon and emoji sets (31,828 files: Lucide, Tabler,
+/// Material Design Icons, game-icons.net, Font Awesome, Twemoji, OpenMoji)
+/// uses only these. Filters, masks, patterns, markers, text, `<style>`
+/// sheets and images are refused: they caused most of the SVG engine's
+/// bugs and needed most of the guards (bug_0188–bug_0248).
+pub(crate) const ALLOWED_ELEMENTS: [&str; 20] = [
+    "svg",
+    "g",
+    "defs",
+    "symbol",
+    "use",
+    "a",
+    "path",
+    "rect",
+    "circle",
+    "ellipse",
+    "line",
+    "polyline",
+    "polygon",
+    "linearGradient",
+    "radialGradient",
+    "stop",
+    "clipPath",
+    "title",
+    "desc",
+    "metadata",
+];
+
+/// Refuses a document with an SVG element outside [`ALLOWED_ELEMENTS`], or
+/// a `filter` property other than `none` (as an attribute or in `style`):
+/// usvg turns CSS filter functions (`blur()`, `drop-shadow()`) into filters
+/// with no `<filter>` element. Elements in other namespaces (an editor's
+/// own, such as Inkscape's) are skipped: usvg ignores them. An element in
+/// no namespace is checked like an SVG one.
+fn check_subset(document: &roxmltree::Document) -> Result<(), SvgError> {
+    let filter = || SvgError::Unsupported("the filter property".to_owned());
+    for node in document.descendants().filter(roxmltree::Node::is_element) {
+        let tag = node.tag_name();
+        let svg = matches!(tag.namespace(), None | Some("http://www.w3.org/2000/svg"));
+        if svg && !ALLOWED_ELEMENTS.contains(&tag.name()) {
+            return Err(SvgError::Unsupported(format!("<{}>", tag.name())));
+        }
+        for attribute in node.attributes() {
+            match attribute.name() {
+                "filter" if attribute.value().trim() != "none" => return Err(filter()),
+                "style" => {
+                    for declaration in simplecss::DeclarationTokenizer::from(attribute.value()) {
+                        if declaration.name == "filter" && declaration.value.trim() != "none" {
+                            return Err(filter());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a converted tree holding what [`check_subset`] keeps out of the
+/// document — a filter, mask, pattern, text or image — should anything get
+/// past it: the cost and extent models don't price them. Iterative.
+fn check_tree(root: &usvg::Group) -> Result<(), SvgError> {
+    let unsupported = |what: &str| Err(SvgError::Unsupported(what.to_owned()));
+    let mut groups = vec![root];
+    while let Some(group) = groups.pop() {
+        if !group.filters().is_empty() {
+            return unsupported("a filter");
+        }
+        if group.mask().is_some() {
+            return unsupported("a mask");
+        }
+        let mut clip = group.clip_path();
+        while let Some(path) = clip {
+            groups.push(path.root());
+            clip = path.clip_path();
+        }
+        for child in group.children() {
+            match child {
+                usvg::Node::Group(child) => groups.push(child),
+                usvg::Node::Path(path) => {
+                    let fill = path.fill().map(|fill| fill.paint());
+                    let stroke = path.stroke().map(|stroke| stroke.paint());
+                    if fill
+                        .into_iter()
+                        .chain(stroke)
+                        .any(|paint| matches!(paint, usvg::Paint::Pattern(_)))
+                    {
+                        return unsupported("a pattern");
+                    }
+                }
+                usvg::Node::Text(_) => return unsupported("text"),
+                usvg::Node::Image(_) => return unsupported("an image"),
+            }
+        }
     }
     Ok(())
 }
@@ -622,17 +583,12 @@ pub(crate) fn raster_size(
 /// Parses, budgets and draws an SVG.
 #[cfg(test)]
 pub(crate) fn rasterize(bytes: &[u8], scale: f32, limits: Limits) -> Result<Raster, SvgError> {
-    rasterize_with(bytes, scale, limits, &SvgFonts::default())
+    rasterize_with(bytes, scale, limits)
 }
 
 /// [`rasterize`] with the fonts `<text>` resolves against.
-pub(crate) fn rasterize_with(
-    bytes: &[u8],
-    scale: f32,
-    limits: Limits,
-    fonts: &SvgFonts,
-) -> Result<Raster, SvgError> {
-    let tree = parse_within(bytes, fonts, limits.work)?;
+pub(crate) fn rasterize_with(bytes: &[u8], scale: f32, limits: Limits) -> Result<Raster, SvgError> {
+    let tree = parse_within(bytes, limits.work)?;
     let (width, height, downscaled) = raster_size(&tree, scale, limits.side)?;
     let (image, cost) = draw(&tree, width, height, limits)?;
     Ok(Raster {
@@ -724,9 +680,7 @@ pub(crate) struct SvgDocument {
 /// Loads `.svg` files as [`SvgDocument`]s, with the same checks as
 /// [`SvgLoader`] (the depth bound, the refusing resolver).
 #[derive(Default, TypePath)]
-pub(crate) struct SvgDocumentLoader {
-    pub(crate) fonts: SvgFonts,
-}
+pub(crate) struct SvgDocumentLoader;
 
 impl AssetLoader for SvgDocumentLoader {
     type Asset = SvgDocument;
@@ -741,9 +695,7 @@ impl AssetLoader for SvgDocumentLoader {
     ) -> Result<SvgDocument, BevyError> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        self.fonts.note(&bytes, load_context.path());
-        let tree = parse_with(&bytes, &self.fonts)
-            .map_err(|err| format!("svg {}: {err}", load_context.path()))?;
+        let tree = parse(&bytes).map_err(|err| format!("svg {}: {err}", load_context.path()))?;
         Ok(SvgDocument {
             tree: std::sync::Arc::new(tree),
         })
@@ -810,7 +762,6 @@ impl SvgRasters {
 #[derive(Resource, Default)]
 pub(crate) struct InlineSvgs {
     inner: std::sync::Mutex<InlineInner>,
-    fonts: SvgFonts,
     /// The bytes the entries' images hold or will hold (reserved before a
     /// drawing starts, also on a task; [`MAX_SVG_RASTER_BYTES`]).
     bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -1003,13 +954,7 @@ impl InlineSvgs {
         text: String,
         images: &Assets<Image>,
     ) -> Option<(Handle<Image>, Option<Vec2>)> {
-        // Text is drawn with the current fonts: a new font set is a new
-        // drawing (the `FontFamilies` restyle collects it).
-        let key = if cfg!(feature = "svg-text") && text.contains("<text") {
-            format!("{}\0{text}", self.fonts.generation())
-        } else {
-            text.clone()
-        };
+        let key = text.clone();
         let mut inner = self
             .inner
             .lock()
@@ -1043,7 +988,7 @@ impl InlineSvgs {
             bytes: 0,
         };
         let parsed = if text.len() <= INLINE_SYNC_BYTES {
-            match parse_unless_costly(text.as_bytes(), &self.fonts, INLINE_SYNC_WORK) {
+            match parse_unless_costly(text.as_bytes(), INLINE_SYNC_WORK) {
                 Ok(parsed) => parsed,
                 Err(err) => return refuse(&mut inner, &err),
             }
@@ -1095,11 +1040,10 @@ impl InlineSvgs {
             entry.tree = Some(tree);
         } else {
             let task_text = text.clone();
-            let task_fonts = self.fonts.clone();
             let used = self.bytes.clone();
             let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
                 let failed = |err: SvgError| InlineFailure::Failed(err.to_string());
-                let tree = parse_with(task_text.as_bytes(), &task_fonts).map_err(failed)?;
+                let tree = parse(task_text.as_bytes()).map_err(failed)?;
                 let (width, height, _) = raster_size(&tree, 1.0, MAX_SVG_SIDE).map_err(failed)?;
                 // Reserved here (the size wasn't known before the parse);
                 // `finish_inline_svgs` records it on the entry.
@@ -1120,15 +1064,6 @@ impl InlineSvgs {
         let intrinsic = entry.intrinsic;
         inner.entries.insert(key, entry);
         Some((image, intrinsic))
-    }
-
-    /// A cache whose `<text>` resolves against `fonts`.
-    pub(crate) fn new(fonts: SvgFonts) -> Self {
-        Self {
-            inner: std::sync::Mutex::default(),
-            fonts,
-            bytes: std::sync::Arc::default(),
-        }
     }
 
     /// The parsed document behind an inline image, for the redraw.
@@ -1369,8 +1304,7 @@ pub(crate) fn rasterize_svg_images(
         }
     }
 
-    // A document reloaded (new fonts for its `<text>`, or the file
-    // changed): its rasters are stale.
+    // A document reloaded (the file changed): its rasters are stale.
     let reloaded: std::collections::HashSet<AssetId<SvgDocument>> = document_events
         .read()
         .filter_map(|event| match event {
@@ -1659,13 +1593,12 @@ const MAX_COST_DEPTH: u32 = 512;
 /// units of one pixel drawn once, stopping early once it exceeds `max`
 /// (the result is then some value above `max`).
 ///
-/// The model follows resvg 0.50's renderer (`render.rs`, `mask.rs`,
-/// `clip.rs`, `filter/mod.rs`): an isolated group (opacity, filter, mask,
-/// clip path, blend mode) draws into a layer the size of its bounding box,
-/// at most 5× the canvas on each side (`max_filter_bbox`); filters run over
-/// that layer; a clip path or mask allocates another layer of the same
-/// size and draws its content into it. The weights per filter primitive
-/// are the measured scaling laws of probe §4.
+/// The model follows resvg 0.50's renderer (`render.rs`, `clip.rs`): an
+/// isolated group (opacity, clip path, blend mode) draws into a layer the
+/// size of its bounding box, at most 5× the canvas on each side; a clip
+/// path allocates another layer of the same size and draws its content
+/// into it. The icon subset has no filters, masks, patterns or text
+/// (ADR 0051; `check_tree` refuses a tree with any).
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn estimate_cost(tree: &usvg::Tree, width: u32, height: u32, max: u64) -> u64 {
     let size = tree.size();
@@ -1686,47 +1619,25 @@ pub(crate) fn estimate_cost(tree: &usvg::Tree, width: u32, height: u32, max: u64
 }
 
 /// Refuses a tree with a path reaching farther than [`MAX_SVG_EXTENT`]
-/// pixels from the drawn image (tiny-skia panics on such paths), or a blur
-/// wider than [`MAX_SVG_BLUR`] (resvg's box blur overflows).
+/// pixels from the drawn image (tiny-skia panics on such paths).
 fn check_extent(tree: &usvg::Tree, width: u32, height: u32) -> Result<(), SvgError> {
     let size = tree.size();
     let canvas = tiny_skia::Transform::from_scale(
         width as f32 / size.width(),
         height as f32 / size.height(),
     );
-    let mut walk = ExtentWalk {
-        extent: 0.0,
-        blur: None,
-        region: false,
-    };
-    match walk.group(tree.root(), canvas, 0) {
-        Ok(()) => Ok(()),
-        Err(Over) => Err(match walk.blur {
-            Some(sigma) => SvgError::TooBlurred {
-                sigma,
-                max: MAX_SVG_BLUR,
-            },
-            None => SvgError::TooFarOut {
-                extent: walk.extent,
-                max: if walk.region {
-                    MAX_SVG_FILTER_REGION
-                } else {
-                    MAX_SVG_EXTENT
-                },
-            },
-        }),
-    }
+    let mut walk = ExtentWalk { extent: 0.0 };
+    walk.group(tree.root(), canvas, 0)
+        .map_err(|Over| SvgError::TooFarOut {
+            extent: walk.extent,
+            max: MAX_SVG_EXTENT,
+        })
 }
 
 /// Walks the tree as resvg draws it, composing each group's transform on
 /// the way down, and records how far each path reaches in pixels.
 struct ExtentWalk {
     extent: f32,
-    /// The blur that stopped the walk, past [`MAX_SVG_BLUR`].
-    blur: Option<f32>,
-    /// A filter region stopped it (its reach is `extent`), past
-    /// [`MAX_SVG_FILTER_REGION`].
-    region: bool,
 }
 
 impl ExtentWalk {
@@ -1752,92 +1663,18 @@ impl ExtentWalk {
             )?;
             clip = path.clip_path();
         }
-        // `mask::apply`: drawn with the group's transform.
-        let mut mask = group.mask();
-        while let Some(layer) = mask {
-            self.group(layer.root(), transform, depth + 1)?;
-            mask = layer.mask();
-        }
-        // `feImage` content: drawn at the transform's scale in the filter
-        // region. Blurs: resvg scales the deviation by the same transform
-        // (`filter/mod.rs` `resolve_std_dev`).
-        for filter in group.filters() {
-            // `filter::apply_inner`: the region and each subregion become
-            // `IntRect`s in pixels (U35).
-            let rects = std::iter::once(filter.rect())
-                .chain(filter.primitives().iter().map(|primitive| primitive.rect()));
-            for rect in rects {
-                let reach = rect.transform(transform).map_or(f32::INFINITY, |rect| {
-                    [rect.left(), rect.top(), rect.right(), rect.bottom()]
-                        .into_iter()
-                        .map(f32::abs)
-                        .fold(0.0, f32::max)
-                });
-                // `!(≤)`: NaN refuses too.
-                if !(reach <= MAX_SVG_FILTER_REGION) {
-                    self.extent = reach;
-                    self.region = true;
-                    return Err(Over);
-                }
-            }
-            for primitive in filter.primitives() {
-                // `apply_offset`/`apply_drop_shadow`: the scaled offset,
-                // saturated to `i32`, positions a `draw_pixmap`, whose
-                // `IntSize::to_int_rect` unwraps an overflowing `x + width`
-                // (U35, bug_0201): bounded like the regions.
-                let offset = match primitive.kind() {
-                    usvg::filter::Kind::Offset(offset) => Some((offset.dx(), offset.dy())),
-                    usvg::filter::Kind::DropShadow(shadow) => Some((shadow.dx(), shadow.dy())),
-                    _ => None,
-                };
-                if let Some((dx, dy)) = offset {
-                    let (sx, sy) = transform.get_scale();
-                    let reach = (dx * sx).abs().max((dy * sy).abs());
-                    if !(reach <= MAX_SVG_FILTER_REGION) {
-                        self.extent = reach;
-                        self.region = true;
-                        return Err(Over);
-                    }
-                }
-                let deviation = match primitive.kind() {
-                    usvg::filter::Kind::Image(image) => {
-                        self.group(image.root(), scale_of(transform), depth + 1)?;
-                        continue;
-                    }
-                    usvg::filter::Kind::GaussianBlur(blur) => (blur.std_dev_x(), blur.std_dev_y()),
-                    usvg::filter::Kind::DropShadow(shadow) => {
-                        (shadow.std_dev_x(), shadow.std_dev_y())
-                    }
-                    _ => continue,
-                };
-                let (sx, sy) = transform.get_scale();
-                let sigma = (deviation.0.get() * sx).max(deviation.1.get() * sy);
-                // `!(≤)`: a NaN product refuses too.
-                if !(sigma <= MAX_SVG_BLUR) {
-                    self.blur = Some(sigma);
-                    return Err(Over);
-                }
-            }
-        }
         for child in group.children() {
             match child {
                 usvg::Node::Group(child) => self.group(child, transform, depth + 1)?,
-                usvg::Node::Path(path) => self.path(path, transform, depth)?,
-                // Drawn as its flattened outlines.
-                usvg::Node::Text(text) => self.group(text.flattened(), transform, depth + 1)?,
-                // Never produced with the refusing resolver.
-                usvg::Node::Image(_) => {}
+                usvg::Node::Path(path) => self.path(path, transform)?,
+                // Refused by `check_tree`.
+                usvg::Node::Text(_) | usvg::Node::Image(_) => {}
             }
         }
         Ok(())
     }
 
-    fn path(
-        &mut self,
-        path: &usvg::Path,
-        transform: tiny_skia::Transform,
-        depth: u32,
-    ) -> Result<(), Over> {
+    fn path(&mut self, path: &usvg::Path, transform: tiny_skia::Transform) -> Result<(), Over> {
         let pad = path.stroke().map_or(0.0, |stroke| {
             stroke.width().get() * 0.5 * stroke.miterlimit().get().max(std::f32::consts::SQRT_2)
         });
@@ -1862,25 +1699,8 @@ impl ExtentWalk {
             return Err(Over);
         }
         self.extent = self.extent.max(reach);
-        // `render_pattern_pixmap`: the tile is drawn at the scale of the
-        // path's transform and the pattern's.
-        let fill = path.fill().map(|fill| fill.paint());
-        let stroke = path.stroke().map(|stroke| stroke.paint());
-        for paint in fill.into_iter().chain(stroke) {
-            if let usvg::Paint::Pattern(pattern) = paint {
-                let tile = scale_of(transform.pre_concat(pattern.transform()));
-                self.group(pattern.root(), tile, depth + 1)?;
-            }
-        }
         Ok(())
     }
-}
-
-/// The scale part of a transform, as resvg takes it for tiles and filter
-/// images.
-fn scale_of(transform: tiny_skia::Transform) -> tiny_skia::Transform {
-    let (sx, sy) = transform.get_scale();
-    tiny_skia::Transform::from_scale(sx, sy)
 }
 
 /// How many dashes tiny-skia cuts `path`'s stroke into (bug_0205): the
@@ -2033,16 +1853,8 @@ impl CostWalk {
             let layer = self.area(width, height);
             // Allocated, then composited onto its parent.
             self.add_area(layer, 2.0)?;
-            for filter in group.filters() {
-                for primitive in filter.primitives() {
-                    self.primitive(primitive.kind(), layer, depth)?;
-                }
-            }
             if let Some(clip) = group.clip_path() {
                 self.clip(clip, layer, depth + 1)?;
-            }
-            if let Some(mask) = group.mask() {
-                self.mask(mask, layer, depth + 1)?;
             }
         }
         for child in group.children() {
@@ -2054,27 +1866,13 @@ impl CostWalk {
     fn node(&mut self, node: &usvg::Node, depth: u32) -> Result<(), Over> {
         match node {
             usvg::Node::Group(group) => self.group(group, depth),
-            usvg::Node::Path(path) => self.path(path, depth),
-            usvg::Node::Image(image) => {
-                self.add(NODE_COST)?;
-                // Never produced with the refusing resolver; counted anyway.
-                if let usvg::ImageKind::SVG(tree) = image.kind() {
-                    self.group(tree.root(), depth + 1)?;
-                }
-                Ok(())
-            }
-            // Drawn as its flattened outlines, one path per glyph with the
-            // text's paint: a pattern on text allocates its tile like any
-            // path's (bug_0204), and each glyph is a path to fill
-            // (bug_0206).
-            usvg::Node::Text(text) => {
-                self.add(NODE_COST)?;
-                self.group(text.flattened(), depth + 1)
-            }
+            usvg::Node::Path(path) => self.path(path),
+            // Refused by `check_tree`.
+            usvg::Node::Text(_) | usvg::Node::Image(_) => self.add(NODE_COST),
         }
     }
 
-    fn path(&mut self, path: &usvg::Path, depth: u32) -> Result<(), Over> {
+    fn path(&mut self, path: &usvg::Path) -> Result<(), Over> {
         self.add(NODE_COST)?;
         let segments = path.data().len() as u64;
         self.add(segments.saturating_mul(SEGMENT_COST))?;
@@ -2110,40 +1908,9 @@ impl CostWalk {
             .abs_stroke_bounding_box()
             .map_or((0.0, 0.0), |bbox| (bbox.width(), bbox.height()));
         let area = self.area(width, height);
-        let fill = path.fill().map(|fill| fill.paint());
-        let stroke = path.stroke().map(|stroke| stroke.paint());
-        for paint in fill.into_iter().chain(stroke) {
-            self.add_area(area, 1.0)?;
-            if let usvg::Paint::Pattern(pattern) = paint {
-                // The tile is a pixmap of its own, per use, at its drawn
-                // size: resvg's `render_pattern_pixmap` scales the pattern
-                // rect by the path's transform with the pattern's, with no
-                // limit, and a failed allocation aborts (bug_0200). Its
-                // content draws at that scale, nested patterns included.
-                let (sx, sy) = path
-                    .abs_transform()
-                    .pre_concat(pattern.transform())
-                    .get_scale();
-                let (tile_x, tile_y) = (f64::from(sx) * self.scale_x, f64::from(sy) * self.scale_y);
-                let rect = pattern.rect();
-                let tile = (f64::from(rect.width()) * tile_x).round()
-                    * (f64::from(rect.height()) * tile_y).round();
-                if !tile.is_finite() {
-                    self.total = self.max.saturating_add(1);
-                    return Err(Over);
-                }
-                // Allocated (zeroed), drawn into, then shaded over the path.
-                self.add_area(tile, 2.0)?;
-                let outer = (self.scale_x, self.scale_y);
-                (self.scale_x, self.scale_y) = (tile_x, tile_y);
-                let drawn = self.group(pattern.root(), depth + 1);
-                (self.scale_x, self.scale_y) = outer;
-                drawn?;
-            }
-        }
-        Ok(())
+        let paints = u8::from(path.fill().is_some()) + u8::from(path.stroke().is_some());
+        self.add_area(area, f64::from(paints))
     }
-
     fn clip(&mut self, clip: &usvg::ClipPath, layer: f64, depth: u32) -> Result<(), Over> {
         if depth > MAX_COST_DEPTH {
             self.total = self.max.saturating_add(1);
@@ -2156,59 +1923,6 @@ impl CostWalk {
             self.clip(inner, layer, depth + 1)?;
         }
         Ok(())
-    }
-
-    fn mask(&mut self, mask: &usvg::Mask, layer: f64, depth: u32) -> Result<(), Over> {
-        if depth > MAX_COST_DEPTH {
-            self.total = self.max.saturating_add(1);
-            return Err(Over);
-        }
-        // A layer-sized pixmap and an alpha mask, drawn, converted, applied.
-        self.add_area(layer, 4.0)?;
-        self.group(mask.root(), depth + 1)?;
-        if let Some(inner) = mask.mask() {
-            self.mask(inner, layer, depth + 1)?;
-        }
-        Ok(())
-    }
-
-    fn primitive(&mut self, kind: &usvg::filter::Kind, layer: f64, depth: u32) -> Result<(), Over> {
-        use usvg::filter::Kind;
-        self.add(NODE_COST)?;
-        // Every primitive converts its inputs' color space and writes a
-        // result buffer: a base of 4 passes over the layer.
-        let weight = 4.0
-            + match kind {
-                Kind::GaussianBlur(_) => 12.0,
-                Kind::DropShadow(_) => 16.0,
-                Kind::Morphology(fe) => {
-                    // Grows faster than linearly in the radius (calibration:
-                    // r 2 → 0.03 µs/px, 10 → 0.23, 40 → 3.5).
-                    let rx = f64::from(fe.radius_x().get()) * self.scale_x;
-                    let ry = f64::from(fe.radius_y().get()) * self.scale_y;
-                    2.0 * rx * ry + 8.0 * (rx + ry)
-                }
-                Kind::ConvolveMatrix(fe) => {
-                    let matrix = fe.matrix();
-                    f64::from(matrix.columns()) * f64::from(matrix.rows())
-                }
-                Kind::Turbulence(fe) => 16.0 * f64::from(fe.num_octaves().max(1)),
-                Kind::DiffuseLighting(_) | Kind::SpecularLighting(_) => 32.0,
-                Kind::DisplacementMap(_) => 8.0,
-                Kind::Merge(fe) => 2.0 * fe.inputs().len() as f64,
-                Kind::Image(fe) => {
-                    self.group(fe.root(), depth + 1)?;
-                    0.0
-                }
-                Kind::Blend(_)
-                | Kind::ColorMatrix(_)
-                | Kind::ComponentTransfer(_)
-                | Kind::Composite(_)
-                | Kind::Flood(_)
-                | Kind::Offset(_)
-                | Kind::Tile(_) => 0.0,
-            };
-        self.add_area(layer, weight)
     }
 }
 
@@ -2707,7 +2421,14 @@ mod tests {
                 4,
                 &format!(r#"<image width="4" height="4" href="{href}"/>"#),
             );
-            let tree = parse(source.as_bytes()).unwrap();
+            // Outside the subset: refused before usvg runs.
+            assert!(
+                matches!(parse(source.as_bytes()), Err(SvgError::Unsupported(ref what)) if what == "<image>"),
+                "{href}"
+            );
+            // And usvg with bevy_markup's options resolves nothing, should
+            // an image ever get past the element check.
+            let tree = usvg::Tree::from_str(&source, &options()).unwrap();
             assert!(
                 tree.root().children().is_empty(),
                 "{href}: resolved into {:?}",
@@ -2758,26 +2479,23 @@ mod tests {
         Group,
         Svg,
         Use,
-        Pattern,
-        Mask,
-        Marker,
-        FeImage,
-        /// A mask attached by a `<style>` rule, not an attribute.
-        CssMask,
+        /// A `<use>` of a `<symbol>` (a new viewport).
+        Symbol,
+        Clip,
+        /// A clip path attached by a `style` declaration, not an attribute.
+        StyleClip,
     }
 
-    const LEVELS: [Level; 8] = [
+    const LEVELS: [Level; 6] = [
         Level::Group,
         Level::Svg,
         Level::Use,
-        Level::Pattern,
-        Level::Mask,
-        Level::Marker,
-        Level::FeImage,
-        Level::CssMask,
+        Level::Symbol,
+        Level::Clip,
+        Level::StyleClip,
     ];
 
-    fn wrap(level: Level, k: usize, inner: String, defs: &mut String, css: &mut String) -> String {
+    fn wrap(level: Level, k: usize, inner: String, defs: &mut String) -> String {
         match level {
             Level::Group => format!("<g>{inner}</g>"),
             Level::Svg => format!("<svg width='8' height='8'>{inner}</svg>"),
@@ -2785,47 +2503,29 @@ mod tests {
                 *defs += &format!("<g id='u{k}'>{inner}</g>");
                 format!("<use href='#u{k}'/>")
             }
-            Level::Pattern => {
-                *defs += &format!(
-                    "<pattern id='p{k}' width='8' height='8' patternUnits='userSpaceOnUse'>{inner}</pattern>"
-                );
-                format!("<rect width='8' height='8' fill='url(#p{k})'/>")
+            Level::Symbol => {
+                *defs += &format!("<symbol id='s{k}' viewBox='0 0 8 8'>{inner}</symbol>");
+                format!("<use href='#s{k}' width='8' height='8'/>")
             }
-            Level::Mask => {
-                *defs += &format!("<mask id='m{k}'>{inner}</mask>");
-                format!("<rect width='8' height='8' fill='white' mask='url(#m{k})'/>")
+            Level::Clip => {
+                *defs += &format!("<clipPath id='c{k}'>{inner}</clipPath>");
+                format!("<g clip-path='url(#c{k})'><rect width='8' height='8'/></g>")
             }
-            Level::Marker => {
-                *defs +=
-                    &format!("<marker id='k{k}' markerWidth='8' markerHeight='8'>{inner}</marker>");
-                format!("<path d='M0 0h8' stroke='black' marker-end='url(#k{k})'/>")
-            }
-            Level::FeImage => {
-                *defs += &format!(
-                    "<g id='r{k}'>{inner}</g><filter id='f{k}'><feImage href='#r{k}'/></filter>"
-                );
-                format!("<rect width='8' height='8' filter='url(#f{k})'/>")
-            }
-            Level::CssMask => {
-                *defs += &format!("<mask id='c{k}'>{inner}</mask>");
-                *css += &format!(".c{k} {{ mask: url(#c{k}) }}");
-                format!("<rect class='c{k}' width='8' height='8' fill='white'/>")
+            Level::StyleClip => {
+                *defs += &format!("<clipPath id='t{k}'>{inner}</clipPath>");
+                format!("<g style='clip-path: url(#t{k})'><rect width='8' height='8'/></g>")
             }
         }
     }
 
     /// `levels` applied innermost first, as a document.
     fn nest(levels: &[Level]) -> String {
-        let (mut defs, mut css) = (String::new(), String::new());
+        let mut defs = String::new();
         let mut inner = "<rect width='8' height='8' fill='red'/>".to_string();
         for (k, &level) in levels.iter().enumerate() {
-            inner = wrap(level, k, inner, &mut defs, &mut css);
+            inner = wrap(level, k, inner, &mut defs);
         }
-        svg(
-            64,
-            64,
-            &format!("<style>{css}</style><defs>{defs}</defs>{inner}"),
-        )
+        svg(64, 64, &format!("<defs>{defs}</defs>{inner}"))
     }
 
     fn depth_of(source: &str) -> Result<u32, SvgError> {
@@ -2837,8 +2537,7 @@ mod tests {
             },
         )
         .unwrap();
-        svg_bounds::bounds(&document, svg_bounds::MAX_REFERENCES, u64::MAX)
-            .map(|bounds| bounds.depth)
+        svg_bounds::bounds(&document, svg_bounds::MAX_REFERENCES).map(|bounds| bounds.depth)
     }
 
     /// The deepest stack of `pick(i)` levels the check accepts, and the
@@ -2908,22 +2607,17 @@ mod tests {
         }
     }
 
-    /// resvg #1185's overflow (100 octaves of noise) panics where overflow
-    /// checks are on; the draw fails with an error instead of unwinding
-    /// into its caller (for a redraw task: the app's main thread).
+    /// A usvg or resvg panic becomes an error instead of unwinding into the
+    /// caller (for a redraw task: the app's main thread).
     #[test]
     fn a_renderer_panic_is_an_error() {
-        let noisy = svg(
-            16,
-            16,
-            "<filter id='f'><feTurbulence baseFrequency='0.05' numOctaves='100'/></filter><rect width='16' height='16' filter='url(#f)'/>",
+        let result: Result<(), SvgError> = guarded(|| panic!("attempt to add with overflow"));
+        assert!(
+            matches!(&result, Err(SvgError::Panicked(message)) if message.contains("overflow")),
+            "{result:?}"
         );
-        match draw(&noisy) {
-            Err(SvgError::Panicked(message)) => assert!(message.contains("overflow"), "{message}"),
-            // Without overflow checks the arithmetic wraps and it draws.
-            Ok(_) if !cfg!(debug_assertions) => {}
-            other => panic!("{:?}", other.map(|raster| raster.cost)),
-        }
+        let result: Result<(), SvgError> = guarded(|| panic!("{}", String::from("owned")));
+        assert!(matches!(&result, Err(SvgError::Panicked(message)) if message == "owned"));
     }
 
     #[test]
@@ -2934,17 +2628,18 @@ mod tests {
             "<g id='a'><use href='#b'/></g><g id='b'><use href='#a'/></g>",
         );
         assert!(matches!(draw(&cyclic_use), Err(SvgError::ReferenceCycle)));
-        let self_mask = svg(
+        let self_clip = svg(
             8,
             8,
-            "<mask id='m'><rect width='8' height='8' mask='url(#m)'/></mask><rect width='8' height='8' mask='url(#m)'/>",
+            "<clipPath id='c'><rect width='8' height='8' clip-path='url(#c)'/></clipPath><rect width='8' height='8' clip-path='url(#c)'/>",
         );
-        assert!(matches!(draw(&self_mask), Err(SvgError::ReferenceCycle)));
-        // Through a `<style>` rule.
+        assert!(matches!(draw(&self_clip), Err(SvgError::ReferenceCycle)));
+        // Through a `style` declaration naming a gradient its own content
+        // inherits.
         let css = svg(
             8,
             8,
-            "<style>.x { fill: url(#p) }</style><pattern id='p' width='8' height='8'><rect class='x' width='8' height='8'/></pattern><rect class='x' width='8' height='8'/>",
+            "<linearGradient id='g'><rect style='fill: url(#g)' width='8' height='8'/></linearGradient><rect fill='url(#g)' width='8' height='8'/>",
         );
         assert!(matches!(draw(&css), Err(SvgError::ReferenceCycle)));
     }
@@ -2955,36 +2650,24 @@ mod tests {
             depth_of(&svg(
                 8,
                 8,
-                &format!("<defs><mask id='m'><g><g><g/></g></g></mask></defs>{body}"),
+                &format!("<defs><clipPath id='m'><g><g><g/></g></g></clipPath></defs>{body}"),
             ))
             .unwrap()
         };
-        // svg(1+... ) → rect: 2 + 1; without a reference the mask's content
+        // svg(1+... ) → rect: 2 + 1; without a reference the clip's content
         // is only defs → mask → g → g → g = 2 + 1 + 1 + 3.
         let unreferenced = depth("<rect/>");
         for body in [
-            "<rect mask='url(#m)'/>",
-            "<rect mask=\"url( '#m' )\"/>",
-            "<rect mask='URL(#m)'/>",
-            "<rect style='mask: url(#m)'/>",
-            "<rect mask='url(&#35;m)'/>",
+            "<rect clip-path='url(#m)'/>",
+            "<rect clip-path=\"url( '#m' )\"/>",
+            "<rect clip-path='URL(#m)'/>",
+            "<rect style='clip-path: url(#m)'/>",
+            "<rect clip-path='url(&#35;m)'/>",
             "<use href='#m'/>",
             "<use xlink:href='#m' xmlns:xlink='http://www.w3.org/1999/xlink'/>",
-            "<style>rect { mask: url(#m) }</style><rect/>",
-            "<style>svg > rect { mask: url(#m) }</style><rect/>",
         ] {
             assert!(depth(body) > unreferenced, "{body}: no reference found");
         }
-        // A rule that doesn't match the element adds nothing (`defs` comes
-        // first, so the rect isn't `:first-child`).
-        assert_eq!(
-            depth("<style>circle { mask: url(#m) }</style><rect/>"),
-            unreferenced
-        );
-        assert_eq!(
-            depth("<style>rect:first-child { mask: url(#m) }</style><rect/>"),
-            unreferenced
-        );
     }
 
     #[test]
@@ -3008,10 +2691,9 @@ mod tests {
 
     #[test]
     fn reference_fan_out_is_bounded() {
-        // Every rect matches every rule: rules × elements edges.
-        let css: String = (0..2000)
-            .map(|i| format!("rect {{ fill: url(#g{i}) }}"))
-            .collect();
+        // A group naming 2000 gradients, inherited by 1000 shapes: 2·10⁶
+        // inherited entries.
+        let names: String = (0..2000).map(|i| format!("fill: url(#g{i});")).collect();
         let defs: String = (0..2000)
             .map(|i| format!("<linearGradient id='g{i}'/>"))
             .collect();
@@ -3019,7 +2701,7 @@ mod tests {
         let source = svg(
             8,
             8,
-            &format!("<style>{css}</style><defs>{defs}</defs>{rects}"),
+            &format!("<defs>{defs}</defs><g style='{names}'>{rects}</g>"),
         );
         assert!(matches!(
             draw(&source),
@@ -3027,8 +2709,8 @@ mod tests {
         ));
     }
 
-    /// The depth and work bounds match `<style>` rules with simplecss and
-    /// walk path data with svgtypes as usvg does, so both must use the same
+    /// The depth and work bounds read `style` declarations with simplecss
+    /// and walk path data with svgtypes as usvg does, so both must use the same
     /// copies. usvg keeps it
     /// private (no type to check at compile time, unlike roxmltree, which
     /// comes from usvg's re-export, and cssparser, ADR 0039), so the
@@ -3066,19 +2748,9 @@ mod tests {
     /// limit, fail the budget instead of drawing for seconds.
     #[test]
     fn costly_documents_exceed_the_budget() {
-        let rect = |side: u32| format!("<rect width='{side}' height='{side}' filter='url(#f)'/>");
         let nested = |open: &str, close: &str, n: usize, side: u32| {
             open.repeat(n) + &format!("<rect width='{side}' height='{side}'/>") + &close.repeat(n)
         };
-        let mut masks =
-            "<mask id='m0'><rect width='2048' height='2048' fill='white'/></mask>".to_string();
-        for i in 1..=28 {
-            masks += &format!(
-                "<mask id='m{i}'><rect width='2048' height='2048' fill='white' mask='url(#m{})'/></mask>",
-                i - 1
-            );
-        }
-        masks += "<rect width='2048' height='2048' mask='url(#m28)'/>";
         let mut clips =
             "<clipPath id='c0'><rect width='2048' height='2048'/></clipPath>".to_string();
         for i in 1..=30 {
@@ -3090,73 +2762,9 @@ mod tests {
         clips += "<rect width='2048' height='2048' clip-path='url(#c30)'/>";
         let cases = [
             (
-                "blur chain",
-                svg(
-                    1024,
-                    1024,
-                    &format!(
-                        "<filter id='f'>{}</filter>{}",
-                        "<feGaussianBlur stdDeviation='5'/>".repeat(1000),
-                        rect(1024)
-                    ),
-                ),
-            ),
-            (
-                "octaves",
-                svg(
-                    2048,
-                    2048,
-                    &format!(
-                        "<filter id='f'><feTurbulence baseFrequency='0.01' numOctaves='1000000'/></filter>{}",
-                        rect(2048)
-                    ),
-                ),
-            ),
-            (
-                "morphology",
-                svg(
-                    1024,
-                    1024,
-                    &format!(
-                        "<filter id='f'><feMorphology radius='100000'/></filter>{}",
-                        rect(1024)
-                    ),
-                ),
-            ),
-            (
-                "convolve",
-                svg(
-                    1024,
-                    1024,
-                    &format!(
-                        "<filter id='f'><feConvolveMatrix order='300' kernelMatrix='{}'/></filter>{}",
-                        "1 ".repeat(90_000),
-                        rect(1024)
-                    ),
-                ),
-            ),
-            (
-                "blur region",
-                svg(
-                    2048,
-                    2048,
-                    "<filter id='f' x='-10' y='-10' width='20' height='20'><feGaussianBlur stdDeviation='100000'/></filter><rect width='2048' height='2048' filter='url(#f)'/>",
-                ),
-            ),
-            (
                 "opacity nest",
                 svg(1024, 1024, &nested("<g opacity='0.99'>", "</g>", 200, 1024)),
             ),
-            (
-                "filter nest",
-                svg(
-                    1024,
-                    1024,
-                    &(r#"<filter id="f"><feOffset dx="1"/></filter>"#.to_string()
-                        + &nested("<g filter='url(#f)'>", "</g>", 100, 1024)),
-                ),
-            ),
-            ("mask nest", svg(2048, 2048, &masks)),
             ("clip nest", svg(2048, 2048, &clips)),
         ];
         for (name, source) in cases {
@@ -3171,7 +2779,6 @@ mod tests {
     /// Ordinary content stays far inside the budget.
     #[test]
     fn ordinary_documents_fit_the_budget() {
-        let shadow = "<filter id='s'><feDropShadow dx='2' dy='2' stdDeviation='3'/></filter>";
         let cases = [
             (
                 "icon",
@@ -3190,13 +2797,11 @@ mod tests {
                 ),
             ),
             (
-                "shadowed panel",
+                "translucent clipped panel",
                 svg(
                     1024,
                     1024,
-                    &format!(
-                        "{shadow}<g filter='url(#s)' opacity='0.9'><rect width='1000' height='1000' rx='24' fill='#222'/></g>"
-                    ),
+                    "<clipPath id='c'><rect width='1000' height='1000' rx='24'/></clipPath><g clip-path='url(#c)' opacity='0.9'><rect width='1024' height='1024' fill='#222'/></g>",
                 ),
             ),
             (
@@ -3219,20 +2824,27 @@ mod tests {
     }
 
     /// A reference used twice by the next one doubles the work per level:
-    /// the walk stops at the budget instead of visiting 2^n nodes.
+    /// the bounds stop it instead of visiting 2^n nodes.
     #[test]
     fn multiplying_references_stop_the_walk() {
-        let mut masks =
-            "<mask id='m0'><rect width='1' height='1' fill='white'/></mask>".to_string();
-        for i in 1..=60 {
-            masks += &format!(
-                "<mask id='m{i}'><rect width='1' height='1' mask='url(#m{p})'/><rect width='1' height='1' mask='url(#m{p})'/></mask>",
+        let mut clips = "<clipPath id='c0'><rect width='1' height='1'/></clipPath>".to_string();
+        // 30 levels: under the depth bound, 2³⁰ instances.
+        for i in 1..=30 {
+            clips += &format!(
+                "<clipPath id='c{i}'><rect width='1' height='1' clip-path='url(#c{p})'/><rect width='1' height='1' clip-path='url(#c{p})'/></clipPath>",
                 p = i - 1
             );
         }
-        masks += "<rect width='1' height='1' mask='url(#m60)'/>";
+        clips += "<rect width='1' height='1' clip-path='url(#c30)'/>";
         // Without the bound this test doesn't finish.
-        assert!(draw(&svg(1, 1, &masks)).is_err(), "drew a 2^60 mask tree");
+        assert!(
+            matches!(
+                draw(&svg(1, 1, &clips)),
+                Err(SvgError::TooLarge { .. } | SvgError::TooExpensive { .. })
+            ),
+            "drew a 2^30 clip tree: {:?}",
+            draw(&svg(1, 1, &clips)).map(|raster| raster.cost)
+        );
     }
 
     fn too_large(source: &str) -> bool {
@@ -3262,60 +2874,6 @@ mod tests {
         assert!(too_large(&source));
         // Three levels (10³ rects) convert.
         parse(fan_out(3).as_bytes()).unwrap();
-    }
-
-    /// bug_0189: a marker is converted once per vertex of each path that
-    /// carries it, including through inheritance. 44 KB: 4·10⁶ rects (over
-    /// two minutes of conversion before the fix).
-    #[test]
-    fn markers_count_per_vertex() {
-        let marker = format!(
-            "<defs><marker id='m'>{}</marker></defs>",
-            "<rect width='1' height='1'/>".repeat(1000)
-        );
-        let vertices = " 1 1".repeat(4000);
-        let direct = svg(
-            64,
-            64,
-            &format!("{marker}<path marker-mid='url(#m)' d='M0 0{vertices}'/>"),
-        );
-        assert!(direct.len() < 50_000);
-        assert!(too_large(&direct));
-        // Inherited from a group, and through a `<style>` rule.
-        let inherited = svg(
-            64,
-            64,
-            &format!("{marker}<g marker-mid='url(#m)'><path d='M0 0{vertices}'/></g>"),
-        );
-        assert!(too_large(&inherited));
-        let styled = svg(
-            64,
-            64,
-            &format!(
-                "<style>g {{ marker-mid: url(#m) }}</style>{marker}<g><path d='M0 0{vertices}'/></g>"
-            ),
-        );
-        assert!(too_large(&styled));
-        // Through a `<use>` whose content inherits it.
-        let used = svg(
-            64,
-            64,
-            &format!(
-                "{marker}<defs><path id='p' d='M0 0{vertices}'/></defs><use href='#p' marker-mid='url(#m)'/>"
-            ),
-        );
-        assert!(too_large(&used));
-        // An arrowhead on a few hundred lines converts.
-        let arrows = svg(
-            64,
-            64,
-            &format!(
-                "<defs><marker id='a'><path d='M0 0 L10 5 L0 10 Z'/></marker></defs><g marker-end='url(#a)'>{}</g>",
-                "<line x1='0' y1='0' x2='10' y2='10'/><polyline points='0 0 5 5 10 0'/>"
-                    .repeat(300)
-            ),
-        );
-        parse(arrows.as_bytes()).unwrap();
     }
 
     /// bug_0190: kurbo splits an arc into more cubics the larger its
@@ -3351,16 +2909,14 @@ mod tests {
 
     /// bug_0191: a pattern whose content inherits a `fill` naming the
     /// pattern itself made usvg recurse until the stack overflowed (a
-    /// process abort, not a panic). The inherited reference is an edge of
-    /// the reference graph, so it's a cycle. A marker inheriting itself is
-    /// refused the same way (usvg skips it, but the check doesn't model
-    /// that: the CSS spelling has always been refused).
+    /// process abort, not a panic). Patterns are refused now, but the
+    /// inherited reference is still an edge of the reference graph: a
+    /// gradient whose content inherits it is a cycle too.
     #[test]
     fn inherited_self_references_are_refused() {
         for body in [
-            "<g fill='url(#p)'><pattern id='p' width='10' height='10' patternUnits='userSpaceOnUse'><rect width='5' height='5'/></pattern><rect width='64' height='64'/></g>",
-            "<g style='stroke: url(#p)'><defs><pattern id='p' width='10' height='10'><g><circle r='3'/></g></pattern></defs></g>",
-            "<g marker-mid='url(#m)'><marker id='m'><path d='M0 0 L1 1 L2 0'/></marker><path d='M0 0 L10 10 L20 0'/></g>",
+            "<g fill='url(#g)'><linearGradient id='g'><rect width='5' height='5'/></linearGradient><rect width='64' height='64'/></g>",
+            "<g style='stroke: url(#g)'><defs><radialGradient id='g'><g><circle r='3'/></g></radialGradient></defs></g>",
         ] {
             assert!(
                 matches!(
@@ -3370,12 +2926,12 @@ mod tests {
                 "{body}"
             );
         }
-        // A pattern under a group filled with something else converts.
+        // A gradient under a group filled with another converts.
         parse(
             svg(
                 64,
                 64,
-                "<g fill='url(#g)'><linearGradient id='g'><stop offset='0'/></linearGradient><pattern id='p' width='10' height='10'><rect width='5' height='5'/></pattern><rect width='64' height='64' fill='url(#p)'/></g>",
+                "<g fill='url(#g)'><linearGradient id='g'><stop offset='0'/></linearGradient><linearGradient id='h'><stop offset='1'/></linearGradient><rect width='64' height='64' fill='url(#h)'/></g>",
             )
             .as_bytes(),
         )
@@ -3402,8 +2958,7 @@ mod tests {
             // A stroke's width counts, and so do transforms.
             "<path d='M0 0 L64 64' stroke='red' stroke-width='2e6'/>",
             "<g transform='scale(1e6)'><rect width='1' height='1'/></g>",
-            // Pattern tiles, clip paths and text outlines are walked too.
-            "<pattern id='p' width='8' height='8' patternUnits='userSpaceOnUse'><path d='M0 0 L1e7 1e7 L0 1e7 Z'/></pattern><rect width='64' height='64' fill='url(#p)'/>",
+            // Clip paths are walked too.
             "<clipPath id='c'><path d='M0 0 L1e7 1e7 L0 1e7 Z'/></clipPath><rect width='64' height='64' clip-path='url(#c)'/>",
         ] {
             assert!(far(body), "{body}");
@@ -3420,243 +2975,6 @@ mod tests {
             "<rect x='-100000' y='-100000' width='200000' height='200000' fill='red'/><circle cx='32' cy='32' r='5000' stroke='blue' stroke-width='40'/>",
         ))
         .unwrap();
-    }
-
-    /// usvg 0.50 unwraps a `PositiveF32` made from `baseFrequency` as an
-    /// `f32`: a number past `f32::MAX` is infinity and panicked, in release
-    /// too (UPSTREAM U26). The check refuses it before usvg runs.
-    #[test]
-    fn infinite_turbulence_frequencies_are_refused() {
-        for frequency in ["1e40", "0.1 1e39", "-0 1e40"] {
-            let body = format!(
-                "<filter id='f'><feTurbulence baseFrequency='{frequency}'/></filter><rect width='8' height='8' filter='url(#f)'/>"
-            );
-            assert!(
-                matches!(
-                    rasterize(svg(64, 64, &body).as_bytes(), 1.0, Limits::DEFAULT),
-                    Err(SvgError::OutOfRange { .. })
-                ),
-                "{frequency}"
-            );
-        }
-        // Finite frequencies convert and draw. A number past `f64` fails
-        // svgtypes' parse, and usvg drops the attribute.
-        let draw = |frequency: &str| {
-            let body = format!(
-                "<filter id='f'><feTurbulence baseFrequency='{frequency}'/></filter><rect width='8' height='8' filter='url(#f)'/>"
-            );
-            rasterize(svg(64, 64, &body).as_bytes(), 1.0, Limits::DEFAULT)
-        };
-        for frequency in ["0.05", "1e6", "1e400"] {
-            draw(frequency).unwrap_or_else(|err| panic!("{frequency}: {err}"));
-        }
-        // Huge finite ones overflow resvg's lattice index: a debug-build
-        // panic (UPSTREAM U20), caught by `guarded`; release wraps and masks
-        // it into range. A resvg fix turns this arm into `Ok`.
-        for frequency in ["1e20", "3e38 0.1"] {
-            match draw(frequency) {
-                Err(SvgError::Panicked(message)) if cfg!(debug_assertions) => {
-                    assert!(message.contains("with overflow"), "{message}")
-                }
-                result => assert!(result.is_ok(), "{frequency}: {:?}", result.err()),
-            }
-        }
-    }
-
-    /// usvg 0.50 multiplies `feConvolveMatrix`'s `order` sides as `u32`
-    /// unchecked: a debug-build panic, a wrapped kernel size in release
-    /// (UPSTREAM U29). The check refuses a product past `u32` before usvg
-    /// runs, reading the sides as usvg does.
-    #[test]
-    fn convolve_orders_past_u32_are_refused() {
-        let draw = |order: &str| {
-            let body = format!(
-                "<filter id='f'><feConvolveMatrix order='{order}'/></filter><rect width='8' height='8' filter='url(#f)'/>"
-            );
-            rasterize(svg(64, 64, &body).as_bytes(), 1.0, Limits::DEFAULT)
-        };
-        // The fuzz find's order saturates to `i32::MAX` on both sides.
-        for order in [
-            "65536",
-            "70000 70000",
-            "1e10 3",
-            "5555555555555555555555555555555553",
-        ] {
-            assert!(
-                matches!(draw(order), Err(SvgError::OutOfRange { .. })),
-                "{order}"
-            );
-        }
-        // A product that fits, a side usvg replaces with 3, a bad list:
-        // usvg drops the primitive (no matching kernel) or draws.
-        for order in ["3", "5 5", "65535 65537", "-1 1e10", "0", "x 70000"] {
-            let result = draw(order);
-            assert!(
-                !matches!(
-                    result,
-                    Err(SvgError::OutOfRange { .. } | SvgError::Panicked(_))
-                ),
-                "{order}: {:?}",
-                result.err()
-            );
-        }
-    }
-
-    /// usvg 0.50 unwraps a `PositiveF32` of each `feMorphology` radius ×
-    /// the primitive scale, which panics in every build when it isn't
-    /// finite (UPSTREAM U30). The check refuses such radii before usvg runs.
-    #[test]
-    fn morphology_radii_that_overflow_are_refused() {
-        let draw = |units: &str, radius: &str| {
-            let body = format!(
-                "<filter id='f' {units}><feMorphology radius='{radius}'/></filter><rect width='8' height='8' filter='url(#f)'/>"
-            );
-            rasterize(svg(64, 64, &body).as_bytes(), 1.0, Limits::DEFAULT)
-        };
-        let bbox = "primitiveUnits='objectBoundingBox'";
-        // The fuzz find's radius; one infinite side, in either units.
-        for (units, radius) in [("", "1e49"), ("", "2 1e39"), (bbox, "0.5 1e39")] {
-            assert!(
-                matches!(draw(units, radius), Err(SvgError::OutOfRange { .. })),
-                "{units} {radius}"
-            );
-        }
-        // Finite radii, a negative side (usvg skips the scaling), a bad or
-        // three-number list (usvg's defaults), box units up to 1.
-        for (units, radius) in [
-            ("", "3"),
-            ("", "1e30 2"),
-            ("", "-1 1e49"),
-            ("", "x 1e49"),
-            ("", "1e49 1e49 1e49"),
-            (bbox, "0.1 1"),
-            // Past 1 in box units: finite over an 8 px box
-            // (`check_regions` bounds it over a huge one).
-            (bbox, "2"),
-        ] {
-            let result = draw(units, radius);
-            assert!(
-                !matches!(
-                    result,
-                    Err(SvgError::OutOfRange { .. } | SvgError::Panicked(_))
-                ),
-                "{units} {radius}: {:?}",
-                result.err()
-            );
-        }
-    }
-
-    /// usvg 0.50 maps `objectBoundingBox` regions onto an element's box
-    /// with tiny-skia-path's `bbox_transform`, which unwraps an overflowed
-    /// rect (UPSTREAM U31): every route to it is refused when the box,
-    /// measured by usvg itself (`svg_boxes`), is too large for its factors.
-    #[test]
-    fn regions_over_huge_boxes_are_refused() {
-        let draw = |body: &str| rasterize(svg(64, 64, body).as_bytes(), 1.0, Limits::DEFAULT);
-        let huge = "width='3e38' height='8'";
-        for body in [
-            // The default filter region (−10%, 120%).
-            format!("<filter id='f'><feOffset/></filter><rect {huge} filter='url(#f)'/>"),
-            // A box grown by a transform below the filtered group.
-            "<filter id='f'><feOffset/></filter><g filter='url(#f)'><g transform='scale(1e20)'>\
-             <rect width='2.9e18' height='8'/></g></g>"
-                .to_string(),
-            // A CSS filter function, a mask, a pattern tile.
-            format!("<rect {huge} style='filter: blur(2px)'/>"),
-            format!(
-                "<mask id='m'><rect width='1' height='1' fill='white'/></mask><rect {huge} mask='url(#m)'/>"
-            ),
-            format!(
-                "<pattern id='p' x='-0.5' width='1.5' height='0.5'><rect width='1' height='1'/></pattern><rect {huge} fill='url(#p)'/>"
-            ),
-            // A primitive subregion times a large region, a box-unit radius.
-            "<filter id='f' primitiveUnits='objectBoundingBox'><feOffset width='1e30'/></filter>\
-             <rect width='1e10' height='8' filter='url(#f)'/>"
-                .to_string(),
-            "<filter id='f' primitiveUnits='objectBoundingBox'><feMorphology radius='2'/></filter>\
-             <rect width='2e38' height='8' filter='url(#f)'/>"
-                .to_string(),
-            // Filters inside a mask's and a pattern's content.
-            format!(
-                "<filter id='f'><feOffset/></filter><mask id='m'><rect {huge} filter='url(#f)'/></mask><rect width='8' height='8' mask='url(#m)'/>"
-            ),
-            format!(
-                "<defs><filter id='f'><feOffset/></filter><pattern id='p' width='8' height='8' patternUnits='userSpaceOnUse'><rect {huge} filter='url(#f)'/></pattern></defs><rect width='8' height='8' fill='url(#p)'/>"
-            ),
-            // A `<style>` rule's transform still applies to renamed content.
-            "<style>mask g g { transform: scale(1e20) }</style><filter id='f'><feOffset/></filter>\
-             <mask id='m'><g filter='url(#f)'><g><rect width='2.9e18' height='8'/></g></g></mask>\
-             <rect width='8' height='8' mask='url(#m)'/>"
-                .to_string(),
-        ] {
-            let result = draw(&body);
-            assert!(
-                matches!(result, Err(SvgError::RegionOverflow { .. })),
-                "{body}: {:?}",
-                result.err()
-            );
-        }
-        // Large but representable: a filtered drawing scaled down by its
-        // viewBox, and the same filters over ordinary boxes.
-        let scaled = "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' \
-                      viewBox='0 0 1e7 1e7'><filter id='f'><feGaussianBlur stdDeviation='1e5'/>\
-                      </filter><rect width='1e7' height='1e7' filter='url(#f)'/></svg>";
-        assert!(rasterize(scaled.as_bytes(), 1.0, Limits::DEFAULT).is_ok());
-        for body in [
-            "<filter id='f'><feOffset/></filter><rect width='8' height='8' filter='url(#f)'/>",
-            "<rect width='8' height='8' style='filter: blur(2px)'/>",
-            "<pattern id='p' width='0.5' height='0.5'><rect width='1' height='1'/></pattern>\
-             <rect width='8' height='8' fill='url(#p)'/>",
-        ] {
-            let result = draw(body);
-            assert!(result.is_ok(), "{body}: {:?}", result.err());
-        }
-    }
-
-    /// resvg 0.50's box blur adds past `i32::MAX` for a deviation of ~1.4·10⁹
-    /// px at the drawn size (UPSTREAM U32): refused past [`MAX_SVG_BLUR`],
-    /// measured through the same transforms resvg scales it by.
-    #[test]
-    fn blurs_past_the_limit_are_refused() {
-        let draw = |root: &str, body: &str| {
-            let source = format!("<svg xmlns='http://www.w3.org/2000/svg' {root}>{body}</svg>");
-            rasterize(source.as_bytes(), 1.0, Limits::DEFAULT)
-        };
-        let size = "width='64' height='64'";
-        let blur = |deviation: &str| {
-            format!(
-                "<filter id='f'><feGaussianBlur stdDeviation='{deviation}'/></filter>\
-                 <rect width='40' height='40' filter='url(#f)'/>"
-            )
-        };
-        // The nightly's find (minimized), one side only, a drop shadow, and
-        // a deviation scaled past the limit by the viewBox (10⁴ × 6.4·10⁴).
-        for (root, body) in [
-            (size.to_string(), blur("1.4e31")),
-            (size.to_string(), blur("2 1e7")),
-            (
-                size.to_string(),
-                "<filter id='f'><feDropShadow stdDeviation='1e7'/></filter>\
-                 <rect width='40' height='40' filter='url(#f)'/>"
-                    .to_string(),
-            ),
-            (format!("{size} viewBox='0 0 0.001 0.001'"), blur("1e4")),
-        ] {
-            let result = draw(&root, &body);
-            assert!(
-                matches!(result, Err(SvgError::TooBlurred { .. })),
-                "{root} {body}: {:?}",
-                result.err()
-            );
-        }
-        // Wide but within it, and the same deviation scaled down.
-        for (root, body) in [
-            (size.to_string(), blur("1e5")),
-            (format!("{size} viewBox='0 0 1e9 1e9'"), blur("1e9")),
-        ] {
-            let result = draw(&root, &body);
-            assert!(result.is_ok(), "{root} {body}: {:?}", result.err());
-        }
     }
 
     /// tiny-skia cuts a dashed stroke into up to 10⁶ dashes per path and
@@ -3710,90 +3028,6 @@ mod tests {
         assert!((56..=96).contains(&dashes), "{dashes}");
     }
 
-    /// resvg 0.50 draws a pattern's tile into a pixmap of its own at the
-    /// drawn size (`render_pattern_pixmap`: the pattern rect × the scale of
-    /// the path's transform with the pattern's), with no limit; a failed
-    /// allocation aborts the process (bug_0200, found by
-    /// `properties::hostile_magnitudes_never_panic`: a 133 TB tile). The
-    /// cost estimate charges the tile, so such a document is refused before
-    /// drawing. Ordinary tiles, in either units, still draw.
-    #[test]
-    fn pattern_tiles_count_toward_the_cost() {
-        for body in [
-            // 10⁴ user units × 100 = a 10⁶ px square tile (4 TB).
-            "<pattern id='p' width='1e4' height='1e4' patternUnits='userSpaceOnUse'>\
-             <rect width='1' height='1'/></pattern>\
-             <rect width='8' height='8' fill='url(#p)' transform='scale(100)'/>",
-            // The find: box units (60 × 900 of a 500 × 80 box) scaled ×600.
-            "<pattern id='p' width='6e1' height='9e2'><rect width='1' height='1'/></pattern>\
-             <g transform='matrix(-6e2 0 0 9e-1 0 0)' fill='url(#p)'>\
-             <path d='M-5e2 -8e1 L-9e-1 0 A-5e2 0 0 0 1 -8e1 -9e-1 Z'/></g>",
-            // A nested pattern drawn at its outer tile's scale.
-            "<pattern id='inner' width='1e3' height='1e3' patternUnits='userSpaceOnUse'>\
-             <rect width='1' height='1'/></pattern>\
-             <pattern id='outer' width='8' height='8' patternUnits='userSpaceOnUse' \
-             patternTransform='scale(1000)'><rect width='8' height='8' fill='url(#inner)'/></pattern>\
-             <rect width='8' height='8' fill='url(#outer)'/>",
-        ] {
-            let result = draw(&svg(64, 64, body));
-            assert!(
-                matches!(result, Err(SvgError::TooExpensive { .. })),
-                "{body}: {:?}",
-                result.err()
-            );
-        }
-        for body in [
-            "<pattern id='p' width='8' height='8' patternUnits='userSpaceOnUse'>\
-             <rect width='4' height='4'/></pattern><rect width='64' height='64' fill='url(#p)'/>",
-            "<pattern id='p' width='0.25' height='0.25'><rect width='4' height='4'/></pattern>\
-             <rect width='64' height='64' fill='url(#p)'/>",
-        ] {
-            let result = draw(&svg(64, 64, body));
-            assert!(result.is_ok(), "{body}: {:?}", result.err());
-        }
-    }
-
-    /// resvg 0.50 turns each filter region and primitive subregion into an
-    /// `IntRect` in pixels with tiny-skia-path's `to_int_rect`, which unwraps
-    /// once `x + width` passes `i32::MAX` (UPSTREAM U35, bug_0201, found by
-    /// `properties::hostile_magnitudes_never_panic`). Refused past
-    /// [`MAX_SVG_FILTER_REGION`]; regions far past the image but under it
-    /// still draw.
-    #[test]
-    fn filter_regions_past_the_limit_are_refused() {
-        for body in [
-            // The find (minimized): a box-unit subregion 4·10⁵ × a 6000-unit box.
-            "<filter id='f' primitiveUnits='objectBoundingBox'><feFlood width='4e5'/></filter>\
-             <rect width='6000' height='10' filter='url(#f)'/>",
-            // An offset (or a drop shadow's) scaled past i32: the find,
-            // `dx='1e8'` × 200 (both panic resvg directly).
-            "<filter id='f'><feOffset dx='1e8' dy='1e8'/></filter>\
-             <g transform='scale(2e2)' filter='url(#f)'><rect width='0.1' height='0.1'/></g>",
-            "<filter id='f'><feDropShadow dx='3e9'/></filter>\
-             <rect width='8' height='8' filter='url(#f)'/>",
-            // A subregion in user space (both panic resvg directly).
-            "<filter id='f' primitiveUnits='userSpaceOnUse'><feFlood x='0' width='3e9'/>\
-             </filter><rect width='8' height='8' filter='url(#f)'/>",
-        ] {
-            let result = draw(&svg(64, 64, body));
-            assert!(
-                matches!(result, Err(SvgError::TooFarOut { max, .. }) if max == MAX_SVG_FILTER_REGION),
-                "{body}: {:?}",
-                result.err()
-            );
-        }
-        for body in [
-            "<filter id='f' filterUnits='userSpaceOnUse' x='-1e6' y='-1e6' width='2e6' \
-             height='2e6'><feGaussianBlur stdDeviation='4'/></filter>\
-             <rect width='8' height='8' filter='url(#f)'/>",
-            "<filter id='f'><feGaussianBlur stdDeviation='4'/></filter>\
-             <rect width='64' height='64' filter='url(#f)'/>",
-        ] {
-            let result = draw(&svg(64, 64, body));
-            assert!(result.is_ok(), "{body}: {:?}", result.err());
-        }
-    }
-
     /// Ordinary illustrations stay far inside the work budget: the bound
     /// over-approximates, but not by enough to refuse real content.
     #[test]
@@ -3801,7 +3035,7 @@ mod tests {
         let work = |body: &str| {
             let source = svg(512, 512, body);
             let document = roxmltree::Document::parse(&source).unwrap();
-            svg_bounds::bounds(&document, svg_bounds::MAX_REFERENCES, u64::MAX)
+            svg_bounds::bounds(&document, svg_bounds::MAX_REFERENCES)
                 .unwrap()
                 .work
         };
@@ -3866,57 +3100,83 @@ mod tests {
         }
     }
 
-    /// usvg matches every `<style>` rule against every element, and so do
-    /// the model and the box pass (bug_0207: 8 000 rules over 32 000
-    /// elements parsed for 1.5 s, inside the work budget). The pairs are
-    /// work, refused before the model's own pass runs.
-    #[test]
-    fn style_rules_count_as_work() {
-        // 10⁸ rule × element pairs; few rules, because parsing a sheet is
-        // itself quadratic in its length (U42, charged separately).
-        let rules: String = (0..1000).map(|i| format!("q{i}{{r:1}}")).collect();
-        let elements = "<g/>".repeat(100_000);
-        let source = svg(64, 64, &format!("<style>{rules}</style>{elements}"));
-        let best = |run: &dyn Fn()| {
-            (0..3)
-                .map(|_| {
-                    let start = std::time::Instant::now();
-                    run();
-                    start.elapsed()
-                })
-                .min()
-                .unwrap()
-        };
-        let refused = best(&|| {
-            let result = parse(source.as_bytes());
-            assert!(
-                matches!(result, Err(SvgError::TooLarge { .. })),
-                "{:?}",
-                result.err()
-            );
-        });
-        // The refusal comes before any matching: it costs what reading
-        // the document and the sheet costs, measured here, not the pairs
-        // (one pass over them alone takes tens of times longer). Relative,
-        // not wall time: a 2 s bound failed on a loaded CI runner
-        // (AGENTS.md, Gotchas).
-        let reading = best(&|| {
-            let document = roxmltree::Document::parse(&source).unwrap();
-            std::hint::black_box(document.descendants().count());
-            let mut sheet = simplecss::StyleSheet::new();
-            sheet.parse_more(&rules);
-            std::hint::black_box(sheet.rules.len());
-        });
-        assert!(
-            refused <= reading * 8,
-            "refusing took {refused:?}, reading the document {reading:?}"
-        );
-    }
-
     /// Generated hostile documents (ADR 0040/0042's guards, bug_0192–0198):
     /// whatever the magnitudes, a document loads or is refused — never a
     /// panic in usvg, resvg or tiny-skia. Test builds have overflow checks
     /// on, so arithmetic overflow panics too.
+    /// ADR 0051: elements outside the icon subset, and the `filter`
+    /// property in any spelling, are refused before usvg runs; what the
+    /// subset allows (and other namespaces' elements) parses.
+    #[test]
+    fn everything_outside_the_subset_is_refused() {
+        let refused = |body: &str| {
+            matches!(
+                parse(svg(16, 16, body).as_bytes()),
+                Err(SvgError::Unsupported(_))
+            )
+        };
+        for body in [
+            "<filter id='f'><feGaussianBlur stdDeviation='1'/></filter>",
+            "<feGaussianBlur stdDeviation='1'/>",
+            "<mask id='m'><rect width='4' height='4'/></mask>",
+            "<pattern id='p' width='4' height='4'/>",
+            "<marker id='k'/>",
+            "<text>hi</text>",
+            "<g><tspan>hi</tspan></g>",
+            "<style>rect { fill: red }</style>",
+            "<image href='x.png' width='4' height='4'/>",
+            "<foreignObject width='4' height='4'/>",
+            "<switch><rect width='4' height='4'/></switch>",
+            "<script>x</script>",
+            "<rect width='4' height='4' filter='url(#f)'/>",
+            "<g filter='blur(2px)'><rect width='4' height='4'/></g>",
+            "<g style='opacity: 0.5; filter: drop-shadow(1px 1px 1px red)'/>",
+        ] {
+            assert!(refused(body), "{body}");
+        }
+        for body in [
+            "<g filter='none' style='filter: none'><rect width='4' height='4'/></g>",
+            "<title>t</title><desc>d</desc><metadata/>",
+            "<a href='#x'><circle cx='8' cy='8' r='4'/></a>",
+            "<defs><symbol id='s' viewBox='0 0 4 4'><path d='M0 0h4v4z'/></symbol></defs><use href='#s' width='8' height='8'/>",
+            "<linearGradient id='g'><stop offset='0'/></linearGradient><ellipse rx='2' ry='3' fill='url(#g)'/>",
+            "<clipPath id='c'><rect width='8' height='8'/></clipPath><polygon points='0,0 8,0 8,8' clip-path='url(#c)'/>",
+            "<line x2='8' y2='8' stroke='red'/><polyline points='0,0 4,4 8,0' stroke='red' fill='none'/>",
+        ] {
+            parse(svg(16, 16, body).as_bytes()).unwrap_or_else(|err| panic!("{body}: {err}"));
+        }
+        // An editor's own namespace (usvg ignores it).
+        parse(
+            br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="8" height="8"><inkscape:grid/><rect width="8" height="8"/></svg>"#,
+        )
+        .unwrap();
+    }
+
+    /// The tree check refuses what the cost and extent models don't price,
+    /// had it got past the document check (here: converted directly).
+    #[test]
+    fn the_tree_check_refuses_what_the_models_dont_price() {
+        for body in [
+            "<filter id='f'><feOffset dx='1'/></filter><rect width='8' height='8' filter='url(#f)'/>",
+            "<g style='filter: blur(1px)'><rect width='8' height='8'/></g>",
+            "<mask id='m'><rect width='8' height='8' fill='white'/></mask><rect width='8' height='8' mask='url(#m)'/>",
+            "<pattern id='p' width='4' height='4' patternUnits='userSpaceOnUse'><rect width='2' height='2'/></pattern><rect width='8' height='8' fill='url(#p)'/>",
+            "<clipPath id='c'><rect width='8' height='8'/></clipPath><g clip-path='url(#c)'><g><mask id='m'><rect width='8' height='8' fill='white'/></mask><rect width='8' height='8' mask='url(#m)'/></g></g>",
+        ] {
+            let tree = usvg::Tree::from_str(&svg(16, 16, body), &options()).unwrap();
+            assert!(
+                matches!(check_tree(tree.root()), Err(SvgError::Unsupported(_))),
+                "{body}"
+            );
+        }
+        let tree = usvg::Tree::from_str(
+            &svg(16, 16, "<g opacity='0.5'><rect width='8' height='8'/></g>"),
+            &options(),
+        )
+        .unwrap();
+        check_tree(tree.root()).unwrap();
+    }
+
     mod properties {
         use super::*;
         use proptest::prelude::*;
@@ -3958,25 +3218,6 @@ mod tests {
             ]
         }
 
-        /// One filter primitive. Turbulence stays ordinary (`numOctaves` 1,
-        /// `baseFrequency` under 1): many octaves or a huge frequency
-        /// overflow resvg's `noise2`, a known debug-only upstream panic
-        /// (U20) that release builds wrap.
-        fn primitive() -> impl Strategy<Value = String> {
-            prop_oneof![
-                magnitude().prop_map(|m| format!("<feGaussianBlur stdDeviation='{m}'/>")),
-                magnitude().prop_map(|m| format!("<feDropShadow stdDeviation='{m}' dx='{m}'/>")),
-                magnitude().prop_map(|m| format!("<feMorphology radius='{m}'/>")),
-                magnitude().prop_map(|m| format!("<feOffset dx='{m}' dy='{m}'/>")),
-                (1u32..100).prop_map(|f| format!(
-                    "<feTurbulence baseFrequency='0.{f:02}' numOctaves='1'/>"
-                )),
-                magnitude().prop_map(|m| format!("<feConvolveMatrix order='{m}'/>")),
-                (magnitude(), magnitude())
-                    .prop_map(|(x, w)| format!("<feFlood x='{x}' width='{w}'/>")),
-            ]
-        }
-
         fn units() -> impl Strategy<Value = &'static str> {
             prop::sample::select(vec!["", "userSpaceOnUse", "objectBoundingBox"])
         }
@@ -3987,36 +3228,31 @@ mod tests {
                 outer in transform(),
                 inner in transform(),
                 body in shape(),
-                primitive in primitive(),
-                filter_units in units(),
-                primitive_units in units(),
-                region in proptest::option::of((magnitude(), magnitude())),
-                effect in 0u8..5,
-                tile in (magnitude(), magnitude()),
+                clip_units in units(),
+                gradient_units in units(),
+                region in (magnitude(), magnitude()),
+                effect in 0u8..4,
             ) -> String {
                 let units = |name: &str, value: &str| {
                     if value.is_empty() { String::new() } else { format!(" {name}='{value}'") }
                 };
-                let region = region
-                    .map(|(x, w)| format!(" x='{x}' width='{w}'"))
-                    .unwrap_or_default();
                 let defs = format!(
-                    "<filter id='f'{}{}{region}>{primitive}</filter>\
-                     <mask id='m'{}><rect width='1' height='1' fill='white'/></mask>\
-                     <pattern id='p' width='{}' height='{}'{}><rect width='1' height='1'/></pattern>",
-                    units("filterUnits", filter_units),
-                    units("primitiveUnits", primitive_units),
-                    units("maskUnits", filter_units),
-                    tile.0,
-                    tile.1,
-                    units("patternUnits", primitive_units),
+                    "<clipPath id='c'{}><rect x='{}' width='{}' height='1'/></clipPath>\
+                     <linearGradient id='g'{} x1='{}' x2='{}'>\
+                     <stop offset='0' stop-color='red'/><stop offset='1' stop-color='blue'/>\
+                     </linearGradient>",
+                    units("clipPathUnits", clip_units),
+                    region.0,
+                    region.1,
+                    units("gradientUnits", gradient_units),
+                    region.0,
+                    region.1,
                 );
                 let applied = match effect {
-                    0 => " filter='url(#f)'".to_owned(),
-                    1 => " mask='url(#m)'".to_owned(),
-                    2 => " fill='url(#p)'".to_owned(),
-                    3 => " style='filter: blur(3px)'".to_owned(),
-                    _ => String::new(),
+                    0 => " clip-path='url(#c)'",
+                    1 => " fill='url(#g)'",
+                    2 => " opacity='0.5'",
+                    _ => "",
                 };
                 let view_box = view_box
                     .map(|(w, h)| format!(" viewBox='0 0 {w} {h}'"))
@@ -4041,40 +3277,6 @@ mod tests {
                 );
             }
 
-            /// `check_values` refuses an `feConvolveMatrix` `order` exactly
-            /// when usvg would panic on it (UPSTREAM U29): no over- or
-            /// under-refusal, whatever the numbers.
-            #[test]
-            fn convolve_orders_are_refused_exactly_when_usvg_panics(
-                columns in prop_oneof![magnitude(), (0u32..70_000).prop_map(|n| n.to_string())],
-                rows in proptest::option::of(prop_oneof![
-                    magnitude(),
-                    (0u32..70_000).prop_map(|n| n.to_string()),
-                ]),
-            ) {
-                let order = match &rows {
-                    Some(rows) => format!("{columns} {rows}"),
-                    None => columns.clone(),
-                };
-                let source = svg(
-                    8,
-                    8,
-                    &format!(
-                        "<filter id='f'><feConvolveMatrix order='{order}'/></filter>\
-                         <rect width='8' height='8' filter='url(#f)'/>"
-                    ),
-                );
-                let document = roxmltree::Document::parse(&source).unwrap();
-                let refused = matches!(
-                    svg_bounds::bounds(&document, svg_bounds::MAX_REFERENCES, u64::MAX),
-                    Err(SvgError::OutOfRange { .. })
-                );
-                let panics = std::panic::catch_unwind(|| {
-                    let _ = usvg::Tree::from_data(source.as_bytes(), &usvg::Options::default());
-                })
-                .is_err();
-                prop_assert_eq!(refused, panics, "order {:?}", order);
-            }
         }
     }
 }

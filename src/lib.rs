@@ -214,10 +214,9 @@
 //! - `svg`: `.svg` files load as `Image`s, drawn on the CPU, so
 //!   `<img src="x.svg">`, `border-image`/`background-image: url(x.svg)` and
 //!   9-slice images accept SVG (the `bevy_markup::svg` module has the details
-//!   and the limits on untrusted files).
-//! - `svg-text`: `svg` plus `<text>` inside SVGs, drawn with the fonts
-//!   registered in [`FontFamilies`](fonts::FontFamilies) (font files and
-//!   system families alike).
+//!   and the limits on untrusted files). The icon subset only: shapes,
+//!   paths, groups, `use`, gradients and clip paths; no filters, masks,
+//!   patterns, markers, text, `<style>` sheets or images.
 //! - `hot-reload`: Bevy's asset file watcher, for editing an asset file and
 //!   restyling without a restart (the library already reacts to asset events).
 //! - `fuzzing`: exposes `bevy_markup::fuzz` (`#[doc(hidden)]`, not covered by
@@ -263,10 +262,6 @@ pub mod style;
 pub mod svg;
 #[cfg(feature = "svg")]
 mod svg_bounds;
-#[cfg(feature = "svg")]
-mod svg_boxes;
-#[cfg(feature = "svg-text")]
-mod svg_fonts;
 pub mod template;
 pub mod tooltips;
 
@@ -330,8 +325,8 @@ pub enum HtmlUiSystems {
 
 /// Registers the asset type `A` unless something already did. Bevy's
 /// `init_asset` isn't idempotent: it inserts a new, empty `Assets<A>` with a
-/// new handle allocator, so calling it after `ImagePlugin`/`TextPlugin`
-/// drops their assets and orphans every handle they gave out (bug_0187).
+/// new handle allocator, so calling it after `ImagePlugin` drops its
+/// assets and orphans every handle they gave out (bug_0187).
 #[cfg(feature = "svg")]
 fn init_asset_once<A: Asset>(app: &mut App) {
     if !app.world().contains_resource::<Assets<A>>() {
@@ -392,30 +387,9 @@ impl Plugin for BevyMarkupPlugin {
             .init_resource::<bevy::input_focus::directional_navigation::DirectionalNavigationMap>()
             .init_resource::<bevy::input_focus::directional_navigation::AutoNavigationConfig>();
         #[cfg(feature = "svg")]
-        {
-            // One font set for every SVG user: the loaders (IO threads),
-            // the inline cache, and (`svg-text`) the system keeping it
-            // current.
-            let fonts = svg::SvgFonts::default();
-            app.insert_resource(fonts.clone())
-                .insert_resource(svg::InlineSvgs::new(fonts.clone()))
-                .register_asset_loader(svg::SvgLoader {
-                    fonts: fonts.clone(),
-                })
-                .register_asset_loader(svg::SvgDocumentLoader { fonts });
-            // `Assets<Font>` (and its events) even without Bevy's
-            // `TextPlugin` (headless apps), but never over an existing one:
-            // `init_asset` replaces the store and its handle allocator
-            // (bug_0187: Bevy's default font gone).
-            #[cfg(feature = "svg-text")]
-            {
-                init_asset_once::<bevy::text::Font>(app);
-                app.add_systems(
-                    PostUpdate,
-                    svg_fonts::sync_svg_fonts.before(HtmlUiSystems::Render),
-                );
-            }
-        }
+        app.init_resource::<svg::InlineSvgs>()
+            .register_asset_loader(svg::SvgLoader)
+            .register_asset_loader(svg::SvgDocumentLoader);
         // `Assets<Image>` only where no `ImagePlugin` made it (bug_0187:
         // replacing it orphaned the handles Bevy had already given out, and
         // the next image load panicked).

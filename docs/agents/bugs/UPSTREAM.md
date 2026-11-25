@@ -33,30 +33,30 @@ the issue may already be fixed or reported.
 | U17 | usvg (resvg) | Converter recursion through references and nesting is unbounded | stack overflow (abort) from a few KB of SVG on a 2 MB thread (`svg` feature) | static recursion-depth check before conversion (`svg_bounds::bounds`) | unreported; still overflows on 0.50, whose `max_depth` (#1223) bounds XML nesting and `<use>` only |
 | U18 | roxmltree | 0.21.1's tokenizer recursed once per nesting level | stack overflow at ~150 levels in debug on a 2 MB thread (`svg` feature) | version floor `roxmltree >= 0.21.2` | fixed upstream (0.21.2) |
 | U19 | usvg (resvg) | The default `ImageHrefResolver` reads any file path | an SVG reads any file the process can and embeds it (`svg` feature) | a resolver that resolves nothing | unreported (by design; worth a docs warning) |
-| U20 | resvg | `feTurbulence` overflows `i32` after enough octaves or on a huge `baseFrequency` (#1185, open; #937 a similar multiply overflow) | panic where overflow checks are on (debug builds, fuzzing): a failed load, or a crash through a redraw task (`svg` feature) | `svg::guarded` (catch_unwind around usvg/resvg); the `svg` fuzz target lets it unwind (`fuzz::is_known_upstream_panic`) | reported upstream (#1185), open; the `baseFrequency` trigger unreported |
+| U20 | resvg | `feTurbulence` overflows `i32` after enough octaves or on a huge `baseFrequency` (#1185, open; #937 a similar multiply overflow) | panic where overflow checks are on (debug builds, fuzzing): a failed load, or a crash through a redraw task (`svg` feature) | none needed: filters are outside the icon subset (ADR 0051); was: `svg::guarded` (catch_unwind around usvg/resvg); the `svg` fuzz target lets it unwind (`fuzz::is_known_upstream_panic`) | reported upstream (#1185), open; the `baseFrequency` trigger unreported; unreachable since ADR 0051 |
 | U21 | astral-tl | `/` is a name character: `<b/>` is an unclosed element named `b/` ([bug_0185](bug_0185.md)) | a `<br/>` merged the rest of the document into one block | `template::normalize_self_closing` before every `tl` parse | unreported |
 | U22 | svgtypes / kurbo | An arc splits into `(11·r)^⅙` cubics at kurbo's absolute 0.1 tolerance, and svgtypes' simplifier drains them with `Vec::remove(0)` ([bug_0190](bug_0190.md)) | one 40-byte arc converts for seconds or never finishes (`svg` feature) | counted before conversion in the work bound (`svg_bounds::bounds`, ADR 0040) | unreported |
-| U23 | usvg (resvg) | A pattern whose content inherits a paint naming itself recurses until the stack overflows ([bug_0191](bug_0191.md)) | stack overflow (abort) from 230 bytes (`svg` feature) | inherited references are edges of the cycle check (`svg_bounds::bounds`) | fixed upstream in 0.50; check kept (it is part of the U17 graph) |
+| U23 | usvg (resvg) | A pattern whose content inherits a paint naming itself recurses until the stack overflows ([bug_0191](bug_0191.md)) | stack overflow (abort) from 230 bytes (`svg` feature) | none needed: patterns are outside the icon subset (ADR 0051); was: inherited references are edges of the cycle check (`svg_bounds::bounds`) | fixed upstream in 0.50; check kept (it is part of the U17 graph); unreachable since ADR 0051 |
 | U24 | tiny-skia | Anti-aliased fills shift the path's *unclipped* rows by 2 in an `i32`, which wraps past 2²⁹ ([bug_0194](bug_0194.md)) | panic in any build on paths far off the canvas (debug: `walk_edges` assertion; release: U28) — a failed load (`svg` feature) | refused before drawing (`svg::check_extent`, `MAX_SVG_EXTENT`, `SvgError::TooFarOut`) | unreported |
-| U25 | usvg (resvg) | No bound on conversion work: `<use>` copies under the million-node limit, markers per vertex ([bug_0188](bug_0188.md), [bug_0189](bug_0189.md)) | seconds to minutes of conversion from a few KB (`svg` feature) | the work bound (`svg_bounds::bounds`, `MAX_SVG_WORK`, ADR 0040) | unreported (by design; a conversion budget option would replace the model) |
-| U26 | usvg (resvg) | `feTurbulence` with a `baseFrequency` past `f32::MAX` unwraps `PositiveF32::new(inf)` ([bug_0192](bug_0192.md)) | panic in any build: a failed load (`svg` feature) | refused before usvg runs (`svg_bounds::check_values`, `SvgError::OutOfRange`) | unreported |
+| U25 | usvg (resvg) | No bound on conversion work: `<use>` copies under the million-node limit, markers per vertex ([bug_0188](bug_0188.md), [bug_0189](bug_0189.md)) | seconds to minutes of conversion from a few KB (`svg` feature) | the work bound (`svg_bounds::bounds`, `MAX_SVG_WORK`, ADR 0040); markers are outside the icon subset since ADR 0051 | unreported (by design; a conversion budget option would replace the model) |
+| U26 | usvg (resvg) | `feTurbulence` with a `baseFrequency` past `f32::MAX` unwraps `PositiveF32::new(inf)` ([bug_0192](bug_0192.md)) | panic in any build: a failed load (`svg` feature) | none needed: filters are outside the icon subset (ADR 0051); was: refused before usvg runs (`svg_bounds::check_values`, `SvgError::OutOfRange`) | unreported; unreachable since ADR 0051 |
 | U27 | tiny-skia | The cubic edge clipper's bisection can't reach its 0.25 px tolerance between ~2²¹ and 2²² px and unwraps `NormalizedF32Exclusive::new(1.0)` ([bug_0194](bug_0194.md)) | panic in any build: a failed load (`svg` feature) | refused before drawing (`svg::check_extent`) | unreported |
 | U28 | tiny-skia | Release builds of U24: the wrapped row range writes outside the canvas, caught by an `unwrap` in `alpha_runs.rs` or a slice in `pipeline/mod.rs` ([bug_0194](bug_0194.md)) | panic in release builds: a failed load (`svg` feature) | as U24 | unreported (report with U24) |
-| U29 | usvg (resvg) | `feConvolveMatrix` multiplies its `order` sides as `u32` unchecked ([bug_0195](bug_0195.md)) | panic where overflow checks are on (debug builds, fuzzing): a failed load; release wraps (the cost estimate then refuses the kernel) (`svg` feature) | refused before usvg runs (`svg_bounds::check_values`, `SvgError::OutOfRange`) | unreported |
-| U30 | usvg (resvg) | `feMorphology` unwraps `PositiveF32::new(radius × scale)`, `None` when the product isn't finite ([bug_0196](bug_0196.md)) | panic in any build: a failed load (`svg` feature) | non-finite radii refused before usvg runs (`svg_bounds::check_values`, `SvgError::OutOfRange`); radius × box by ADR 0042 | unreported |
-| U31 | tiny-skia-path (via usvg) | `NonZeroRect::bbox_transform` unwraps `from_xywh` of an overflowed product ([bug_0197](bug_0197.md)) | panic in any build on a filter over a box wider than ~2.8·10³⁸: a failed load (`svg` feature) | boxes measured by a first usvg pass, overflowing regions refused (ADR 0042, `svg_boxes`, `SvgError::RegionOverflow`) | unreported |
-| U32 | resvg | The box blur adds 2 to an `i32` box width that saturates at `i32::MAX` for a deviation of ~1.4·10⁹ px ([bug_0198](bug_0198.md)) | panic where overflow checks are on (debug builds, fuzzing): a failed draw; release wraps to a negative box (`svg` feature) | refused before drawing past `MAX_SVG_BLUR` (`svg::check_extent`, `SvgError::TooBlurred`) | unreported |
+| U29 | usvg (resvg) | `feConvolveMatrix` multiplies its `order` sides as `u32` unchecked ([bug_0195](bug_0195.md)) | panic where overflow checks are on (debug builds, fuzzing): a failed load; release wraps (the cost estimate then refuses the kernel) (`svg` feature) | none needed: filters are outside the icon subset (ADR 0051); was: refused before usvg runs (`svg_bounds::check_values`, `SvgError::OutOfRange`) | unreported; unreachable since ADR 0051 |
+| U30 | usvg (resvg) | `feMorphology` unwraps `PositiveF32::new(radius × scale)`, `None` when the product isn't finite ([bug_0196](bug_0196.md)) | panic in any build: a failed load (`svg` feature) | none needed: filters are outside the icon subset (ADR 0051); was: non-finite radii refused before usvg runs (`svg_bounds::check_values`, `SvgError::OutOfRange`); radius × box by ADR 0042 | unreported; unreachable since ADR 0051 |
+| U31 | tiny-skia-path (via usvg) | `NonZeroRect::bbox_transform` unwraps `from_xywh` of an overflowed product ([bug_0197](bug_0197.md)) | panic in any build on a filter over a box wider than ~2.8·10³⁸: a failed load (`svg` feature) | none needed: filters and the `filter` property are outside the icon subset (ADR 0051); was: boxes measured by a first usvg pass, overflowing regions refused (ADR 0042, `svg_boxes`, `SvgError::RegionOverflow`) | unreported; unreachable since ADR 0051 |
+| U32 | resvg | The box blur adds 2 to an `i32` box width that saturates at `i32::MAX` for a deviation of ~1.4·10⁹ px ([bug_0198](bug_0198.md)) | panic where overflow checks are on (debug builds, fuzzing): a failed draw; release wraps to a negative box (`svg` feature) | none needed: filters are outside the icon subset (ADR 0051); was: refused before drawing past `MAX_SVG_BLUR` (`svg::check_extent`, `SvgError::TooBlurred`) | unreported; unreachable since ADR 0051 |
 | U33 | Bevy (bevy_picking 0.20) | `Location::is_in_viewport` returns false without a `PrimaryWindow`, even for an image render target: ray-based picking (mesh, sprite) hits nothing in a windowless app | any render-to-texture-only app loses mesh picking (no bevy_markup code affected); the examples' `--offscreen` mode did | the harness's `--offscreen` mode spawns a primary `Window` entity with no native window (`examples/shared/harness.rs`) | unreported |
 | U34 | Bevy (bevy_ui 0.20) | The UI picking backend hit-tests a text node's runs (`run_geometry`) but never `TextLayoutInfo::inline_boxes`: a pointer over an inline image hits its text block ([bug_0199](bug_0199.md)) | an image or SVG inside a link can't be clicked through the icon | `signals::pick_inline_boxes` adds the image's hit from the UI backend's hit on its text block | unreported |
-| U35 | tiny-skia-path 0.12 (via resvg 0.50) | `NonZeroRect::to_int_rect` and `IntSize::to_int_rect(x, y)` unwrap `IntRect::from_xywh`, `None` once `x + width` passes `i32::MAX`; resvg converts filter regions, subregions and offsets with them ([bug_0201](bug_0201.md)) | panic in any build: a failed draw (`svg` feature) | regions, subregions and offsets past `MAX_SVG_FILTER_REGION` refused before drawing (`svg::check_extent`) | unreported |
-| U36 | resvg 0.50 (tiny-skia 0.12) | `render_pattern_pixmap` allocates a pattern's tile at its drawn size with no limit; `Pixmap::new` allocates with `vec![0; len]`, which aborts on failure ([bug_0200](bug_0200.md)) | process abort (`svg` feature) | the render-cost estimate charges each tile (`svg::estimate_cost`) | unreported |
+| U35 | tiny-skia-path 0.12 (via resvg 0.50) | `NonZeroRect::to_int_rect` and `IntSize::to_int_rect(x, y)` unwrap `IntRect::from_xywh`, `None` once `x + width` passes `i32::MAX`; resvg converts filter regions, subregions and offsets with them ([bug_0201](bug_0201.md)) | panic in any build: a failed draw (`svg` feature) | none needed: filters are outside the icon subset (ADR 0051); was: regions, subregions and offsets past `MAX_SVG_FILTER_REGION` refused before drawing (`svg::check_extent`) | unreported; unreachable since ADR 0051 |
+| U36 | resvg 0.50 (tiny-skia 0.12) | `render_pattern_pixmap` allocates a pattern's tile at its drawn size with no limit; `Pixmap::new` allocates with `vec![0; len]`, which aborts on failure ([bug_0200](bug_0200.md)) | process abort (`svg` feature) | none needed: patterns are outside the icon subset (ADR 0051); was: the render-cost estimate charges each tile (`svg::estimate_cost`) | unreported; unreachable since ADR 0051 |
 | U37 | parley 0.11 (via bevy_text 0.20) | An inline box's whole height counts as ascent and the line height is the tallest item's, so a box taller than the text's ascent gets negative leading ([bug_0203](bug_0203.md)) | an `<img>`/inline `<svg>` taller than the ascent overlaps the line above; the line is short by the text's descent | none | fixed upstream (parley 0.12.0); waiting for Bevy to depend on it |
 | U38 | Bevy (bevy_ui 0.20.1) | `update_viewport_render_target_size` ends in `images.get_mut(image_handle).unwrap()`: a `ViewportNode` camera whose `RenderTarget::Image` isn't in `Assets<Image>` panics ([bug_0218](bug_0218.md)) | a canvas camera over a not-yet-loaded or removed target image panics on the compute pool | `sync_canvases` binds a camera only while its target image is in `Assets<Image>` (bug_0218) | unreported |
 | U39 | Tera 2.4.0 | A render's work and memory have no limit (only `range` ≤ 10⁵ and component recursion ≤ 20): nested loops run for hours, `set_global` doubling in a loop or unrolled `set` doubling ask for terabytes and abort ([bug_0220](bug_0220.md)) | a template stalls or aborts the app | `tera_check`: a static check at load bounds steps, built values and copies of context data (ADR 0044); output capped by `template::MAX_RENDERED_BYTES` | unreported **Moot for bevy_markup since ADR 0049 (2026-11-25): it no longer uses Tera; MiniJinja's fuel bounds renders, and `tera_check` is removed.** |
-| U40 | simplecss 0.2.2 (via usvg 0.50 and bevy_markup's `svg_bounds`) | `Selector::matches` tries every ancestor for a descendant combinator and recurses with no memo: a selector with k descendant combinators costs up to Σ_{j≤k} C(depth, j) calls per element when its leftmost compound never matches ([bug_0229](bug_0229.md)) | a 555-byte SVG `<style>` parses for 36 s (`svg` feature) | `svg_bounds::match_work` charges every rule by that count (and its class/attribute tests) before anything matches | unreported |
-| U41 | usvg 0.50 text layout (`text` feature) | `ByteIndex::code_point_at` counts characters from the chunk's start, and `resolve_relative_shifts` (and the rotate and text-on-path code) calls it per cluster: every text chunk lays out in time quadratic in its characters ([bug_0232](bug_0232.md)) | a 100 000-character `<text>` converts for 3.9 s (13.5 s with multi-byte characters) inside `MAX_SVG_WORK` (`svg-text`) | `svg_bounds` charges a `<text>` by its characters² | unreported |
-| U42 | simplecss 0.2.2 (via usvg 0.50 and bevy_markup's `svg_bounds`) | `StyleSheet::parse_more` builds an error, positioned by counting lines from the text's start (`Stream::gen_text_pos`), at every declaration's end, unitless number and `#` colour, then drops it: parsing is quadratic in the sheet's length ([bug_0231](bug_0231.md)) | 40 000 rules (760 KB) parse for 0.96 s per pass, three passes per SVG (`svg` feature) | `svg_bounds::style_scan_bytes` charges the offsets of those places before simplecss parses | unreported |
-| U43 | usvg 0.50 text layout (`text` feature) | `process_chunk` reshapes the whole chunk once per span and merges each span's glyphs into the first run with `glyphs.iter().position(…)` and `Vec::remove`/`insert`: spans × characters ([bug_0232](bug_0232.md)) | 4 000 one-character `<tspan>`s convert for 2.0 s (`svg-text`) | `svg_bounds` charges a `<text>` by its spans × characters | unreported |
+| U40 | simplecss 0.2.2 (via usvg 0.50 and bevy_markup's `svg_bounds`) | `Selector::matches` tries every ancestor for a descendant combinator and recurses with no memo: a selector with k descendant combinators costs up to Σ_{j≤k} C(depth, j) calls per element when its leftmost compound never matches ([bug_0229](bug_0229.md)) | a 555-byte SVG `<style>` parses for 36 s (`svg` feature) | none needed: `<style>` sheets are outside the icon subset (ADR 0051); was: `svg_bounds::match_work` charges every rule by that count (and its class/attribute tests) before anything matches | unreported; unreachable since ADR 0051 |
+| U41 | usvg 0.50 text layout (`text` feature) | `ByteIndex::code_point_at` counts characters from the chunk's start, and `resolve_relative_shifts` (and the rotate and text-on-path code) calls it per cluster: every text chunk lays out in time quadratic in its characters ([bug_0232](bug_0232.md)) | a 100 000-character `<text>` converts for 3.9 s (13.5 s with multi-byte characters) inside `MAX_SVG_WORK` (`svg-text`) | none needed: `<text>` are outside the icon subset (ADR 0051); was: `svg_bounds` charges a `<text>` by its characters² | unreported; unreachable since ADR 0051 |
+| U42 | simplecss 0.2.2 (via usvg 0.50 and bevy_markup's `svg_bounds`) | `StyleSheet::parse_more` builds an error, positioned by counting lines from the text's start (`Stream::gen_text_pos`), at every declaration's end, unitless number and `#` colour, then drops it: parsing is quadratic in the sheet's length ([bug_0231](bug_0231.md)) | 40 000 rules (760 KB) parse for 0.96 s per pass, three passes per SVG (`svg` feature) | none needed: `<style>` sheets are outside the icon subset (ADR 0051); was: `svg_bounds::style_scan_bytes` charges the offsets of those places before simplecss parses | unreported; unreachable since ADR 0051 |
+| U43 | usvg 0.50 text layout (`text` feature) | `process_chunk` reshapes the whole chunk once per span and merges each span's glyphs into the first run with `glyphs.iter().position(…)` and `Vec::remove`/`insert`: spans × characters ([bug_0232](bug_0232.md)) | 4 000 one-character `<tspan>`s convert for 2.0 s (`svg-text`) | none needed: `<text>` are outside the icon subset (ADR 0051); was: `svg_bounds` charges a `<text>` by its spans × characters | unreported; unreachable since ADR 0051 |
 | U44 | fuzzcheck | The fuzzer unwraps `String::from_utf8` of every serialized input it keeps (for an assertion message) | a `ByteSerializer` target panics on its first non-UTF-8 input | vendored patch | unreported |
 | U45 | lightningcss 1.0.0-alpha.72 / cssparser-color 0.5.0 | An infinite `hsl()`/`hwb()` hue normalizes to NaN, and `hsl_to_rgb` `debug_assert!`s its hue range | panic at parse time in debug builds, from any CSS text ([bug_0238](bug_0238.md)) | `cascade::guarded_parse` (catch_unwind around the three lightningcss parses); the fuzz targets let it unwind (`fuzz::is_known_upstream_panic`, pinned to cssparser-color 0.5.0) | unreported; **moot for bevy_markup**: lightningcss removed (ADR 0048) |
 | U46 | Tera 2.4.0 | `unique` compares every pair of distinct items ([bug_0241](bug_0241.md)) | unmodeled quadratic render work | charge comparisons, refuse context-sized `unique` (ADR 0047) | unreported **Moot for bevy_markup since ADR 0049 (2026-11-25): it no longer uses Tera.** |
@@ -483,6 +483,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U20 — resvg: `feTurbulence` overflows `i32` after enough octaves
 
+> **Unreachable since ADR 0051 (2026-11-26):** filters are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/resvg. Affected: 0.49.0, 0.50.0. Reported upstream as
   [#1185](https://github.com/linebender/resvg/issues/1185) ("Panic
   attempt to multiply with overflow in filter/turbulence.rs", open); #937
@@ -557,6 +559,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U23 — usvg: a pattern inheriting a paint naming itself recurses forever
 
+> **Unreachable since ADR 0051 (2026-11-26):** patterns are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/resvg, crate usvg. Affected: 0.49.0; fixed in
   0.50.0 (the reproduction below converts in debug and release).
 - **Problem:** converting a pattern converts its content. A shape inside
@@ -622,6 +626,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U26 — usvg: an infinite `baseFrequency` panics
 
+> **Unreachable since ADR 0051 (2026-11-26):** filters are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/resvg, crate usvg. Affected: 0.49.0, 0.50.0.
 - **Problem:** `parser/filter.rs` `convert_turbulence` parses
   `baseFrequency` as a number list, converts to `f32` (a value past
@@ -674,6 +680,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U29 — usvg: `feConvolveMatrix` `order` overflows `u32`
 
+> **Unreachable since ADR 0051 (2026-11-26):** filters are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/resvg, crate usvg. Affected: 0.49.0, 0.50.0.
 - **Problem:** `parser/filter.rs` `convert_convolve_matrix` reads `order`
   as one or two numbers saturated to `i32`, keeps them when positive, and
@@ -699,6 +707,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U30 — usvg: `feMorphology` radius × scale unwrapped as `PositiveF32`
 
+> **Unreachable since ADR 0051 (2026-11-26):** filters are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/resvg, crate usvg. Affected: 0.49.0, 0.50.0.
 - **Problem:** `parser/filter.rs` `convert_morphology` (lines 1028–1029)
   reads `radius` as `f32`s and, when both are non-negative, unwraps
@@ -721,6 +731,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U31 — tiny-skia-path: `NonZeroRect::bbox_transform` unwraps an overflowed rect
 
+> **Unreachable since ADR 0051 (2026-11-26):** filters and the `filter` property are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/tiny-skia, crate tiny-skia-path. Affected:
   0.12.0 (via usvg 0.49.0, 0.50.0).
 - **Problem:** `rect.rs` `bbox_transform` (line 691) multiplies the rect by
@@ -742,6 +754,8 @@ CI clippy command and workspace tests pass on both.
   element as they do for other invalid regions.
 
 ## U32 — resvg: box blur width overflows `i32`
+
+> **Unreachable since ADR 0051 (2026-11-26):** filters are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
 
 - **Project:** linebender/resvg, crate resvg. Affected: 0.49.0, 0.50.0.
 - **Problem:** `filter/box_blur.rs` `create_box_gauss` computes the ideal
@@ -809,6 +823,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U35 — tiny-skia-path: `to_int_rect` unwraps an overflowing rect
 
+> **Unreachable since ADR 0051 (2026-11-26):** filters are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/tiny-skia, crate tiny-skia-path. Affected:
   0.12.0 (via resvg 0.49.0, 0.50.0).
 - **Problem:** `NonZeroRect::to_int_rect` (`rect.rs:700`) and
@@ -828,6 +844,8 @@ CI clippy command and workspace tests pass on both.
   an unrepresentable region as empty, as it does for invalid ones.
 
 ## U36 — resvg: pattern tiles are allocated without a limit
+
+> **Unreachable since ADR 0051 (2026-11-26):** patterns are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
 
 - **Project:** linebender/resvg. Affected: 0.49.0, 0.50.0 (tiny-skia 0.12.0).
 - **Problem:** `path.rs` `render_pattern_pixmap` sizes the tile pixmap as
@@ -914,6 +932,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U40 — simplecss: descendant selectors match in exponential time
 
+> **Unreachable since ADR 0051 (2026-11-26):** `<style>` sheets are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/simplecss. Affected: 0.2.2 (used by usvg 0.50's
   `resolve_css` and by `svg_bounds::Graph::new`).
 - **Problem:** `Selector::matches_impl` (`selector.rs:174`) matches a
@@ -939,6 +959,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U41 — usvg: text layout is quadratic in a chunk's characters
 
+> **Unreachable since ADR 0051 (2026-11-26):** `<text>` are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
+
 - **Project:** linebender/resvg, crate usvg. Affected: 0.49, 0.50 (`text`
   feature).
 - **Problem:** `ByteIndex::code_point_at` (`text/layout.rs:1871`)
@@ -962,6 +984,8 @@ CI clippy command and workspace tests pass on both.
   (or walk clusters in byte order with a running count).
 
 ## U42 — simplecss: parsing a style sheet is quadratic in its length
+
+> **Unreachable since ADR 0051 (2026-11-26):** `<style>` sheets are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
 
 - **Project:** linebender/simplecss. Affected: 0.2.2.
 - **Problem:** errors carry a `TextPos` computed eagerly by
@@ -987,6 +1011,8 @@ CI clippy command and workspace tests pass on both.
   end of a value.
 
 ## U43 — usvg: each text span reshapes the whole chunk
+
+> **Unreachable since ADR 0051 (2026-11-26):** `<text>` are outside the icon subset and refused before usvg runs; the workaround described below was removed with it. Kept for the record and for reporting upstream.
 
 - **Project:** linebender/resvg, crate usvg. Affected: 0.49, 0.50 (`text`
   feature).

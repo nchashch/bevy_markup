@@ -1,7 +1,7 @@
 //! SVG benchmarks (ADR 0038) with criterion: where an SVG spends its time.
 //!
 //! - **Stages**, per document (`benches/shared/svg.rs`: an icon, a 40-group
-//!   illustration, a drop-shadowed panel, a pattern chain near the
+//!   illustration, a clipped panel, a clip-path chain near the
 //!   recursion-depth limit, a 1920×1080 background — its 2× draw is 4K —
 //!   and a 1024-icon sheet):
 //!   - `depth`: the XML parse and the recursion-depth bound alone, the

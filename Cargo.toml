@@ -30,7 +30,7 @@ exclude = [
 system_fonts = ["bevy/system_font_discovery"]
 # Exposes `bevy_markup::fuzz` (`#[doc(hidden)]`, not covered by semver): internal
 # glue callable without a full Bevy app, for `fuzz/` targets.
-fuzzing = ["dep:wgpu-types", "svg-text"]
+fuzzing = ["dep:wgpu-types", "svg"]
 # Dev/QA only: serves the examples over localhost BRP + MCP
 # (bevy_mcp_harness), so an agent can playtest them — `game/screenshot`
 # (the examples' README screenshots), `game/ui`, input mocks. Never enabled
@@ -42,14 +42,11 @@ dev-tools = ["dep:bevy_mcp_harness"]
 text-input = ["bevy/bevy_ui_widgets", "bevy/keyboard"]
 # `.svg` files load as `Image`s, drawn on the CPU by resvg (ADR 0038):
 # `<img src="x.svg">`, `border-image`/`background-image: url(x.svg)` and
-# 9-slice images. resvg without its default features: no text (fonts), no
-# raster decoders, no svgz. Opt-in: apps that don't use SVG pay nothing.
+# 9-slice images. The icon subset only (ADR 0051): shapes, paths, groups,
+# `use`, gradients and clip paths. resvg without its default features: no
+# text (fonts), no raster decoders, no svgz. Opt-in: apps that don't use
+# SVG pay nothing.
 svg = ["dep:resvg", "dep:roxmltree", "dep:simplecss", "dep:svgtypes", "dep:wgpu-types"]
-# SVG `<text>` (ADR 0038 §6): resvg's text stack (fontdb, harfrust,
-# skrifa), fed the fonts registered in `FontFamilies` (font files, and
-# system families from Bevy's font collection) plus Bevy's default font.
-# Its own feature: icon-only apps don't pay for it.
-svg-text = ["svg", "resvg/text"]
 # Bevy's asset file watcher, for the `hot-reload` example (edit an asset
 # file and the UI restyles without a restart — the library already reacts
 # to `LoadedWithDependencies`/`Modified`). Inert otherwise; the library

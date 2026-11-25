@@ -484,12 +484,6 @@ pub const SVG_FUZZ_WORK: u64 = crate::svg::MAX_SVG_WORK / 16;
 /// and a budget scaled to that area, so one input stays fast; the fuzz
 /// target times the call, and a slow one means the estimate missed a cost.
 /// `Ok` carries the size and the estimate.
-/// The fonts the `svg` harness draws `<text>` with, built once.
-fn svg_fonts() -> &'static crate::svg::SvgFonts {
-    static FONTS: std::sync::OnceLock<crate::svg::SvgFonts> = std::sync::OnceLock::new();
-    FONTS.get_or_init(crate::svg::SvgFonts::default_font)
-}
-
 pub fn svg(source: &[u8]) -> Result<String, String> {
     let side = 256;
     let full = u64::from(crate::svg::MAX_SVG_SIDE).pow(2);
@@ -500,64 +494,17 @@ pub fn svg(source: &[u8]) -> Result<String, String> {
     };
     // The inline-`<svg>` path too (ADR 0038 §4): the same bytes as an
     // element's source text, prepared (namespaces, the cascade color).
-    // `<text>` draws with Bevy's default font (`fuzzing` implies
-    // `svg-text`; bug_0221: without fonts text drew nothing).
-    let fonts = svg_fonts();
     if let Some(prepared) = std::str::from_utf8(source)
         .ok()
         .and_then(|text| crate::svg::prepare_inline(text, Some([255, 0, 0, 255])))
     {
-        let _ = crate::svg::rasterize_with(prepared.as_bytes(), 1.0, limits, fonts);
+        let _ = crate::svg::rasterize_with(prepared.as_bytes(), 1.0, limits);
     }
-    let raster =
-        crate::svg::rasterize_with(source, 1.0, limits, fonts).map_err(|err| err.to_string())?;
+    let raster = crate::svg::rasterize_with(source, 1.0, limits).map_err(|err| err.to_string())?;
     Ok(format!(
         "{}x{} cost {}",
         raster.width, raster.height, raster.cost
     ))
-}
-
-/// Whether a panic is one of the known upstream panics that the fuzz
-/// targets let unwind into the library's guard (`svg::guarded`) instead
-/// of aborting: the guard already turns
-/// it into an error. `file` is the panic location's path; the crate
-/// directory name pins the version, so a bump makes the fuzzer report it
-/// again until rechecked.
-///
-/// - UPSTREAM U20 (resvg #1185): resvg's turbulence overflows `i32`
-///   lattice indices after many octaves or on a huge `baseFrequency`
-///   (release wraps, then masks into range).
-///
-/// tiny-skia's far-off-canvas panics (U24, U27, U28) are not excused: they
-/// panic in release builds too, and `svg::check_extent` refuses their
-/// inputs before drawing, so one reaching tiny-skia is a miss to report.
-pub fn is_known_upstream_panic(file: &str, message: &str) -> bool {
-    let file = file.replace('\\', "/");
-    let turbulence = file.contains("/resvg-0.50.0/")
-        && file.ends_with("/src/filter/turbulence.rs")
-        && message.starts_with("attempt to ")
-        && message.ends_with(" with overflow");
-    turbulence
-}
-
-/// Makes the driver's panic hook skip the known upstream debug-only panics
-/// ([`is_known_upstream_panic`]), so they unwind into the library's
-/// guard instead of aborting the fuzz target. Call it from inside the target's
-/// closure: the drivers install their aborting hook before the first
-/// input, and this wraps whichever hook is current, once.
-pub fn excuse_known_upstream_panics() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let aborting = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let excused = info.location().is_some_and(|location| {
-                is_known_upstream_panic(location.file(), info.payload_as_str().unwrap_or(""))
-            });
-            if !excused {
-                aborting(info);
-            }
-        }));
-    });
 }
 
 /// How long one `svg` input may take in a fuzz target.
@@ -568,7 +515,6 @@ pub const SVG_FUZZ_TIME: std::time::Duration = std::time::Duration::from_secs(5)
 /// slow input means the estimate missed a cost (or a parse step is
 /// superlinear) and panics here instead of passing as a mere refusal.
 pub fn svg_target(data: &[u8]) {
-    excuse_known_upstream_panics();
     if data.len() > 64 * 1024 {
         return;
     }
@@ -624,7 +570,7 @@ pub fn svg_depth(source: &str) -> Result<u32, String> {
     };
     let document =
         roxmltree::Document::parse_with_options(source, options).map_err(|err| err.to_string())?;
-    crate::svg_bounds::bounds(&document, crate::svg_bounds::MAX_REFERENCES, u64::MAX)
+    crate::svg_bounds::bounds(&document, crate::svg_bounds::MAX_REFERENCES)
         .map(|bounds| bounds.depth)
         .map_err(|err| err.to_string())
 }
@@ -637,7 +583,7 @@ pub fn svg_work(source: &str) -> Result<(u32, u64), String> {
     };
     let document =
         roxmltree::Document::parse_with_options(source, options).map_err(|err| err.to_string())?;
-    crate::svg_bounds::bounds(&document, crate::svg_bounds::MAX_REFERENCES, u64::MAX)
+    crate::svg_bounds::bounds(&document, crate::svg_bounds::MAX_REFERENCES)
         .map(|bounds| (bounds.depth, bounds.work))
         .map_err(|err| err.to_string())
 }
@@ -645,7 +591,7 @@ pub fn svg_work(source: &str) -> Result<(u32, u64), String> {
 /// usvg's conversion with the work bound off (the depth bound stays): for
 /// calibrating the bound against real conversion time.
 pub fn svg_convert_unbounded(source: &[u8]) -> Result<SvgTree, String> {
-    crate::svg::parse_within(source, &crate::svg::SvgFonts::default(), u64::MAX)
+    crate::svg::parse_within(source, u64::MAX)
         .map(SvgTree)
         .map_err(|err| err.to_string())
 }
@@ -670,42 +616,26 @@ pub fn svg_prepare_inline(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod svg_tests {
-    /// The harness draws `<text>` with a font, so the fuzzer reaches text's
-    /// paths (bug_0221): bug_0204's pattern on text is refused, which
-    /// without a font drew nothing and passed.
+    fn svg(body: &str) -> String {
+        format!("<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>{body}</svg>")
+    }
+
+    /// Text is outside the icon subset (ADR 0051): the harness reaches its
+    /// refusal, never a text path (bug_0204's pattern on text, bug_0221).
     #[test]
-    fn the_harness_draws_text() {
-        let svg = |body: &str| {
-            format!(
-                r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">{body}</svg>"#
-            )
-        };
+    fn the_harness_refuses_text() {
         let label = super::svg(svg("<text y='40' font-size='32'>A</text>").as_bytes());
-        assert!(label.is_ok(), "{label:?}");
-        let pattern = super::svg(
-            svg(
-                "<pattern id='p' width='1e4' height='1e4' patternUnits='userSpaceOnUse'>\
-                 <rect width='1' height='1'/></pattern>\
-                 <text y='8' font-size='8' fill='url(#p)' transform='scale(100)'>A</text>",
-            )
-            .as_bytes(),
-        );
         assert!(
-            pattern.as_ref().is_err_and(|err| err.contains("expensive")),
-            "{pattern:?}"
+            label.as_ref().is_err_and(|err| err.contains("subset")),
+            "{label:?}"
         );
     }
 
-    /// The inputs behind U20 (by `baseFrequency`), U45 and U49 still panic
-    /// with the messages `is_known_upstream_panic` excuses (U20 and U45 in
-    /// debug builds). When upstream fixes one, this fails: drop its
-    /// excuse. U24's input is
-    /// refused before tiny-skia draws it, so its panic is never excused.
+    /// The inputs behind U24 and the CSS panics (U45, U49) are refused
+    /// before the code that panicked on them runs; the input behind U20
+    /// (an `feTurbulence` filter) is outside the subset.
     #[test]
-    fn known_upstream_panics_still_panic_as_excused() {
-        let svg = |body: &str| {
-            format!("<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>{body}</svg>")
-        };
+    fn known_upstream_panics_are_refused() {
         // One pair: enough to pass the extent, under the cost estimate (which
         // counts the rows each edge walks, bug_0230).
         let arcs = "A1e9 1e9 0 1 1 1e9 0 A1e9 1e9 0 1 1 0 0 ";
@@ -715,16 +645,8 @@ mod svg_tests {
         let u20 = svg(
             "<filter id='f'><feTurbulence baseFrequency='1e20'/></filter><rect width='64' height='64' filter='url(#f)'/>",
         );
-        let outcome = super::svg(u20.as_bytes());
-        if cfg!(debug_assertions) {
-            let err = outcome.expect_err("U20");
-            assert!(err.contains("with overflow"), "U20: {err}");
-            let panic = err.trim_start_matches("the SVG renderer panicked: ");
-            assert!(
-                super::is_known_upstream_panic("/r/resvg-0.50.0/src/filter/turbulence.rs", panic),
-                "U20: {panic}"
-            );
-        }
+        let err = super::svg(u20.as_bytes()).expect_err("U20");
+        assert!(err.contains("subset"), "U20: {err}");
         // bevy_markup's CSS parser (ADR 0048) refuses the inputs that
         // panicked lightningcss (U45, U49): no panic, the declaration drops.
         for css in [
@@ -733,22 +655,5 @@ mod svg_tests {
         ] {
             assert!(super::cascade(css).is_ok(), "{css}");
         }
-        // Anything else still aborts the fuzz target.
-        assert!(!super::is_known_upstream_panic(
-            "/r/tiny-skia-0.12.0/src/scan/path.rs",
-            "index out of bounds"
-        ));
-        assert!(!super::is_known_upstream_panic(
-            "/r/usvg-0.50.0/src/parser/filter.rs",
-            "called `Option::unwrap()` on a `None` value"
-        ));
-        assert!(!super::is_known_upstream_panic(
-            "/r/tiny-skia-0.12.0/src/scan/path.rs",
-            "assertion failed: edges[curr_idx].last_y >= curr_y as i32"
-        ));
-        assert!(!super::is_known_upstream_panic(
-            "/r/resvg-0.51.0/src/filter/turbulence.rs",
-            "attempt to add with overflow"
-        ));
     }
 }

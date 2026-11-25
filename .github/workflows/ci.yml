@@ -64,8 +64,6 @@ jobs:
       # it, but dead-code warnings show only without the harness).
       - name: Library with svg
         run: cargo check --lib --features svg
-      - name: Library with svg-text
-        run: cargo check --lib --features svg-text
       - name: All targets
         run: cargo build --all-targets
       - name: Tests
@@ -76,12 +74,10 @@ jobs:
       # and the headless SVG vectors.
       - name: Tests with svg
         run: cargo test --features svg --lib --test html_ui --test content_lint
-      - name: Tests with svg-text
-        run: cargo test --features svg-text --lib --test html_ui
       # The hot-reload and demo dev-tools examples are gated behind those
       # features and skipped by --all-targets.
       - name: Gated examples compile
-        run: cargo check --examples --features hot-reload,dev-tools,text-input,svg-text
+        run: cargo check --examples --features hot-reload,dev-tools,text-input,svg
       # Example `#[cfg(test)]` modules run under plain `cargo test` only
       # for examples marked `test = true` in Cargo.toml (grid-names, which
       # also runs the shared input module's tests). hot-reload needs its

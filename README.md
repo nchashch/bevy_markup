@@ -268,7 +268,7 @@ cargo run --example world        # styled, localized nameplates over 3D units (H
 cargo run --example canvas       # <canvas>: a live 3D portrait in a character sheet (HtmlCanvases)
 cargo run --example inline       # inline styling, text decoration, images, elliptical corners, position: fixed
 cargo run --example markdown     # localized Markdown documents
-cargo run --example svg --features svg-text   # inline <svg> (currentColor), <img> SVGs, SVG frames, text, a refused file
+cargo run --example svg --features svg        # inline <svg> (currentColor), <img> SVGs, SVG frames, gradients, a refused file
 cargo run --example demo         # themes, languages, scrolling, 9-slice frames, DOM outlines
 ```
 
@@ -316,8 +316,7 @@ remain your app's choice. Optional features:
 |---|---|
 | `text-input` | `<input type="text">` renders Bevy's editable-text widget (fields, form values) |
 | `system_fonts` | the OS's installed fonts join the font fallback chain |
-| `svg` | `.svg` files load as images (`<img src>`, `border-image`/`background-image: url()`) and inline `<svg>` draws (`currentColor` from CSS), on the CPU; untrusted files are bounded (no external resources, a size cap, a depth and render-cost limit) |
-| `svg-text` | `svg` plus SVG `<text>`, drawn with the fonts registered in `FontFamilies` (font files or system families) |
+| `svg` | `.svg` files load as images (`<img src>`, `border-image`/`background-image: url()`) and inline `<svg>` draws (`currentColor` from CSS), on the CPU, in the icon subset (shapes, paths, groups, `use`, gradients, clip paths; ADR 0051); untrusted files are bounded (no external resources, a size cap, a depth and render-cost limit) |
 | `dev-tools` | examples-only: the localhost agent/QA surface (BRP + MCP) |
 
 ### Bevy compatibility

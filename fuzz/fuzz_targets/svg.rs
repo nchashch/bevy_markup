@@ -11,15 +11,11 @@
 //! step is superlinear) and fails here instead of passing as a mere
 //! refusal.
 //!
-//! One upstream panic only happens in debug builds (cargo-fuzz builds
-//! with debug assertions): resvg's turbulence overflow (UPSTREAM U20). The
-//! loader catches it as an error, and release builds don't panic there, so
-//! it isn't a finding: the panic hook lets it unwind into the loader's
-//! `catch_unwind` instead of aborting
-//! (`bevy_markup::fuzz::excuse_known_upstream_panics`). Every other panic
-//! still aborts, tiny-skia's far-off-canvas ones (U24, U27, U28) included:
-//! they panic in release too, and the loader's extent check refuses their
-//! inputs, so one reaching tiny-skia is a miss.
+//! Every panic aborts, tiny-skia's far-off-canvas ones (U24, U27, U28)
+//! included: they panic in release too, and the loader's extent check
+//! refuses their inputs, so one reaching tiny-skia is a miss. (resvg's
+//! turbulence overflow, U20, was excused until ADR 0051 put filters
+//! outside the subset.)
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

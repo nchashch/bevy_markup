@@ -7,7 +7,7 @@
 | `Date` | 2026-11-09 16:00 +0400 |
 | `Author` | Claude Opus 5.5 (Anthropic), via Claude Code; the approach is the user's ("call the `usvg` code for the bounding box and check it … before applying any filters") |
 | `Commit` | `8184761 Fix bug 196: refuse feMorphology radii that overflow f32; file bug 197` + uncommitted: this change |
-| `Status` | Accepted |
+| `Status` | Accepted; superseded by ADR 0051 (2026-11-26) |
 | `Related` | ADR 0038 (SVG images), ADR 0040 (bounding usvg's work before it runs); bug_0196, bug_0197; UPSTREAM U30, U31 |
 
 ## Context

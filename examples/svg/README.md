@@ -1,14 +1,14 @@
 # svg
 
-![The SVG page: a toolbar of three icon buttons (theme, scale, language), and five cards: gold inline star icons at four sizes, the same star.svg as images at 16 to 96 px, a card on a tiled SVG background, a "bevy SVG" badge drawn from SVG text, and an empty "Refused" card; the cards are framed by an SVG border-image](../screenshots/svg.png)
+![The SVG page: a toolbar of three icon buttons (theme, scale, language), and five cards: gold inline star icons at four sizes, the same star.svg as images at 16 to 96 px, a card on a tiled SVG background, a gradient badge with clipped circles, and an empty "Refused" card; the cards are framed by an SVG border-image](../screenshots/svg.png)
 
 SVG in bevy_markup (ADR 0038): inline `<svg>`, `<img src="….svg">`, SVG
-`border-image` and `background-image`, SVG `<text>`, and a hostile SVG
-that's refused.
+`border-image` and `background-image`, gradients and clip paths, and a
+hostile SVG that's refused. SVGs are drawn in the icon subset (ADR 0051):
+shapes, paths, groups, `use`, gradients and clip paths.
 
 ```sh
 cargo run --example svg --features svg
-cargo run --example svg --features svg-text   # with the text badge
 ```
 
 ## What you see
@@ -22,10 +22,8 @@ cargo run --example svg --features svg-text   # with the text badge
   96 px star is as sharp as the 16 px one.
 - **CSS images:** the cards are framed by `frame.svg` as a `border-image`
   (9-slice), and one card sits on a tiled `tile.svg` background.
-- **Text:** `badge.svg` contains SVG `<text>`. With `svg-text` it's
-  drawn with the fonts registered with bevy_markup. The example registers
-  only system font families, which SVG text can't use, so the badge falls
-  back to Bevy's default font. Without the feature, the text is blank.
+- **Gradients and clipping:** `badge.svg` is a pill filled with a linear
+  gradient, with circles clipped to its outline by a `clipPath`.
 - **Refused:** `refused.svg` is a `<use>` cycle that would overflow the
   SVG parser's stack. It's refused before parsing; nothing shows, and the
   page is unharmed.

@@ -92,6 +92,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     image fails with an error, instead of a renderer panic.
 
 ### Changed
+- **Breaking:** SVGs are drawn in an icon subset: shapes, paths, groups,
+  `defs`/`symbol`/`use`, gradients and clip paths, with their presentation
+  attributes and `style` declarations. An SVG with a filter (or a `filter`
+  property), mask, pattern, marker, `<text>`, `<style>` sheet or `<image>`
+  fails to load with an error naming it. Every document of seven popular
+  icon and emoji sets fits the subset and draws as before.
 - **Breaking:** templates are MiniJinja (Jinja2) instead of Tera 2
   (ADR 0049). Every render runs on a fuel budget instead of a load-time
   analysis, so templates the old check refused by shape (loops over context
@@ -147,6 +153,9 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   Fluent files that would crash it (ADR 0045).
 
 ### Removed
+- **Breaking:** the `svg-text` cargo feature (SVG `<text>` is outside the
+  subset): enable `svg` instead, and put text over the image in HTML or
+  convert it to paths.
 - **Breaking:** `bevy_markup::tera_check` (the load-time template check)
   and the `tera` re-export (see Changed).
 - **Breaking:** the `bevy_markup::lightningcss` re-export and

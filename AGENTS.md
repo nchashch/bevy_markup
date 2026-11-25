@@ -67,8 +67,7 @@ Re-exported crates (their types appear in the API): `minijinja`, `tl` (the
 `fluent`. Cargo features: `system_fonts` (Bevy's
 `system_font_discovery`), `text-input` (the editable-text widget),
 `hot-reload` (the file watcher), `svg` (`.svg` images via usvg/resvg,
-ADR 0038), `svg-text` (`svg` + SVG `<text>`; `fuzzing` implies it, and the harness draws
-text with Bevy's default font, bug_0221), `fuzzing` (the fuzz harness),
+ADR 0038, in the icon subset of ADR 0051; `fuzzing` implies it), `fuzzing` (the fuzz harness),
 `dev-tools` (the examples' QA surface), and `hotpath` / `hotpath-alloc` /
 `hotpath-prometheus` / `hotpath-cloud` (hotpath profiling: `#[hotpath::measure]`
 on the pipeline systems and hot internals, `#[hotpath::main]` on every
@@ -169,87 +168,45 @@ src/
                    frame), focus pseudo-state, press-to-focus, activation (InputFocus-based;
                    a submit button's activation submits its form)
   nine_slice.rs    NineSlice asset + loader, NineSliceFrame
-  svg_fonts.rs     (`svg-text`, ADR 0038 §6) `SvgFontSet`: fontdb loaded with the
-                   faces of `FontFamilies` + Bevy's default font — `FontSource::Handle`
-                   faces from the `Font` asset, family sources (system fonts) from
-                   Bevy's `FontCx` collection (`system_face`: the family's face closest
-                   to the requested style, then weight; fontique's types used through
-                   inference, no fontique dependency); a usvg
-                   `FontResolver` maps `font-family` like the page CSS (names any case,
-                   `set_generic`, `FontFaces::face` fallback, unknown → default font);
-                   `sync_svg_fonts` (PostUpdate, before Render) rebuilds it when the
-                   signature (families × faces: handle + loaded, or collection data id +
-                   index) changes, then reloads `.svg`
-                   paths with `<text>` (`note_text`) and `set_changed`s `FontFamilies` so
-                   inline text (keyed by the set's generation) is re-collected; the next run
-                   sees the same signature (no loop)
-  svg_bounds.rs    (`svg` feature, ADR 0040) `bounds`: one graph over the document's elements
-                   (parent → child, url(#…)/href references, `<style>` rules matched by simplecss
-                   like usvg, and — added by a topological inheritance walk — shape/text →
-                   inherited paint server or marker, so a pattern inheriting itself is a cycle,
-                   bug_0191). First `check_values` refuses values usvg would panic on
-                   (`feTurbulence` `baseFrequency` not finite as `f32`, U26, bug_0192;
-                   `feConvolveMatrix` `order` sides multiplying past `u32`, U29,
-                   bug_0195; `feMorphology` `radius` not finite, U30, bug_0196:
-                   `OutOfRange`). `Bounds::boxes` (a filter/mask/pattern element or a
-                   `filter` declaration) and `Bounds::regions` (largest region/subregion
-                   `x`/`y`/`width`/`height` or morphology radius, px, ≥ 2) feed
-                   `svg_boxes`. `depth`: longest weighted path, ≤ `MAX_DEPTH` 256 units ≈ 800 KB
+  svg_bounds.rs    (`svg` feature, ADR 0040; the icon subset, ADR 0051) `bounds`: one graph over
+                   the document's elements (parent → child, url(#…)/href references in attributes
+                   and `style` declarations, and — added by a topological inheritance walk — shape →
+                   inherited gradient, so a gradient whose content inherits it is a cycle,
+                   bug_0191). `depth`: longest weighted path, ≤ `MAX_DEPTH` 256 units ≈ 800 KB
                    debug stack (usvg's converter overflows a 2 MB thread on a few KB of
                    references, UPSTREAM U17). `work`: Σ instances × own work, instances = paths
-                   from the root with edge multiplicities (`<use>` copies 1, marker = the shape's
-                   segments + 2 — per vertex, bug_0189; paint server 0 — converted once, a
-                   shape's own work gains 2 × the server's content); own work = 16 per element,
-                   1 per stop, 4 per path segment, (arc cubics)²/64 per path arc (svgtypes'
-                   quadratic drain), 16 per text byte, 256 per `<text>` (bug_0248), a `<text>`'s characters² ÷ 32 + spans ×
-                   characters × 2 (usvg's layout, U41, U43, bug_0232); plus the `<style>`
-                   sheets, charged before simplecss runs: its parse by `style_scan_bytes`
-                   (the offsets where it raises errors, U42) and its matching by
-                   `match_work` — per rule, simplecss's worst-case calls Σ_{j≤k} C(depth, j)
-                   for k descendant combinators (`descendant_calls`, U40) over the depth
-                   histogram × (1 + 2 per class/id/attribute/pseudo test), ÷ 4 (usvg, the
-                   model and the box pass each match; bug_0207, bug_0229, bug_0231). Segments
-                   are counted, never generated:
+                   from the root with edge multiplicities (`<use>` copies 1; gradient 0 —
+                   converted once, a shape's own work gains 2 × its stops); own work = 16 per
+                   element, 1 per stop, 4 per path segment, (arc cubics)²/64 per path arc
+                   (svgtypes' quadratic drain). Segments are counted, never generated:
                    `path_segments` walks svgtypes' raw `PathParser` tracking the point like the
                    simplifier, each arc's cubics by kurbo's arithmetic (bug_0190, U22); shape
                    radii resolve like usvg's `convert_length` (`em` against the inherited
                    font-size, `%` against the inherited viewport). One unit ≈ 60 ns of release
                    conversion (ADR 0040 §3)
-  svg_boxes.rs     (`svg` feature, ADR 0042) `largest_box`: usvg's own object bounding
-                   boxes, from a first conversion of a rewritten copy that reaches no
-                   `bbox_transform` (CSS inlined into `style` in usvg's order, each
-                   `style` led by `!important` filter/mask/clip-path none, fill black,
-                   stroke none; `defs`/`mask`/`clipPath`/`pattern` renamed to `g` so their
-                   content converts in place); run only when `Bounds::boxes`
-  svg.rs           (`svg` feature, ADR 0038) `.svg` → `Image` loader: `parse`/`parse_within`
-                   (roxmltree once, as usvg configures it → `svg_bounds::bounds`: depth ≤ 256,
-                   work ≤ `MAX_SVG_WORK` 2²³ (`Limits::work`; the fuzz harness uses 1/16) →
-                   → if `boxes`, `check_regions` over `svg_boxes::largest_box` × `regions`:
-                   `RegionOverflow` when tiny-skia-path's `bbox_transform` could
-                   overflow, U31, bug_0197 → `usvg::Tree::from_xmltree` on the same
-                   document), refusing `<image href>` resolver (usvg's default reads any file,
-                   U19), `raster_size` (side cap before allocating: tiny-skia aborts on a failed
-                   allocation), `estimate_cost` (resvg's layer/filter/mask/clip model, early exit
-                   at `MAX_SVG_COST`; calibrated in docs/agents/performance/adr-0038-probe.md §7;
-                   text walks its flattened glyph paths, bug_0204/0206; a dashed stroke is
+  svg.rs           (`svg` feature, ADR 0038; the icon subset, ADR 0051) `.svg` → `Image` loader:
+                   `parse`/`parse_within` (roxmltree once, as usvg configures it →
+                   `check_subset`: an SVG-namespace element outside `ALLOWED_ELEMENTS` (shapes,
+                   paths, `g`/`defs`/`symbol`/`use`/`a`, gradients and stops, `clipPath`,
+                   `title`/`desc`/`metadata`) or a `filter` property other than `none` (attribute
+                   or `style`) → `Unsupported` → `svg_bounds::bounds`: depth ≤ 256, work ≤
+                   `MAX_SVG_WORK` 2²³ (`Limits::work`; the fuzz harness uses 1/16) →
+                   `usvg::Tree::from_xmltree` on the same document → `check_tree`: a filter,
+                   mask, pattern, text or image node that got past refuses too), refusing
+                   `<image href>` resolver (usvg's default reads any file, U19), `raster_size`
+                   (side cap before allocating: tiny-skia aborts on a failed allocation),
+                   `estimate_cost` (resvg's layer/clip model, early exit at `MAX_SVG_COST`;
+                   calibrated in docs/agents/performance/adr-0038-probe.md §7; a dashed stroke is
                    charged `DASH_COST` per dash, `dash_count` ≤ tiny-skia's 10⁶, bug_0205;
                    `CostWalk::measure` takes each path's control polygon in device px — the
                    rows its edges walk (fill once, stroke outline twice) and every stroke
                    contour (subpath or dash) with its caps, bug_0230),
                    `check_extent` (before drawing: each path's control bounds, strokes padded,
-                   through every transform resvg applies — groups, clips, masks, `feImage`,
-                   pattern tiles, text outlines — must stay within `MAX_SVG_EXTENT` 2¹⁹ px of
-                   the image, else `TooFarOut`: tiny-skia panics far off the canvas in every
-                   build, U24/U27/U28, bug_0194; the same walk scales each blur's deviation
-                   as resvg does, ≤ `MAX_SVG_BLUR` 2²⁰ px, else `TooBlurred`: resvg's box blur
-                   overflows `i32`, U32, bug_0198; and maps each filter region, primitive
-                   subregion and `feOffset`/`feDropShadow` offset to pixels, ≤
-                   `MAX_SVG_FILTER_REGION` 2²⁴ px, else `TooFarOut`: tiny-skia-path's
-                   `to_int_rect` unwraps past `i32`, U35, bug_0201; the cost estimate
-                   charges each pattern tile at its drawn size, U36, bug_0200),
+                   through every transform resvg applies — groups and clip paths — must stay
+                   within `MAX_SVG_EXTENT` 2¹⁹ px of the image, else `TooFarOut`: tiny-skia
+                   panics far off the canvas in every build, U24/U27/U28, bug_0194),
                    straight-alpha `Rgba8UnormSrgb` output; `guarded` turns a usvg/resvg panic
-                   into an error (resvg #1185, U20: a panicked AsyncCompute task re-panics
-                   its poller). `<img>` redraw (ADR 0038 §3): `SvgDocument` (own typed loader,
+                   into an error (a panicked AsyncCompute task re-panics its poller). `<img>` redraw (ADR 0038 §3): `SvgDocument` (own typed loader,
                    not a label), `SvgRaster` on the span (source, intrinsic, shown raster,
                    one-frame `wanted` hysteresis), `SvgRasters` cache keyed (document, px)
                    pruned each frame; `rasterize_svg_images` after `size_images`, before
@@ -415,11 +372,11 @@ examples/
                    window entity Bevy's ray picking needs, UPSTREAM U33) turn the hero /
                    change the armor, Q / E or LB / RB turn it; "Hide the portrait" → `shown` false →
                    the camera's `is_active` off; Space / Y language
-  svg/             ADR 0038 (`--features svg`, `svg-text` for the badge): inline `<svg>` icons
+  svg/             ADR 0038 (`--features svg`): inline `<svg>` icons
                    (toolbar buttons and a row of sizes; `currentColor` from the cascade, so
                    `:hover` and the theme's context `var()`s recolor them), `star.svg` as
                    `<img>` at 16–96 px (display-size redraws), `frame.svg` as `border-image`,
-                   `tile.svg` as tiled `background-image`, `badge.svg` with SVG `<text>`,
+                   `tile.svg` as tiled `background-image`, `badge.svg` (gradient + clip path),
                    `refused.svg` (a `<use>` cycle, refused); T / X theme, S / B `UiScale`
                    1/1.5/2×, L / Y language
   testbench/       main.rs + scenarios.rs: an interactive torture bench (scenario list,
@@ -564,10 +521,9 @@ scripts/
 fuzz/
   fuzz_targets/      cargo-fuzz targets (`html`, `css`, `ftl`, `svg`) over `bevy_markup::fuzz`
                      (every driver's `svg` target is `fuzz::svg_target`: it asserts each
-                     input finishes in 5 s, and `fuzz::excuse_known_upstream_panics`
-                     lets the debug-only upstream panic U20 unwind into `svg::guarded` —
-                     `fuzz::is_known_upstream_panic`, pinned to resvg 0.50.0 —
-                     every other panic aborts, tiny-skia's included)
+                     input finishes in 5 s; every panic aborts, tiny-skia's included —
+                     resvg's turbulence overflow, U20, was excused until ADR 0051 refused
+                     filters)
   seeds/<target>/    committed minimized seed corpora (read-only extra input to every
                      cargo-fuzz run; copied into honggfuzz's working corpus, and `svg`'s
                      into fuzzcheck's and — through the `seed_svg` test — test-fuzz's)

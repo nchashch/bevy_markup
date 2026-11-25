@@ -2,13 +2,12 @@
 //! `currentColor` follows the CSS color (the theme button and `:hover`
 //! recolor them), one `star.svg` as an `<img>` at four CSS sizes (each
 //! drawn again at its displayed pixels), an SVG `border-image` frame and a
-//! tiled SVG `background-image`, an SVG with `<text>` (drawn with the
-//! `svg-text` feature), and a hostile SVG (a `<use>` cycle) that's refused
+//! tiled SVG `background-image`, a badge drawn with a gradient and a clip
+//! path, and a hostile SVG (a `<use>` cycle) that's refused
 //! while the page stays intact. The scale button steps `UiScale` (1×,
 //! 1.5×, 2×): every SVG is drawn again at the new pixel density.
 //!
-//! `cargo run --example svg --features svg` (add `svg-text` for the text
-//! badge). Click the buttons, or arrows / D-pad + Enter / A; T / X theme,
+//! `cargo run --example svg --features svg`. Click the buttons, or arrows / D-pad + Enter / A; T / X theme,
 //! S / B scale, L / Y language.
 
 use bevy::prelude::*;

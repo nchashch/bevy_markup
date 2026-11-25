@@ -58,7 +58,7 @@ as `[INFERENCE]`.
 | [0039](./0039-css-pre-scan-walks-cssparser-tokens.md) | The CSS nesting pre-scan walks cssparser's tokens | Accepted |
 | [0040](./0040-svg-conversion-work-bound.md) | Bound usvg's conversion work before it runs | Accepted |
 | [0041](./0041-canvas-shows-app-render-targets.md) | `<canvas>` shows a render target the app registers | Accepted |
-| [0042](./0042-svg-boxes-measured-by-a-first-usvg-pass.md) | usvg's object bounding boxes are measured by a first conversion | Accepted |
+| [0042](./0042-svg-boxes-measured-by-a-first-usvg-pass.md) | usvg's object bounding boxes are measured by a first conversion | Superseded by [0051](./0051-svg-icon-subset.md) |
 | [0043](./0043-canvas-picture-child.md) | A canvas shows its source on a child node | Accepted |
 | [0044](./0044-every-input-is-untrusted.md) | Every input is untrusted; templates are bounded by a static check at load | Accepted |
 | [0045](./0045-ftl-checked-at-load.md) | Fluent resources are checked at load; the fluent-syntax fork goes | Accepted |
@@ -68,5 +68,6 @@ as `[INFERENCE]`.
 | [0048](./0048-own-css-value-parsing-on-cssparser.md) | CSS is parsed on cssparser by bevy_markup; lightningcss is removed | Accepted |
 | [0049](./0049-minijinja-with-fuel-instead-of-tera.md) | Templates on MiniJinja with fuel instead of Tera and a static check | Accepted |
 | [0050](./0050-own-selector-engine.md) | Selectors are parsed and matched by bevy_markup; parcel_selectors is removed | Accepted |
+| [0051](./0051-svg-icon-subset.md) | SVG is drawn in an icon subset; filters, masks, patterns, markers, text and style sheets are refused | Accepted |
 
 Add new records to this index in the same commit that adds the file.
