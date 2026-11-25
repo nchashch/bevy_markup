@@ -139,7 +139,7 @@ pub(crate) struct Bounds {
 /// reference cycle (direct, or through an inherited paint server or
 /// marker) is an error: usvg expands some cycles until its depth limit,
 /// past the stack, and recurses through others without end.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn bounds(
     document: &roxmltree::Document,
     max_references: usize,

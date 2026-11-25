@@ -73,7 +73,7 @@ fn register_generated_source(app: &mut App) {
     );
 }
 
-#[hotpath::main]
+#[cfg_attr(feature = "hotpath", hotpath::main)]
 fn main() {
     harness::run(
         harness::ExampleWindow {
@@ -496,7 +496,7 @@ fn template_context(value: &Value) -> TemplateContext {
 }
 
 /// Spawns the scenario's workload UIs into the stage.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 #[allow(clippy::too_many_arguments)]
 fn start_scenario(
     mut bench: ResMut<Bench>,
@@ -632,7 +632,7 @@ fn start_scenario(
 /// `--scroll`: advance the main workload's scroll position every frame
 /// (bouncing over the content's full range), so the windowed band
 /// moves — the scroll-frame cost is the measured quantity (ADR 0031).
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn scroll_workloads(
     bench: Res<Bench>,
     frames: Res<FrameCount>,
@@ -693,7 +693,7 @@ fn scroll_workloads(
 }
 
 /// One frame of the scenario's churn, written into the workloads.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn churn(
     mut bench: ResMut<Bench>,
     frames: Res<FrameCount>,
@@ -706,9 +706,13 @@ fn churn(
     let changed = scenarios::churn(id, &mut bench.model);
     let bench = &*bench;
     let update = |role: Role, context: &mut TemplateContext| {
-        *context = hotpath::measure_block!("testbench::serialize_context", {
+        #[cfg(feature = "hotpath")]
+        let serialized = hotpath::measure_block!("testbench::serialize_context", {
             template_context(&scenarios::context(id, &bench.model, role))
         });
+        #[cfg(not(feature = "hotpath"))]
+        let serialized = template_context(&scenarios::context(id, &bench.model, role));
+        *context = serialized;
     };
     // The scaling scenario churns one of its UIs per phase, the other
     // hidden (`display: none` skips its layout, which would otherwise
@@ -803,7 +807,7 @@ type SignatureParts<'a> = (
 /// spacing, and backgrounds, in document order. Two UIs of the same state
 /// must agree — a dump that only held tags and backgrounds missed most
 /// of what selectors style.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn signature(root: Entity, tree: &Query<&Children>, parts: &Query<SignatureParts>) -> Vec<String> {
     tree.iter_descendants_depth_first(root)
         .filter_map(|entity| signature_line(entity, parts))
@@ -886,7 +890,7 @@ fn row_signatures(
 
 /// The correctness scenarios: every 20 frames, hold the churn, let the
 /// UIs settle, and compare what they built ([`TwinKind`]).
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 #[allow(clippy::too_many_arguments)]
 fn compare_twins(
     mut bench: ResMut<Bench>,
@@ -1092,7 +1096,7 @@ fn element_text(
 }
 
 /// Evaluates the scenario's checks.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 #[allow(clippy::too_many_arguments)]
 fn check_scenario(
     bench: Res<Bench>,
@@ -1699,7 +1703,7 @@ fn update_stats(
 }
 
 /// Writes the numbers and the checks into the shell, a few times a second.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 #[allow(clippy::too_many_arguments)]
 fn show_shell(
     time: Res<Time>,

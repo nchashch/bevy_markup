@@ -511,7 +511,7 @@ fn write(dir: &Dir, prefix: &str, files: &[(&str, String)]) -> Vec<String> {
 
 /// Generates `scenario`'s assets under a fresh `prefix` (a new path per
 /// start, so every start loads anew) and returns its plan.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn plan(scenario: &str, dir: &Dir, prefix: &str) -> Plan {
     let main = |template: &str, sheet: &str, role: Role| Spec {
         template: template.to_owned(),
@@ -1149,7 +1149,7 @@ pub enum Changed {
 }
 
 /// One frame of `scenario`'s churn on the model.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn churn(scenario: &str, model: &mut Model) -> Changed {
     model.tick += 1;
     let len = model.rows.len();
@@ -1290,7 +1290,7 @@ pub fn churn(scenario: &str, model: &mut Model) -> Changed {
 /// The context of a model-driven workload UI. Only the restyle storm
 /// carries the `--accent` var (a per-frame `var()` change restyles every
 /// UI whose sheet reads it).
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn context(scenario: &str, model: &Model, role: Role) -> Value {
     match role {
         Role::Card(index) => {

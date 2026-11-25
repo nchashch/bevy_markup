@@ -71,7 +71,8 @@ text with Bevy's default font, bug_0221), `fuzzing` (the fuzz harness),
 `dev-tools` (the examples' QA surface), and `hotpath` / `hotpath-alloc` /
 `hotpath-prometheus` / `hotpath-cloud` (hotpath profiling: `#[hotpath::measure]`
 on the pipeline systems and hot internals, `#[hotpath::main]` on every
-example's `main`, no-ops without the feature; regression policy in
+example's `main`, all as `cfg_attr(feature = "hotpath", …)`: without a
+`hotpath*` feature hotpath isn't a dependency at all; regression policy in
 `hotpath/policy.toml`; `cargo run --example demo --features hotpath --
 --no-render --exit-after 300` prints a report).
 

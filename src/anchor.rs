@@ -153,7 +153,7 @@ fn overflow(side: AnchorPlacement, rect: Rect, viewport: Vec2) -> f32 {
 /// rects: the overlay's laid-out position (and its descendants') is
 /// corrected in place, so it renders, clips and picks beside the element
 /// this frame, and its insets are written so the next layout agrees.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn place_anchored(
     mut overlays: Query<Overlay>,
     mut layout: ParamSet<(Query<AnchorElement>, Query<&mut UiGlobalTransform>)>,
@@ -376,7 +376,7 @@ type WorldOverlay = (
 
 /// Places every [`HtmlWorldAnchor`]ed root over its target, or despawns it
 /// with its target.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn place_world_anchored(
     mut overlays: Query<WorldOverlay>,
     targets: Query<(&GlobalTransform, Option<&InheritedVisibility>)>,

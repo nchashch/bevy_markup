@@ -276,7 +276,7 @@ impl HtmlElements<'_, '_> {
     }
 }
 
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn render_templates(
     mut events: MessageReader<AssetEvent<HtmlTemplate>>,
     templates: Res<Assets<HtmlTemplate>>,

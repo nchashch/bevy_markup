@@ -42,7 +42,7 @@ const OPTIONS: Options = Options::ENABLE_TABLES
 /// the output is one `<p>` per paragraph etc., which the walk reads
 /// transparently (a `<p>` inside a translated block's fragment becomes
 /// plain runs).
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn to_html(source: &str) -> String {
     convert(source, false)
 }
@@ -53,7 +53,7 @@ pub(crate) fn to_html(source: &str) -> String {
 /// conversion runs once at load and the per-frame path is Tera-only.
 /// Text inside code blocks and code spans is Tera-literal: it stays
 /// escaped text, like any Markdown code content.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn to_html_template(source: &str) -> String {
     convert(&separate_statements(&dedent_blocks(source).0), true)
 }

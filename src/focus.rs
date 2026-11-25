@@ -476,7 +476,7 @@ type ScopeRoot = (
 /// on the active [`HtmlModal`] only, so Bevy's tab navigation (ours, or
 /// its own `TabNavigationPlugin`) stays inside it.
 #[allow(clippy::too_many_arguments)] // a Bevy system
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn sync_navigation(
     roots_in_scope: Query<ScopeRoot, (With<HtmlUi>, Without<HtmlNoFocus>)>,
     all_roots: Query<RootTabGroup, With<HtmlUi>>,
@@ -570,7 +570,7 @@ fn eligible(
 /// is left alone; focus on something that isn't UI — Bevy's input dispatch
 /// focuses the primary window at startup — counts as none (bug_0022). With
 /// nothing focusable in scope, focus on a markup element is cleared.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn repair_focus(
     mut focus: ResMut<InputFocus>,
     memory: Res<FocusMemory>,

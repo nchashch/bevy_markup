@@ -37,7 +37,7 @@ use input::Hotkeys;
 #[path = "../shared/harness.rs"]
 mod harness;
 
-#[hotpath::main]
+#[cfg_attr(feature = "hotpath", hotpath::main)]
 fn main() {
     harness::run(
         harness::ExampleWindow {

@@ -100,7 +100,7 @@ fn side_name(side: AnchorPlacement) -> &'static str {
 /// (the nearest one per hovered node), keeps open ones up to date, and
 /// despawns the rest.
 #[allow(clippy::too_many_arguments)]
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn show_tooltips(
     config: Option<Res<HtmlTooltips>>,
     hover_map: Option<Res<HoverMap>>,

@@ -1299,7 +1299,7 @@ impl InlineStyle {
 }
 
 /// `tag`'s `style` attribute, if it has declarations.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn inline_style(tag: &tl::HTMLTag) -> Option<InlineStyle> {
     let text =
         crate::template::decode_attribute(tag.attributes().get("style").flatten()?.as_utf8_str());
@@ -1580,7 +1580,7 @@ impl<'a> HtmlStyles<'a> {
     /// then its normal declarations, then `!important` rules, then its
     /// `!important` declarations (CSS's order). Not cached: the attribute
     /// belongs to one element.
-    #[hotpath::measure(impl_type = "HtmlStyles")]
+    #[cfg_attr(feature = "hotpath", hotpath::measure(impl_type = "HtmlStyles"))]
     pub fn get_with(
         &self,
         element: &HtmlElement,

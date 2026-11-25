@@ -88,6 +88,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     image fails with an error, instead of a renderer panic.
 
 ### Changed
+- `hotpath` is no longer a dependency unless a `hotpath*` feature is on:
+  builds that don't profile no longer compile the profiler and its macros.
+  `hotpath-alloc`, `hotpath-prometheus` and `hotpath-cloud` now imply
+  `hotpath`.
 - CSS is parsed by bevy_markup's own parser instead of lightningcss
   (ADR 0048). It reads only the properties bevy_markup maps. What you may
   notice: an infinite or NaN value (`hsl(1e39 50% 50%)`,

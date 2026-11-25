@@ -23,7 +23,7 @@ mod harness;
 
 use input::Hotkeys;
 
-#[hotpath::main]
+#[cfg_attr(feature = "hotpath", hotpath::main)]
 fn main() {
     harness::run(
         harness::ExampleWindow {

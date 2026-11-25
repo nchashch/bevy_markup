@@ -50,7 +50,7 @@ const NEUTRAL: &str = "filter:none!important;mask:none!important;clip-path:none!
 
 /// The largest coordinate magnitude of any object bounding box usvg
 /// computes for `document` (0 for a document without boxes).
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn largest_box(
     document: &roxmltree::Document,
     options: &usvg::Options,

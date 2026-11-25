@@ -533,7 +533,7 @@ fn tera_span_end(source: &str, closer: [u8; 2]) -> Option<usize> {
 /// paths. In a Markdown template, code (as its conversion reads it:
 /// [`md::template_code_ranges`]) is literal text, so a reference there
 /// is none.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn resolve_references(
     path: &AssetPath<'static>,
     source: &str,
@@ -756,7 +756,7 @@ impl AssetLoader for MarkdownTemplateLoader {
 /// on Markdown too (Tera's default list is `.html`/`.htm`/`.xml` only):
 /// without it, `{{ value }}` in a `.md` template would inject raw text into
 /// the HTML.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 async fn load_template(
     reader: &mut dyn Reader,
     allow_unapproved: bool,

@@ -229,7 +229,7 @@
 //!   [hotpath](https://hotpath.rs) profiling of the pipeline's systems
 //!   (render, localize, build, cascade lookups, signals, …). Enable `hotpath`
 //!   on `bevy_markup` *and* put `#[hotpath::main]` on your app's `main` to
-//!   get a report on exit; `hotpath-alloc` adds per-function allocations.
+//!   get a report on exit (your app depends on `hotpath` itself); `hotpath-alloc` adds per-function allocations.
 //!   Without the features the instrumentation compiles to nothing.
 
 use bevy::asset::UnapprovedPathMode;

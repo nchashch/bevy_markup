@@ -56,14 +56,15 @@ svg-text = ["svg", "resvg/text"]
 # itself never needs it.
 hot-reload = ["bevy/file_watcher"]
 # Profiling with hotpath (https://hotpath.rs): the pipeline's systems and
-# hot internals are instrumented; every macro is a no-op (and the crate
-# compiles nothing) unless `hotpath` is on. `cargo run --example demo
+# hot internals are instrumented. Without one of these features hotpath
+# isn't a dependency at all (the attributes are `cfg_attr`s); each implies
+# `hotpath`, which is what the code checks. `cargo run --example demo
 # --features hotpath` prints a report on exit; `hotpath-alloc` adds
 # per-function allocations. Never in `default`.
-hotpath = ["hotpath/hotpath"]
-hotpath-alloc = ["hotpath/hotpath-alloc"]
-hotpath-prometheus = ["hotpath/hotpath-prometheus"]
-hotpath-cloud = ["hotpath/hotpath-cloud"]
+hotpath = ["dep:hotpath", "hotpath/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+hotpath-prometheus = ["hotpath", "hotpath/hotpath-prometheus"]
+hotpath-cloud = ["hotpath", "hotpath/hotpath-cloud"]
 
 [dependencies]
 # Only what the library's code uses; the app picks rendering, windowing,
@@ -125,9 +126,10 @@ pulldown-cmark = { version = "0.13.5", default-features = false, features = [
 # fluent's. Upstream 0.11.1: `ftl_check` (ADR 0045) refuses at load what
 # would panic or overflow it (UPSTREAM U1, U2).
 fluent-syntax = "0.11.1"
-# Profiling instrumentation (the `hotpath*` features). Inert without them:
-# no profiling code, no dependencies, macros expand to the plain function.
-hotpath = "0.28"
+# Profiling instrumentation, only with the `hotpath*` features: the
+# attributes are `cfg_attr(feature = "hotpath", …)`, so users who don't
+# profile never compile it.
+hotpath = { version = "0.28", optional = true }
 # Only for the `fuzzing` harness: `Image::new_fill` needs wgpu texture types,
 # which bevy_image does not re-export.
 wgpu-types = { version = "30.0.1", optional = true }

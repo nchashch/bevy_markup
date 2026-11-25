@@ -266,7 +266,7 @@ impl ActiveLocale {
 #[derive(Component, Default)]
 pub struct LocalizedText(pub(crate) HashMap<tl::NodeHandle, Result<String, String>>);
 
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn localize(
     mut events: MessageReader<AssetEvent<LocaleBundle>>,
     locale: Res<ActiveLocale>,
@@ -325,7 +325,7 @@ pub(crate) fn localize(
 /// the Markdown cache (ADR 0020 Decision 3), each value substitutes its
 /// formatted arguments into the message's pre-converted HTML; without it,
 /// each formatted value converts to HTML (`md::to_html`).
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn resolve_all(
     dom: &tl::VDom,
     bundle: &ConcurrentBundle,
@@ -659,7 +659,7 @@ fn marker_in_live_position(html: &str) -> bool {
     false
 }
 
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn markdown_cache(sources: &[String]) -> MarkdownCache {
     use fluent_syntax::ast::Expression;
     use fluent_syntax::ast::InlineExpression;
