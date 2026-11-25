@@ -66,7 +66,7 @@ as `[INFERENCE]`.
 
 | [0047](./0047-bound-quadratic-template-and-fluent-operations.md) | Bound quadratic template and Fluent operations before execution | Accepted |
 | [0048](./0048-own-css-value-parsing-on-cssparser.md) | CSS is parsed on cssparser by bevy_markup; lightningcss is removed | Accepted |
-| [0049](./0049-minijinja-with-fuel-instead-of-tera.md) | Templates on MiniJinja with fuel instead of Tera and a static check | Proposed |
+| [0049](./0049-minijinja-with-fuel-instead-of-tera.md) | Templates on MiniJinja with fuel instead of Tera and a static check | Accepted |
 | [0050](./0050-own-selector-engine.md) | Selectors are parsed and matched by bevy_markup; parcel_selectors is removed | Accepted |
 
 Add new records to this index in the same commit that adds the file.

@@ -102,22 +102,21 @@
 //! - **Fluent** ([`l10n`]): `data-l10n-id` / `data-l10n-args` /
 //!   `data-l10n-name` (fluent-dom convention) on any element; translations
 //!   may contain inline markup.
-//! - **Tera** ([`template`](mod@template)): full Tera 2 syntax in `.html` files, rendered with
-//!   the entity's [`TemplateContext`](html::TemplateContext). Templates
-//!   compose: `{% extends %}` and `{% include %}` take paths relative to the
-//!   template's file, and an included file's `{% component %}`s are usable
-//!   in the whole template (`{{ <ui.button … /> }}`) — include a component
-//!   library to share widgets. Templates are untrusted input: each is
-//!   checked once at load ([`tera_check`]) and refused when its own loops,
-//!   values or copies of context data could pass the limits; loops over
-//!   your context data count once per element.
+//! - **Templates** ([`template`](mod@template)): MiniJinja (Jinja2) syntax in `.html` files,
+//!   rendered with the entity's [`TemplateContext`](html::TemplateContext).
+//!   Templates compose: `{% extends %}`, `{% include %}` and `{% import %}`
+//!   take paths relative to the template's file; `{% import "ui.html" as
+//!   ui %}` brings a macro library's `{{ ui.button(…) }}` widgets in.
+//!   Templates are untrusted input: every render runs on a fuel budget
+//!   ([`HtmlTemplateLimits`](template::HtmlTemplateLimits)) and fails
+//!   when it runs out.
 //! - **Markdown** ([`template`](mod@template)): a `.md`/`.markdown` template is
-//!   the same Tera machinery; its Markdown converts to HTML once, at asset
+//!   the same template machinery; its Markdown converts to HTML once, at asset
 //!   load (CommonMark + tables, strikethrough, task lists, footnotes),
-//!   with Tera syntax passing through untouched — headings, emphasis,
+//!   with template syntax passing through untouched — headings, emphasis,
 //!   lists and `![images](…)` come out as ordinary elements carrying
 //!   `class="markdown"` (so documents style their Markdown content apart
-//!   from raw-HTML `<img>` tags), and the per-frame path is Tera-only.
+//!   from raw-HTML `<img>` tags), and the per-frame path is template-only.
 //!   Conversion is per file: an `.html` partial included from a Markdown
 //!   page is never converted, a `.md` partial included from an HTML page
 //!   is. Raw HTML passes through, so a Markdown page can embed real UI
@@ -269,11 +268,10 @@ mod svg_boxes;
 #[cfg(feature = "svg-text")]
 mod svg_fonts;
 pub mod template;
-pub mod tera_check;
 pub mod tooltips;
 
 /// Dependencies whose types appear in this crate's API.
-pub use {fluent, tera, tl};
+pub use {fluent, minijinja, tl};
 
 /// Everything needed to build HTML UIs: `use bevy_markup::prelude::*;`.
 pub mod prelude {
@@ -301,7 +299,7 @@ pub mod prelude {
     pub use crate::style::{DefaultStylesheet, HtmlStylesheet, Stylesheet};
     #[cfg(feature = "svg")]
     pub use crate::svg::SvgLoaderSettings;
-    pub use crate::template::HtmlTemplate;
+    pub use crate::template::{HtmlTemplate, HtmlTemplateLimits};
     pub use crate::tooltips::{HtmlTooltip, HtmlTooltips};
     pub use crate::{BevyMarkupPlugin, HtmlUiSystems};
 }
@@ -352,9 +350,21 @@ impl Plugin for BevyMarkupPlugin {
             .get_added_plugins::<AssetPlugin>()
             .first()
             .is_some_and(|assets| matches!(assets.unapproved_path_mode, UnapprovedPathMode::Allow));
+        // ADR 0049: the loaders compile templates with the app's fuel
+        // budget (`HtmlTemplateLimits`, copied to them each frame).
+        let fuel = template::TemplateFuel::default();
         app.init_asset::<template::HtmlTemplate>()
-            .register_asset_loader(template::HtmlTemplateLoader { allow_unapproved })
-            .register_asset_loader(template::MarkdownTemplateLoader { allow_unapproved })
+            .register_asset_loader(template::HtmlTemplateLoader {
+                allow_unapproved,
+                fuel: fuel.clone(),
+            })
+            .register_asset_loader(template::MarkdownTemplateLoader {
+                allow_unapproved,
+                fuel: fuel.clone(),
+            })
+            .insert_resource(fuel)
+            .init_resource::<template::HtmlTemplateLimits>()
+            .add_systems(PreUpdate, template::sync_template_fuel)
             .init_asset::<style::Stylesheet>()
             .init_asset_loader::<style::StylesheetLoader>()
             .init_asset::<nine_slice::NineSlice>()

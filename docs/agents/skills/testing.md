@@ -41,7 +41,7 @@ Rules that always hold:
 | Layer | Where | Catches |
 |---|---|---|
 | Unit tests | `#[cfg(test)] mod tests` in `src/*.rs` | logic of pure pieces: cascade matching and property mapping, entity decoding, Fluent args, font fallback, the rebuild state machine |
-| Test vectors | `tests/html_ui.rs`, `tests/vectors/<name>/` | the HTML/CSS/Fluent/Tera → Bevy world mapping, through the real pipeline, headless |
+| Test vectors | `tests/html_ui.rs`, `tests/vectors/<name>/` | the HTML/CSS/Fluent/template → Bevy world mapping, through the real pipeline, headless |
 | CSS oracle | `browser_oracle` test + `browser.json` | bevy_markup's computed styles vs headless Chromium |
 | Layout oracle | `layout_oracle` test + `layout_*` vectors | Bevy UI's real layout rects vs Chromium's |
 | Fluent oracle | `fluent_oracle` test + `fluent.html` | bevy_markup's localization vs `@fluent/dom` |
@@ -166,7 +166,7 @@ for `layout_*` vectors, inline images included) into `browser.json`.
   containers are flex columns, blocks are blocks, nothing shrinks, white
   text in Bevy's default font at line height 1.2, the `li` indent and
   bullet, `pre` with 8 px padding. Keep it in sync with `src/build.rs`.
-- Vectors must be plain HTML (no Tera syntax, no `data-l10n-id`). Set
+- Vectors must be plain HTML (no template syntax, no `data-l10n-id`). Set
   `color` on `html` (browsers default to black) and `border-style: solid`
   wherever border widths matter (bevy_markup ignores `border-style`).
 - Layout vectors (`layout_*`) must not set `font-family`, must be ASCII

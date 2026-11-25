@@ -82,11 +82,10 @@ bevy = { version = "0.20.0", default-features = false, features = [
 ron = "0.12.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# HTML: Tera templating, then tl parsing.
-tera = { version = "2.4.0", features = ["fast"] }
-# The load-time template safety check (`tera_check`, ADR 0044): a port of
-# Tera's lexer, since Tera's parser is private.
-nom = "8.0.0"
+# HTML: MiniJinja templating (ADR 0049), then tl parsing. `fuel` bounds
+# every render's work and memory (`HtmlTemplateLimits`); `loop_controls`
+# is `{% break %}`/`{% continue %}`; `json` its `tojson` filter.
+minijinja = { version = "3.1.0", features = ["fuel", "loop_controls", "json", "serde", "speedups"] }
 # astral-tl: astral-sh's maintained tl fork (same `tl` crate name). tl 0.7.8 drops the first
 # character of the attribute after a value-less one (`autofocus data-on-click` →
 # `ata-on-click`); see docs/agents/bugs/bug_0019.md and UPSTREAM.md.

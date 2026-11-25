@@ -149,7 +149,7 @@ pub(crate) fn show_tooltips(
                 if let Some(side) = side.filter(|_| anchor.placement == placement) {
                     new_context.insert("side", side_name(side.0));
                 }
-                if **context != *new_context {
+                if context.0 != new_context.0 {
                     *context = new_context;
                 }
                 if anchor.placement != placement || anchor.gap != config.gap {

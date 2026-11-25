@@ -1,11 +1,13 @@
-//! `.html` files as Tera templates, and the parsed result.
+//! `.html` files as MiniJinja templates (ADR 0049), and the parsed result.
 //!
-//! The loader compiles each file as a Tera 2 template, so syntax errors fail the
-//! load. The template's name is its asset path, so `.html` files get Tera's
-//! HTML autoescaping of `{{ }}` values. A plain `.html` file with no Tera
-//! syntax is a template that renders to itself.
+//! The loader compiles each file as a MiniJinja (Jinja2) template, so syntax
+//! errors fail the load. `.html`/`.htm`/`.md` templates get HTML
+//! autoescaping of `{{ }}` values. A plain `.html` file with no template
+//! syntax is a template that renders to itself. Every render runs on a
+//! fuel budget ([`HtmlTemplateLimits`]): work and memory are bounded per
+//! render, so an untrusted template can't stall or exhaust the app.
 //!
-//! The crate registers a `json` filter ([`new_tera`]): argument attributes
+//! The crate registers a `json` filter ([`new_environment`]): argument attributes
 //! (`data-l10n-args`, `data-with`, `data-tooltip-args`) print their value
 //! with it, `'{{ {"name": player} | json }}'`.
 //!
@@ -16,11 +18,9 @@
 //! loads them with it — with Bevy's file watcher, editing one reloads every
 //! template using it (a manual `AssetServer::reload` must name the using
 //! template: Bevy reloads only the given path) — and
-//! renders them as one Tera set, so `{% component %}`s defined in any of
-//! them (Tera 2's macros) can be called from all: include a component
-//! library (it renders nothing) and use `{{ <ui.button label="Go" /> }}`.
-//! A template that extends another may only hold blocks at its top level,
-//! so include libraries inside a block there.
+//! compiles them into one environment, so a template can `{% import
+//! "ui.html" as ui %}` a macro library and call `{{ ui.button(label="Go")
+//! }}` (with a body: `{% call ui.button(label="Go") %}…{% endcall %}`).
 
 use std::borrow::Cow;
 use std::fmt::Write;
@@ -29,19 +29,20 @@ use bevy::asset::{AssetLoader, AssetPath, LoadContext, io::Reader};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
+use crate::html::TemplateContext;
 use crate::l10n::LocalizedText;
 use crate::md;
 
-/// A compiled Tera template loaded from an `.html`/`.htm` file — or a
+/// A compiled MiniJinja template loaded from an `.html`/`.htm` file — or a
 /// Markdown `.md`/`.markdown` file ([ADR 0014]), whose Markdown converts
-/// to HTML once, at asset load (Tera syntax passes through; ADR 0020).
+/// to HTML once, at asset load (template syntax passes through; ADR 0020).
 /// Use it via [`HtmlUi`](crate::html::HtmlUi).
 ///
 /// [ADR 0014]: docs/agents/adr/0014-markdown-via-pulldown-cmark.md
 #[derive(Asset, TypePath)]
 pub struct HtmlTemplate {
-    pub(crate) tera: tera::Tera,
-    /// Template name inside `tera`: the asset path.
+    pub(crate) env: minijinja::Environment<'static>,
+    /// Template name inside `env`: the asset path.
     pub(crate) name: String,
 }
 
@@ -49,23 +50,33 @@ impl HtmlTemplate {
     /// Renders with `context`, then parses the output into a DOM.
     pub fn render(
         &self,
-        context: &tera::Context,
+        context: &TemplateContext,
     ) -> Result<HtmlDocument, Box<dyn std::error::Error + Send + Sync>> {
         let source = self.render_source(context)?;
         Ok(HtmlDocument::parse(source)?)
     }
 
-    /// Renders with `context` to HTML text, without parsing it. Output
-    /// past [`MAX_RENDERED_BYTES`] fails the render (bug_0220).
-    pub fn render_source(&self, context: &tera::Context) -> tera::TeraResult<String> {
+    /// Renders with `context` to HTML text, without parsing it. A render
+    /// past its fuel ([`HtmlTemplateLimits`]) or past
+    /// [`MAX_RENDERED_BYTES`] of output fails (bug_0220).
+    pub fn render_source(&self, context: &TemplateContext) -> Result<String, minijinja::Error> {
+        let template = self.env.get_template(&self.name)?;
         let mut out = BoundedOutput::default();
-        match self.tera.render_to(&self.name, context, &mut out) {
-            Err(_) if out.over => Err(tera::Error::message(format!(
-                "the rendered HTML is larger than MAX_RENDERED_BYTES ({MAX_RENDERED_BYTES} bytes)"
-            ))),
+        let result = template.render_captured_to(context.as_value(), &mut out);
+        match result {
+            Err(_) if out.over => Err(minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                format!(
+                    "the rendered HTML is larger than MAX_RENDERED_BYTES ({MAX_RENDERED_BYTES} bytes)"
+                ),
+            )),
             Err(err) => Err(err),
-            Ok(()) => String::from_utf8(out.bytes)
-                .map_err(|_| tera::Error::message("the rendered HTML isn't UTF-8")),
+            Ok(_) => String::from_utf8(out.bytes).map_err(|_| {
+                minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    "the rendered HTML isn't UTF-8",
+                )
+            }),
         }
     }
 
@@ -76,14 +87,13 @@ impl HtmlTemplate {
 }
 
 /// The most HTML text a template may render, in bytes (16 MiB). Templates
-/// are untrusted input (ADR 0044), and Tera bounds a `range` (10⁵ items)
-/// and component recursion, not output: two nested loops in 92 bytes
-/// render 10¹⁰ characters (bug_0220). A render past it fails with an error
-/// saying so, like a template error.
+/// are untrusted input (ADR 0044): fuel bounds the work, this the output
+/// (two nested loops in 92 bytes once rendered 10¹⁰ characters, bug_0220).
+/// A render past it fails with an error saying so, like a template error.
 pub const MAX_RENDERED_BYTES: usize = 16 << 20;
 
-/// Tera's output, refused past [`MAX_RENDERED_BYTES`] (Tera streams its
-/// output, so the render stops at the write that crosses it).
+/// The render's output, refused past [`MAX_RENDERED_BYTES`] (the output
+/// streams, so the render stops at the write that crosses it).
 #[derive(Default)]
 struct BoundedOutput {
     bytes: Vec<u8>,
@@ -176,19 +186,210 @@ pub(crate) fn decode_text<'a>(text: impl Into<Cow<'a, str>>) -> Cow<'a, str> {
 pub(crate) fn decode_attribute<'a>(value: impl Into<Cow<'a, str>>) -> Cow<'a, str> {
     htmlize::unescape_attribute(value)
 }
-/// A Tera environment as the template loader builds it (public so tools
-/// can compile templates exactly as the loader does): autoescaping for
-/// the markup extensions and the crate's filters — `json`, which prints a
-/// value as JSON for the argument attributes (`data-l10n-args`,
-/// `data-with`, `data-tooltip-args`): `'{{ {"name": player} | json }}'`.
-/// Tera prints a value without it in Rust's `Debug` style, which isn't
-/// JSON once a string holds an escape (`\u{200d}` in an emoji sequence,
-/// bug_0128).
-pub fn new_tera() -> tera::Tera {
-    let mut tera = tera::Tera::new();
-    tera.autoescape_on([".html", ".htm", ".xml", ".md", ".markdown"]);
-    tera.register_filter("json", json_filter);
-    tera
+/// The template environment every load builds (and the fuzz harness, so it
+/// compiles templates exactly as the loader does): HTML autoescaping for
+/// the markup extensions; the crate's `json` filter, which prints a value
+/// as JSON for the argument attributes (`data-l10n-args`, `data-with`,
+/// `data-tooltip-args`): `'{{ {"name": player} | json }}'`; a fuel budget
+/// per render (`fuel`, see [`HtmlTemplateLimits`]); Tera's handling of
+/// undefined values (printing or iterating one is an error, testing it in
+/// `{% if %}` is false); and the source's trailing newline kept.
+pub fn new_environment(fuel: u64) -> minijinja::Environment<'static> {
+    let mut env = minijinja::Environment::new();
+    env.set_auto_escape_callback(|name| {
+        if [".html", ".htm", ".xml", ".md", ".markdown"]
+            .iter()
+            .any(|extension| name.ends_with(extension))
+        {
+            minijinja::AutoEscape::Html
+        } else {
+            minijinja::AutoEscape::None
+        }
+    });
+    env.set_undefined_behavior(minijinja::UndefinedBehavior::SemiStrict);
+    if let Ok(syntax) = minijinja::syntax::SyntaxConfig::builder()
+        .keep_trailing_newline(true)
+        .build()
+    {
+        env.set_syntax(syntax);
+    }
+    env.add_filter("json", json_filter);
+    // Filters that build a string or list from their input charge the
+    // result's size up front, before building it.
+    env.add_filter("join", fueled_join);
+    env.add_filter("split", fueled_split);
+    env.add_filter("lines", fueled_lines);
+    env.add_filter("escape", fueled_escape);
+    env.add_filter("e", fueled_escape);
+    env.set_fuel(Some(fuel));
+    env
+}
+
+/// Bytes charged per item a filter creates: a `Value` slot and a small
+/// allocation (a slot is 24 bytes).
+const ITEM_BYTES: u64 = 48;
+
+/// Charges `bytes` of a result about to be built (fuel's resolution: one
+/// unit per 64 bytes, as MiniJinja charges data).
+fn charge_bytes(state: &minijinja::State, bytes: u64) -> Result<(), minijinja::Error> {
+    state.consume_fuel(bytes / 64)
+}
+
+/// `join`, charged for its result before building it.
+fn fueled_join(
+    state: &mut minijinja::State,
+    value: &minijinja::Value,
+    joiner: Option<minijinja::value::StringInput<'_>>,
+    attribute: Option<&str>,
+    kwargs: minijinja::value::Kwargs,
+) -> Result<minijinja::Value, minijinja::Error> {
+    if value.as_str().is_some() || value.is_undefined() || value.is_none() {
+        return minijinja::filters::join(state, value, joiner, attribute, kwargs);
+    }
+    // Collected once: an iterator (`map`'s, `select`'s) can only be walked
+    // once, and the built-in walks what it is given.
+    let items: Vec<minijinja::Value> = value.try_iter()?.collect();
+    let joiner_bytes = joiner.as_ref().map_or(0, |joiner| joiner.as_str().len()) as u64;
+    let item_bytes: u64 = items
+        .iter()
+        .map(|item| item.as_str().map_or(ITEM_BYTES, |text| text.len() as u64))
+        .sum();
+    let joiners = joiner_bytes.saturating_mul(items.len().saturating_sub(1) as u64);
+    charge_bytes(state, item_bytes.saturating_add(joiners))?;
+    minijinja::filters::join(
+        state,
+        &minijinja::Value::from(items),
+        joiner,
+        attribute,
+        kwargs,
+    )
+}
+
+/// `split`, charged for its pieces before building them.
+fn fueled_split(
+    state: &minijinja::State,
+    value: &minijinja::Value,
+    split: Option<std::sync::Arc<str>>,
+    maxsplits: Option<i64>,
+) -> Result<minijinja::Value, minijinja::Error> {
+    if let Some(text) = value.as_str() {
+        let pieces = match split.as_deref() {
+            Some("") | None => text.split_whitespace().count(),
+            Some(separator) => text.matches(separator).count() + 1,
+        };
+        let pieces = match maxsplits {
+            Some(max) if max >= 0 => pieces.min(max as usize + 1),
+            _ => pieces,
+        } as u64;
+        charge_bytes(
+            state,
+            (text.len() as u64).saturating_add(pieces.saturating_mul(ITEM_BYTES)),
+        )?;
+    }
+    minijinja::filters::split(value, split, maxsplits)
+}
+
+/// `lines`, charged for its lines before building them.
+fn fueled_lines(
+    state: &minijinja::State,
+    value: &minijinja::Value,
+) -> Result<minijinja::Value, minijinja::Error> {
+    if let Some(text) = value.as_str() {
+        let lines = text.bytes().filter(|byte| *byte == b'\n').count() as u64 + 1;
+        charge_bytes(
+            state,
+            (text.len() as u64).saturating_add(lines.saturating_mul(ITEM_BYTES)),
+        )?;
+    }
+    minijinja::filters::lines(value)
+}
+
+/// `escape`, charged for its escaped text before building it: HTML
+/// escaping turns one byte into up to six (`"` → `&quot;`).
+fn fueled_escape(
+    state: &mut minijinja::State,
+    value: &minijinja::Value,
+) -> Result<minijinja::Value, minijinja::Error> {
+    if let Some(text) = value.as_str() {
+        let grown: u64 = text
+            .bytes()
+            .map(|byte| match byte {
+                b'"' | b'\'' | b'/' => 5,
+                b'<' | b'>' => 3,
+                b'&' => 4,
+                _ => 0,
+            })
+            .sum();
+        charge_bytes(state, (text.len() as u64).saturating_add(grown))?;
+    }
+    minijinja::filters::escape(state, value)
+}
+
+/// The template limits an app may set (ADR 0049): how much work and
+/// memory one render may use. Every render is charged fuel: one unit per
+/// instruction, one per 64 bytes of strings, lists and maps it produces,
+/// per item a filter visits, per sort comparison. A render that runs out
+/// fails like a template error, and the UI shows the failure. Templates
+/// are untrusted input (ADR 0044): fuel is what bounds them.
+///
+/// Read when a template loads: set it before loading templates (a change
+/// applies to templates loaded or reloaded afterwards).
+#[derive(Resource, Clone, Debug, PartialEq, Reflect)]
+pub struct HtmlTemplateLimits {
+    /// Fuel per render. Default 2²² (≈ 4.2 M): at most ~250 MB of data
+    /// produced and ~0.1 s of work per render, about 40× what the largest
+    /// example template needs.
+    pub fuel: u64,
+}
+
+impl Default for HtmlTemplateLimits {
+    fn default() -> Self {
+        Self { fuel: 1 << 22 }
+    }
+}
+
+/// The fuel the loaders compile templates with: [`HtmlTemplateLimits`],
+/// copied each frame by `sync_template_fuel` (loaders run off the ECS).
+#[derive(Resource, Clone, Debug)]
+pub(crate) struct TemplateFuel(pub(crate) std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl Default for TemplateFuel {
+    fn default() -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+            HtmlTemplateLimits::default().fuel,
+        )))
+    }
+}
+
+impl TemplateFuel {
+    pub(crate) fn get(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Compiles `source` as template `name` (the loader's environment, default
+/// fuel) and renders it with `context` (tests).
+#[cfg(test)]
+pub(crate) fn test_render(
+    name: &str,
+    source: &str,
+    context: serde_json::Value,
+) -> Result<String, minijinja::Error> {
+    let mut env = new_environment(HtmlTemplateLimits::default().fuel);
+    env.add_template_owned(name.to_owned(), source.to_owned())?;
+    let template = HtmlTemplate {
+        env,
+        name: name.to_owned(),
+    };
+    template.render_source(&TemplateContext::from_serialize(&context))
+}
+
+/// Copies a changed [`HtmlTemplateLimits`] to the loaders.
+pub(crate) fn sync_template_fuel(limits: Res<HtmlTemplateLimits>, fuel: Res<TemplateFuel>) {
+    if limits.is_changed() {
+        fuel.0
+            .store(limits.fuel, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// The operator bound of one Tera tag (see [`tera_tag_over_limit`]):
@@ -341,9 +542,14 @@ pub(crate) fn check_tera_operators(name: &str, source: &str) -> Result<(), Strin
     }
 }
 
-/// The `json` filter: the value as compact JSON.
-fn json_filter(value: tera::Value, _: tera::Kwargs, _: &tera::State) -> tera::TeraResult<String> {
-    serde_json::to_string(&value).map_err(|err| tera::Error::message(format!("json: {err}")))
+/// The `json` filter: the value as compact JSON (escaped like any output).
+fn json_filter(value: minijinja::Value) -> Result<String, minijinja::Error> {
+    serde_json::to_string(&value).map_err(|err| {
+        minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            format!("json: {err}"),
+        )
+    })
 }
 
 /// Parses an argument attribute's JSON (`data-l10n-args`, `data-with`,
@@ -352,7 +558,7 @@ pub(crate) fn parse_attribute_json(text: &str) -> serde_json::Result<serde_json:
     serde_json::from_str(text)
 }
 
-/// `err: source: source…` — Tera puts the useful detail in the sources.
+/// `err: source: source…` — the template engine puts detail in the sources.
 pub(crate) fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
     let mut message = err.to_string();
     let mut source = err.source();
@@ -468,8 +674,9 @@ pub(crate) fn is_remote(path: &AssetPath<'_>) -> bool {
     }
 }
 
-/// The keywords of the tags naming another template.
-const REFERENCE_TAGS: [&str; 2] = ["include", "extends"];
+/// The keywords of the tags naming another template (`{% import "x" as
+/// ui %}` and `{% from "x" import button %}` bring in macro libraries).
+const REFERENCE_TAGS: [&str; 4] = ["include", "extends", "import", "from"];
 
 /// The index just past the `{% endraw %}` group closing the raw block
 /// whose opener ends at `after`; `None` when there is none.
@@ -700,6 +907,7 @@ pub(crate) fn resolve_references(
 #[derive(Default, TypePath)]
 pub(crate) struct HtmlTemplateLoader {
     pub(crate) allow_unapproved: bool,
+    pub(crate) fuel: TemplateFuel,
 }
 
 impl AssetLoader for HtmlTemplateLoader {
@@ -713,7 +921,7 @@ impl AssetLoader for HtmlTemplateLoader {
         _settings: &(),
         load_context: &mut LoadContext<'_>,
     ) -> Result<HtmlTemplate, BevyError> {
-        load_template(reader, self.allow_unapproved, load_context).await
+        load_template(reader, self.allow_unapproved, self.fuel.get(), load_context).await
     }
 
     fn extensions(&self) -> &[&str] {
@@ -728,6 +936,7 @@ impl AssetLoader for HtmlTemplateLoader {
 #[derive(Default, TypePath)]
 pub(crate) struct MarkdownTemplateLoader {
     pub(crate) allow_unapproved: bool,
+    pub(crate) fuel: TemplateFuel,
 }
 
 impl AssetLoader for MarkdownTemplateLoader {
@@ -741,7 +950,7 @@ impl AssetLoader for MarkdownTemplateLoader {
         _settings: &(),
         load_context: &mut LoadContext<'_>,
     ) -> Result<HtmlTemplate, BevyError> {
-        load_template(reader, self.allow_unapproved, load_context).await
+        load_template(reader, self.allow_unapproved, self.fuel.get(), load_context).await
     }
 
     fn extensions(&self) -> &[&str] {
@@ -760,6 +969,7 @@ impl AssetLoader for MarkdownTemplateLoader {
 async fn load_template(
     reader: &mut dyn Reader,
     allow_unapproved: bool,
+    fuel: u64,
     load_context: &mut LoadContext<'_>,
 ) -> Result<HtmlTemplate, BevyError> {
     let mut bytes = Vec::new();
@@ -770,6 +980,8 @@ async fn load_template(
     let name = root.to_string();
     let mut templates: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // Who references whom, for the cycle check below.
+    let mut edges: HashMap<String, Vec<String>> = HashMap::default();
     let mut pending = vec![(root, source)];
     while let Some((path, source)) = pending.pop() {
         if !seen.insert(path.to_string()) {
@@ -786,6 +998,10 @@ async fn load_template(
         } else {
             source
         };
+        edges.insert(
+            path.to_string(),
+            references.iter().map(ToString::to_string).collect(),
+        );
         for reference in references {
             if !seen.contains(&reference.to_string()) {
                 let bytes = load_context.read_asset_bytes(reference.clone()).await?;
@@ -795,12 +1011,49 @@ async fn load_template(
         check_tera_operators(&path.to_string(), &source)?;
         templates.push((path.to_string(), source));
     }
-    let mut tera = new_tera();
-    tera.add_raw_templates(templates.clone())?;
-    // ADR 0044: templates are untrusted; what Tera compiled is bounded
-    // before it renders (bug_0220).
-    crate::tera_check::check(&name, &templates).map_err(|err| format!("{name}: {err}"))?;
-    Ok(HtmlTemplate { tera, name })
+    // A template that includes, extends or imports itself, directly or
+    // not, fails its load (as with Tera): it could only recurse until the
+    // recursion limit.
+    if let Some(cycle) = reference_cycle(&name, &edges) {
+        return Err(format!("{name}: circular template reference: {cycle}").into());
+    }
+    // ADR 0044, 0049: templates are untrusted; every render of what
+    // compiles here runs on `fuel`.
+    let mut env = new_environment(fuel);
+    for (path, source) in templates {
+        env.add_template_owned(path, source)?;
+    }
+    Ok(HtmlTemplate { env, name })
+}
+
+/// A cycle of references reachable from `root`, as `a → b → a`.
+fn reference_cycle(root: &str, edges: &HashMap<String, Vec<String>>) -> Option<String> {
+    // Iterative depth-first search: the path on the stack, its members.
+    let mut path: Vec<(&str, usize)> = vec![(root, 0)];
+    let mut on_path: std::collections::HashSet<&str> = [root].into();
+    let mut done: std::collections::HashSet<&str> = Default::default();
+    while let Some((node, next)) = path.last_mut() {
+        let targets = edges.get(*node).map_or(&[][..], Vec::as_slice);
+        if let Some(target) = targets.get(*next) {
+            *next += 1;
+            let target = target.as_str();
+            if on_path.contains(target) {
+                let start = path.iter().position(|(n, _)| *n == target).unwrap_or(0);
+                let mut names: Vec<&str> = path[start..].iter().map(|(n, _)| *n).collect();
+                names.push(target);
+                return Some(names.join(" → "));
+            }
+            if !done.contains(target) {
+                on_path.insert(target);
+                path.push((target, 0));
+            }
+        } else {
+            let (finished, _) = path.pop().expect("non-empty");
+            on_path.remove(finished);
+            done.insert(finished);
+        }
+    }
+    None
 }
 
 /// Includes naming a network source fail the load (review_0003 G19:
@@ -834,10 +1087,8 @@ fn remote_includes_are_refused() {
 #[test]
 fn json_filter_round_trips_any_string() {
     let render = |template: &str, value: &str| {
-        let mut tera = new_tera();
-        tera.add_raw_template("t.html", template).unwrap();
-        let context = tera::Context::from_serialize(&serde_json::json!({ "s": value })).unwrap();
-        decode_text(&tera.render("t.html", &context).unwrap()).into_owned()
+        let html = test_render("t.html", template, serde_json::json!({ "s": value })).unwrap();
+        decode_text(&html).into_owned()
     };
     for value in [
         "Ada \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
@@ -1235,8 +1486,8 @@ mod tests {
                 "{% endif %}".repeat(39)
             );
             assert!(!tera_tag_over_limit(&template));
-            new_tera()
-                .add_raw_template("t.html", &template)
+            new_environment(HtmlTemplateLimits::default().fuel)
+                .add_template_owned("t.html", template.clone())
                 .unwrap_or_else(|err| panic!("{err}: {chain:.40}"));
         }
     }
@@ -1469,29 +1720,30 @@ mod tests {
     #[test]
     fn rendered_output_is_bounded() {
         let template = |source: &str| {
-            let mut tera = new_tera();
-            tera.add_raw_template("t.html", source).unwrap();
+            // Fuel enough for the output itself (the limit under test).
+            let mut env = new_environment(1 << 30);
+            env.add_template_owned("t.html", source.to_owned()).unwrap();
             HtmlTemplate {
-                tera,
+                env,
                 name: "t.html".to_owned(),
             }
         };
         let loops = |n: usize| {
             template(&format!(
-                "{{% for i in range(end={n}) %}}{{% for j in range(end={n}) %}}xxxx{{% endfor %}}{{% endfor %}}"
+                "{{% for i in range({n}) %}}{{% for j in range({n}) %}}xxxx{{% endfor %}}{{% endfor %}}"
             ))
         };
         // 4 × 2 100² = 17.6 MB.
         let err = loops(2100)
-            .render_source(&tera::Context::new())
+            .render_source(&TemplateContext::new())
             .expect_err("over the limit");
         assert!(err.to_string().contains("MAX_RENDERED_BYTES"), "{err}");
         // 4 × 2 000² = 16 MB, just under 16 MiB.
-        let ok = loops(2000).render_source(&tera::Context::new()).unwrap();
+        let ok = loops(2000).render_source(&TemplateContext::new()).unwrap();
         assert_eq!(ok.len(), 16_000_000);
         // Other errors stay what they were.
         let err = template("{{ missing }}")
-            .render_source(&tera::Context::new())
+            .render_source(&TemplateContext::new())
             .expect_err("undefined");
         assert!(!err.to_string().contains("MAX_RENDERED_BYTES"), "{err}");
     }
@@ -1518,11 +1770,10 @@ mod tests {
         /// in the UI; a missing escape lets data inject markup).
         #[test]
         fn rendered_variables_round_trip(s in MARKUP_TEXT) {
-            let mut tera = tera::Tera::new();
-            tera.add_raw_template("t.html", "<p>{{ s }}</p>").unwrap();
-            let template = HtmlTemplate { tera, name: "t.html".to_owned() };
-            let mut context = tera::Context::new();
-            context.insert("s", &s);
+            let mut env = new_environment(HtmlTemplateLimits::default().fuel);
+            env.add_template_owned("t.html", "<p>{{ s }}</p>").unwrap();
+            let template = HtmlTemplate { env, name: "t.html".to_owned() };
+            let context = TemplateContext::new().with("s", &s);
             let document = template.render(&context).unwrap();
             prop_assert_eq!(document.dom().query_selector("p").unwrap().count(), 1);
             prop_assert_eq!(decoded_text(&document), s);

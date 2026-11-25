@@ -37,7 +37,7 @@ fn fake_frame() -> Image {
     )
 }
 
-/// Tera compile + render with a JSON context, then `tl` parse + outline +
+/// Template compile + render with a JSON context, then `tl` parse + outline +
 /// entity decoding: the whole Render stage on arbitrary sources. The same
 /// bytes also run through the Markdown path (ADR 0014): the conversion and
 /// its parse must not panic either.
@@ -47,17 +47,17 @@ pub fn render_html(source: &str, context_json: &str) -> Result<String, String> {
     // (bug_0182: without it, long operator chains overflowed the 2 MB
     // replay threads of debug builds inside Tera's compiler).
     crate::template::check_tera_operators(name, source)?;
-    let mut tera = crate::template::new_tera();
-    tera.add_raw_template(name, source)
-        .map_err(|err| err.to_string())?;
-    // The loader's safety check (ADR 0044): only bounded templates render.
-    crate::tera_check::check(name, &[(name.to_owned(), source.to_owned())])
+    // A sixteenth of the default fuel (ADR 0049): the bound is the same
+    // kind, the fuzzer's iterations stay fast.
+    let fuel = crate::template::HtmlTemplateLimits::default().fuel / 16;
+    let mut env = crate::template::new_environment(fuel);
+    env.add_template_owned(name, source.to_owned())
         .map_err(|err| err.to_string())?;
     let value: serde_json::Value =
         serde_json::from_str(context_json).map_err(|err| err.to_string())?;
-    let context = tera::Context::from_serialize(&value).map_err(|err| err.to_string())?;
+    let context = crate::html::TemplateContext::from_serialize(&value);
     let template = HtmlTemplate {
-        tera,
+        env,
         name: name.to_owned(),
     };
     let document = template.render(&context).map_err(|err| err.to_string())?;
@@ -68,13 +68,11 @@ pub fn render_html(source: &str, context_json: &str) -> Result<String, String> {
     // ADR 0020) runs on the same bytes, then the converted template renders.
     let md_source = crate::md::to_html_template(source);
     crate::template::check_tera_operators(md_name, &md_source)?;
-    let mut tera = crate::template::new_tera();
-    tera.add_raw_template(md_name, &md_source)
-        .map_err(|err| err.to_string())?;
-    crate::tera_check::check(md_name, &[(md_name.to_owned(), md_source.clone())])
+    let mut env = crate::template::new_environment(fuel);
+    env.add_template_owned(md_name, md_source)
         .map_err(|err| err.to_string())?;
     let template = HtmlTemplate {
-        tera,
+        env,
         name: md_name.to_owned(),
     };
     let document = template.render(&context).map_err(|err| err.to_string())?;

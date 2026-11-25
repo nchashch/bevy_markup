@@ -946,10 +946,7 @@ mod tests {
         let render = |source: &str, json: &str| -> String {
             let html = to_html_template(source);
             let value: serde_json::Value = serde_json::from_str(json).unwrap();
-            let mut tera = tera::Tera::default();
-            tera.add_raw_template("md", &html).unwrap();
-            let context = tera::Context::from_serialize(&value).unwrap();
-            tera.render("md", &context).unwrap()
+            crate::template::test_render("md", &html, value).unwrap()
         };
 
         // After the closed fence, the statement is separated: `Shown`
@@ -977,10 +974,7 @@ mod tests {
             "the statements left the code: {html}"
         );
         let value: serde_json::Value = serde_json::from_str(r#"{"a":true}"#).unwrap();
-        let mut tera = tera::Tera::default();
-        tera.add_raw_template("md", &html).unwrap();
-        let context = tera::Context::from_serialize(&value).unwrap();
-        let rendered = tera.render("md", &context).unwrap();
+        let rendered = crate::template::test_render("md", &html, value).unwrap();
         assert!(
             !rendered.contains("<p class=\"markdown\">Shown</p>"),
             "the statements executed outside the code: {rendered}"
@@ -1368,9 +1362,8 @@ mod tests {
 
         // A block-level loop: the wrapper-free Tera lines bracket the
         // constructed Markdown.
-        let html =
-            to_html_template("{% for i in range(end=2) %}\n## Section {{ i }}\n{% endfor %}\n");
-        assert!(html.contains("{% for i in range(end=2) %}"), "{html}");
+        let html = to_html_template("{% for i in range(2) %}\n## Section {{ i }}\n{% endfor %}\n");
+        assert!(html.contains("{% for i in range(2) %}"), "{html}");
         assert!(html.contains("{% endfor %}"), "{html}");
         assert!(
             html.contains("<h2 class=\"markdown\">Section {{ i }}</h2>"),
@@ -1481,10 +1474,7 @@ fn code_is_teraliteral_when_rendered() {
     let render = |source: &str, json: &str| -> String {
         let html = to_html_template(source);
         let value: serde_json::Value = serde_json::from_str(json).unwrap();
-        let mut tera = tera::Tera::default();
-        tera.add_raw_template("md", &html).unwrap();
-        let context = tera::Context::from_serialize(&value).unwrap();
-        tera.render("md", &context).unwrap()
+        crate::template::test_render("md", &html, value).unwrap()
     };
 
     let html = render("a `{{ x }}` span\n", r#"{"x":"VALUE"}"#);

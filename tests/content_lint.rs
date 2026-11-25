@@ -1141,13 +1141,18 @@ fn locale_check_reports_missing_extra_and_mismatched_messages() {
 /// path (so `.html` autoescapes), together with every template it includes
 /// or extends.
 fn compile(assets: &Path, template: &str) -> Result<(), String> {
-    let mut tera = bevy_markup::template::new_tera();
-    tera.add_raw_templates(template_set(assets, template)?)
-        .map_err(|err| error_chain(&err))
+    let mut env = bevy_markup::template::new_environment(
+        bevy_markup::template::HtmlTemplateLimits::default().fuel,
+    );
+    for (name, source) in template_set(assets, template)? {
+        env.add_template_owned(name, source)
+            .map_err(|err| error_chain(&err))?;
+    }
+    Ok(())
 }
 
 /// `template` and the templates it references (transitively), each with its
-/// `{% include/extends "…" %}` paths rewritten to asset paths — a simple
+/// `{% include/extends/import/from "…" %}` paths rewritten to asset paths — a simple
 /// mirror of the loader's resolution (same-directory and `../` paths).
 fn template_set(assets: &Path, template: &str) -> Result<Vec<(String, String)>, String> {
     let mut set = Vec::new();
@@ -1160,7 +1165,7 @@ fn template_set(assets: &Path, template: &str) -> Result<Vec<(String, String)>, 
             std::fs::read_to_string(assets.join(&name)).map_err(|err| format!("{name}: {err}"))?;
         let dir = Path::new(&name).parent().unwrap_or(Path::new(""));
         let mut rewritten = source.clone();
-        for keyword in ["include", "extends"] {
+        for keyword in ["include", "extends", "import", "from"] {
             for chunk in source.split("{%").skip(1) {
                 let body = chunk.trim_start_matches('-').trim_start();
                 let Some(after) = body.strip_prefix(keyword) else {

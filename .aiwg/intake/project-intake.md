@@ -16,7 +16,7 @@ This page summarises; `AGENTS.md` (current state) and the ADRs (why) are authori
 
 ## System Overview
 
-A Bevy 0.20 library that turns HTML templates (Tera, or Markdown), CSS and Fluent localization into native Bevy UI entities, with 9-slice frames as CSS `border-image`. Apps spawn an `HtmlUi` with a template and a `TemplateContext`; the library renders, localizes and builds the entity tree, then updates it in place when the context, stylesheet, locale or interaction state changes. Declarative interaction (`data-on-*` signals, `:hover`/`:focus` restyles), focus and directional navigation, tooltips and anchored overlays, forms and text input are built in. It is the UI layer of the studio's games (prototype_19) and apps (vtuber).
+A Bevy 0.20 library that turns HTML templates (MiniJinja, or Markdown), CSS and Fluent localization into native Bevy UI entities, with 9-slice frames as CSS `border-image`. Apps spawn an `HtmlUi` with a template and a `TemplateContext`; the library renders, localizes and builds the entity tree, then updates it in place when the context, stylesheet, locale or interaction state changes. Declarative interaction (`data-on-*` signals, `:hover`/`:focus` restyles), focus and directional navigation, tooltips and anchored overlays, forms and text input are built in. It is the UI layer of the studio's games (prototype_19) and apps (vtuber).
 
 ## Problem and Outcomes
 
@@ -28,7 +28,7 @@ A Bevy 0.20 library that turns HTML templates (Tera, or Markdown), CSS and Fluen
 
 | Feature | State | Source |
 |---|---|---|
-| Tera templates (the crate's `json` filter prints argument attributes), Markdown templates (pulldown-cmark, converted at load) | built | ADR 0001, 0014, 0020; CHANGELOG |
+| MiniJinja templates rendered on a fuel budget (`HtmlTemplateLimits`, ADR 0049; the crate's `json` filter prints argument attributes), Markdown templates (pulldown-cmark, converted at load) | built | ADR 0001, 0014, 0020; CHANGELOG |
 | HTML parsing: `astral-tl` (tag soup, no tree construction); character references decoded by the HTML spec's text and attribute rules (`htmlize`) | built (htmlize since 2026-10-29; a switch to html5ever was measured and rejected) | ADR 0035, 0036 |
 | CSS selectors parsed and matched by bevy_markup's own engine (ADR 0050) within an allowlist: combinators (`+`/`~` next to the subject), `:is()`/`:where()`/`:not()` with lists, structural incl. `:nth-last-*`/`:only-*`, interaction pseudo-classes, `data-*` attributes with every operator | built (engine since 2026-10-28) | ADR 0007, 0028, 0030, 0034, 0048 |
 | Sibling combinators away from the subject, non-`data-*` attributes, `:has()`, `:root` | not supported (restyle invalidation; the element model; engine gaps) | ADR 0034 |
@@ -45,7 +45,7 @@ A Bevy 0.20 library that turns HTML templates (Tera, or Markdown), CSS and Fluen
 
 ## Architecture (Current State)
 
-A `PostUpdate` pipeline in three chained sets (`HtmlUiSystems::{Render, Localize, Build}`) before Bevy's `UiSystems::Prepare`: render the Tera template, parse it (`astral-tl`; character references decoded with `htmlize`, ADR 0036), localize with Fluent, cascade the CSS (`lightningcss`; selectors matched by parcel_selectors over the walk's ancestor chain and sibling lists, `src/cascade/selector.rs`, ADR 0034), and reconcile a `NodeSpec` tree with the existing entities. When to update is decided by a pure state machine (`rebuild` module, ADR 0005). Details: @AGENTS.md ("Public API", "Layout", "Pipeline").
+A `PostUpdate` pipeline in three chained sets (`HtmlUiSystems::{Render, Localize, Build}`) before Bevy's `UiSystems::Prepare`: render the MiniJinja template on its fuel, parse it (`astral-tl`; character references decoded with `htmlize`, ADR 0036), localize with Fluent, cascade the CSS (`lightningcss`; selectors matched by parcel_selectors over the walk's ancestor chain and sibling lists, `src/cascade/selector.rs`, ADR 0034), and reconcile a `NodeSpec` tree with the existing entities. When to update is decided by a pure state machine (`rebuild` module, ADR 0005). Details: @AGENTS.md ("Public API", "Layout", "Pipeline").
 
 ## Scale and Performance (Current)
 
@@ -67,7 +67,7 @@ One developer with AI coding agents (Claude Code, omp with other models); ADRs, 
 | Dependency | Use |
 |---|---|
 | Bevy 0.20 (`default-features = false`, `ui_api` and a few more) | engine, UI, picking |
-| tera, astral-tl, cssparser (bevy_markup's own CSS parser on it, ADR 0048), fluent, pulldown-cmark | templates, HTML parsing, CSS, localization, Markdown |
+| minijinja, astral-tl, cssparser (bevy_markup's own CSS parser on it, ADR 0048), fluent, pulldown-cmark | templates, HTML parsing, CSS, localization, Markdown |
 | htmlize 1.1 (`unescape`, phf table) | character references (ADR 0036; replaced a 2,134-line generated table) |
 | fluent-syntax fork (`[patch.crates-io]`) | fixes for U1, U2 |
 | bevy_mcp_harness (`dev-tools`) | agent QA of the examples |

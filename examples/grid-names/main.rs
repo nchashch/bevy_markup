@@ -210,7 +210,7 @@ mod tests {
         let context = app.world().get::<TemplateContext>(ui).unwrap();
         assert_eq!(
             context.get("picks").unwrap(),
-            &tera::Value::from(vec![true, false, false, false])
+            &bevy_markup::minijinja::Value::from(vec![true, false, false, false])
         );
 
         click(&mut app, "pick-portrait");
@@ -219,7 +219,7 @@ mod tests {
         let context = app.world().get::<TemplateContext>(ui).unwrap();
         assert_eq!(
             context.get("picks").unwrap(),
-            &tera::Value::from(vec![false, false, false, false])
+            &bevy_markup::minijinja::Value::from(vec![false, false, false, false])
         );
 
         click(&mut app, "pick-stats");

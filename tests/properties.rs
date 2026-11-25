@@ -776,7 +776,7 @@ fn skeleton_reuse_matches_a_fresh_build(
   <p class="dynamic">Value: {{ b }}</p>
   <p>See <a href="/p/{{ a }}">the page</a> now.</p>
 </div>
-{% for i in range(end=2) %}
+{% for i in range(2) %}
 <p class="row">Row {{ i }}: {{ b }}</p>
 {% endfor %}
 "#;

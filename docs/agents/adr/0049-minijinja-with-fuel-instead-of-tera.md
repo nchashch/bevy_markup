@@ -7,7 +7,7 @@
 | `Date` | 2026-11-25 05:21 +0400 |
 | `Author` | Claude Opus 5.5 (Anthropic), via Claude Code |
 | `Commit` | `a8d5260 Bump fluent to 0.17 (fluent-syntax 0.12)` |
-| `Status` | Proposed |
+| `Status` | Accepted (2026-11-25, after the trial on branch `minijinja`; see Results) |
 | `Related` | ADR 0044, 0046, 0047, 0048; bug_0182, bug_0220, bug_0223, bug_0224, bug_0227, bug_0239, bug_0240, bug_0241; UPSTREAM U39, U46; U56, U57 (reserved: unfixed, filed privately) |
 
 ## Context
@@ -54,7 +54,7 @@ Its `vm/fuel.rs` documents the model, and the measurements below match it:
 It also has `set_recursion_limit` (≤ 500, macro recursion and parser
 nesting), `range` ≤ 100,000 items, and string or sequence repetition ≤ 10⁸.
 
-## Decision (proposed)
+## Decision
 
 Evaluate replacing Tera with MiniJinja 3.1 with fuel, and, if the
 open questions below come out as expected, switch:
@@ -172,7 +172,7 @@ If adopted:
   `separate_statements`); the fuzz harness and `tests/content_lint.rs`
   build Tera environments. All need porting.
 
-Open questions before acceptance:
+Open questions before acceptance (answered in Results below):
 
 1. Port the examples' templates and the template test vectors, and
    measure: render time against Tera (the criterion and divan benches —
@@ -186,3 +186,73 @@ Open questions before acceptance:
 4. Decide the migration path for users: a release note with a Tera →
    MiniJinja table, or a deprecation period with both engines behind
    features (doubles the template surface for a release).
+
+## Results (2026-11-25, branch `minijinja`)
+
+The trial ported the crate, its examples, tests and benchmarks; the full
+suite passes (654 tests). Method for every timing: criterion, release,
+`main` (Tera) measured, then the branch against that baseline, then `main`
+again (noise up to 2.6%).
+
+1. **Render speed (open question 1).**
+
+   | Workload (`rebuilding` page) | Tera | MiniJinja | |
+   |---|---|---|---|
+   | compiled once, render per iteration, 120 rows | 8.0 µs | 13.4 µs | +67% |
+   | the same, 600 rows | 34.6 µs | 62.9 µs | +82% |
+   | compile + render (`one_off`), 120 / 600 rows | 15.1 / 42.0 µs | 17.2 / 68.2 µs | +13% / +62% |
+   | fuel accounting itself (fuel vs none) | | | ≈ 5% |
+   | full frames, all 18 `frame/*` workloads | | | −4% to +4.7% |
+
+   A profile puts half of a render in MiniJinja's per-iteration loop
+   machinery (`eval_impl`, `next_loop_item`): a tight 600-row loop is its
+   worst case. A render runs only when the context changes; the largest
+   frame effect was `changing/600` (+4.7%, re-rendering 600 rows every
+   frame). At 60 FPS the 600-row render is 0.38% of a frame; what it costs
+   over Tera (28 µs) is 0.17%. The `speedups` feature is on (a faster escaper and
+   number formatting: a few percent).
+2. **Built-in audit (open question 2).** Every filter, function and
+   operator that can produce more than it takes was measured against the
+   default budget (peak RSS, release). Most charge before or while
+   allocating and stay within ~1.1× of the budget's ~268 MB. Some build
+   their result first and charge it afterwards (U56, filed privately and
+   reserved); `new_environment` registers wrappers over those that charge
+   the result's size up front, then call MiniJinja's own implementation.
+   A counting-allocator regression test (kept with the private report
+   until upstream fixes U56) holds every case under 1× of a 2¹⁸ budget and
+   fails without the wrappers.
+3. **Fuel default (open question 3).** `HtmlTemplateLimits { fuel }`, a
+   resource, default 2²² (≈ 4.2 M), read when a template loads (the loaders
+   get it through `TemplateFuel`, an atomic `sync_template_fuel` updates).
+   Measured: the example templates use at most 2,605 fuel per render
+   (`ui/content/l10n.html`); generated documents use 21–27 fuel per
+   element and about one per 4 bytes of output (testbench `big-document`
+   at 8,000 elements: 213,077 fuel, 836,742 bytes), so the default runs
+   out near the 16 MiB output cap, which stays.
+4. **Migration (open question 4).** One breaking release with a migration
+   table in the CHANGELOG; no period with both engines. What the
+   repository needed: the examples' component library became a macro
+   library (`{% import … as ui %}`, `{% call ui.button(…) %}`), two
+   `range(start=, end=)` calls, one `as_bool()`, and a handful of test
+   templates (`range(end=)`, `default(value=)`, `set_global`).
+
+Also decided in the trial:
+
+- `{% import %}` and `{% from %}` resolve relative to the file and load
+  like `include`/`extends`; a reference cycle fails the load (Tera refused
+  cycles too; MiniJinja would recurse until its limit).
+- `UndefinedBehavior::SemiStrict` (printing or iterating an undefined
+  value fails; testing it in `{% if %}` is false), as Tera behaved, and
+  the trailing newline is kept.
+- The operator pre-check (`tera_tag_over_limit`, bug_0182) stays: it
+  bounds what fuel can't see, the compile.
+- Review 0009's template bombs now run out of fuel at render
+  (`hostile_templates_run_out_of_fuel`); `unique` over a large range,
+  quadratic in Tera (U46), renders.
+- Removed: `src/tera_check/` (2,423 lines of logic, 567 of tests),
+  `tera`, `nom`. Added: `minijinja` (3.1.0, features `fuel`,
+  `loop_controls`, `json`, `serde`, `speedups`), `v_htmlescape`. Library
+  tree: 315 → 313 crates.
+- Fuzzing: 593,153 runs of the `html` target (5 min, over the Tera-era
+  corpus), no crash.
+

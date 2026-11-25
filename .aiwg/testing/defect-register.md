@@ -35,7 +35,7 @@ bug_0203 waits on a Bevy release (UPSTREAM U37). review_0007's findings were fil
 | Medium | K02 (dashed strokes ~1000× their cost estimate), K03 (glyph outlines uncosted), K04 (`<style>` rules × elements quadratic), K05 (a refused inline `<svg>` re-parsed per build), K06 (no bound on the rasters' sum), K11 (`%` image sizes wrong at scale factors other than 1), K12 (a framed canvas loses its picture or frame), K13 (a hidden canvas resizes its camera's image to 1 × 1) |
 | Low | K07–K09, K14–K18 |
 
-Decided (ADR 0044): every input is untrusted, templates and CSS included; templates are bounded by a static check at load (`src/tera_check/`).
+Decided (ADR 0044): every input is untrusted, templates and CSS included; templates were bounded by a static check at load (`src/tera_check/`) until ADR 0049 (2026-11-25), which bounds every render with MiniJinja's fuel instead.
 
 ## Open Review Findings (review_0008, 2026-11-12, at `54bad82`)
 

@@ -297,10 +297,7 @@ fn handle_signals(
             "armor" => next_armor(&mut contexts, &armor, &mut materials),
             "toggle-portrait" => {
                 for mut context in &mut contexts {
-                    let shown = context
-                        .get("portrait")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
+                    let shown = context.get("portrait").map(|v| v.is_true()).unwrap_or(true);
                     context.insert("portrait", &!shown);
                 }
             }

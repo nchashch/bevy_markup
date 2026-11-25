@@ -24,8 +24,6 @@
 //! and containers carry an [`HtmlElement`] (anonymous loose text doesn't), so
 //! CSS selectors and [`HtmlElements`] reach them.
 
-use std::borrow::Cow;
-
 use bevy::asset::LoadState;
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::HashSet;
@@ -70,32 +68,71 @@ impl From<Handle<HtmlTemplate>> for HtmlUi {
     }
 }
 
-/// Tera variables for this entity's template. Mutate it (it derefs to
-/// [`tera::Context`]) to re-render. A render whose HTML equals the previous
-/// one changes nothing (no rebuild, attached components kept), so there's no
-/// need to diff values before writing them.
-#[derive(Component, Default, Clone, Deref, DerefMut)]
-pub struct TemplateContext(pub tera::Context);
+/// Template variables for this entity's template. Mutate it to re-render.
+/// A render whose HTML equals the previous one changes nothing (no
+/// rebuild, attached components kept), so there's no need to diff values
+/// before writing them.
+///
+/// Values are MiniJinja [`Value`](minijinja::Value)s: anything
+/// `Serialize` goes in (`insert`, `with`), and `get` hands back a value
+/// with `as_str()`, `as_i64()`, `is_true()` and friends.
+#[derive(Component, Default, Clone, Debug, PartialEq)]
+pub struct TemplateContext(pub std::collections::BTreeMap<String, minijinja::Value>);
+
+/// A `Serialize` value as a template value.
+pub(crate) fn to_value<T: Serialize + ?Sized>(value: &T) -> minijinja::Value {
+    minijinja::Value::from(minijinja::value::Serde(value))
+}
 
 impl TemplateContext {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Builder form of [`tera::Context::insert`].
-    pub fn with<T: Serialize + ?Sized>(
-        mut self,
-        key: impl Into<Cow<'static, str>>,
-        value: &T,
-    ) -> Self {
-        self.0.insert(key, value);
+    /// A context from any `Serialize` map-like value (a struct, a map, a
+    /// `serde_json::Value` object); anything else gives an empty context.
+    pub fn from_serialize<T: Serialize + ?Sized>(value: &T) -> Self {
+        let value = to_value(value);
+        let mut map = std::collections::BTreeMap::new();
+        if let Ok(keys) = value.try_iter() {
+            for key in keys {
+                if let (Some(name), Ok(item)) = (key.as_str(), value.get_item(&key)) {
+                    map.insert(name.to_owned(), item);
+                }
+            }
+        }
+        Self(map)
+    }
+
+    /// Sets `key` to `value`.
+    pub fn insert<T: Serialize + ?Sized>(&mut self, key: impl Into<String>, value: &T) {
+        self.0.insert(key.into(), to_value(value));
+    }
+
+    /// Builder form of [`insert`](Self::insert).
+    pub fn with<T: Serialize + ?Sized>(mut self, key: impl Into<String>, value: &T) -> Self {
+        self.insert(key, value);
         self
     }
-}
 
-impl From<tera::Context> for TemplateContext {
-    fn from(context: tera::Context) -> Self {
-        Self(context)
+    /// The value of `key`.
+    pub fn get(&self, key: &str) -> Option<&minijinja::Value> {
+        self.0.get(key)
+    }
+
+    /// Removes `key`, returning its value.
+    pub fn remove(&mut self, key: &str) -> Option<minijinja::Value> {
+        self.0.remove(key)
+    }
+
+    /// Whether `key` is set.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
+    /// The context as the value templates render with.
+    pub(crate) fn as_value(&self) -> minijinja::Value {
+        minijinja::Value::from(&self.0)
     }
 }
 
@@ -345,16 +382,19 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// `TemplateContext::from(tera::Context)` keeps the context's variables
-    /// (an app building a `tera::Context` itself must not lose them).
+    /// `TemplateContext::from_serialize` keeps a serialized map's entries
+    /// (an app building its context from a struct must not lose them).
     #[test]
-    fn template_context_from_tera_keeps_variables() {
-        let mut context = tera::Context::new();
-        context.insert("player", "Ada");
-        let converted = TemplateContext::from(context);
+    fn template_context_from_serialize_keeps_variables() {
+        let context =
+            TemplateContext::from_serialize(&serde_json::json!({ "player": "Ada", "gold": 3 }));
         assert_eq!(
-            converted.get("player").and_then(|value| value.as_str()),
+            context.get("player").and_then(|value| value.as_str()),
             Some("Ada")
+        );
+        assert_eq!(
+            context.get("gold").and_then(|value| value.as_i64()),
+            Some(3)
         );
     }
 

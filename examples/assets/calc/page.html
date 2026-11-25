@@ -12,7 +12,7 @@
     <h2 class="headline" data-l10n-id="calc-headline" data-l10n-args='{{ {"indent": settings.indent} | json }}' style="margin-left: calc({{ settings.indent }}px + 1em)">Indented by {{ settings.indent }}px + 1em</h2>
     <p class="formula" data-l10n-id="calc-formula-content" data-l10n-args='{{ {"sidebar": settings.sidebar} | json }}'>width: calc(100% − {{ settings.sidebar }}px − 12px)</p>
     <div class="cards">
-      {% for i in range(start=1, end=settings.cards + 1) %}
+      {% for i in range(1, settings.cards + 1) %}
       <div class="card" id="card-{{ i }}" style="width: calc(100% / {{ settings.cards }} - 8px)">
         <p class="count">{{ i }}/{{ settings.cards }}</p>
         <p class="formula" data-l10n-id="calc-formula-card" data-l10n-args='{{ {"cards": settings.cards} | json }}'>calc(100% / {{ settings.cards }} − 8px)</p>

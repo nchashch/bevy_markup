@@ -34,9 +34,7 @@ fn main() {
 #[divan::bench(args = SIZES, max_time = 2)]
 fn render(bencher: Bencher, size: usize) {
     let source = shared::workload_page(size, "rebuilding");
-    bencher.bench_local(|| {
-        black_box(tera::Tera::one_off(&source, &shared::context(0), true).unwrap())
-    });
+    bencher.bench_local(|| black_box(shared::one_off(&source, &shared::context(0))));
 }
 
 /// The `tl` parse stage. `parse` takes the string; the clone is setup

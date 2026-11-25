@@ -48,7 +48,28 @@ fn render_and_parse(c: &mut Criterion) {
         let source = shared::workload_page(size, "rebuilding");
         group.throughput(Throughput::Elements(size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter(|| black_box(tera::Tera::one_off(&source, &shared::context(0), true).unwrap()))
+            b.iter(|| black_box(shared::one_off(&source, &shared::context(0))))
+        });
+    }
+    group.finish();
+
+    // ADR 0049: the per-frame cost — compiled once, rendered per
+    // iteration — with the default fuel and, to price fuel itself, none.
+    let mut group = c.benchmark_group("render-compiled");
+    for size in SIZES {
+        let source = shared::workload_page(size, "rebuilding");
+        let context = shared::context(0);
+        group.throughput(Throughput::Elements(size as u64));
+        let fueled = shared::compiled(
+            &source,
+            Some(bevy_markup::template::HtmlTemplateLimits::default().fuel),
+        );
+        group.bench_with_input(BenchmarkId::new("fuel", size), &size, |b, _| {
+            b.iter(|| black_box(shared::render(&fueled, &context)))
+        });
+        let unlimited = shared::compiled(&source, None);
+        group.bench_with_input(BenchmarkId::new("no-fuel", size), &size, |b, _| {
+            b.iter(|| black_box(shared::render(&unlimited, &context)))
         });
     }
     group.finish();

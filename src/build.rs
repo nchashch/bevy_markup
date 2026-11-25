@@ -553,18 +553,17 @@ fn context_vars_hash(
 /// string: this runs per tracked name, per UI, per frame (it cloned a
 /// `String` each time, review_0003 G22). Distinct `css_value` results hash
 /// apart; the hash only signals change.
-fn hash_css_value(value: &tera::Value, hasher: &mut impl std::hash::Hasher) {
+fn hash_css_value(value: &minijinja::Value, hasher: &mut impl std::hash::Hasher) {
+    use minijinja::value::ValueKind;
     use std::hash::Hash;
     if let Some(text) = value.as_str() {
         (1u8, text).hash(hasher);
     } else if let Some(number) = value.as_i64() {
         (2u8, number).hash(hasher);
-    } else if let Some(number) = value.as_u64() {
-        (3u8, number).hash(hasher);
-    } else if let Some(number) = value.as_f64() {
+    } else if let (ValueKind::Number, Ok(number)) = (value.kind(), f64::try_from(value.clone())) {
         (4u8, number.to_bits()).hash(hasher);
-    } else if let Some(flag) = value.as_bool() {
-        (5u8, flag).hash(hasher);
+    } else if value.kind() == ValueKind::Bool {
+        (5u8, value.is_true()).hash(hasher);
     } else {
         // Arrays, objects, `null`: unresolvable, like a missing value.
         0u8.hash(hasher);
@@ -574,20 +573,21 @@ fn hash_css_value(value: &tera::Value, hasher: &mut impl std::hash::Hasher) {
 /// A `TemplateContext` value as a CSS `var()` replacement: strings as
 /// written, numbers and bools as their CSS spelling, anything else (arrays,
 /// objects, `null`) unresolvable.
-fn css_value(value: &tera::Value) -> Option<String> {
+fn css_value(value: &minijinja::Value) -> Option<String> {
+    use minijinja::value::ValueKind;
     if let Some(text) = value.as_str() {
         return Some(text.to_owned());
     }
     if let Some(number) = value.as_i64() {
         return Some(number.to_string());
     }
-    if let Some(number) = value.as_u64() {
-        return Some(number.to_string());
+    match value.kind() {
+        ValueKind::Number => f64::try_from(value.clone())
+            .ok()
+            .map(|number| format!("{number}")),
+        ValueKind::Bool => Some(value.is_true().to_string()),
+        _ => None,
     }
-    if let Some(number) = value.as_f64() {
-        return Some(format!("{number}"));
-    }
-    value.as_bool().map(|value| value.to_string())
 }
 
 /// `[top, right, bottom, left]` px values over `base`.

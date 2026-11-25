@@ -38,7 +38,7 @@ Status: **Built** or **Planned**. IDs are stable. Each brief names the example t
 ### UC-004 — Author writes pages in Markdown
 
 - **Main success scenario:** a `.md` template is converted to HTML at load (pulldown-cmark) and styled like any template.
-- **Notes:** indentation inside Tera blocks or HTML containers is not Markdown; indented code blocks are disabled. Example: `markdown`. Sources: ADR 0014, 0020, 0024–0026.
+- **Notes:** indentation inside template blocks or HTML containers is not Markdown; indented code blocks are disabled. Example: `markdown`. Sources: ADR 0014, 0020, 0024–0026.
 
 ### UC-005 — Player interacts with the UI
 

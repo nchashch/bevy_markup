@@ -1,21 +1,20 @@
-{# The examples' shared widget components: Tera 2 macros, included by
-   templates that want them (`{% include "../shared/components.html" %}` —
-   relative to the including template; including renders nothing). A
-   component stays unstyled here: the including page's stylesheet styles
-   its classes (`.button` etc.). Call with a body where the component takes
-   one: `{% <ui.button id="x" signal="y"> %}<p>…</p>{% </ui.button> %}`. #}
+{# The examples' shared widget macros, imported by the templates that use
+   them (`{% import "../shared/components.html" as ui %}` — relative to the
+   importing template). A macro stays unstyled here: the importing page's
+   stylesheet styles its classes (`.button` etc.). Call with a body where
+   the macro takes one: `{% call ui.button(id="x", signal="y") %}<p>…</p>{% endcall %}`. #}
 
 {# A focusable button. `signal` is its `data-on-click`; optional `aux` its
    `data-on-auxclick` (right/middle button), `tooltip` a Fluent key shown by
    `HtmlTooltips` (`data-tooltip`), `answer` a `data-answer` the handler reads
    with `ElementSignal::data("answer")`; `class` adds classes, and
-   `focusable={false}` (`tabindex="-1"`) keeps it out of keyboard/gamepad
+   `focusable=false` (`tabindex="-1"`) keeps it out of keyboard/gamepad
    focus (mouse only). #}
-{% component ui.button(id: string, signal: string, aux: string = "", tooltip: string = "", answer: string = "", class: string = "", autofocus: bool = false, focusable: bool = true) %}
+{% macro button(id, signal, aux="", tooltip="", answer="", class="", autofocus=false, focusable=true) %}
 <div class="button{% if class %} {{ class }}{% endif %}" id="{{ id }}"{% if autofocus %} autofocus{% endif %}{% if not focusable %} tabindex="-1"{% endif %} data-on-click="{{ signal }}"
      {%- if aux %} data-on-auxclick="{{ aux }}"{% endif %}
      {%- if tooltip %} data-tooltip="{{ tooltip }}"{% endif %}
      {%- if answer %} data-answer="{{ answer }}"{% endif %}>
-  {% if body is defined %}{{ body }}{% endif %}
+  {% if caller is defined %}{{ caller() }}{% endif %}
 </div>
-{% endcomponent ui.button %}
+{% endmacro %}

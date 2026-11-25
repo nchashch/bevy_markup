@@ -66,7 +66,7 @@ p.row { margin: 2px 0 }
 /// templated (per-frame change with a transition attached: the advance
 /// system's active path).
 pub(crate) const SHELL_PRELUDE: &str = r#"<header><span class="chip">a</span><span class="chip">b</span></header>
-<div class="grid">{% for i in range(end=8) %}<span class="cell">cell {{ i }}</span>{% endfor %}</div>
+<div class="grid">{% for i in range(8) %}<span class="cell">cell {{ i }}</span>{% endfor %}</div>
 <p class="counter {% if n % 2 == 1 %}active{% endif %}" style="color: rgb({{ n % 255 }}, 0, 0)">{{ n }}</p>
 "#;
 
@@ -81,7 +81,7 @@ pub(crate) fn shell_template(elements: usize, counter_only: bool) -> String {
         "item {{ i }} of {{ n }}"
     };
     format!(
-        r#"{prelude}{{% for i in range(end={elements}) %}}<p class="row">{line}</p>
+        r#"{prelude}{{% for i in range({elements}) %}}<p class="row">{line}</p>
 {{% endfor %}}"#,
         prelude = SHELL_PRELUDE
     )
@@ -91,7 +91,7 @@ pub(crate) fn shell_template(elements: usize, counter_only: bool) -> String {
 /// changing per frame.
 pub(crate) fn localized_template(elements: usize) -> String {
     format!(
-        "{{% for i in range(end={elements}) %}}\
+        "{{% for i in range({elements}) %}}\
          <p class=\"row\" data-l10n-id=\"row\" data-l10n-args='{{\"i\": {{{{ i }}}}, \"n\": {{{{ n }}}}}}'>fallback</p>\n\
          {{% endfor %}}"
     )
@@ -101,7 +101,7 @@ pub(crate) fn localized_template(elements: usize) -> String {
 /// loader by extension) whose Fluent values are Markdown too.
 pub(crate) fn markdown_template(elements: usize) -> String {
     format!(
-        "{{% for i in range(end={elements}) %}}\
+        "{{% for i in range({elements}) %}}\
          ## Section {{{{ i }}}}\n\
          A *markdown* paragraph with `code`, some **emphasis** and a data-l10n-id line:\n\
          <p class=\"row\" data-l10n-id=\"row\" data-l10n-args='{{\"i\": {{{{ i }}}}, \"n\": {{{{ n }}}}}}'>fallback</p>\n\n\
@@ -135,13 +135,50 @@ pub(crate) fn locale_files(markdown: bool) -> Vec<(String, String)> {
 }
 
 /// The context: the one value the workloads change.
-pub(crate) fn context(n: i64) -> tera::Context {
-    tera::Context::from_serialize(&serde_json::json!({ "n": n })).unwrap()
+pub(crate) fn context(n: i64) -> TemplateContext {
+    TemplateContext::new().with("n", &n)
 }
 
-/// The rendered HTML for the parse benchmarks (Tera one-off).
+/// `source` compiled as `page.html` (autoescaped, as the loader does),
+/// with `fuel` per render (`None`: unlimited, to measure fuel's cost).
+pub(crate) fn compiled(
+    source: &str,
+    fuel: Option<u64>,
+) -> bevy_markup::minijinja::Environment<'static> {
+    let mut env = bevy_markup::template::new_environment(
+        bevy_markup::template::HtmlTemplateLimits::default().fuel,
+    );
+    env.set_fuel(fuel);
+    env.add_template_owned("page.html", source.to_owned())
+        .unwrap();
+    env
+}
+
+/// One render of a compiled `page.html`.
+pub(crate) fn render(
+    env: &bevy_markup::minijinja::Environment<'static>,
+    context: &TemplateContext,
+) -> String {
+    env.get_template("page.html")
+        .unwrap()
+        .render(bevy_markup::minijinja::Value::from(&context.0))
+        .unwrap()
+}
+
+/// Compile and render at once (the old Tera `one_off`).
+pub(crate) fn one_off(source: &str, context: &TemplateContext) -> String {
+    render(
+        &compiled(
+            source,
+            Some(bevy_markup::template::HtmlTemplateLimits::default().fuel),
+        ),
+        context,
+    )
+}
+
+/// The rendered HTML for the parse benchmarks.
 pub(crate) fn rendered(source: &str) -> String {
-    tera::Tera::one_off(source, &context(0), true).unwrap()
+    one_off(source, &context(0))
 }
 
 /// Fake font ids, served from Bevy's embedded font (the test harness's
@@ -336,7 +373,7 @@ li:focus-within { background-color: #222222 }
 pub(crate) fn selectors_template(size: usize) -> String {
     let cards = (size / 40).max(1);
     format!(
-        r#"<main>{{% for s in range(end={cards}) %}}<section class="card c{{{{ s % 40 }}}}"><header>Card {{{{ s }}}}</header><p class="{{% if s % 3 == 0 %}}muted{{% endif %}}">{{{{ n }}}}</p><ul class="list">{{% for i in range(end=10) %}}<li class="{{% if i < 3 %}}done{{% else %}}todo{{% endif %}}" data-kind="{{% if i % 2 == 0 %}}a{{% else %}}b{{% endif %}}"><span class="label">L{{{{ i }}}}</span><span class="value">{{{{ n + i }}}}</span><span></span></li>{{% endfor %}}</ul></section>{{% endfor %}}</main>"#
+        r#"<main>{{% for s in range({cards}) %}}<section class="card c{{{{ s % 40 }}}}"><header>Card {{{{ s }}}}</header><p class="{{% if s % 3 == 0 %}}muted{{% endif %}}">{{{{ n }}}}</p><ul class="list">{{% for i in range(10) %}}<li class="{{% if i < 3 %}}done{{% else %}}todo{{% endif %}}" data-kind="{{% if i % 2 == 0 %}}a{{% else %}}b{{% endif %}}"><span class="label">L{{{{ i }}}}</span><span class="value">{{{{ n + i }}}}</span><span></span></li>{{% endfor %}}</ul></section>{{% endfor %}}</main>"#
     )
 }
 
@@ -350,7 +387,7 @@ pub(crate) fn deep_template(size: usize) -> String {
         .collect();
     let close = "</div>".repeat(24);
     format!(
-        "<main>{{% for s in range(end={repeats}) %}}{open}<span class=\"leaf\">{{{{ n + s }}}}</span>{close}{{% endfor %}}</main>"
+        "<main>{{% for s in range({repeats}) %}}{open}<span class=\"leaf\">{{{{ n + s }}}}</span>{close}{{% endfor %}}</main>"
     )
 }
 
@@ -386,7 +423,7 @@ div > div > div > div > .leaf { margin: 1px 0 }\n",
 pub(crate) fn siblings_template(size: usize) -> String {
     let lists = (size / 72).max(1);
     format!(
-        "<main>{{% for s in range(end={lists}) %}}<ul class=\"list\">{{% for i in range(end=60) %}}<li class=\"{{% if i % 7 == 0 %}}mark{{% endif %}}\" data-n=\"{{{{ i }}}}\">{{{{ n + i }}}}</li>{{% if i % 5 == 0 %}}<p>x</p>{{% endif %}}{{% endfor %}}</ul>{{% endfor %}}</main>"
+        "<main>{{% for s in range({lists}) %}}<ul class=\"list\">{{% for i in range(60) %}}<li class=\"{{% if i % 7 == 0 %}}mark{{% endif %}}\" data-n=\"{{{{ i }}}}\">{{{{ n + i }}}}</li>{{% if i % 5 == 0 %}}<p>x</p>{{% endif %}}{{% endfor %}}</ul>{{% endfor %}}</main>"
     )
 }
 
@@ -516,7 +553,7 @@ pub(crate) fn workload_page(size: usize, workload: &str) -> String {
 pub(crate) fn hover_template(elements: usize) -> String {
     format!(
         r#"{prelude}
-{{% for i in range(end={elements}) %}}<p class="row" data-on-click="ping" data-tooltip="tip" data-l10n-args='{{"i": {{{{ i }}}}}}'>item {{{{ i }}}} of {{{{ n }}}}</p>
+{{% for i in range({elements}) %}}<p class="row" data-on-click="ping" data-tooltip="tip" data-l10n-args='{{"i": {{{{ i }}}}}}'>item {{{{ i }}}} of {{{{ n }}}}</p>
 {{% endfor %}}"#,
         prelude = SHELL_PRELUDE
     )

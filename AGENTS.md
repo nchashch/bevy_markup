@@ -1,6 +1,6 @@
 # bevy_markup
 
-Bevy 0.20 library: HTML templates (Tera) + Fluent + CSS → Bevy UI, with
+Bevy 0.20 library: HTML templates (MiniJinja) + Fluent + CSS → Bevy UI, with
 9-slice frames. Dependencies are limited to that; don't add unrelated crates.
 A maintained crate in that domain that replaces code the crate maintains
 is in scope (ADR 0036: `htmlize` replaced the generated entity table),
@@ -33,7 +33,8 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `BevyMarkupPlugin` | Plugin | loaders, resources, systems |
 | `HtmlUiSystems::{Render, Localize, Build}` | SystemSet | chained in `PostUpdate`, before `UiSystems::Prepare` |
 | `HtmlUi(Handle<HtmlTemplate>)` | Component | the UI; requires `Node`, `TemplateContext`, `RenderedHtml`, `LocalizedText` |
-| `TemplateContext(tera::Context)` | Component | Tera variables; `.with(k, &v)` builder; Deref to `tera::Context`; mutate → re-render (rebuild only if the HTML changed) |
+| `TemplateContext(BTreeMap<String, minijinja::Value>)` | Component | template variables; `insert`/`with(k, &v)` (any `Serialize`), `get` (a `minijinja::Value`: `as_str`, `as_i64`, `is_true`), `remove`, `from_serialize`; mutate → re-render (rebuild only if the HTML changed) |
+| `HtmlTemplateLimits { fuel }` | Resource | ADR 0049: fuel per render (default 2²², ≈ 4.2 M: one per instruction, per 64 bytes produced, per item visited); a render out of fuel fails like a template error; read when a template loads |
 | `HtmlStylesheet(Handle<Stylesheet>)` | Component | per-entity stylesheet override |
 | `HtmlDebugOutline` | Component | show the DOM outline (styled like `pre`) instead of the UI |
 | `RenderedHtml` | Component | `Pending` / `Ready(HtmlDocument)` / `Failed(msg)` (read-only) |
@@ -61,7 +62,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `HtmlModal`, `HtmlNoFocus` | Component | on an `HtmlUi` root: confine focus to it while visible / never take focus |
 | `FocusEdge { entity, direction }`, `ActivateElement { entity }` | EntityEvent | no neighbour in that direction / emit the element's click signals |
 
-Re-exported crates (their types appear in the API): `tera`, `tl` (the
+Re-exported crates (their types appear in the API): `minijinja`, `tl` (the
 `astral-tl` fork, bug_0019 / UPSTREAM.md U11),
 `fluent`. Cargo features: `system_fonts` (Bevy's
 `system_font_discovery`), `text-input` (the editable-text widget),
@@ -85,22 +86,27 @@ LICENSE-MIT, LICENSE-APACHE  dual license (MIT OR Apache-2.0, Cargo.toml `licens
 src/
   lib.rs           crate docs (guide), BevyMarkupPlugin, HtmlUiSystems, prelude, re-exports
   html.rs          HtmlUi, TemplateContext, RenderedHtml, HtmlDebugOutline, HtmlElement,
-                   HtmlUiBuilt, HtmlElements; render system (Tera + tl)
-  template.rs      HtmlTemplate asset + loader (resolve_references: `{% include/extends "…" %}`
-                   paths resolved relative to the file, rewritten, loaded with read_asset_bytes
-                   (loader dependencies: Bevy's file watcher reloads every user of an edited
-                   file; a manual `AssetServer::reload` reloads only its own path — bug_0026)
-                   → one Tera set per template, components shared), each file converted by its
-                   own root extension (a `.md` partial included from an `.html` page converts,
-                   an `.html` partial from a `.md` page stays HTML), a tag holding more than
-                   64 operators fails the load before Tera compiles it (tera_tag_over_limit,
-                   bug_0182); after Tera compiles the set, `tera_check::check` bounds it (ADR
-                   0044); `render_source` renders through `BoundedOutput`, refused past
+                   HtmlUiBuilt, HtmlElements; render system (MiniJinja + tl)
+  template.rs      HtmlTemplate asset + loader (ADR 0049: MiniJinja; resolve_references:
+                   `{% include/extends/import/from "…" %}` paths resolved relative to the file,
+                   rewritten, loaded with read_asset_bytes (loader dependencies: Bevy's file
+                   watcher reloads every user of an edited file; a manual `AssetServer::reload`
+                   reloads only its own path — bug_0026) → one environment per template, a
+                   reference cycle fails the load (`reference_cycle`)), each file converted by
+                   its own root extension (a `.md` partial included from an `.html` page
+                   converts, an `.html` partial from a `.md` page stays HTML), a tag holding
+                   more than 64 operators fails the load before compiling (the long-chain
+                   stack guard, `tera_tag_over_limit`, bug_0182; still needed); `new_environment`
+                   (autoescape for the markup extensions, `SemiStrict` undefined handling,
+                   trailing newline kept, the `json` filter, `join`/`split`/`lines`/`escape`/`e`
+                   wrapped to charge their result's size up front, fuel from
+                   `HtmlTemplateLimits` via `TemplateFuel`/`sync_template_fuel`);
+                   `render_source` renders through `BoundedOutput`, refused past
                    `MAX_RENDERED_BYTES` 16 MiB (bug_0220), HtmlDocument (+ outline, cut at
                    1 MiB, bug_0244),
                    decode_text / decode_attribute (htmlize, ADR 0036)
   md.rs            Markdown → HTML (ADR 0014, 0020): `to_html` / `to_html_template` (pulldown-cmark,
-                   Tera syntax kept verbatim), `code_ranges`, `dedent_blocks` (ADR 0024)
+                   template syntax kept verbatim), `code_ranges`, `dedent_blocks` (ADR 0024)
   fuzz.rs          (`fuzzing` feature, `#[doc(hidden)]`) the fuzz harness: the internal glue
                    called directly per input (html, css, ftl, svg targets)
   ftl_check.rs     (ADR 0045) the load-time FTL safety check: a port of fluent-syntax 0.11.1's (unchanged in 0.12.0)
@@ -110,31 +116,6 @@ src/
                    (`Stop::BadEscape`, UPSTREAM U1; text isn't scanned, bug_0236);
                    `ftl_check/tests.rs` (the port vs fluent-syntax's entries, the escape
                    refusal vs fluent-syntax's panic, the limit on a 2 MB thread)
-  tera_check/      (ADR 0044, bug_0220) the load-time template safety check: every input is
-                   untrusted, and Tera 2.4 bounds no render's work or memory (UPSTREAM U39),
-                   its parser private. `lexer.rs` (Tera's lexer ported with `nom`: text,
-                   `{% raw %}`, comments, tokens), `parser.rs` (Tera's Pratt parser ported:
-                   same precedence, `loop.*`, components, blocks, `extends`; run only on what
-                   Tera compiled, an unreadable input is an error), `analysis.rs` (an abstract
-                   render over `Av` bounds — written size, item count, one item's size,
-                   numeric magnitude — each a `Lin` `c + k·A`, `A` one app value; a loop over
-                   app data counts one iteration, a template-made one multiplies; a loop over
-                   app data inside another runs only over the innermost app loop's element
-                   (`Av::origin`; else `NestedAppLoops`, ADR 0046); a context number in
-                   `range` counts `RANGE_MAX`; building or scanning a value costs its bytes
-                   ÷ 16 (bug_0227); `set_global` in a loop runs once with symbols and must
-                   come out as constant + one copy per carried variable (linear growth;
-                   `carried` reaches component bodies, bug_0224; early-exit environments
-                   are joined at the loop boundary, bug_0239); map elements include
-                   key lengths (bug_0240); `unique` charges pairwise comparisons and
-                   refuses context-sized input (bug_0241, ADR 0047); includes/`extends`+
-                   `super()`/components inline, recursion refused; `MAX_NESTING` 64,
-                   `MAX_DEPTH` 96 (every level the analysis recurses through, ~14 KB each in
-                   debug, bug_0223) and `MAX_ANALYSIS_WORK` 2²² bound the check itself).
-                   Limits: `MAX_TEMPLATE_STEPS` 2²⁵,
-                   `MAX_TEMPLATE_VALUE_BYTES` 16 MiB, `MAX_TEMPLATE_APP_COPIES` 4 096.
-                   `tests.rs`: bombs refused by their limit, ordinary templates accepted,
-                   properties vs Tera (the parsers agree; renders stay within the bound)
   l10n.rs          LocaleBundle asset + loader (`.ftl.ron`: manifest → Fluent resources, read as
                    dependencies), ActiveLocale, LocalizedText; localize system (data-l10n-id/-args);
                    with `markdown: true`, each cacheable message's pattern pre-converts at load
@@ -374,7 +355,7 @@ examples/
                    `tabindex="0"` label ▶, clamped at Easy/Hard; both controls carry
                    `data-setting`, which routes ← → to them), HtmlModal confirm dialog,
                    `data-tooltip` + HtmlTooltips (on the slider row: nearest ancestor wins),
-                   buttons as a Tera 2 component (`../shared/components.html`: body, `class`,
+                   buttons as a template macro (`../shared/components.html`, imported as `ui`: `{% call %}` body, `class`,
                    `focusable`; included by menu and dialog), handlers routed with on_html_click
                    (dialog answer via `data-answer` → `signal.data`), a MessageReader beside
                    them (last input), roots styled by `<html class>` (backdrop, z-index,
@@ -423,7 +404,7 @@ examples/
   forms/           form submission: a `<form data-on-submit>` with two
                    fields and a `type="submit"` button (plus a
                    `type="button"` clear); the `Submit` payload goes into
-                   the context and Tera `{% if submitted %}` swaps the form
+                   the context and the template's `{% if submitted %}` swaps the form
                    for a receipt; "edit again" clears it; Space / Y =
                    language
   canvas/          ADR 0041: a character sheet over a 3D world; the hero exists only on render
@@ -495,7 +476,7 @@ examples/
                    triggers Bevy's `ScrollIntoView` on navigated focus (only while
                    `InputFocusVisible`: startup autofocus fires before layout settles)
 tests/
-  html_ui.rs       headless test vectors: HTML/CSS/Fluent/Tera → world dump, + browser_oracle (see Testing)
+  html_ui.rs       headless test vectors: HTML/CSS/Fluent/templates → world dump, + browser_oracle (see Testing)
   signals.rs       picking-driven signal tests: real WindowEvent input → Bevy picking → ElementSignal/PseudoState
                    (needs TestUi::with_pointer; see Testing)
   signal_properties.rs  proptest: random pages (nested hooks, pointer-events none) × random pointer-op
@@ -624,15 +605,15 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
                    refused.svg, locales/{en-US,de}
   testbench/       shell.html, style.css, locales/{en-US,de} (`markdown: true`: shell.ftl +
                    workload.ftl, the generated workloads' messages)
-  shared/          reused across examples: components.html (Tera 2 component
-                   library: `ui.button`; unstyled — the including page's
+  shared/          reused across examples: components.html (template macro
+                   library: `ui.button`; unstyled — the importing page's
                    stylesheet styles its classes), images: frame.png (256x256
                    9-slice frame), frame_transparent.png (clear center; the
                    parchment/terminal panels frame themselves with it),
                    cat.png (the examples' seal/cat icon)
   ui/themes/       demo CSS themes: crimson (default), parchment (framed `pre` via border-image longhands), terminal, large_print;
                    each carries the identical `Demo chrome` block styling the shell's panels/buttons/viewports
-  ui/content/      test.html (plain), inventory.html (Tera), l10n.html (Tera + Fluent; ends
+  ui/content/      test.html (plain), inventory.html (templated), l10n.html (templated + Fluent; ends
                    with a 60-entry "Expedition log" — one `log-entry` message selecting
                    place/event/coin plural from `range` loop args — so the inventory panel
                    overflows even on a 4K screen),
@@ -656,7 +637,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   didn't touch and `tests/common/mod.rs`: don't restore by hand what the
   formatter changed.
 
-- Library = HTML/CSS/Fluent/Tera → Bevy UI only. Panels, layouts, selectors,
+- Library = HTML/CSS/Fluent/templates → Bevy UI only. Panels, layouts, selectors,
   scrollbars, cameras, `ClearColor`, font files and asset paths belong to apps
   (the examples). Global config is resources; per-entity config is components.
 - New user-facing items go in the prelude; internals stay `pub(crate)`. Keep
@@ -786,14 +767,16 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 ## Pipeline
 
 ```
-.html/.md (Tera) --render(TemplateContext)--> HTML --tl--> DOM       [Render]
+.html/.md (MiniJinja) --render(TemplateContext)--> HTML --tl--> DOM  [Render]
     --data-l10n-id × ActiveLocale--> LocalizedText                     [Localize]
     --CSS (HtmlStylesheet | DefaultStylesheet) × FontFamilies--> UI    [Build] → HtmlUiBuilt
 ```
 
 - Templates: compiled at load (syntax errors fail the load); name = asset path,
-  so `.html` gets Tera HTML autoescaping (the loader forces `.md`/`.markdown`
-  into the autoescape list). Plain HTML renders to itself; Markdown
+  so `.html` gets HTML autoescaping (`new_environment`'s callback covers
+  `.html`/`.htm`/`.xml`/`.md`/`.markdown`). Every render runs on fuel
+  (`HtmlTemplateLimits`, ADR 0049): an expensive or hostile template fails
+  that render (`RenderedHtml::Failed`) instead of stalling the app. Plain HTML renders to itself; Markdown
   (`src/md.rs::to_html`/`to_html_template`, pulldown-cmark: CommonMark + tables, strikethrough,
   task lists, footnotes; raw HTML passes through unclassed; every element
   the conversion constructs carries `class="markdown"` — `img.markdown`
@@ -801,20 +784,20 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   converts once per file, at template load (ADR 0020): each file in the
   include graph decides by its own root extension — an `.html` partial
   included from a `.md` page is never converted, a `.md` partial included
-  from an `.html` page is. Tera syntax survives verbatim (`to_html_template`:
-  Tera runs pass raw, a Tera-only paragraph keeps no `<p>` wrapper; text
-  inside code fences and code spans stays Tera-literal escaped text —
+  from an `.html` page is. Template syntax survives verbatim (`to_html_template`:
+  template runs pass raw, a template-only paragraph keeps no `<p>` wrapper; text
+  inside code fences and code spans stays template-literal escaped text —
   `{% … %}` there doesn't execute), and `separate_statements` puts a
   `{% … %}`/`{# … #}` on its own line only when it already owns the line
   (an inline statement and `{{ … }}` stay where they are) so statements
   can't merge with Markdown content. Before that, `dedent_blocks` (ADR
-  0024) strips from each own-line Tera block body (`if`/`for`/`block`/
+  0024) strips from each own-line template block body (`if`/`for`/`block`/
   `component`/`filter`/`raw`/block `set`, per `elif`/`else` segment) the
   indentation its lines share, recursively up to `MAX_DEDENT_DEPTH` (16):
-  authors indent Tera for readability, and the separated statement's blank
+  authors indent templates for readability, and the separated statement's blank
   line made a 4-space body an indented code block (review_0004 H11).
   Own-line raw HTML containers (`<div …>` … `</div>`, any non-void tag
-  alone on its line) are blocks too, nested with Tera blocks on one stack
+  alone on its line) are blocks too, nested with template blocks on one stack
   (ADR 0025); `<pre>`/`<textarea>`/`<script>`/`<style>` bodies stay
   verbatim. Lines inside code are content; `raw` bodies dedent but aren't
   searched. *What is code* is pulldown's answer,
@@ -863,10 +846,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   data-l10n-args='{"n": 3}'>fallback</p>` on any element (block, container,
   inline, walked-through); the translation replaces the children, the
   element's own content is the fallback. Args are JSON (numbers stay numbers
-  for plurals), printed by the crate's `json` Tera filter from a map literal
+  for plurals), printed by the crate's `json` template filter from a map literal
   (`'{{ {"name": player} | json }}'`) or one map variable
   (`'{{ args | json }}'`). Never splice a value into hand-written JSON
-  (`'{"name": "{{ player }}"}'`): attribute decoding undoes Tera's `&quot;`,
+  (`'{"name": "{{ player }}"}'`): attribute decoding undoes the escaper's `&quot;`,
   so a value holding `"` adds its own arguments (review_0003 G20; the
   examples and README use map literals). Translations are markup
   (`walk_translation` in `build.rs` parses them as a fragment): inline
@@ -1045,7 +1028,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `markdown: true` values write their lists as two-space-indented
   continuations (`notes-body = The *bridge* is out.\n\n  - first item`),
   never start a line with `*`, and escape literal braces as `{"{"}` /
-  `{"}"}` (a `{{ Tera }}` placeholder shown in the doc is exactly that).
+  `{"}"}` (a `{{ template }}` placeholder shown in the doc is exactly that).
   The blank line makes the newline a Markdown paragraph break. Fluent
   string args are never Markdown or markup: HTML-escaped, and on the
   per-value path (a message the cache can't take) their punctuation and
@@ -1106,16 +1089,16 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   fn, sound per its docs) → `VDomGuard`, which only hands out shared borrows,
   so the DOM is never mutated; translations live beside it keyed by
   `tl::NodeHandle`.
-- `tl` misparses raw Tera (`{% if a < b %}` becomes a `<b>` tag) — hence
+- `tl` misparses raw template syntax (`{% if a < b %}` becomes a `<b>` tag) — hence
   render-then-parse. `tl` keeps character references as written (decode
   with `decode_text` for text, `decode_attribute` for attribute values:
   the spec's two rules, via `htmlize`) and drops `<!DOCTYPE>`.
-- Tera 2 (not 1.x): unknown functions/filters fail at template *compile* time,
-  so custom ones must be registered in the loader before `add_raw_template`.
-  `template::new_tera` builds every environment (the loader, the fuzz
-  harness): autoescaping plus the `json` filter. Without the filter Tera
-  prints maps with Rust `Debug` string escaping (`\u{200d}`, `\0`), which
-  isn't JSON (bug_0128: an emoji name lost its translation), so argument
+- MiniJinja (ADR 0049): custom filters are registered in
+  `template::new_environment`, which builds every environment (the loader,
+  the fuzz harness, the tests' `test_render`): autoescaping, the `json`
+  filter and the up-front-charging wrappers. Without the filter a map
+  prints as a template literal, not JSON, and a Rust `Debug`-style escape
+  (`\u{200d}`) once lost an emoji name its translation (bug_0128), so argument
   attributes (`data-l10n-args`, `data-with`, `data-tooltip-args`) are
   printed with `| json` and parsed as plain JSON
   (`template::parse_attribute_json`).
@@ -1281,7 +1264,7 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   declared style for an `HtmlElement` (specificity, compound matching, comma
   lists, importance, unsupported selectors).
 - **Test vectors** (`tests/html_ui.rs`, `cargo test --test html_ui`): input
-  files (HTML/Tera template, CSS, Fluent bundles) → the Bevy world they
+  files (HTML/template, CSS, Fluent bundles) → the Bevy world they
   produce. `TestUi::new(name, files)` writes the files plus `frame.png` into a
   fresh temp asset root and builds `MinimalPlugins + AssetPlugin + ImagePlugin
   + BevyMarkupPlugin` (no window/renderer; fonts are fake `Handle::Uuid`s labelled
@@ -1292,7 +1275,7 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   line per entity (`tag#id.class` / `-` / `html-ui`, then `border=`,
   `padding=`, `margin=` as t,r,b,l, `gap=`, `bg=`, `slice=file t,r,b,l
   stretch|tile`), one indented line per text run (`"text" face size color`).
-  Vectors: Tera structure, CSS cascade + fonts, Fluent, box model, runtime
+  Vectors: template structure, CSS cascade + fonts, Fluent, box model, runtime
   changes (context / locale / stylesheet swaps, root box restore). Plain-HTML
   vectors live as files in `tests/vectors/<name>/` (`TestUi::from_vector`).
 - Adding a vector: write the inputs, derive the expected dump **by hand from
@@ -1314,7 +1297,7 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   flex-column root and containers, block blocks, Bevy's default font at line
   height 1.2, white text, `li` indent and bullet, `pre` 8px padding — keep in
   sync with `build.rs`) + `style.css` + `page.html`, so vectors must be plain
-  HTML (no Tera / `data-l10n-id`; the script refuses them and skips Fluent
+  HTML (no template syntax / `data-l10n-id`; the script refuses them and skips Fluent
   vectors), set `color` on
   `html` (browsers default to black, bevy_markup to white) and `border-style: solid`
   where widths matter. Deliberate differences (root background,
@@ -1349,7 +1332,7 @@ harnesses below) are filed in `docs/agents/bugs/` — see **Bug reports**.
   U37), so `layout_svg` keeps its images shorter.
 - **Unit tests** (`cargo test --lib`; `--features fuzzing` adds `src/fuzz.rs`):
   besides the cascade tests, `template.rs` (entity decoding: five escapes,
-  one level only, others untouched; Tera-autoescape round trip proptest),
+  one level only, others untouched; template-autoescape round trip proptest),
   `l10n.rs` (escape/decode identity, `data-l10n-args` typing: numbers stay
   numbers for CLDR plurals, bools → strings, bad JSON → error naming the
   message; only FSI/PDI stripped), `fonts.rs` (face fallback chain
@@ -1502,7 +1485,7 @@ known gaps:
     rule in `src/rebuild.rs`).
   - [x] `quickcheck` over structured inputs: a generated many-rule stylesheet
     checked against a reference CSS-precedence model (`cascade_winner_matches_
-    precedence_model`), and arbitrary text round-tripping through Tera
+    precedence_model`), and arbitrary text round-tripping through template
     autoescaping (`context_text_round_trips_through_template`). The cascade
     property catches a specificity mutation that all cascade unit tests miss.
     Note: quickcheck 1.1's `Gen` RNG is private (edition-2024 `gen` keyword) —
@@ -2017,7 +2000,7 @@ Known limits (each skipped/ignored value is logged at `debug`):
   translation) becomes one anonymous block per text piece, not one line.
 - **Fluent:** numbers format without locale grouping (fluent-rs; the loader
   exposes no configuration for `FluentBundle::set_formatter` yet) — pre-format
-  in Tera if needed.
+  in the template if needed.
 - **Fonts:** no bundled CJK font; Japanese relies on `system_fonts`. Bevy's
   default font covers printable ASCII only, so with no registered family even
   the `li` bullet (`•`) comes from font fallback.

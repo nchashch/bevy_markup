@@ -275,10 +275,7 @@ fn data_tooltip_shows_the_nearest_tooltip() {
         "tooltips",
         &[
             ("page.html", page),
-            (
-                "tooltip.html",
-                "<p>{{ key }} {{ args.n | default(value=0) }}</p>",
-            ),
+            ("tooltip.html", "<p>{{ key }} {{ args.n | default(0) }}</p>"),
         ],
         VIEWPORT,
     )

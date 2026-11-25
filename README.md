@@ -104,7 +104,7 @@ actual input (arrows, D-pad, Tab, Enter, A) in a couple
 of lines, and the examples ship a ready-made binding
 (`examples/shared/input.rs`).
 
-**Data flows one way: the context.** `TemplateContext` holds the Tera
+**Data flows one way: the context.** `TemplateContext` holds the template
 variables (`{{ player }}`, `{% if %}`, loops, includes); change a value and
 the template re-renders, updating the existing UI in place — elements keep
 their entities, hover and focus state, and whatever your code attached. Swap
@@ -184,9 +184,10 @@ bevy_markup implements a useful subset of the web, not all of it:
   when it doesn't fit, kept on screen, gone when the element goes — and
   `HtmlWorldAnchor` keeps one over a 3D entity (nameplates, markers), with
   distance fade.
-- **Template composition:** `{% extends %}`, `{% include %}` and Tera 2
-  `{% component %}`s across files, by relative paths — keep your buttons
-  and panels in one component library and call `{{ <ui.button … /> }}`.
+- **Template composition:** `{% extends %}`, `{% include %}` and
+  `{% import %}` across files, by relative paths — keep your buttons and
+  panels in one macro library, `{% import "ui.html" as ui %}`, and call
+  `{{ ui.button(…) }}` (with a body: `{% call ui.button(…) %}…{% endcall %}`).
 - **Fluent:** messages, arguments, plurals and selectors, inline markup;
   per-bundle `markdown: true` for Markdown-authored values.
 - **Fonts:** you register font files under CSS family names
@@ -224,16 +225,14 @@ the limit. The bounds are estimates calibrated against the libraries
 underneath, and the reviews keep finding inputs they miss
 (`docs/agents/reviews/`): treat them as defense in depth, not a sandbox.
 
-- **Templates** are checked once when they load (`bevy_markup::tera_check`):
-  their own loops, built values and copies of context data must stay within
-  `MAX_TEMPLATE_STEPS`, `MAX_TEMPLATE_VALUE_BYTES` and
-  `MAX_TEMPLATE_APP_COPIES`, and a template the check can't analyze is
-  refused. A loop over your `TemplateContext` data counts once per element
-  (the data you send is yours to size), and a loop over context data inside
-  another may only run over the outer loop's element (`for card in
-  group.cards`). `unique` charges its worst-case pairwise comparisons;
-  applying it to context-sized collections is refused because the work is
-  quadratic (deduplicate those in app code). Rendered output is capped at `template::MAX_RENDERED_BYTES`.
+- **Templates** render on a fuel budget (MiniJinja's fuel, ADR 0049):
+  every instruction, every 64 bytes of data a template produces and every
+  item a filter visits cost fuel, and a render that runs out fails like a
+  template error (the UI shows the failure) instead of stalling the app or
+  exhausting its memory. The budget is `HtmlTemplateLimits::fuel`
+  (default 2²², about 4.2 million: the example templates use at most a few
+  thousand; a document runs out near the 16 MiB output cap,
+  `template::MAX_RENDERED_BYTES`). Raise it for very large documents.
 - **Fluent files** are checked once when they load
   (`bevy_markup::ftl_check`): placeables and function calls nested deeper
   than `MAX_FTL_NESTING`, calls with more than `MAX_FTL_ARGUMENTS` (64)
@@ -340,8 +339,8 @@ Bevy systems in `PostUpdate`:
 
 ```mermaid
 flowchart LR
-  MD[.md / .markdown template] -->|pulldown-cmark<br>once at asset load| T[HTML template<br>Tera syntax intact]
-  T -->|Tera render × TemplateContext| H[HTML document]
+  MD[.md / .markdown template] -->|pulldown-cmark<br>once at asset load| T[HTML template<br>template syntax intact]
+  T -->|MiniJinja render × TemplateContext| H[HTML document]
   H -->|tl parse| D[DOM]
   D -->|Fluent: data-l10n-id × ActiveLocale| L[localized document]
   L --> B[build]
@@ -349,11 +348,11 @@ flowchart LR
   B -->|skeleton reuse: skip unchanged subtrees| U[Bevy UI entities]
 ```
 
-1. **Render.** The template is a [Tera](https://keats.github.io/tera/)
-   template. A `.md`/`.markdown` page is converted to HTML once, at asset
+1. **Render.** The template is a [MiniJinja](https://github.com/mitsuhiko/minijinja)
+   (Jinja2) template, rendered on a fuel budget. A `.md`/`.markdown` page is converted to HTML once, at asset
    load (CommonMark + GFM tables, strikethrough, task lists, footnotes,
-   via pulldown-cmark; Tera syntax passes through), so the per-frame path
-   is Tera-only.
+   via pulldown-cmark; template syntax passes through), so the per-frame path
+   is template-only.
 2. **Localize.** `data-l10n-id` elements get the Fluent translation of the
    active locale, `data-l10n-args` as arguments, following the conventions
    of Mozilla's `fluent-dom`. Translations may carry inline markup, styled

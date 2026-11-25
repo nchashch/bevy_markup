@@ -106,7 +106,7 @@ pub(crate) fn inline_page(elements: usize, recolor: bool) -> String {
         "rgb(200, 40, 40)"
     };
     format!(
-        r#"{{% for i in range(end={elements}) %}}<p style="color: {color}">Item {{{{ i }}}} {icon}</p>{{% endfor %}}"#
+        r#"{{% for i in range({elements}) %}}<p style="color: {color}">Item {{{{ i }}}} {icon}</p>{{% endfor %}}"#
     )
 }
 
@@ -114,7 +114,7 @@ pub(crate) fn inline_page(elements: usize, recolor: bool) -> String {
 /// (drawn again at 48×48 by the display-size redraw).
 pub(crate) fn img_page(elements: usize) -> String {
     format!(
-        r#"{{% for i in range(end={elements}) %}}<p>Item {{{{ i }}}} <img class="icon" src="icon.svg"></p>{{% endfor %}}"#
+        r#"{{% for i in range({elements}) %}}<p>Item {{{{ i }}}} <img class="icon" src="icon.svg"></p>{{% endfor %}}"#
     )
 }
 

@@ -57,17 +57,18 @@ Numbered, testable statements with what verifies each ("—" = no automated chec
 | ID | Requirement | Source | Verified by |
 |---|---|---|---|
 | NFR-SEC-001 | Template input is treated as untrusted: a panic reachable from user data is high severity | `AGENTS.md` Bug reports | fuzzing (NFR-REL-001) |
-| NFR-SEC-002 | Tera autoescaping round-trips; character references are decoded one level only (htmlize, the spec's algorithm) | `AGENTS.md` Testing, ADR 0036 | `template.rs` unit tests and proptest; `entity_decoding_stays_linear_without_terminators` |
+| NFR-SEC-002 | Template (MiniJinja) autoescaping round-trips; character references are decoded one level only (htmlize, the spec's algorithm) | `AGENTS.md` Testing, ADR 0036 | `template.rs` unit tests and proptest; `entity_decoding_stays_linear_without_terminators` |
 | NFR-SEC-006 | Argument attributes (`data-with`, `data-l10n-args`, `data-tooltip-args`) are parsed as strict JSON, printed by the `json` filter; any string a template variable holds round-trips | CHANGELOG (bug_0128's class) | `template::tests::json_filter_round_trips_any_string`, `malformed_attribute_json_is_an_error`; the testbench's hostile-args scenarios |
 | NFR-SEC-005 | Selector forms outside the supported grammar (`:nth-child(… of S)`, `:has()`, `&` nesting, `:nth-col()`, pseudo-elements) parse to `Unsupported` and the allowlist skips their rules; the matcher has no panic paths (ADR 0050) | ADR 0034, 0050 | `cascade::tests::the_engine_allowlist`; the testbench's selector-engine scenario |
 | NFR-SEC-003 | Known upstream panics are patched locally until fixed upstream, and apps are told to apply the patch | `UPSTREAM.md` U1, U2 | `[patch.crates-io]` in `Cargo.toml`; README section |
 | NFR-SEC-004 | The `dev-tools` surface (localhost BRP + MCP) is never enabled in a shipped build | `Cargo.toml` features | — (opt-in feature) |
+| NFR-SEC-007 | Every template render is bounded by fuel (instructions, bytes produced, items visited) and fails, not stalls or exhausts memory, when it runs out; output is capped at 16 MiB; long expression chains fail the load | ADR 0049 | `review_0009::hostile_templates_run_out_of_fuel`; `template::tests::rendered_output_is_bounded`; html fuzzing |
 
 ## Design Constraints
 
 | ID | Requirement | Source |
 |---|---|---|
-| NFR-DES-001 | Bevy 0.20; the library maps HTML/CSS/Fluent/Tera to Bevy UI and nothing else; app decisions (panels, input bindings, fonts, asset paths) stay in apps | ADR 0002 |
+| NFR-DES-001 | Bevy 0.20; the library maps HTML/CSS/Fluent/templates to Bevy UI and nothing else; app decisions (panels, input bindings, fonts, asset paths) stay in apps | ADR 0002 |
 | NFR-DES-002 | Global configuration is resources; per-entity configuration is components; public items go in the prelude | `AGENTS.md` Conventions |
 | NFR-DES-003 | When to update is decided by the pure `rebuild` state machine, unit-tested in `rebuild::tests` | ADR 0005 |
 

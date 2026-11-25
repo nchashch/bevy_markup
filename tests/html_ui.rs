@@ -2732,8 +2732,8 @@ html-ui
     // The cyclic include loaded (terminating on the seen set); the missing
     // dependency failed its template's load.
     let server = ui.world_mut().resource::<AssetServer>().clone();
-    // A circular include fails its load (`CircularInclude`), like the
-    // missing one.
+    // A circular include fails its load (the loader's cycle check), like
+    // the missing one.
     assert!(server.load_state(cyclic.id()).is_failed());
     assert!(server.load_state(broken.id()).is_failed());
 
@@ -2960,10 +2960,9 @@ fn focus_on_the_window_yields_to_autofocus() {
     );
 }
 
-/// Templates compose: a page extends a base template, uses a component from a
-/// library it includes (Tera 2 components are shared by every template in
-/// the set; including a definitions-only file renders nothing), and includes
-/// a part — all by paths relative to its own file.
+/// Templates compose: a page extends a base template, calls a macro from a
+/// library it imports, and includes a part — all by paths relative to its
+/// own file.
 #[test]
 fn templates_extend_import_and_include() {
     let mut ui = TestUi::new(
@@ -2972,7 +2971,7 @@ fn templates_extend_import_and_include() {
             (
                 "pages/page.html",
                 r#"{% extends "base.html" %}
-{% block body %}{% include "../lib/ui.html" %}{{ <ui.button id="go" label={label} /> }}{% include "part.html" %}{% endblock %}"#,
+{% block body %}{% import "../lib/ui.html" as ui %}{{ ui.button(id="go", label=label) }}{% include "part.html" %}{% endblock %}"#,
             ),
             (
                 "pages/base.html",
@@ -2984,7 +2983,7 @@ fn templates_extend_import_and_include() {
             ),
             (
                 "lib/ui.html",
-                r#"{% component ui.button(id, label) %}<div id="{{ id }}" class="button"><p>{{ label }}</p></div>{% endcomponent ui.button %}"#,
+                r#"{% macro button(id, label) %}<div id="{{ id }}" class="button"><p>{{ label }}</p></div>{% endmacro %}"#,
             ),
         ],
     )
@@ -6187,7 +6186,7 @@ mod skeleton_reuse {
                 "page.html",
                 // The loop shifts every later node's index between builds:
                 // a stale handle then no longer keys the state walk.
-                "<p>{% for i in range(end=n) %}<b>r</b>{% endfor %}</p><div class=\"panel\"><p class=\"x\">Hover me</p></div>",
+                "<p>{% for i in range(n) %}<b>r</b>{% endfor %}</p><div class=\"panel\"><p class=\"x\">Hover me</p></div>",
             ),
             (
                 "a.css",
@@ -10511,7 +10510,7 @@ mod review_0006 {
     fn rows_that_stay_in_the_band_keep_their_entities() {
         let page: String = (1..=300)
             .map(|i| match i {
-                145 => "<p id=\"p145\">{{ v | default(value=\"first\") }}</p>".to_owned(),
+                145 => "<p id=\"p145\">{{ v | default(\"first\") }}</p>".to_owned(),
                 // Boxed rows (a wrapper plus its text node) too.
                 _ if i % 10 == 0 => format!("<p id=\"p{i}\" class=\"bx\">row {i}</p>"),
                 _ => format!("<p id=\"p{i}\">row {i}</p>"),
@@ -11880,38 +11879,47 @@ fn the_plugin_keeps_existing_image_and_font_stores() {
 }
 
 /// Review 0009's refusals must apply through the real asset loaders,
-/// before Tera renders or Fluent builds its resource.
+/// before a template's work grows or Fluent builds its resource.
 mod review_0009 {
     use super::*;
     use bevy::asset::LoadState;
 
+    /// Review 0009's template bombs (once refused at load by `tera_check`)
+    /// run out of fuel at render (ADR 0049): the UI shows the failure,
+    /// quickly, without the memory the bomb asks for. `unique` over a
+    /// large range was quadratic in Tera (UPSTREAM U46); MiniJinja's isn't,
+    /// so that one renders.
     #[test]
-    fn hostile_templates_fail_to_load() {
+    fn hostile_templates_run_out_of_fuel() {
         let key = "k".repeat(100_000);
-        let sources = [
-            "{% set_global s = 'x' %}{% for i in range(end=50) %}{% set_global s = s ~ s %}{% continue %}{% set_global s = '' %}{% endfor %}{{ s | length }}".to_owned(),
-            format!("{{% set m = {{'{key}': 1}} %}}{{% for k,v in m %}}{{% set s = k %}}{}{{{{ s | length }}}}{{% endfor %}}", "{% set s = s ~ s %}".repeat(8)),
-            "{% set x = range(end=40000) | unique %}{{ x | length }}".to_owned(),
+        let bombs = [
+            "{% set ns = namespace(s='x') %}{% for i in range(50) %}{% set ns.s = ns.s ~ ns.s %}{% continue %}{% endfor %}{{ ns.s | length }}".to_owned(),
+            format!("{{% set m = {{'{key}': 1}} %}}{{% for k, v in m | items %}}{{% set s = k %}}{}{{{{ s | length }}}}{{% endfor %}}", "{% set s = s ~ s %}".repeat(12)),
         ];
-        for (i, source) in sources.iter().enumerate() {
-            let mut ui = TestUi::new(&format!("review9-template-{i}"), &[("page.html", source)]);
-            let handle = ui.load::<HtmlTemplate>("page.html");
-            assert!(ui.wait_until(|ui| {
-                matches!(
-                    ui.world_mut()
-                        .resource::<AssetServer>()
-                        .load_state(handle.id()),
-                    LoadState::Loaded | LoadState::Failed(_)
-                )
-            }));
+        for (i, source) in bombs.iter().enumerate() {
+            let start = std::time::Instant::now();
+            let mut ui = TestUi::new(&format!("review9-template-{i}"), &[("page.html", source)])
+                .spawn("page.html", TemplateContext::new(), Node::default());
+            let dump = ui.settle().dump();
+            assert!(dump.contains("fuel"), "case {i} runs out of fuel:\n{dump}");
             assert!(
-                ui.world_mut()
-                    .resource::<AssetServer>()
-                    .load_state(handle.id())
-                    .is_failed(),
-                "case {i} must fail before rendering"
+                start.elapsed().as_secs() < 30,
+                "case {i} took {:?}",
+                start.elapsed()
             );
         }
+        let mut ui = TestUi::new(
+            "review9-template-unique",
+            &[("page.html", "<p>{{ range(40000) | unique | length }}</p>")],
+        )
+        .spawn("page.html", TemplateContext::new(), Node::default());
+        ui.settle().assert_dump(
+            r#"
+html-ui
+  p
+    "40000" default 16px #ffffff
+"#,
+        );
     }
 
     #[test]

@@ -110,7 +110,6 @@ dependencies = [
  "cfg-if",
  "getrandom 0.3.4",
  "once_cell",
- "serde",
  "version_check",
  "zerocopy",
 ]
@@ -1389,7 +1388,7 @@ dependencies = [
  "htmlize",
  "icu_casemap",
  "icu_segmenter",
- "nom",
+ "minijinja",
  "proptest",
  "proptest-stateful",
  "pulldown-cmark",
@@ -1402,7 +1401,6 @@ dependencies = [
  "serde_json",
  "simplecss",
  "svgtypes",
- "tera",
  "test-strategy",
  "unic-langid",
  "wgpu-types",
@@ -4711,6 +4709,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
+name = "minijinja"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "509eeb2603a84eccabb4d75f6ec8ba23b46bbf441aaeb863d6b83a5887fd51e4"
+dependencies = [
+ "itoa",
+ "serde",
+ "v_htmlescape",
+ "zmij",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7018,18 +7028,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tera"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61e0cadeeb54426080b4c5395d59769ce8293f542cc25511c167c742b2175809"
-dependencies = [
- "ahash",
- "itoa",
- "pulldown-cmark-escape",
- "serde",
-]
-
-[[package]]
 name = "terminal_size"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7704,6 +7702,12 @@ dependencies = [
  "serde_core",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "v_htmlescape"
+version = "0.15.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e8257fbc510f0a46eb602c10215901938b5c2a7d5e70fc11483b1d3c9b5b18c"
 
 [[package]]
 name = "valuable"

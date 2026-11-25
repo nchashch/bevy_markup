@@ -9,6 +9,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Added
+- `HtmlTemplateLimits { fuel }` (resource, in the prelude): the fuel one
+  template render may use (default 2²², about 4.2 million; the example
+  templates use at most a few thousand, a large generated document runs
+  out near the 16 MiB output cap). Read when a template loads.
 - `HtmlFontLimits` (resource, in the prelude): bounds the font sizes
   bevy_markup's text uses — `max_font_size` (default 2048 px) and
   `max_font_sizes`, the distinct sizes across the app (default 128; past
@@ -88,6 +92,30 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     image fails with an error, instead of a renderer panic.
 
 ### Changed
+- **Breaking:** templates are MiniJinja (Jinja2) instead of Tera 2
+  (ADR 0049). Every render runs on a fuel budget instead of a load-time
+  analysis, so templates the old check refused by shape (loops over context
+  data nested in others) now render, and a too-expensive render fails
+  (`RenderedHtml::Failed`) when it runs out. Most Tera syntax is Jinja
+  syntax; what changes:
+
+  | Tera 2 | MiniJinja |
+  |---|---|
+  | `{% component ui.button(id, …) %}…{% endcomponent ui.button %}` | `{% macro button(id, …) %}…{% endmacro %}` |
+  | `{% include "ui.html" %}` to share components | `{% import "ui.html" as ui %}` |
+  | `{{ <ui.button id="x" /> }}` | `{{ ui.button(id="x") }}` |
+  | `{% <ui.button id="x"> %}body{% </ui.button> %}`, `body` | `{% call ui.button(id="x") %}body{% endcall %}`, `caller()` |
+  | `range(end=n)`, `range(start=a, end=b)` | `range(n)`, `range(a, b)` |
+  | named filter arguments (`default(value=x)`) | positional (`default(x)`) |
+  | `{% set_global x = … %}` in a loop | `{% set ns = namespace(x=…) %}` … `{% set ns.x = … %}` |
+  | `{% for k, v in map %}` | `{% for k, v in map \| items %}` |
+  | `TemplateContext(tera::Context)`, `Deref` to it | `TemplateContext(BTreeMap<String, minijinja::Value>)` with `insert`/`with`/`get`/`remove`/`from_serialize` |
+  | `context.get(k).and_then(\|v\| v.as_bool())` | `context.get(k).map(\|v\| v.is_true())` (`as_str`, `as_i64` stay) |
+  | `bevy_markup::tera` | `bevy_markup::minijinja` |
+
+  Printing or iterating an undefined variable is still an error, testing
+  it in `{% if %}` is still false; a template that includes, extends or
+  imports itself still fails to load.
 - Selectors are parsed and matched by bevy_markup itself (ADR 0050);
   `parcel_selectors` and `static-self` are no longer dependencies (11
   fewer crates in a build, `syn` 1 among them). The same selectors are
@@ -119,11 +147,17 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   Fluent files that would crash it (ADR 0045).
 
 ### Removed
+- **Breaking:** `bevy_markup::tera_check` (the load-time template check)
+  and the `tera` re-export (see Changed).
 - **Breaking:** the `bevy_markup::lightningcss` re-export and
   `Stylesheet::sheet()`. bevy_markup now parses CSS itself (see Changed);
   depend on `lightningcss` directly if your app used it.
 
 ### Security
+- Template renders are bounded by fuel (instructions, data produced,
+  items visited) instead of a load-time model of what a Tera render could
+  cost: hostile templates fail their render instead of stalling or
+  exhausting the app, with no shapes the model could miss.
 - CSS values so large that Bevy's layout overflows (`width: 3e38em`, a
   `calc()` adding up past the largest float, `font-size: 1e8px`) no longer
   crash or freeze the app inside Bevy UI's layout and text rendering
