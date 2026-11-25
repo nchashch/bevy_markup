@@ -88,6 +88,7 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     image fails with an error, instead of a renderer panic.
 
 ### Changed
+- hotpath 0.28 → 0.33 (the `hotpath*` features).
 - `hotpath` is no longer a dependency unless a `hotpath*` feature is on:
   builds that don't profile no longer compile the profiler and its macros.
   `hotpath-alloc`, `hotpath-prometheus` and `hotpath-cloud` now imply
