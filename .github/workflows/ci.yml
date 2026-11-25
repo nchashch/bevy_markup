@@ -11,6 +11,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege: jobs only read the repository (checkout). Caches and
+# artifacts use the Actions runtime token, which these don't govern.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

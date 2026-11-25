@@ -21,6 +21,11 @@ on:
     - cron: "23 1 * * *"
   workflow_dispatch:
 
+# Least privilege: jobs only read the repository (checkout). Caches and
+# artifacts use the Actions runtime token, which these don't govern.
+permissions:
+  contents: read
+
 concurrency:
   group: build-caches
   cancel-in-progress: false
