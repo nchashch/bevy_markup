@@ -357,20 +357,31 @@ corpus directory, `fuzz/corpus/<target>/`). First seeded 2026-10-05 from a
 local corpus (2940 html, 4868 css, 1181 ftl inputs; 580 KB). To refresh
 them, merge the seeds, your local corpus and CI's latest corpus into a
 fresh directory and replace the seeds (inputs are named by content hash,
-so git only stores the new ones). CI's corpus is the nightly fuzz job's
-`fuzz-corpus-<target>` artifact (kept 90 days; the cache it also saves
-can't be downloaded):
+so git only stores the new ones). CI's corpus is in the nightly fuzz
+job's sealed bundle (encrypted, kept 90 days; the cache it also saves
+can't be downloaded); decrypting it needs the maintainer's age key:
 
 ```sh
-cd fuzz && host=$(rustc +nightly -vV | sed -n 's/^host: //p')
 run=$(gh run list --workflow nightly.yml --status success --limit 1 --json databaseId -q '.[0].databaseId')
+TRIAGE_CORPORA=1 scripts/fuzz-triage.sh "$run"   # → docs/agents/bugs/private/fuzz-inbox/$run/
+cd fuzz && host=$(rustc +nightly -vV | sed -n 's/^host: //p')
 for t in html css ftl; do
-  rm -rf /tmp/ci-$t /tmp/seed-$t && mkdir -p /tmp/seed-$t
-  gh run download "$run" -n fuzz-corpus-$t -D /tmp/ci-$t
-  cargo +nightly fuzz run --target "$host" $t /tmp/seed-$t seeds/$t corpus/$t /tmp/ci-$t -- -merge=1
-  rm -rf seeds/$t && mv /tmp/seed-$t seeds/$t && rm -rf /tmp/ci-$t
+  ci=../docs/agents/bugs/private/fuzz-inbox/$run/corpus-libfuzzer-$t/fuzz/corpus/$t
+  rm -rf /tmp/seed-$t && mkdir -p /tmp/seed-$t
+  cargo +nightly fuzz run --target "$host" $t /tmp/seed-$t seeds/$t corpus/$t "$ci" -- -merge=1
+  rm -rf seeds/$t && mv /tmp/seed-$t seeds/$t
 done
 ```
+
+Nightly findings (crashing inputs, the fuzzers' logs) are triaged the same
+way: `scripts/fuzz-triage.sh [run-id]` downloads the run's sealed bundles,
+decrypts them, replays every libFuzzer and honggfuzz input against the
+current code, groups them by crash signature into
+`docs/agents/bugs/private/fuzz-inbox/<run>/triage.md`, and archives one
+sample per new reproducing signature in
+`docs/agents/bugs/private/fuzz-findings/`. A finding in bevy_markup becomes
+a bug report when its fix lands; one in a dependency stays private until
+upstream fixes it (`docs/agents/bugs/private/README.md`).
 
 The nightly coverage job runs after the fuzz jobs (`needs: fuzz`, also
 when one failed) and restores the corpus caches they just saved, so its
@@ -582,12 +593,15 @@ reporting upstream or removing a vendored patch.
 - `nightly.yml`: golden images on Ubuntu's lavapipe (the canonical
   renderer; a manual `Update golden references (lavapipe)` job,
   workflow_dispatch only, re-records the references on it), the browser
-  oracle against the runner's Chrome, 15 min of cargo-fuzz per target (RSS limit raised to 4 GB), and 15 min
-  per target of honggfuzz, fuzzcheck and test-fuzz (`fuzz-drivers`; a job
-  fails when its script reports a new crashing input and uploads
-  `fuzz-artifacts-<driver>-<target>`). Failures are reports to triage, not blockers. The
-  fuzz corpora carry over between nights (GitHub cache
-  `fuzz-corpus-<target>-*`, minimized with `cargo fuzz cmin` on Sundays).
+  oracle against the runner's Chrome, cargo-fuzz and honggfuzz with four
+  workers (css and html 120 min, svg and ftl 60, each reading the other's
+  corpus), fuzzcheck and test-fuzz 30 min (`fuzz-drivers`; a job fails
+  when its driver saves a new crashing input). Findings, logs and corpora
+  are encrypted before upload (`fuzz-sealed-*`, see "Nightly findings"
+  above); the job summaries show coverage start → end per campaign.
+  Failures are reports to triage, not blockers. The fuzz corpora carry
+  over between nights (GitHub cache `fuzz-corpus-<target>-*`, minimized
+  with `cargo fuzz cmin` on Sundays).
 - `mutants.yml` (Sundays and Wednesdays, 8 shards): informational. Survivors are in each
   shard's job summary and the `mutants-shard-N` artifacts. Test binaries run
   under an 8 GB address-space cap (`prlimit`), so a mutant that allocates

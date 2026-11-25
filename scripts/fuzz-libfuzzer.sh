@@ -1,6 +1,8 @@
 #!/bin/sh
 # cargo-fuzz (libFuzzer + AddressSanitizer) over bevy_markup::fuzz harnesses.
 # Usage: scripts/fuzz-libfuzzer.sh <html|css|ftl|svg> [seconds] [libFuzzer flags...]
+# FUZZ_EXTRA_CORPUS: more read-only corpus directories (space-separated;
+# CI passes honggfuzz's corpus of the same target).
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -26,5 +28,5 @@ host=$(rustc "+$toolchain" -vV | sed -n 's/^host: //p')
 # (fuzz/seeds/<target>, minimized) are read-only extra input.
 mkdir -p "fuzz/corpus/$target"
 exec cargo "+$toolchain" fuzz run --target "$host" "$target" \
-    "fuzz/corpus/$target" "fuzz/seeds/$target" -- \
+    "fuzz/corpus/$target" "fuzz/seeds/$target" ${FUZZ_EXTRA_CORPUS:-} -- \
     -max_total_time="$duration" -max_len=65536 -timeout=10 "$@"

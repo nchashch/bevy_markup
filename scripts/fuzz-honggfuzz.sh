@@ -30,6 +30,11 @@ cargo "+$toolchain" hfuzz build --bin "$target"
 # corpus; files already there are kept.
 mkdir -p "hfuzz_workspace/$target/input"
 cp -n "fuzz/seeds/$target"/* "hfuzz_workspace/$target/input/" 2>/dev/null || true
+# FUZZ_EXTRA_CORPUS: more corpus directories to start from (space-separated;
+# CI passes cargo-fuzz's corpus of the same target: same input format).
+for extra in ${FUZZ_EXTRA_CORPUS:-}; do
+    cp -n "$extra"/* "hfuzz_workspace/$target/input/" 2>/dev/null || true
+done
 # honggfuzz kills an input after 1 s by default: too tight for a loaded
 # machine or a CI runner (and under the svg target's own 5 s assertion).
 # = cargo-fuzz's -timeout. The 4 GiB address-space limit (= its

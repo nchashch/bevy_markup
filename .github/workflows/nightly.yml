@@ -241,19 +241,39 @@ jobs:
           path: target/coverage/
 
   fuzz:
-    name: Fuzz ${{ matrix.target }} (cargo-fuzz, 15 min)
+    name: Fuzz ${{ matrix.target }} (cargo-fuzz, ${{ matrix.minutes }} min)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout }}
     # The corpus persists across nights as a GitHub cache: each run restores
     # the newest `fuzz-corpus-<target>-*` entry, fuzzes on from there and
     # saves a new entry (also after a crash). Old entries age out after 7
     # days unused; if all of them do, fuzzing starts from scratch again.
+    #
+    # Coverage per night (2026-11-25, nightly 45522952063): the mature
+    # corpora gained little in 15 min (html +0.9%, svg +0.06%, ftl +0.25%
+    # of edges) while css, restarted under ADR 0048, gained 55%; every
+    # target still found edges at the end. So: four libFuzzer workers per
+    # job (the runner's four cores; one process used one), more time where
+    # coverage still grows (css, html), and honggfuzz's corpus as extra
+    # input (the same harness and format, explored differently).
+    #
+    # Findings stay private (artifacts and logs of a public repository are
+    # public): the fuzzer's output goes to a log that is encrypted with the
+    # crashing inputs and the corpus (scripts/fuzz-seal.sh, to
+    # .github/fuzz-artifacts.age.pub); the job log and summary carry counts
+    # only. scripts/fuzz-triage.sh downloads and decrypts them locally.
     strategy:
       fail-fast: false
       matrix:
-        target: [html, css, ftl, svg]
+        include:
+          - { target: css, minutes: 120, timeout: 170 }
+          - { target: html, minutes: 120, timeout: 170 }
+          - { target: svg, minutes: 60, timeout: 110 }
+          - { target: ftl, minutes: 60, timeout: 110 }
     steps:
       - uses: actions/checkout@v7
+      - name: Install age (artifact encryption)
+        run: sudo apt-get install -y --no-install-recommends age
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.BEVY_MARKUP_NIGHTLY }}
@@ -270,14 +290,21 @@ jobs:
         with:
           tool: cargo-fuzz
       # The css corpus restarted under `css-own` (ADR 0048): the
-      # lightningcss-era corpus isn't carried into the new parser's runs or
-      # its public artifacts.
+      # lightningcss-era corpus isn't carried into the new parser's runs.
       - name: Restore the corpus from the last run
         uses: actions/cache/restore@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-
+      # Read-only extra input: what honggfuzz found last night (the path
+      # must equal the one its job saves, for the cache to match).
+      - name: Restore honggfuzz's corpus of this target
+        uses: actions/cache/restore@v6
+        with:
+          path: hfuzz_workspace/${{ matrix.target }}/input
+          key: fuzz-corpus-honggfuzz-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-none
+          restore-keys: fuzz-corpus-honggfuzz-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-
       # Weekly (Sundays, UTC): drop inputs that add no coverage
       # (libFuzzer -merge=1), so the corpus stays small and fast to replay.
       - name: Minimize the corpus (Sundays)
@@ -287,50 +314,53 @@ jobs:
           if [ "$(date -u +%u)" != 7 ] || [ "$(count)" = 0 ]; then exit 0; fi
           before=$(count)
           host=$(rustc -vV | sed -n 's/^host: //p')
-          (cd fuzz && cargo "+$BEVY_MARKUP_NIGHTLY" fuzz cmin --target "$host" ${{ matrix.target }})
+          (cd fuzz && cargo "+$BEVY_MARKUP_NIGHTLY" fuzz cmin --target "$host" ${{ matrix.target }} > /dev/null 2>&1)
           echo "corpus minimized: $before → $(count) inputs"
-      # 15 min per target (minutes are free for public repos). libFuzzer's
-      # default 2 GB RSS limit would be hit by memory that only grows with
-      # the run (corpus, ASan quarantine): css reached 1 GB after 5 min.
-      # 4 GB of the runner's 16 GB; a real leak still fails, just later.
+      # Four workers (-fork=4) on the runner's four cores, carrying on after
+      # a crash (each is saved in fuzz/artifacts/<target>). 3 GB RSS each:
+      # libFuzzer's 2 GB default is hit by memory that only grows with a run
+      # (corpus, ASan quarantine); four at 3 GB fit the runner's 16 GB.
       - name: Fuzz
-        run: |
-          scripts/fuzz-libfuzzer.sh ${{ matrix.target }} 900 -rss_limit_mb=4096
-          echo "corpus: $(find fuzz/corpus/${{ matrix.target }} -type f | wc -l) inputs"
+        env:
+          FUZZ_EXTRA_CORPUS: hfuzz_workspace/${{ matrix.target }}/input
+          CORPUS: fuzz/corpus/${{ matrix.target }}
+          CRASHES: fuzz/artifacts/${{ matrix.target }}
+        run: >-
+          scripts/fuzz-ci-run.sh libfuzzer ${{ matrix.target }} $(( ${{ matrix.minutes }} * 60 ))
+          -fork=4 -ignore_crashes=1 -rss_limit_mb=3072
       - name: Save the corpus for the next run
         if: always()
         uses: actions/cache/save@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-      # Caches can't be downloaded; the artifact can (`gh run download <run>
-      # -n fuzz-corpus-<target>`), to fold into fuzz/seeds (see
-      # docs/agents/skills/testing.md, fuzzing).
-      - name: Upload the corpus
+      - name: Seal the log, crashing inputs and corpus
+        if: always()
+        run: |
+          scripts/fuzz-seal.sh libfuzzer-${{ matrix.target }} fuzz-private fuzz/artifacts/${{ matrix.target }}
+          scripts/fuzz-seal.sh corpus-libfuzzer-${{ matrix.target }} fuzz/corpus/${{ matrix.target }}
+      - name: Upload the sealed files
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: fuzz-corpus-${{ matrix.target }}
-          path: fuzz/corpus/${{ matrix.target }}/
+          name: fuzz-sealed-libfuzzer-${{ matrix.target }}
+          path: fuzz-sealed/
           if-no-files-found: ignore
           retention-days: 90
-      - name: Upload crashing inputs
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: fuzz-artifacts-${{ matrix.target }}
-          path: fuzz/artifacts/
-          if-no-files-found: ignore
 
   fuzz-drivers:
-    name: Fuzz ${{ matrix.target }} (${{ matrix.driver }}, 15 min)
+    name: Fuzz ${{ matrix.target }} (${{ matrix.driver }})
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 175
     # The other three drivers over the same harnesses (AGENTS.md, Testing
     # TODO 5). Until 2026-11-12 this job only compiled them. Each driver's
     # tools and build come from its `fuzz-<driver>` cache (cache.yml, built
     # by the same scripts/fuzz-setup.sh); the working corpus carries over
-    # between nights like the cargo-fuzz jobs'.
+    # between nights like the cargo-fuzz jobs'. Durations (step `plan`):
+    # honggfuzz as cargo-fuzz (css, html 120 min; svg, ftl 60) with four
+    # threads and cargo-fuzz's corpus as extra input; fuzzcheck and
+    # test-fuzz (single-threaded, formats of their own) 30 min. Findings
+    # are sealed as in the cargo-fuzz job.
     strategy:
       fail-fast: false
       matrix:
@@ -359,6 +389,8 @@ jobs:
             crashes: test-fuzz/target/afl/output
     steps:
       - uses: actions/checkout@v7
+      - name: Install age (artifact encryption)
+        run: sudo apt-get install -y --no-install-recommends age
       - name: Install the honggfuzz build dependencies
         if: matrix.driver == 'honggfuzz'
         run: |
@@ -380,12 +412,18 @@ jobs:
       - name: Install the driver's tools and build its targets (nothing to do on a cache hit)
         run: scripts/fuzz-setup.sh ${{ matrix.driver }}
       - id: paths
-        name: Resolve this target's corpus and crash paths
+        name: Resolve this target's corpus and crash paths, and its time
         run: |
           corpus='${{ matrix.corpus }}'
           crashes='${{ matrix.crashes }}'
           echo "corpus=${corpus//TARGET/${{ matrix.target }}}" >> "$GITHUB_OUTPUT"
           echo "crashes=${crashes//TARGET/${{ matrix.target }}}" >> "$GITHUB_OUTPUT"
+          case '${{ matrix.driver }}/${{ matrix.target }}' in
+            honggfuzz/css | honggfuzz/html) minutes=120 ;;
+            honggfuzz/*) minutes=60 ;;
+            *) minutes=30 ;;
+          esac
+          echo "seconds=$((minutes * 60))" >> "$GITHUB_OUTPUT"
       - name: Restore the corpus from the last run
         if: steps.paths.outputs.corpus != ''
         uses: actions/cache/restore@v6
@@ -393,27 +431,48 @@ jobs:
           path: ${{ steps.paths.outputs.corpus }}
           key: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-
+      # Read-only extra input for honggfuzz: cargo-fuzz's corpus of the
+      # target (the path must equal the one the cargo-fuzz job saves).
+      - name: Restore cargo-fuzz's corpus of this target
+        if: matrix.driver == 'honggfuzz'
+        uses: actions/cache/restore@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-none
+          restore-keys: fuzz-corpus-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-
       # Each script exits non-zero when its driver saved a new crashing
       # input (and only then: a time budget that runs out is success).
+      # honggfuzz: four threads, 3 GB address space each (U58's x86-64
+      # build is the scripts').
       - name: Fuzz
-        run: scripts/fuzz-${{ matrix.driver }}.sh ${{ matrix.target }} 900
+        env:
+          HFUZZ_RUN_ARGS: -t 10 --rlimit_as 3072 -n 4
+          FUZZ_EXTRA_CORPUS: ${{ matrix.driver == 'honggfuzz' && format('fuzz/corpus/{0}', matrix.target) || '' }}
+          CORPUS: ${{ steps.paths.outputs.corpus }}
+          CRASHES: ${{ steps.paths.outputs.crashes }}
+        run: >-
+          scripts/fuzz-ci-run.sh ${{ matrix.driver }} ${{ matrix.target }}
+          ${{ steps.paths.outputs.seconds }}
       - name: Save the corpus for the next run
         if: always() && steps.paths.outputs.corpus != ''
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.paths.outputs.corpus }}
           key: fuzz-corpus-${{ matrix.driver }}-${{ matrix.target == 'css' && 'css-own' || matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-      # As a tarball: AFL's file names hold `:`, which artifacts refuse.
-      - name: Pack crashing inputs
-        if: failure()
+      # Sealed (encrypted) before upload, as tarballs (AFL's file names
+      # hold `:`, which artifacts refuse).
+      - name: Seal the log, crashing inputs and corpus
+        if: always()
         run: |
-          if [ -e "${{ steps.paths.outputs.crashes }}" ]; then
-            tar -czf fuzz-crashes.tar.gz "${{ steps.paths.outputs.crashes }}"
+          scripts/fuzz-seal.sh ${{ matrix.driver }}-${{ matrix.target }} fuzz-private "${{ steps.paths.outputs.crashes }}"
+          if [ -n "${{ steps.paths.outputs.corpus }}" ]; then
+            scripts/fuzz-seal.sh corpus-${{ matrix.driver }}-${{ matrix.target }} "${{ steps.paths.outputs.corpus }}"
           fi
-      - name: Upload crashing inputs
-        if: failure()
+      - name: Upload the sealed files
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: fuzz-artifacts-${{ matrix.driver }}-${{ matrix.target }}
-          path: fuzz-crashes.tar.gz
+          name: fuzz-sealed-${{ matrix.driver }}-${{ matrix.target }}
+          path: fuzz-sealed/
           if-no-files-found: ignore
+          retention-days: 90

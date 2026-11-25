@@ -1,0 +1,5 @@
+# Recipient for the nightly fuzz artifacts (scripts/fuzz-seal.sh): logs,
+# crashing inputs and corpora are encrypted to it before upload, since a
+# public repository's artifacts and logs are public. Only the maintainer's
+# private key decrypts them (scripts/fuzz-triage.sh).
+age1jslhqsfclwwh5d8vn2ea2v5ggv2t55f0km4402nuszrfq0kpnegqgncaxx

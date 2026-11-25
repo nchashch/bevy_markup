@@ -17,3 +17,8 @@
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Nightly fuzz jobs: the private log and the sealed (encrypted) bundles
+# (scripts/fuzz-ci-run.sh, scripts/fuzz-seal.sh), if run locally.
+/fuzz-private/
+/fuzz-sealed/

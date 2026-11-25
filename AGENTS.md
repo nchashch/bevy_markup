@@ -523,9 +523,10 @@ tests/
 .github/workflows/
   ci.yml           per push to main / PR: -D warnings check/build/doc, cargo test, fuzzing-feature
                    tests, Fluent oracle references current
-  nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome, 15 min
-                   cargo-fuzz per target, 15 min per target of honggfuzz, fuzzcheck and
-                   test-fuzz (`fuzz-drivers`, 12 jobs), criterion + divan
+  nightly.yml      golden images (Ubuntu lavapipe), browser oracle vs current Chrome,
+                   cargo-fuzz and honggfuzz with four workers each (css, html 120 min;
+                   svg, ftl 60; each reading the other's corpus), fuzzcheck and test-fuzz
+                   30 min (`fuzz-drivers`), findings sealed (encrypted), criterion + divan
                    benchmarks (`pipeline`/`pipeline-divan`, and `svg`/`svg-divan` with
                    `--features fuzzing`: the SVG stages through `fuzz::svg_*` glue plus
                    inline/`<img>` frame workloads, `benches/shared/svg.rs`; reports as
@@ -547,6 +548,14 @@ scripts/
   fuzz-setup.sh      install one driver's cargo subcommands (pinned versions) and build
                      its targets: `scripts/fuzz-setup.sh <honggfuzz|fuzzcheck|test-fuzz>`
                      (CI's cache producer and its nightly jobs; optional locally)
+  fuzz-seal.sh       encrypt files with age to `.github/fuzz-artifacts.age.pub` into
+                     `fuzz-sealed/<name>.tar.gz.age` (the nightly's only artifacts of findings)
+  fuzz-ci-run.sh     one nightly campaign: the driver's output to `fuzz-private/` (sealed),
+                     counts only to the job log and summary (coverage start → end, corpus,
+                     crashes)
+  fuzz-triage.sh     locally: download a Nightly run's sealed bundles, decrypt them with the
+                     maintainer's key, replay the crashing inputs, group them by signature,
+                     archive new ones in `docs/agents/bugs/private/fuzz-findings/`
   fuzz-<driver>.sh   run one fuzzer over one target:
                      `scripts/fuzz-{libfuzzer,honggfuzz,fuzzcheck,test-fuzz}.sh
                      <html|css|ftl|svg> [seconds=60]` (details in each script's
@@ -2042,12 +2051,22 @@ Next steps (roughly in order of value):
   PNGs over `tests/golden/*/expected.png`, review and commit. It checks
   `browser.json` against the runner's Chrome
   (ignoring the generator line; a failure means Chrome changed or a vector
-  is stale), fuzzes each cargo-fuzz target for 15 min (`-rss_limit_mb=4096`) and each
-  target of the other three drivers for 15 min (`fuzz-drivers`, driver ×
-  target; until 2026-11-12 it only compiled them — set up locally, not yet
-  seen green on a runner). Every `scripts/fuzz-<driver>.sh` exits non-zero
-  exactly when its driver saved a new crashing input; the job then uploads
-  `fuzz-artifacts-<driver>-<target>` (a tarball). Nightly failures are reports to triage, not merge blockers.
+  is stale), and fuzzes (since 2026-11-25): cargo-fuzz (`-fork=4
+  -ignore_crashes=1 -rss_limit_mb=3072`) and honggfuzz (`-n 4`) 120 min on
+  css and html and 60 on svg and ftl, each also reading the other's corpus
+  of the target; fuzzcheck and test-fuzz 30 min (`fuzz-drivers`). The
+  choice is measured: on 2026-11-25 the mature corpora gained under 1% of
+  edges in 15 min, css (new corpus) 55%, and every target still found
+  edges at the end; one process used one of the runner's four cores. A
+  public repository's logs and artifacts are public, so findings never
+  leave a job unencrypted: `scripts/fuzz-ci-run.sh` keeps the fuzzer's
+  output in a log, `scripts/fuzz-seal.sh` encrypts it with the crashing
+  inputs and the corpus to `.github/fuzz-artifacts.age.pub`
+  (`fuzz-sealed-<driver>-<target>` artifacts, 90 days), and the job log
+  and summary show counts only (coverage start → end, corpus, crashes).
+  `scripts/fuzz-triage.sh` decrypts and replays them locally (the
+  maintainer's key). A job fails when its driver saved a new crashing
+  input. Nightly failures are reports to triage, not merge blockers.
   Fuzz corpora persist across nights as GitHub caches
   (`fuzz-corpus-<target>-<run>`; restored from the newest, saved after
   every run, also after a crash; `css` restarted as `css-own` with ADR 0048,
@@ -2058,8 +2077,9 @@ Next steps (roughly in order of value):
   `coverage` job runs `scripts/coverage.py --html`: the per-layer table goes
   to the job summary, the reports to the `coverage` artifact (the fuzz-corpora layer
   replays the committed seeds plus the newest CI corpus caches). Each fuzz
-  job also uploads its corpus as the `fuzz-corpus-<target>` artifact (90
-  days) so CI's finds can be merged into `fuzz/seeds` (testing guide).
+  job's sealed bundle holds its corpus (`corpus-<driver>-<target>`), which
+  `TRIAGE_CORPORA=1 scripts/fuzz-triage.sh` decrypts, to merge CI's finds
+  into `fuzz/seeds` (testing guide).
   First local measurement (2026-10-04): 94.3% of 1684 library lines
   covered by some layer. Its two gaps are closed: the template
   *render*-failure path (`template_render_failure_shows_the_error_and_recovers`
