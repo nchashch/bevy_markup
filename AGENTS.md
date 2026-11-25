@@ -886,7 +886,10 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   context numbers rely on —, numbers, angles, times, URLs and typed
   `calc()`/`min()`/`max()`/`clamp()` folded into `CalcExpr`; other math
   functions are unsupported; every literal and result must be finite, so
-  no value carries NaN or infinity), `color.rs` (CSS Color 4 to 8-bit
+  no value carries NaN or infinity, and is clamped to ±`MAX_CSS_MAGNITUDE`
+  (10⁸): Bevy's layout sums and multiplies values, and an overflow to
+  infinity or NaN panics in bevy_ui and parley, bug_0249, U52, U53),
+  `color.rs` (CSS Color 4 to 8-bit
   sRGB), `grid.rs` (track lists, areas, placements, `grid`/`grid-template`;
   a bare `grid-auto-flow: dense` is `row dense`).
 - CSS subset (`style.rs` docs): selectors parsed by parcel_selectors and
@@ -931,7 +934,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   whole list chains into Bevy 0.20's per-glyph fallback list over registered
   families, generics via `set_generic`; nothing registered → Bevy's
   default font, as browsers do), `font-size` (`px`, `em`/`%`, `rem`, keywords
-  with medium = 16px, `smaller`/`larger`), `font-weight` (bold above 500, CSS
+  with medium = 16px, `smaller`/`larger`; the computed size is clamped to
+  `cascade::MAX_FONT_SIZE`, 8192 px: larger glyphs crash or hang Bevy's
+  rasterizer, bug_0249, U54), `font-weight` (bold above 500, CSS
   font matching), `font-style`, `pointer-events` (`none`/`auto`); blocks:
   `background-color`. `html` is the
   starting point even without `<html>`; nothing declared → white, Bevy's

@@ -180,7 +180,7 @@ fn track_breadth<'i>(input: &mut Parser<'i, '_>, flex: bool) -> Parsed<'i, Track
             }
         })
     {
-        return Ok(TrackBreadth::Flex(fr));
+        return Ok(TrackBreadth::Flex(super::value::bounded(fr)));
     }
     let location = input.current_source_location();
     match input.expect_ident()?.to_ascii_lowercase().as_str() {

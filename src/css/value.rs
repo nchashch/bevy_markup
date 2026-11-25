@@ -43,6 +43,50 @@ const PX_PER_Q: f32 = PX_PER_CM / 40.0;
 const PX_PER_PT: f32 = PX_PER_IN / 72.0;
 const PX_PER_PC: f32 = PX_PER_IN / 6.0;
 
+/// The largest magnitude a parsed number, length or percentage keeps:
+/// larger ones are clamped to it, as browsers clamp huge lengths. Finite
+/// is not enough: Bevy's layout adds and multiplies these values (width +
+/// margin, `em` × font size, `vw` × viewport), and a sum of two values
+/// near `f32::MAX` is infinity, which panics in bevy_ui and parley
+/// (UPSTREAM U52, U53). At 10⁸ no sum or product the layout forms can
+/// overflow; no authored CSS comes near it.
+pub(crate) const MAX_CSS_MAGNITUDE: f32 = 1e8;
+
+/// `value` within ±[`MAX_CSS_MAGNITUDE`].
+pub(crate) fn bounded(value: f32) -> f32 {
+    value.clamp(-MAX_CSS_MAGNITUDE, MAX_CSS_MAGNITUDE)
+}
+
+/// `val` within ±[`MAX_CSS_MAGNITUDE`].
+pub(crate) fn bounded_val(val: Val) -> Val {
+    match val {
+        Val::Px(v) => Val::Px(bounded(v)),
+        Val::Percent(v) => Val::Percent(bounded(v)),
+        Val::Em(v) => Val::Em(bounded(v)),
+        Val::Rem(v) => Val::Rem(bounded(v)),
+        Val::Vw(v) => Val::Vw(bounded(v)),
+        Val::Vh(v) => Val::Vh(bounded(v)),
+        Val::VMin(v) => Val::VMin(bounded(v)),
+        Val::VMax(v) => Val::VMax(bounded(v)),
+        Val::Auto => Val::Auto,
+    }
+}
+
+/// `expr` with every term within ±[`MAX_CSS_MAGNITUDE`].
+fn bounded_expr(expr: CalcExpr) -> CalcExpr {
+    match expr {
+        CalcExpr::Val(val) => CalcExpr::Val(bounded_val(val)),
+        CalcExpr::Sum(a, b) => {
+            CalcExpr::Sum(Box::new(bounded_expr(*a)), Box::new(bounded_expr(*b)))
+        }
+        CalcExpr::Product(k, inner) => {
+            CalcExpr::Product(bounded(k), Box::new(bounded_expr(*inner)))
+        }
+        CalcExpr::Min(args) => CalcExpr::Min(args.into_iter().map(bounded_expr).collect()),
+        CalcExpr::Max(args) => CalcExpr::Max(args.into_iter().map(bounded_expr).collect()),
+    }
+}
+
 /// A dimension's value in its cascade unit, or `None` when `unit` isn't a
 /// length unit at all (then the value is invalid).
 pub(crate) fn length_unit(value: f32, unit: &str) -> Option<(f32, Unit)> {
@@ -166,18 +210,20 @@ pub(crate) fn parse_lp<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Lp> {
         Token::Dimension { value, unit, .. } => {
             let value = finite(input, value)?;
             match length_unit(value, &unit) {
-                Some((value, unit)) => Ok(Lp::Dim(finite(input, value)?, unit)),
+                Some((value, unit)) => Ok(Lp::Dim(bounded(finite(input, value)?), unit)),
                 None => Err(location.new_custom_error(super::CssError::Invalid)),
             }
         }
-        Token::Percentage { unit_value, .. } => Ok(Lp::Percent(finite(input, unit_value * 100.0)?)),
+        Token::Percentage { unit_value, .. } => {
+            Ok(Lp::Percent(bounded(finite(input, unit_value * 100.0)?)))
+        }
         // A unitless number is pixels, as lightningcss read it: apps pass
         // numbers through `var()` from the `TemplateContext` (`--w: 160`),
         // and their sheets rely on it.
-        Token::Number { value, .. } => Ok(Lp::Dim(finite(input, value)?, Unit::Px)),
+        Token::Number { value, .. } => Ok(Lp::Dim(bounded(finite(input, value)?), Unit::Px)),
         Token::Function(name) if is_math(&name) => {
             match evaluate(&math_function(&name, input, 0)?, true) {
-                Some(Typed::Len(expr)) => Ok(Lp::Calc(Some(expr))),
+                Some(Typed::Len(expr)) => Ok(Lp::Calc(Some(simplify(bounded_expr(expr))))),
                 Some(Typed::Unsupported) => Ok(Lp::Calc(None)),
                 _ => Err(location.new_custom_error(super::CssError::Invalid)),
             }
@@ -226,7 +272,12 @@ pub(crate) fn parse_numeric<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Numeri
         Numeric::Number(v) | Numeric::Percent(v) | Numeric::Angle(v) | Numeric::Time(v) => v,
     };
     finite(input, value)?;
-    Ok(numeric)
+    Ok(match numeric {
+        Numeric::Number(v) => Numeric::Number(bounded(v)),
+        Numeric::Percent(v) => Numeric::Percent(bounded(v)),
+        Numeric::Angle(v) => Numeric::Angle(bounded(v)),
+        Numeric::Time(v) => Numeric::Time(bounded(v)),
+    })
 }
 
 /// A number (or math folding to one).
@@ -674,5 +725,153 @@ fn expr_is_finite(expr: &CalcExpr) -> bool {
         CalcExpr::Sum(a, b) => expr_is_finite(a) && expr_is_finite(b),
         CalcExpr::Product(k, inner) => k.is_finite() && expr_is_finite(inner),
         CalcExpr::Min(args) | CalcExpr::Max(args) => args.iter().all(expr_is_finite),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ui::Val;
+    use cssparser::{Parser, ParserInput};
+
+    use super::*;
+
+    fn lp(text: &str) -> Option<Lp> {
+        let mut input = ParserInput::new(text);
+        Parser::new(&mut input).parse_entirely(parse_lp).ok()
+    }
+
+    fn numeric(text: &str) -> Option<Numeric> {
+        let mut input = ParserInput::new(text);
+        Parser::new(&mut input).parse_entirely(parse_numeric).ok()
+    }
+
+    /// The largest magnitude anywhere in an expression (products count
+    /// their factor).
+    fn magnitude(expr: &CalcExpr) -> f32 {
+        let val = |val: &Val| match *val {
+            Val::Px(v)
+            | Val::Percent(v)
+            | Val::Em(v)
+            | Val::Rem(v)
+            | Val::Vw(v)
+            | Val::Vh(v)
+            | Val::VMin(v)
+            | Val::VMax(v) => v.abs(),
+            Val::Auto => 0.0,
+        };
+        match expr {
+            CalcExpr::Val(v) => val(v),
+            CalcExpr::Sum(a, b) => magnitude(a).max(magnitude(b)),
+            CalcExpr::Product(k, inner) => k.abs().max(magnitude(inner)),
+            CalcExpr::Min(args) | CalcExpr::Max(args) => {
+                args.iter().map(magnitude).fold(0.0, f32::max)
+            }
+        }
+    }
+
+    /// The largest magnitude a parsed length keeps.
+    fn lp_magnitude(lp: &Lp) -> f32 {
+        match lp {
+            Lp::Dim(v, _) | Lp::Percent(v) => v.abs(),
+            Lp::Calc(Some(expr)) => magnitude(expr),
+            Lp::Calc(None) => 0.0,
+        }
+    }
+
+    /// Huge but finite values clamp to `MAX_CSS_MAGNITUDE` (Bevy's layout
+    /// sums and multiplies them, and two values near `f32::MAX` add up to
+    /// infinity, which panics in bevy_ui and parley: UPSTREAM U52, U53).
+    #[test]
+    fn huge_values_clamp_to_the_bound() {
+        assert_eq!(lp("3e38px"), Some(Lp::Dim(MAX_CSS_MAGNITUDE, Unit::Px)));
+        assert_eq!(lp("-3e38em"), Some(Lp::Dim(-MAX_CSS_MAGNITUDE, Unit::Em)));
+        assert_eq!(lp("3e38"), Some(Lp::Dim(MAX_CSS_MAGNITUDE, Unit::Px)));
+        assert_eq!(lp("1e30%"), Some(Lp::Percent(MAX_CSS_MAGNITUDE)));
+        assert_eq!(lp("1e30in"), Some(Lp::Dim(MAX_CSS_MAGNITUDE, Unit::Abs)));
+        assert_eq!(lp("1e30vw"), Some(Lp::Dim(MAX_CSS_MAGNITUDE, Unit::Vw)));
+        assert_eq!(numeric("1e30"), Some(Numeric::Number(MAX_CSS_MAGNITUDE)));
+        assert_eq!(
+            numeric("-1e30deg"),
+            Some(Numeric::Angle(-MAX_CSS_MAGNITUDE))
+        );
+        assert_eq!(numeric("1e30s"), Some(Numeric::Time(MAX_CSS_MAGNITUDE)));
+        assert_eq!(
+            numeric("calc(1e20 * 1e10)"),
+            Some(Numeric::Number(MAX_CSS_MAGNITUDE))
+        );
+        // Values inside the bound are kept as written.
+        assert_eq!(lp("1234.5px"), Some(Lp::Dim(1234.5, Unit::Px)));
+        assert_eq!(lp("-50%"), Some(Lp::Percent(-50.0)));
+    }
+
+    /// A mixed-unit `calc()` keeps its terms (they are added up at layout
+    /// time), each within the bound; a fold that overflows is invalid.
+    #[test]
+    fn calc_terms_stay_within_the_bound() {
+        let Some(Lp::Calc(Some(expr))) = lp("calc(3e38px + 1em + 3e38px)") else {
+            panic!("a mixed-unit calc parses");
+        };
+        assert!(magnitude(&expr) <= MAX_CSS_MAGNITUDE, "{expr:?}");
+        let Some(Lp::Calc(Some(expr))) = lp("calc((1e30px + 1em) * 1e5)") else {
+            panic!("a scaled mixed-unit calc parses");
+        };
+        assert!(magnitude(&expr) <= MAX_CSS_MAGNITUDE, "{expr:?}");
+        // Folding overflows f32: refused, never infinite.
+        assert_eq!(lp("calc(3e38px + 3e38px)"), None);
+        assert_eq!(lp("calc(1e30px * 1e30)"), None);
+        assert_eq!(lp("calc((1e30px + 1em) * 1e30)"), None);
+        assert_eq!(numeric("calc(1e30 * 1e30)"), None);
+    }
+
+    /// Non-finite literals and math constants are refused.
+    #[test]
+    fn non_finite_values_are_refused() {
+        for text in [
+            "1e39px",
+            "-1e39px",
+            "calc(infinity * 1px)",
+            "calc(NaN * 1px)",
+            "1e39%",
+        ] {
+            assert_eq!(lp(text), None, "{text}");
+        }
+        for text in [
+            "1e39",
+            "calc(infinity)",
+            "calc(-infinity)",
+            "calc(NaN)",
+            "sqrt(-1)",
+        ] {
+            assert_eq!(numeric(text), None, "{text}");
+        }
+    }
+
+    proptest::proptest! {
+        /// Whatever magnitude, unit and arithmetic a length uses, a parsed
+        /// value is finite and within the bound: the whole class of
+        /// overflow inputs (bug_0249).
+        #[test]
+        fn parsed_lengths_are_finite_and_bounded(
+            mantissa in -10.0f32..10.0,
+            exponent in 0i32..40,
+            unit in proptest::sample::select(vec!["px", "em", "rem", "%", "vw", "vh", "in", "pt", ""]),
+            factor_exponent in 0i32..40,
+            shape in 0usize..6,
+        ) {
+            let value = format!("{mantissa}e{exponent}{unit}");
+            let factor = format!("1e{factor_exponent}");
+            let text = match shape {
+                0 => value.clone(),
+                1 => format!("calc({value} + 1em + {value})"),
+                2 => format!("calc({value} * {factor})"),
+                3 => format!("calc(({value} - 1px) / {factor})"),
+                4 => format!("min({value}, 1em, calc({value} * {factor}))"),
+                _ => format!("clamp(1px, calc({value} + 2vw), {value})"),
+            };
+            if let Some(parsed) = lp(&text) {
+                let max = lp_magnitude(&parsed);
+                proptest::prop_assert!(max.is_finite() && max <= MAX_CSS_MAGNITUDE, "{text}: {parsed:?}");
+            }
+        }
     }
 }

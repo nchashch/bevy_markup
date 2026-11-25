@@ -104,6 +104,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   depend on `lightningcss` directly if your app used it.
 
 ### Security
+- CSS values so large that Bevy's layout overflows (`width: 3e38em`, a
+  `calc()` adding up past the largest float, `font-size: 1e8px`) no longer
+  crash or freeze the app inside Bevy UI's layout and text rendering
+  (bug_0249). Lengths, percentages and numbers are clamped to ±10⁸, as
+  browsers clamp huge lengths, and the computed font size to 8192 px.
 - Untrusted CSS can no longer crash the app through the CSS parser: the
   inputs that panicked lightningcss (a NaN in `min()`/`max()`/`clamp()`,
   which aborted apps built with `panic = "abort"`, and an infinite hue)

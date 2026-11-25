@@ -63,6 +63,9 @@ the issue may already be fixed or reported.
 | U47 | fluent-syntax 0.11.1 | Duplicate named-argument scan is quadratic ([bug_0243](bug_0243.md)) | flat FTL call stalls resource loading | `MAX_FTL_ARGUMENTS` = 64 in the pre-check (ADR 0047) | unreported |
 | U48 | cargo-afl 0.18.2 | `target-cpu=native` also reaches proc macros and build scripts | cached test-fuzz builds hit SIGILL on runners with older CPUs | append `-C target-cpu=x86-64` in `scripts/fuzz-{setup,test-fuzz}.sh` | unreported |
 | U49 | lightningcss 1.0.0-alpha.72 | A NaN argument to `min()`/`max()`/`clamp()` reaches `unreachable!()` in `Percentage::parse` | panic at parse time in every build profile, from any CSS text; an app with `panic = "abort"` aborts ([bug_0245](bug_0245.md)) | `cascade::guarded_parse` (unwinding builds only); the fuzz targets let it unwind (`fuzz::is_known_upstream_panic`, pinned to 1.0.0-alpha.72) | fixed on master ([`b0939ab`](https://github.com/parcel-bundler/lightningcss/commit/b0939ab684793d2ba3ccc1a91e0f4d3ba837a708)), awaiting release; **moot for bevy_markup**: lightningcss removed (ADR 0048) |
+| U52 | bevy_ui 0.20.1 (bevy_math 0.20.0) | `ComputedNode::border_box` calls `Rect::from_center_size`, which `assert!`s a non-negative size: a node laid out to a NaN size panics ([bug_0249](bug_0249.md)) | panic in every build from a NaN `Node` value (a CSS `calc()` overflowing at layout) | CSS magnitudes bounded at 10⁸, `CalcExpr::resolve` skips non-finite results | unreported |
+| U53 | parley 0.11.1 (via bevy_text) | `BreakLines::break_next_line_or_box` `assert!`s on its line widths, which an infinite or NaN layout width breaks ([bug_0249](bug_0249.md)) | panic in every build from text in a node whose width overflows (`3e38em`, width + margin near `f32::MAX`) | same bounds | unreported |
+| U54 | zeno 0.3.3 / swash 0.2.10 (via bevy_text) | Glyph rasterization sizes its bitmap with `u32` arithmetic: past ~32,768 px per side it overflows ([bug_0249](bug_0249.md)) | debug: panic from `font-size: 2e5px`; release: hangs past 2 min at 1.4–2.4 GB; `50000px` costs 3.5 s and 6.9 GB | computed font size clamped to `MAX_FONT_SIZE` (8192 px) | unreported |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -1121,3 +1124,55 @@ CI clippy command and workspace tests pass on both.
 - **On a bump:** `fuzz::svg_tests::known_upstream_panics_still_panic_as_excused`
   fails when the panic is gone or moved; drop the excuse and the README's
   `panic = "abort"` warning then.
+
+## U52 — bevy_ui: a NaN node size panics in `Rect::from_center_size`
+
+- **Project/version:** [bevyengine/bevy](https://github.com/bevyengine/bevy)
+  0.20.1: `bevy_ui::ui_node::ComputedNode::border_box`
+  (`ui_node.rs:281`) → `bevy_math::Rect::from_center_size`
+  (`rects/rect.rs:100`, `assert!(0. <= size.x && 0. <= size.y)`), reached from
+  `bevy_ui::widget::text::text_system`.
+- **Problem:** a `Node` whose computed size is NaN fails the assertion: the
+  app panics, in release builds too. NaN reaches the layout from a value
+  like `inf - inf` (here a CSS `calc()` that overflowed).
+- **Reproduction:** a text node inside a node with `top: Val::Px(f32::NAN)`
+  and `position_type: Absolute` (bevy_markup:
+  `position: absolute; top: calc((3e38px + 1em + 3e38px) + (-3e38px + 1em - 3e38px))`).
+- **Local workaround:** bevy_markup never writes a non-finite `Val`
+  (`css::value::MAX_CSS_MAGNITUDE`, `CalcExpr::resolve`).
+- **PR sketch:** sanitize non-finite style values when converting to taffy
+  (treat NaN/infinite lengths as `auto` or 0), or make `border_box` tolerate
+  NaN; at least `debug_assert!` plus a clamp.
+
+## U53 — parley: an infinite or NaN layout width fails the line breaker's assertion
+
+- **Project/version:** [linebender/parley](https://github.com/linebender/parley)
+  0.11.1, `layout/line_break.rs:453`
+  (`assert!(layout_max_advance == INFINITY || line_max_advance - layout_max_advance < 1.0)`),
+  via `bevy_text::pipeline::layout_with_bounds`.
+- **Problem:** a max advance that is NaN, or a line advance that overflows to
+  infinity, fails the assertion: the app panics, in release builds too.
+- **Reproduction:** text inside a Bevy UI node with `width: Val::Px(f32::MAX)`
+  and `margin.left: Val::Px(f32::MAX)`, or `width: Val::Em(3e38)`.
+- **Local workaround:** as U52.
+- **PR sketch:** parley: treat a non-finite max advance as unbounded (or
+  clamp it) instead of asserting; Bevy: don't pass non-finite bounds.
+
+## U54 — zeno/swash: huge glyphs overflow the bitmap size
+
+- **Project/version:** [dfrg/zeno](https://github.com/dfrg/zeno) 0.3.3
+  (`mask.rs:34`, `Format::buffer_size`: `width * height * 4` in `u32`; also
+  `raster.rs:339`), via [dfrg/swash](https://github.com/dfrg/swash) 0.2.10
+  `scale::Render::render_into`, from `bevy_text::font_atlas::get_outlined_glyph_texture`.
+- **Problem:** a glyph past ~32,768 px per side overflows `u32`. Debug builds
+  panic (`attempt to multiply with overflow`); release builds wrap and then
+  run for minutes at gigabytes (measured: `font-size: 2e5px`, `3e6px`,
+  `1e8px` each over 2 min at 1.4–2.4 GB). Even without overflow the cost is
+  unbounded: a 50,000 px glyph took 3.5 s and 6.9 GB.
+- **Reproduction:** a Bevy `Text` with `TextFont { font_size: 200_000.0, .. }`.
+- **Local workaround:** `cascade::MAX_FONT_SIZE` (8192 px) caps the computed
+  CSS font size.
+- **PR sketch:** zeno: compute buffer sizes in `usize` with checked
+  arithmetic and refuse oversized masks; Bevy: cap the rasterized glyph size
+  (render larger text as scaled outlines or refuse it).
+

@@ -11951,3 +11951,77 @@ mod review_0009 {
         assert!(format!("{error:?}").contains("MAX_FTL_ARGUMENTS"));
     }
 }
+
+/// bug_0249: CSS values whose layout overflows `f32` — a mixed-unit
+/// `calc()` adding up to infinity or NaN, `3e38em` times the font size,
+/// width plus margin near `f32::MAX`, a huge font size — panicked inside
+/// bevy_ui (`Rect::from_center_size`), parley's line breaker and zeno's
+/// glyph rasterizer, in release builds too (UPSTREAM U52–U54): any page's
+/// CSS could crash the app. Each case runs through Bevy's real layout and
+/// text pipeline: no panic, finite sizes, and no node rewritten every
+/// frame (a NaN never equals itself).
+#[test]
+fn extreme_css_values_never_crash_bevy_layout() {
+    let inf = "calc(3e38px + 1em + 3e38px)";
+    let neg_inf = "calc(-3e38px + 1em - 3e38px)";
+    let nan = "calc((3e38px + 1em + 3e38px) + (-3e38px + 1em - 3e38px))";
+    let cases = [
+        format!("width: {inf}"),
+        format!("width: {neg_inf}"),
+        format!("width: {nan}"),
+        format!("height: {nan}"),
+        format!("max-width: {nan}"),
+        format!("margin-left: {inf}"),
+        format!("position: absolute; top: {nan}"),
+        format!("flex-basis: {inf}"),
+        "width: 3e38em".to_owned(),
+        "width: 3e38vw".to_owned(),
+        "width: 3e38px; margin-left: 3e38px".to_owned(),
+        "padding: 3e38px 3e38px".to_owned(),
+        "border-width: 3e38px".to_owned(),
+        "font-size: 3e38px".to_owned(),
+        "font-size: 2e5px".to_owned(),
+        "font-size: 1e8px".to_owned(),
+        "font-size: 1000em".to_owned(),
+    ];
+    for decl in cases {
+        let css = format!(
+            "html {{ flex-direction: column; padding: 10px }}
+             #a {{ height: 20px; width: 50px; {decl} }}
+             #a div {{ font-size: 1000em }}
+             #b {{ height: 20px; width: 60px }}"
+        );
+        let mut ui = TestUi::with_layout(
+            "extreme-values",
+            &[
+                (
+                    "page.html",
+                    r#"<div id="a"><p>x</p><div><div><p>deep</p></div></div></div><div id="b"></div>"#,
+                ),
+                ("style.css", css.as_str()),
+            ],
+            UVec2::new(320, 240),
+        )
+        .stylesheet("style.css")
+        .spawn("page.html", TemplateContext::new(), Node::default());
+        ui.settle();
+        let root = ui.root();
+        let a = element_by_id(ui.world_mut(), root, "a");
+        let size = ui.world_mut().get::<ComputedNode>(a).unwrap().size;
+        assert!(size.is_finite(), "{decl}: {size:?}");
+        let changed = |ui: &mut TestUi| {
+            ui.world_mut()
+                .entity(a)
+                .get_ref::<Node>()
+                .unwrap()
+                .last_changed()
+        };
+        let before = changed(&mut ui);
+        ui.update(5);
+        assert_eq!(
+            changed(&mut ui),
+            before,
+            "{decl}: the node is rewritten every frame"
+        );
+    }
+}

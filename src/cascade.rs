@@ -25,6 +25,11 @@ use selector::Selector;
 use crate::fonts::FamilyRef;
 use crate::html::HtmlElement;
 
+/// The largest computed font size, in px. Above it, swash and zeno's glyph
+/// rasterization overflow their `u32` bitmap arithmetic and panic (a
+/// 2·10⁵ px glyph did; UPSTREAM U54), so a larger size is clamped to it.
+pub(crate) const MAX_FONT_SIZE: f32 = 8192.0;
+
 /// A declared `font-size`, resolved against inherited/root sizes later.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum FontSizeSpec {
@@ -36,12 +41,19 @@ pub(crate) enum FontSizeSpec {
 }
 
 impl FontSizeSpec {
+    /// The size in px, clamped to [0, [`MAX_FONT_SIZE`]]: relative sizes
+    /// multiply down the tree (ten levels of `1000em` pass `f32::MAX`), and
+    /// glyph rasterization overflows far below that (UPSTREAM U54).
     pub fn resolve(self, inherited: f32, root: f32) -> f32 {
-        match self {
+        let size = match self {
             Self::Px(px) => px,
             Self::Inherited(factor) => inherited * factor,
             Self::Root(factor) => root * factor,
+        };
+        if size.is_nan() {
+            return 0.0;
         }
+        size.clamp(0.0, MAX_FONT_SIZE)
     }
 }
 
@@ -264,7 +276,17 @@ impl CalcExpr {
     /// The value, resolved against the basis: percentages against
     /// `basis.content`'s axis (per the property), `em`/`rem` against the
     /// font sizes, viewport units against the viewport.
+    /// `None` also when the result isn't finite: the terms are bounded
+    /// (`css::value::MAX_CSS_MAGNITUDE`), but a mixed-unit sum is only added
+    /// up here, and an infinite or NaN size panics in bevy_ui and parley
+    /// (UPSTREAM U52, U53). A finite result is clamped to the same bound.
     pub fn resolve(&self, basis: &CalcBasis, horizontal: bool) -> Option<f32> {
+        self.resolve_raw(basis, horizontal)
+            .filter(|value| value.is_finite())
+            .map(crate::css::value::bounded)
+    }
+
+    fn resolve_raw(&self, basis: &CalcBasis, horizontal: bool) -> Option<f32> {
         match self {
             CalcExpr::Val(Val::Px(px)) => Some(*px),
             CalcExpr::Val(Val::Em(f)) => Some(f * basis.em),
@@ -283,17 +305,17 @@ impl CalcExpr {
             CalcExpr::Val(Val::VMax(f)) => Some(f / 100.0 * basis.viewport.x.max(basis.viewport.y)),
             CalcExpr::Val(_) => None,
             CalcExpr::Sum(a, b) => {
-                Some(a.resolve(basis, horizontal)? + b.resolve(basis, horizontal)?)
+                Some(a.resolve_raw(basis, horizontal)? + b.resolve_raw(basis, horizontal)?)
             }
-            CalcExpr::Product(k, expr) => Some(k * expr.resolve(basis, horizontal)?),
+            CalcExpr::Product(k, expr) => Some(k * expr.resolve_raw(basis, horizontal)?),
             CalcExpr::Min(args) => args
                 .iter()
-                .map(|arg| arg.resolve(basis, horizontal))
+                .map(|arg| arg.resolve_raw(basis, horizontal))
                 .try_fold(f32::INFINITY, |acc, value| Some(acc.min(value?)))
                 .filter(|value| value.is_finite()),
             CalcExpr::Max(args) => args
                 .iter()
-                .map(|arg| arg.resolve(basis, horizontal))
+                .map(|arg| arg.resolve_raw(basis, horizontal))
                 .try_fold(f32::NEG_INFINITY, |acc, value| Some(acc.max(value?)))
                 .filter(|value| value.is_finite()),
         }
@@ -5073,6 +5095,72 @@ mod tests {
         // No transition: nothing declared.
         let style = declared("color: #ff0000");
         assert_eq!(style.transitions, Vec::new());
+    }
+
+    /// bug_0249: a mixed-unit `calc()` is added up at layout time, after
+    /// parsing bounded its terms; a non-finite sum is skipped (an infinite
+    /// or NaN size panics in bevy_ui and parley, UPSTREAM U52, U53), and a
+    /// finite one is clamped to the bound.
+    #[test]
+    fn calc_resolution_is_finite_and_bounded() {
+        let basis = CalcBasis {
+            em: 16.0,
+            rem: 16.0,
+            viewport: Vec2::new(800.0, 600.0),
+            content: Vec2::new(400.0, 300.0),
+        };
+        let px = |v| Box::new(CalcExpr::Val(Val::Px(v)));
+        let infinite = CalcExpr::Sum(px(f32::MAX), px(f32::MAX));
+        assert_eq!(infinite.resolve(&basis, true), None);
+        let nan = CalcExpr::Sum(px(f32::INFINITY), px(f32::NEG_INFINITY));
+        assert_eq!(nan.resolve(&basis, true), None);
+        let product = CalcExpr::Product(f32::MAX, Box::new(CalcExpr::Val(Val::Em(10.0))));
+        assert_eq!(product.resolve(&basis, true), None);
+        let huge = CalcExpr::Sum(px(1e20), Box::new(CalcExpr::Val(Val::Em(1.0))));
+        assert_eq!(
+            huge.resolve(&basis, true),
+            Some(crate::css::value::MAX_CSS_MAGNITUDE)
+        );
+        let ordinary = CalcExpr::Sum(px(10.0), Box::new(CalcExpr::Val(Val::Percent(50.0))));
+        assert_eq!(ordinary.resolve(&basis, true), Some(210.0));
+
+        // Through the cascade: the expression the parser kept resolves to a
+        // bounded number however the terms were written.
+        let style = declared(
+            "width: calc(3e38px + 1em + 3e38px); height: calc((3e38px + 1em + 3e38px) + (-3e38px + 1em - 3e38px))",
+        );
+        assert_eq!(style.calc.len(), 2, "{:?}", style.calc);
+        for (prop, expr) in &style.calc {
+            let value = expr.resolve(&basis, prop.horizontal());
+            assert!(
+                value.is_none_or(
+                    |v| v.is_finite() && v.abs() <= crate::css::value::MAX_CSS_MAGNITUDE
+                ),
+                "{prop:?}: {value:?}"
+            );
+        }
+    }
+
+    /// bug_0249: relative font sizes multiply down the tree; the computed
+    /// size stays within [0, `MAX_FONT_SIZE`] (glyph rasterization panics
+    /// far below `f32::MAX`, UPSTREAM U54).
+    #[test]
+    fn computed_font_sizes_are_bounded() {
+        assert_eq!(FontSizeSpec::Px(1e8).resolve(16.0, 16.0), MAX_FONT_SIZE);
+        assert_eq!(
+            FontSizeSpec::Inherited(1e8).resolve(1e8, 16.0),
+            MAX_FONT_SIZE
+        );
+        assert_eq!(FontSizeSpec::Root(1e8).resolve(16.0, 1e8), MAX_FONT_SIZE);
+        assert_eq!(FontSizeSpec::Inherited(f32::NAN).resolve(16.0, 16.0), 0.0);
+        assert_eq!(FontSizeSpec::Px(-5.0).resolve(16.0, 16.0), 0.0);
+        assert_eq!(FontSizeSpec::Inherited(2.0).resolve(16.0, 16.0), 32.0);
+        // Ten levels of 1000em: past f32::MAX unclamped.
+        let mut size = 16.0;
+        for _ in 0..10 {
+            size = FontSizeSpec::Inherited(1000.0).resolve(size, 16.0);
+            assert!(size.is_finite() && size <= MAX_FONT_SIZE, "{size}");
+        }
     }
 
     /// CSS variables: `var(--x)` resolves from the sheet's `--x`
