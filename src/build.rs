@@ -25,7 +25,7 @@ use crate::cascade::{
 };
 use crate::custom_elements::{self, ConnectedAs, CustomElement, ElementConnected};
 use crate::focus::{self, Focusable};
-use crate::fonts::FontFamilies;
+use crate::fonts::{FontFamilies, FontSizeBudget, HtmlFontLimits};
 use crate::html::{
     HtmlDebugOutline, HtmlElement, HtmlUi, HtmlUiBuilt, HtmlUiRestyled, HtmlWindowed, RenderedHtml,
     TemplateContext,
@@ -668,6 +668,9 @@ pub(crate) struct Styler<'a> {
     /// be added (the fuzzing harness): inline `<svg>` is then skipped.
     #[cfg(feature = "svg")]
     pub(crate) inline_svgs: Option<&'a crate::svg::InlineSvgs>,
+    /// The app's font size budget (`HtmlFontLimits`); `None` where there's
+    /// no app (unit tests): sizes are then only clamped by the cascade.
+    pub(crate) font_sizes: Option<&'a RefCell<FontSizeBudget>>,
 }
 
 impl Styler<'_> {
@@ -708,6 +711,12 @@ impl Styler<'_> {
         let size = declared.font_size.map_or(inherited.size, |size| {
             size.resolve(inherited.size, self.root_size)
         });
+        // bug_0250: Bevy keeps an atlas per size forever; the budget bounds
+        // the sizes (and their maximum) the app's text uses.
+        let size = match self.font_sizes {
+            Some(budget) => budget.borrow_mut().admit(size),
+            None => size,
+        };
         let letter_spacing = declared
             .letter_spacing
             .map_or(inherited.letter_spacing, |spec| {
@@ -1011,6 +1020,7 @@ pub(crate) fn root_style(
     server: Option<&AssetServer>,
     root: &HtmlElement,
     inline: Option<&InlineStyle>,
+    font_sizes: Option<&RefCell<FontSizeBudget>>,
 ) -> Style {
     let defaults = Style {
         color: DEFAULT_COLOR,
@@ -1037,6 +1047,7 @@ pub(crate) fn root_style(
         template: None,
         #[cfg(feature = "svg")]
         inline_svgs: None,
+        font_sizes,
     }
     .style_of(
         root,
@@ -1073,6 +1084,8 @@ pub(crate) struct BuildAssets<'w> {
     rem_size: Res<'w, RemSize>,
     #[cfg(feature = "svg")]
     inline_svgs: Res<'w, crate::svg::InlineSvgs>,
+    font_limits: Res<'w, HtmlFontLimits>,
+    font_sizes: ResMut<'w, FontSizeBudget>,
 }
 
 /// ADR 0031: the windowing params (the system is at Bevy's 16-param
@@ -1125,7 +1138,13 @@ pub(crate) fn build_html_ui(
         rem_size,
         #[cfg(feature = "svg")]
         inline_svgs,
+        font_limits,
+        mut font_sizes,
     } = assets;
+    // Taken for the build (the `Styler`s borrow it), put back at the end;
+    // no change detection: nothing reads it but the build.
+    let font_budget = RefCell::new(std::mem::take(font_sizes.bypass_change_detection()));
+    font_budget.borrow_mut().limits = font_limits.clone();
     // Removals aren't `Ref` changes, so they're read separately.
     let removed_outlines: HashSet<Entity> = removed_outlines.read().collect();
     let removed_sheets: HashSet<Entity> = removed_sheets.read().collect();
@@ -1388,6 +1407,7 @@ pub(crate) fn build_html_ui(
             Some(&server),
             &root_element,
             root_inline.as_ref(),
+            Some(&font_budget),
         );
         let template = match (&*rendered, ui) {
             (RenderedHtml::Ready(_), HtmlUi(template)) => templates
@@ -1405,6 +1425,7 @@ pub(crate) fn build_html_ui(
             template,
             #[cfg(feature = "svg")]
             inline_svgs: Some(&inline_svgs),
+            font_sizes: Some(&font_budget),
         };
 
         let mut root_box = styler.box_of(
@@ -2022,6 +2043,7 @@ pub(crate) fn build_html_ui(
             commands.trigger(HtmlUiBuilt { entity });
         }
     }
+    *font_sizes.bypass_change_detection() = font_budget.into_inner();
 }
 
 /// What one UI node should be, computed from the item tree, then spawned
@@ -7703,6 +7725,7 @@ mod ua_default_tests {
             template: None,
             #[cfg(feature = "svg")]
             inline_svgs: None,
+            font_sizes: None,
         };
         let defaults = Style {
             color: DEFAULT_COLOR,

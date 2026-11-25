@@ -194,7 +194,8 @@ bevy_markup implements a useful subset of the web, not all of it:
   families (`serif`, `monospace`, …). A `font-family` list becomes a
   per-glyph fallback chain (Bevy 0.20's `FontSource`), so mixed scripts
   render from different fonts without bundling — and with the
-  `system_fonts` feature, the OS's fonts join the chain.
+  `system_fonts` feature, the OS's fonts join the chain. `HtmlFontLimits`
+  bounds the font sizes a page may make Bevy rasterize (memory).
 
 The crate documentation (`cargo doc --open`) is the full guide, including
 the exact CSS subset.

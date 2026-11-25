@@ -44,6 +44,7 @@ never reach library users. A missing feature shows up in `cargo check --lib`.
 | `DefaultStylesheet(Option<Handle<Stylesheet>>)` | Resource | stylesheet for `HtmlUi`s without an override; swap = theme |
 | `ActiveLocale(Option<Handle<LocaleBundle>>)` | Resource | Fluent bundle; `None` = no localization; swap = language |
 | `FontFamilies` / `FontFaces` / `GenericFamily` | Resource + types | CSS `font-family` name → faces: font files or system families (any `FontSource`; for system families bold/italic are requested via `TextFont` weight/style), + generic keyword mapping. A CSS list resolves to every registered family in order and composes Bevy 0.20's per-glyph fallback list (ADR 0015) |
+| `HtmlFontLimits { max_font_size, max_font_sizes }` | Resource | bounds the computed font sizes text uses (default 2048 px, 128 distinct sizes app-wide): past the count a new size reuses the nearest in use (by ratio, `fonts::FontSizeBudget`, admitted in `Styler::style_of`); Bevy keeps an atlas per size forever (bug_0250, U55) |
 | `HtmlTemplate`, `Stylesheet`, `NineSlice`, `LocaleBundle` | Assets | `.html`/`.htm`/`.md`/`.markdown`, `.css`, `*.slice.ron`, `*.ftl.ron` |
 | `SvgLoaderSettings { scale }` | Loader settings (`svg` feature) | `.svg` → `Image` (`svg.rs` `SvgLoader`, ADR 0038): drawn on the CPU at intrinsic size × `scale` (an `<img>` redrawn at its displayed px), ≤ `MAX_SVG_SIDE` per side; refusing `<image href>` resolver, depth and conversion-work bounds before usvg runs (`svg_bounds`: depth ≤ 256, U17; work ≤ `MAX_SVG_WORK`, ADR 0040), render-cost budget (`MAX_SVG_COST`); typed `Image` loads coexist with other crates' `.svg` loaders |
 | `NineSliceFrame(Handle<NineSlice>)` | Component | 9-slice image as a node's border-box background (non-HTML nodes; HTML uses CSS `border-image`) |
@@ -145,7 +146,7 @@ src/
                    value.rs, color.rs, grid.rs (see Pipeline, CSS parser)
   cascade.rs       (internal) stylesheet → declared style per element (+ unit tests)
   cascade/selector.rs (internal) selector allowlist + parcel_selectors matching (ADR 0034)
-  fonts.rs         FontFamilies, FontFaces, GenericFamily
+  fonts.rs         FontFamilies, FontFaces, GenericFamily, HtmlFontLimits + FontSizeBudget
   build.rs         (internal) DOM + styles → Bevy UI children; HtmlUiBuilt trigger
   rebuild.rs       (internal) pure rebuild decision: Frame (load phases + change signals) → Build/Skip/Wait
   signals.rs       `data-on-*`/`data-with` → ElementSignal messages (picking observers, hover tracking)
@@ -936,7 +937,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   default font, as browsers do), `font-size` (`px`, `em`/`%`, `rem`, keywords
   with medium = 16px, `smaller`/`larger`; the computed size is clamped to
   `cascade::MAX_FONT_SIZE`, 8192 px: larger glyphs crash or hang Bevy's
-  rasterizer, bug_0249, U54), `font-weight` (bold above 500, CSS
+  rasterizer, bug_0249, U54; then `HtmlFontLimits` bounds it further and
+  caps the number of distinct sizes, bug_0250, U55), `font-weight` (bold above 500, CSS
   font matching), `font-style`, `pointer-events` (`none`/`auto`); blocks:
   `background-color`. `html` is the
   starting point even without `<html>`; nothing declared → white, Bevy's

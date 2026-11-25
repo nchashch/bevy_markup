@@ -34,6 +34,110 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
+/// Bounds on the text bevy_markup asks Bevy to rasterize, so a page's CSS
+/// can't exhaust memory through font sizes.
+///
+/// Bevy rasterizes glyphs into font atlases kept per exact font size and
+/// never frees them (UPSTREAM U55): each size used costs at least a
+/// 512×512 RGBA atlas (1 MiB, held in main memory and on the GPU), and a
+/// glyph gets an atlas as large as itself — up to twice the font size for
+/// tall glyphs (`j`, `$`). Measured on Bevy 0.20: a thousand elements at
+/// slightly different sizes took 1 GB; sixteen letters at 8192 px took
+/// 2.3 GB.
+///
+/// Set it before spawning `HtmlUi`s: a change applies to styles computed
+/// afterwards. Raise the limits for apps that need more sizes (large
+/// displays, typography-heavy documents); lower them on memory-constrained
+/// platforms (WebGL 2's textures stop at 2048 px).
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use bevy_markup::prelude::*;
+/// App::new()
+///     .add_plugins((DefaultPlugins, BevyMarkupPlugin))
+///     .insert_resource(HtmlFontLimits {
+///         max_font_size: 1024.0,
+///         max_font_sizes: 32,
+///     });
+/// ```
+#[derive(Resource, Clone, Debug, PartialEq, Reflect)]
+pub struct HtmlFontLimits {
+    /// The largest computed `font-size`, in logical px; larger sizes are
+    /// clamped to it. Default 2048: the tallest glyphs' atlases then stay
+    /// within 8192 px — the default texture size limit on WebGPU and many
+    /// GPUs — at a scale factor up to 2. Values above 8192 count as 8192:
+    /// larger glyphs overflow the glyph rasterizer (UPSTREAM U54).
+    pub max_font_size: f32,
+    /// How many distinct computed font sizes the app may use, all `HtmlUi`s
+    /// together (default 128). Past it, a new size is replaced by the
+    /// nearest size already in use (by ratio): Bevy keeps those sizes'
+    /// atlases anyway, so reusing them costs no memory. The sizes counted
+    /// stay counted for the app's lifetime, as Bevy's atlases do. At least
+    /// one size is always allowed.
+    pub max_font_sizes: usize,
+}
+
+impl Default for HtmlFontLimits {
+    fn default() -> Self {
+        Self {
+            max_font_size: 2048.0,
+            max_font_sizes: 128,
+        }
+    }
+}
+
+/// The font sizes in use, against [`HtmlFontLimits`] (copied in each build).
+#[derive(Resource, Default, Debug)]
+pub(crate) struct FontSizeBudget {
+    pub(crate) limits: HtmlFontLimits,
+    /// Sorted, distinct.
+    sizes: Vec<f32>,
+}
+
+impl FontSizeBudget {
+    /// `size` as it may be used: within `[0, max_font_size]`, and one of the
+    /// sizes in use once `max_font_sizes` are (the nearest by ratio).
+    pub(crate) fn admit(&mut self, size: f32) -> f32 {
+        let ceiling = crate::cascade::MAX_FONT_SIZE;
+        let max = match self.limits.max_font_size {
+            max if max.is_nan() => ceiling,
+            max => max.clamp(0.0, ceiling),
+        };
+        let size = if size.is_nan() {
+            0.0
+        } else {
+            size.clamp(0.0, max)
+        };
+        if size == 0.0 {
+            // Draws nothing: no atlas.
+            return size;
+        }
+        match self.sizes.binary_search_by(|used| used.total_cmp(&size)) {
+            Ok(_) => size,
+            Err(at) if self.sizes.len() < self.limits.max_font_sizes.max(1) => {
+                self.sizes.insert(at, size);
+                size
+            }
+            Err(at) => {
+                let below = at.checked_sub(1).map(|i| self.sizes[i]);
+                let above = self.sizes.get(at).copied();
+                match (below, above) {
+                    (Some(below), Some(above)) if above / size < size / below => above,
+                    (Some(below), _) => below,
+                    (None, Some(above)) => above,
+                    (None, None) => unreachable!("at least one size is admitted"),
+                }
+            }
+        }
+    }
+
+    /// How many distinct sizes are in use.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.sizes.len()
+    }
+}
+
 /// CSS generic family keywords that can be mapped to a registered family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
 pub enum GenericFamily {
@@ -312,5 +416,76 @@ mod tests {
             families.get("Iosevka Slab").unwrap().regular,
             font(2).into()
         );
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    fn budget(max_font_size: f32, max_font_sizes: usize) -> FontSizeBudget {
+        FontSizeBudget {
+            limits: HtmlFontLimits {
+                max_font_size,
+                max_font_sizes,
+            },
+            ..default()
+        }
+    }
+
+    /// bug_0250: sizes clamp to the configured maximum, which never goes
+    /// past the rasterizer's ceiling (UPSTREAM U54).
+    #[test]
+    fn sizes_clamp_to_the_maximum() {
+        let mut b = budget(100.0, 16);
+        assert_eq!(b.admit(16.0), 16.0);
+        assert_eq!(b.admit(1e8), 100.0);
+        assert_eq!(b.admit(-3.0), 0.0);
+        assert_eq!(b.admit(f32::NAN), 0.0);
+        let mut b = budget(1e9, 16);
+        assert_eq!(b.admit(1e8), crate::cascade::MAX_FONT_SIZE);
+        let mut b = budget(f32::NAN, 16);
+        assert_eq!(b.admit(1e8), crate::cascade::MAX_FONT_SIZE);
+        assert_eq!(HtmlFontLimits::default().max_font_size, 2048.0);
+    }
+
+    /// bug_0250: past the budget, a new size reuses the nearest size in
+    /// use (by ratio); sizes in use and zero don't count again.
+    #[test]
+    fn sizes_past_the_budget_reuse_the_nearest() {
+        let mut b = budget(2048.0, 3);
+        for size in [10.0, 20.0, 40.0] {
+            assert_eq!(b.admit(size), size);
+        }
+        assert_eq!(b.admit(20.0), 20.0, "a size in use is free");
+        assert_eq!(b.admit(0.0), 0.0, "zero draws nothing and isn't counted");
+        assert_eq!(b.len(), 3);
+        assert_eq!(b.admit(5.0), 10.0);
+        assert_eq!(b.admit(13.0), 10.0, "13/10 < 20/13");
+        assert_eq!(b.admit(15.0), 20.0, "20/15 < 15/10");
+        assert_eq!(b.admit(1000.0), 40.0);
+        assert_eq!(b.len(), 3);
+        // A budget of zero still admits one size.
+        let mut b = budget(2048.0, 0);
+        assert_eq!(b.admit(12.0), 12.0);
+        assert_eq!(b.admit(30.0), 12.0);
+    }
+
+    proptest::proptest! {
+        /// Whatever sizes a page asks for, at most `max_font_sizes`
+        /// distinct sizes come out, each within the maximum.
+        #[test]
+        fn distinct_sizes_stay_within_the_budget(
+            sizes in proptest::collection::vec(-10.0f32..1e6, 0..300),
+            max_font_sizes in 1usize..40,
+        ) {
+            let mut b = budget(2048.0, max_font_sizes);
+            let mut out: Vec<f32> = sizes.into_iter().map(|size| b.admit(size)).collect();
+            out.retain(|size| *size != 0.0);
+            out.sort_by(f32::total_cmp);
+            out.dedup();
+            proptest::prop_assert!(out.len() <= max_font_sizes);
+            proptest::prop_assert!(out.iter().all(|size| (0.0..=2048.0).contains(size)));
+        }
     }
 }

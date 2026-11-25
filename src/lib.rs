@@ -287,7 +287,7 @@ pub mod prelude {
     pub use crate::focus::{
         ActivateElement, FocusEdge, Focusable, HtmlFocus, HtmlModal, HtmlNoFocus, NavAction,
     };
-    pub use crate::fonts::{FontFaces, FontFamilies, GenericFamily};
+    pub use crate::fonts::{FontFaces, FontFamilies, GenericFamily, HtmlFontLimits};
     pub use crate::html::{
         HtmlDebugOutline, HtmlElement, HtmlElements, HtmlUi, HtmlUiBuilt, HtmlUiRestyled,
         HtmlWindowed, RenderedHtml, TemplateContext,
@@ -368,6 +368,8 @@ impl Plugin for BevyMarkupPlugin {
             // minimal apps (no `TextPlugin`) have it too.
             .init_resource::<RemSize>()
             .init_resource::<fonts::FontFamilies>()
+            .init_resource::<fonts::HtmlFontLimits>()
+            .init_resource::<fonts::FontSizeBudget>()
             .init_resource::<custom_elements::CustomElements>()
             .init_resource::<canvas::HtmlCanvases>()
             // `HtmlFocus`'s navigator reads these; they are normally

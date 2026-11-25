@@ -289,6 +289,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0245](bug_0245.md) | A NaN argument to `min()`, `max()` or `clamp()` panics the CSS parse | `src/cascade.rs`; lightningcss 1.0.0-alpha.72 (U49) | high | fixed (guarded; `panic = "abort"` builds exposed) | honggfuzz `css`, nightly 2026-11-22 |
 | [bug_0248](bug_0248.md) | The SVG work bound undercharges short `<text>` elements | `src/svg_bounds.rs` | medium | fixed | remeasuring `MAX_SVG_WORK` on usvg 0.50, 2026-11-23 |
 | [bug_0249](bug_0249.md) | Extreme CSS values crash or hang Bevy's layout and text | `src/css/value.rs`, `src/cascade.rs`; bevy_ui, parley, zeno (U52–U54) | high | fixed (upstream open) | code reading + Bevy layout reproduction, 2026-11-25 |
+| [bug_0250](bug_0250.md) | Font sizes from CSS make Bevy allocate unbounded font atlas memory | `src/fonts.rs`, `src/build.rs`; bevy_text (U55) | high | fixed (upstream open) | glyph cost measurement after bug_0249, 2026-11-25 |
 
 ## Discovery session metadata: bug_0239–0243 (2026-11-12)
 

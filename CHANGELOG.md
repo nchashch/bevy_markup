@@ -9,6 +9,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ## [Unreleased]
 
 ### Added
+- `HtmlFontLimits` (resource, in the prelude): bounds the font sizes
+  bevy_markup's text uses — `max_font_size` (default 2048 px) and
+  `max_font_sizes`, the distinct sizes across the app (default 128; past
+  it a new size reuses the nearest one in use). Raise or lower them for
+  your platform. Bevy keeps a font atlas for every size forever, so
+  without a bound a page could exhaust memory through font sizes alone.
 - `<canvas data-canvas="name" width height>` shows a render target the app
   registers by name in the new `HtmlCanvases` resource (ADR 0041): a
   camera (`CanvasSource::Camera`, shown live through Bevy's `ViewportNode`,
@@ -109,6 +115,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   crash or freeze the app inside Bevy UI's layout and text rendering
   (bug_0249). Lengths, percentages and numbers are clamped to ±10⁸, as
   browsers clamp huge lengths, and the computed font size to 8192 px.
+- **Breaking (behavior):** computed font sizes are capped at 2048 px by
+  default (was unbounded), and an app's text uses at most 128 distinct
+  sizes (`HtmlFontLimits`): a page with thousands of slightly different
+  sizes made Bevy allocate gigabytes of font atlases (bug_0250).
 - Untrusted CSS can no longer crash the app through the CSS parser: the
   inputs that panicked lightningcss (a NaN in `min()`/`max()`/`clamp()`,
   which aborted apps built with `panic = "abort"`, and an infinite hue)

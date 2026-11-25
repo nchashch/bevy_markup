@@ -66,6 +66,7 @@ the issue may already be fixed or reported.
 | U52 | bevy_ui 0.20.1 (bevy_math 0.20.0) | `ComputedNode::border_box` calls `Rect::from_center_size`, which `assert!`s a non-negative size: a node laid out to a NaN size panics ([bug_0249](bug_0249.md)) | panic in every build from a NaN `Node` value (a CSS `calc()` overflowing at layout) | CSS magnitudes bounded at 10⁸, `CalcExpr::resolve` skips non-finite results | unreported |
 | U53 | parley 0.11.1 (via bevy_text) | `BreakLines::break_next_line_or_box` `assert!`s on its line widths, which an infinite or NaN layout width breaks ([bug_0249](bug_0249.md)) | panic in every build from text in a node whose width overflows (`3e38em`, width + margin near `f32::MAX`) | same bounds | unreported |
 | U54 | zeno 0.3.3 / swash 0.2.10 (via bevy_text) | Glyph rasterization sizes its bitmap with `u32` arithmetic: past ~32,768 px per side it overflows ([bug_0249](bug_0249.md)) | debug: panic from `font-size: 2e5px`; release: hangs past 2 min at 1.4–2.4 GB; `50000px` costs 3.5 s and 6.9 GB | computed font size clamped to `MAX_FONT_SIZE` (8192 px) | unreported |
+| U55 | bevy_text 0.20.1 | Font atlases are kept per exact font size and never freed; each new size costs at least a 512² RGBA atlas, a glyph gets an atlas as large as itself (2× the font size for tall glyphs), possibly past the device's texture limit ([bug_0250](bug_0250.md)) | memory grows with the distinct sizes and glyphs ever drawn: 2,000 sizes took 2 GB, 16 letters at 8192 px 2.3 GB; animated font sizes leak | `HtmlFontLimits` (default 2048 px, 128 distinct sizes) | unreported |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -1175,4 +1176,43 @@ CI clippy command and workspace tests pass on both.
 - **PR sketch:** zeno: compute buffer sizes in `usize` with checked
   arithmetic and refuse oversized masks; Bevy: cap the rasterized glyph size
   (render larger text as scaled outlines or refuse it).
+
+## U55 — bevy_text: font atlases per exact size, never freed
+
+- **Project/version:** [bevyengine/bevy](https://github.com/bevyengine/bevy)
+  0.20.1, `bevy_text`: `FontAtlasSet` (`font_atlas_set.rs`, keyed by
+  `FontAtlasKey { font_size_bits, … }`) and `FontAtlas::add_glyph`
+  (`font_atlas.rs:161–173`: a glyph that fits no atlas gets a new one, the
+  smallest power of two holding it, at least 512 px; RGBA8, kept in the main
+  world and uploaded to the GPU).
+- **Problem:** nothing ever removes an atlas (`FontAtlasSet::clear` drops
+  everything, and nothing calls it). Every exact font size (the `f32` bits:
+  `16.0` and `16.000001` are two) gets its own atlases, so memory grows with
+  every size and glyph ever drawn: text whose size animates, or UI built from
+  untrusted content, grows without bound. Large glyphs each take an atlas of
+  their own; for tall glyphs that's twice the font size, which past 4096 px
+  exceeds the 8192 px texture limit WebGPU and many GPUs have (a wgpu
+  validation error is fatal in Bevy; not run on a GPU here).
+- **Measurements** (release, headless, Bevy's default font; main-world
+  bytes, the GPU holds the same again):
+
+  | Text | Atlas memory |
+  |---|---|
+  | 1 glyph at 1024 / 4096 / 8192 / 16384 px | 4 MiB / 64 MiB / 256 MiB / 1 GiB |
+  | 26 letters at 4096 px | 1.1 GiB |
+  | 16 letters at 8192 px | 2.3 GiB |
+  | 2,000 nodes, one glyph each, sizes 10, 10.001, 10.002, … px | 2.0 GiB |
+  | 4,000 nodes, two glyphs each, sizes 16–1016 px in 0.25 px steps | 10.6 GiB (11.5 s) |
+
+- **Reproduction:** spawn 2,000 `Text` nodes with `TextFont::from_font_size(10.0 + i as f32 * 0.001)`
+  and one character each; read `FontAtlasSet::total_bytes`.
+- **Local workaround:** `HtmlFontLimits` caps the size (default 2048 px) and
+  the distinct sizes bevy_markup's text uses (default 128; past it a size
+  reuses the nearest in use).
+- **To investigate with Bevy:** eviction of atlases no live text uses
+  (reference-counting glyphs per atlas, or an LRU with a memory budget),
+  sharing atlases across sizes (quantized sizes, or a size-independent
+  rasterization such as SDF/MSDF for large text), packing large glyphs
+  instead of one atlas each, and refusing or downscaling a glyph larger than
+  the device's `max_texture_dimension_2d`.
 

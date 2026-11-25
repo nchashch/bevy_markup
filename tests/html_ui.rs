@@ -12025,3 +12025,51 @@ fn extreme_css_values_never_crash_bevy_layout() {
         );
     }
 }
+
+/// bug_0250: Bevy keeps a font atlas per exact font size and never frees it
+/// (UPSTREAM U55), at least 1 MiB each: a page with a thousand slightly
+/// different sizes took 1 GB, one glyph at 8192 px 256 MiB. `HtmlFontLimits`
+/// bounds both: past `max_font_sizes` a size reuses the nearest one in use,
+/// and no size exceeds `max_font_size`. Checked on what Bevy rasterized.
+#[test]
+fn font_limits_bound_what_bevy_rasterizes() {
+    let mut page = String::new();
+    for i in 0..200 {
+        page += &format!(
+            r#"<p style="font-size: {}px">x</p>"#,
+            10.0 + i as f32 * 0.25
+        );
+    }
+    page += r#"<p style="font-size: 5000px">x</p>"#;
+    let mut ui = TestUi::with_layout("font-limits", &[("page.html", &page)], UVec2::new(320, 240));
+    ui.world_mut().insert_resource(HtmlFontLimits {
+        max_font_size: 64.0,
+        max_font_sizes: 8,
+    });
+    let mut ui = ui.spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    ui.update(3);
+    let world = ui.world_mut();
+    let mut sizes: Vec<f32> = world
+        .query::<&TextFont>()
+        .iter(world)
+        .map(|font| match font.font_size {
+            FontSize::Px(px) => px,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    sizes.sort_by(f32::total_cmp);
+    sizes.dedup();
+    assert!(sizes.len() <= 8, "{sizes:?}");
+    assert!(sizes.iter().all(|size| *size <= 64.0), "{sizes:?}");
+    let atlases = world.resource::<bevy::text::FontAtlasSet>();
+    let mut rasterized: Vec<u32> = atlases.keys().map(|key| key.font_size_bits).collect();
+    rasterized.sort();
+    rasterized.dedup();
+    assert!(!rasterized.is_empty(), "the text was rasterized");
+    assert!(
+        rasterized.len() <= 8,
+        "{} sizes rasterized",
+        rasterized.len()
+    );
+}

@@ -113,7 +113,16 @@ pub fn cascade(css: &str) -> Result<String, String> {
 
     let styles = HtmlStyles::from_sheet(&stylesheet.sheet);
     let fonts = FontFamilies::default();
-    let root = root_style(&styles, &fonts, &assets, None, &element_tag("html"), None);
+    let font_budget = std::cell::RefCell::new(crate::fonts::FontSizeBudget::default());
+    let root = root_style(
+        &styles,
+        &fonts,
+        &assets,
+        None,
+        &element_tag("html"),
+        None,
+        Some(&font_budget),
+    );
     let styler = Styler {
         styles: &styles,
         fonts: &fonts,
@@ -124,6 +133,7 @@ pub fn cascade(css: &str) -> Result<String, String> {
         template: None,
         #[cfg(feature = "svg")]
         inline_svgs: None,
+        font_sizes: Some(&font_budget),
     };
 
     let elements = [
