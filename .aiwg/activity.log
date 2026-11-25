@@ -56,3 +56,4 @@
 ## [2026-11-25 00:19] update | Bounded CSS magnitudes and font sizes against Bevy layout overflow (bug_0249, U52-U54)
 ## [2026-11-25 00:36] update | Added HtmlFontLimits: bounded font sizes and distinct sizes against Bevy's unbounded font atlases (bug_0250, U55)
 ## [2026-11-25 01:13] update | Optional hotpath (0.33); fluent 0.17 / fluent-syntax 0.12 (ftl_check port verified, U1/U2/U47 still present)
+## [2026-11-25 01:23] update | ADR 0049 proposed: MiniJinja with fuel instead of Tera + tera_check (measured fuel bounds; two upstream issues filed privately, U56, U57)
