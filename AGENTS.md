@@ -103,7 +103,7 @@ src/
                    Tera syntax kept verbatim), `code_ranges`, `dedent_blocks` (ADR 0024)
   fuzz.rs          (`fuzzing` feature, `#[doc(hidden)]`) the fuzz harness: the internal glue
                    called directly per input (html, css, ftl, svg targets)
-  ftl_check.rs     (ADR 0045) the load-time FTL safety check: a port of fluent-syntax 0.11.1's
+  ftl_check.rs     (ADR 0045) the load-time FTL safety check: a port of fluent-syntax 0.11.1's (unchanged in 0.12.0)
                    `parse_runtime` counting nesting (`MAX_FTL_NESTING` 64, UPSTREAM U2),
                    call width (`MAX_FTL_ARGUMENTS` 64, UPSTREAM U47), and
                    refusing, in its string-literal path, an escape cut off by a non-ASCII byte
@@ -749,8 +749,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   (uncached). `opacity` multiplies down the tree in the computed `Style`
   (the `<html>` element reuses the root style, or its opacity would square)
   and fades text/span colors at spec time and box colors in `collect_node`.
-- fluent-syntax is upstream 0.11.1 (what `fluent` 0.16 requires). Three of
-  its bugs are reachable from any FTL asset, and `src/ftl_check.rs` (ADR
+- fluent-syntax is upstream 0.12.0 (what `fluent` 0.17 requires). Three of
+  its bugs (still there in 0.12.0, checked 2026-11-25) are reachable from any FTL asset, and `src/ftl_check.rs` (ADR
   0045) refuses the triggering resources at load, before
   `FluentResource::try_new` (the bundle loader, the fuzz harness, the
   Markdown fuzz path):
@@ -771,7 +771,8 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   generated FTL and runs the real parser and resolver at the limit on 2 MB.
   The fork (`nchashch/fluent-rs` `fix/fuzzing-bugs-0.11`, proposed upstream
   from `fix/fuzzing-bugs`) was the earlier fix; on a `fluent` bump re-run
-  those tests (the port follows 0.11.1) and UPSTREAM.md U1/U2.
+  those tests (the port follows 0.11.1, whose control flow 0.12.0 kept) and
+  UPSTREAM.md U1/U2/U47.
 - `vendor/honggfuzz` is a patched fork of the honggfuzz crate used only by
   `honggfuzz/` targets: its bundled C source fails against current binutils
   (`bfd.h` no longer defines `TRUE`).

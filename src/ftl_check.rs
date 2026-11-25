@@ -1,8 +1,8 @@
 //! The load-time safety check of Fluent resources (ADR 0045, replacing
 //! the fluent-syntax fork of bug_0005 and bug_0015).
 //!
-//! FTL is untrusted (ADR 0044), and fluent-syntax 0.11.1 has three defects
-//! reachable from any resource (UPSTREAM U1, U2, U47):
+//! FTL is untrusted (ADR 0044), and fluent-syntax (0.11.1, still in 0.12.0)
+//! has three defects reachable from any resource (UPSTREAM U1, U2, U47):
 //!
 //! - an invalid `\u`/`\U` escape in a string literal, cut off by a
 //!   multi-byte character, panics (the error quotes one *byte* of that
@@ -121,7 +121,9 @@ pub(crate) enum Entry {
 
 /// fluent-syntax 0.11.1's `Parser` (`parser/core.rs`, `pattern.rs`,
 /// `expression.rs`, `helper.rs`, `comment.rs`, `runtime.rs`), ported:
-/// the same pointer moves and the same errors, without the tree.
+/// the same pointer moves and the same errors, without the tree. 0.12.0
+/// changed only how `get_text_slice` finds a text element's end (memchr),
+/// not where it ends: the port holds for both (checked 2026-11-25).
 pub(crate) struct Parser<'a> {
     source: &'a [u8],
     ptr: usize,

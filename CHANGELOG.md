@@ -88,6 +88,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     image fails with an error, instead of a renderer panic.
 
 ### Changed
+- fluent 0.16 → 0.17 (fluent-bundle 0.16, fluent-syntax 0.12): no API
+  change for bevy_markup users; two duplicate dependencies (`thiserror` 1,
+  `self_cell` 0.10) leave the tree. The load-time FTL check still applies:
+  0.12 has the same three parser bugs.
 - hotpath 0.28 → 0.33 (the `hotpath*` features).
 - `hotpath` is no longer a dependency unless a `hotpath*` feature is on:
   builds that don't profile no longer compile the profiler and its macros.

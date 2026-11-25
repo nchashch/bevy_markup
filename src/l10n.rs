@@ -206,7 +206,7 @@ impl AssetLoader for LocaleBundleLoader {
             // reloads every bundle that uses it.
             let bytes = load_context.read_asset_bytes(path.clone()).await?;
             let source = String::from_utf8(bytes)?;
-            // ADR 0045: FTL is untrusted, and fluent-syntax 0.11.1 panics or
+            // ADR 0045: FTL is untrusted, and fluent-syntax (0.12) panics or
             // overflows its stack on some resources (UPSTREAM U1, U2): those
             // are refused before it parses them.
             crate::ftl_check::check(&source).map_err(|err| format!("`{path}`: {err}"))?;

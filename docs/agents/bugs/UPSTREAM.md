@@ -60,7 +60,7 @@ the issue may already be fixed or reported.
 | U44 | fuzzcheck | The fuzzer unwraps `String::from_utf8` of every serialized input it keeps (for an assertion message) | a `ByteSerializer` target panics on its first non-UTF-8 input | vendored patch | unreported |
 | U45 | lightningcss 1.0.0-alpha.72 / cssparser-color 0.5.0 | An infinite `hsl()`/`hwb()` hue normalizes to NaN, and `hsl_to_rgb` `debug_assert!`s its hue range | panic at parse time in debug builds, from any CSS text ([bug_0238](bug_0238.md)) | `cascade::guarded_parse` (catch_unwind around the three lightningcss parses); the fuzz targets let it unwind (`fuzz::is_known_upstream_panic`, pinned to cssparser-color 0.5.0) | unreported; **moot for bevy_markup**: lightningcss removed (ADR 0048) |
 | U46 | Tera 2.4.0 | `unique` compares every pair of distinct items ([bug_0241](bug_0241.md)) | unmodeled quadratic render work | charge comparisons, refuse context-sized `unique` (ADR 0047) | unreported |
-| U47 | fluent-syntax 0.11.1 | Duplicate named-argument scan is quadratic ([bug_0243](bug_0243.md)) | flat FTL call stalls resource loading | `MAX_FTL_ARGUMENTS` = 64 in the pre-check (ADR 0047) | unreported |
+| U47 | fluent-syntax 0.11.1, 0.12.0 | Duplicate named-argument scan is quadratic ([bug_0243](bug_0243.md)) | flat FTL call stalls resource loading | `MAX_FTL_ARGUMENTS` = 64 in the pre-check (ADR 0047) | unreported |
 | U48 | cargo-afl 0.18.2 | `target-cpu=native` also reaches proc macros and build scripts | cached test-fuzz builds hit SIGILL on runners with older CPUs | append `-C target-cpu=x86-64` in `scripts/fuzz-{setup,test-fuzz}.sh` | unreported |
 | U49 | lightningcss 1.0.0-alpha.72 | A NaN argument to `min()`/`max()`/`clamp()` reaches `unreachable!()` in `Percentage::parse` | panic at parse time in every build profile, from any CSS text; an app with `panic = "abort"` aborts ([bug_0245](bug_0245.md)) | `cascade::guarded_parse` (unwinding builds only); the fuzz targets let it unwind (`fuzz::is_known_upstream_panic`, pinned to 1.0.0-alpha.72) | fixed on master ([`b0939ab`](https://github.com/parcel-bundler/lightningcss/commit/b0939ab684793d2ba3ccc1a91e0f4d3ba837a708)), awaiting release; **moot for bevy_markup**: lightningcss removed (ADR 0048) |
 | U52 | bevy_ui 0.20.1 (bevy_math 0.20.0) | `ComputedNode::border_box` calls `Rect::from_center_size`, which `assert!`s a non-negative size: a node laid out to a NaN size panics ([bug_0249](bug_0249.md)) | panic in every build from a NaN `Node` value (a CSS `calc()` overflowing at layout) | CSS magnitudes bounded at 10⁸, `CalcExpr::resolve` skips non-finite results | unreported |
@@ -80,8 +80,9 @@ CI clippy command and workspace tests pass on both.
 ## U1 — fluent-syntax: invalid unicode escape before a multi-byte character panics
 
 - **Project:** [projectfluent/fluent-rs](https://github.com/projectfluent/fluent-rs),
-  crate `fluent-syntax`. Affected: 0.11.1 (pinned by fluent 0.16 via
-  fluent-bundle 0.15) and 0.12.0 (latest checked, 2026-10-05).
+  crate `fluent-syntax`. Affected: 0.11.1 and 0.12.0 (what bevy_markup
+  uses since 2026-11-25, through fluent 0.17 / fluent-bundle 0.16; latest
+  release, rechecked that day).
 - **Problem:** `skip_unicode_escape_sequence` reports an invalid `\u`/`\U`
   escape with the character that ended it, sliced as `ptr + 1`, one byte.
   If that character is multi-byte, `Slice::slice` (`&self[range]`) panics.
@@ -102,8 +103,8 @@ CI clippy command and workspace tests pass on both.
 
 ## U2 — fluent-syntax: unbounded expression nesting overflows the stack
 
-- **Project:** as U1. Affected: 0.11.1 and 0.12.0 (latest checked,
-  2026-10-05).
+- **Project:** as U1. Affected: 0.11.1 and 0.12.0 (latest release,
+  rechecked 2026-11-25: no depth limit).
 - **Problem:** inline expressions nest recursively with no limit, along two
   cycles: placeables (placeable → expression → inline expression or select
   variant → placeable) and call arguments (inline expression → call
@@ -1066,10 +1067,10 @@ CI clippy command and workspace tests pass on both.
 
 ## U47 — fluent-syntax: wide calls have quadratic duplicate-name scans
 
-- **Project/version:** fluent-syntax 0.11.1,
+- **Project/version:** fluent-syntax 0.11.1 and 0.12.0 (checked
+  2026-11-25: the same `Vec::contains` scan),
   `src/parser/expression.rs::get_call_arguments`.
-- **Status:** unreported; observed in the installed version, latest
-  upstream release/default branch not checked in this fix session.
+- **Status:** unreported.
 - **Reproduction:** `m = { FUNC(a000000: 0, a000001: 0, ...) }` with 20,000
   distinct names. Every name is compared with all earlier names through
   `argument_names.contains`. See [bug_0243](bug_0243.md); the port of

@@ -95,7 +95,7 @@ tl = { package = "astral-tl", version = "0.8.0" }
 # attribute rules (ADR 0036; replaced a generated WHATWG table).
 htmlize = { version = "1.1.0", features = ["unescape"] }
 # Localization: FTL syntax, bundle, formatting (https://projectfluent.org).
-fluent = "0.16.0"
+fluent = "0.17.0"
 # Locale identifiers: the `*.ftl.ron` manifest's `locale` field.
 unic-langid = { version = "0.9", features = ["serde"] }
 # CSS (ADR 0048): bevy_markup's own parser (`src/css/`) on Servo's
@@ -123,9 +123,9 @@ pulldown-cmark = { version = "0.13.5", default-features = false, features = [
 ] }
 # The FTL AST (ADR 0020 Decision 3): the per-message Markdown patterns
 # pre-convert at bundle load. fluent doesn't re-export it; same version as
-# fluent's. Upstream 0.11.1: `ftl_check` (ADR 0045) refuses at load what
-# would panic or overflow it (UPSTREAM U1, U2).
-fluent-syntax = "0.11.1"
+# fluent's. 0.12.0 still has UPSTREAM U1, U2, U47: `ftl_check` (ADR 0045)
+# refuses at load what would panic, overflow or stall it.
+fluent-syntax = "0.12.0"
 # Profiling instrumentation, only with the `hotpath*` features: the
 # attributes are `cfg_attr(feature = "hotpath", …)`, so users who don't
 # profile never compile it.
