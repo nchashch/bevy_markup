@@ -221,7 +221,7 @@ pub fn new_environment(fuel: u64) -> minijinja::Environment<'static> {
     env.add_filter("lines", fueled_lines);
     env.add_filter("escape", fueled_escape);
     env.add_filter("e", fueled_escape);
-    env.add_filter("format", ascii_keyed_format);
+    env.add_filter("format", checked_format);
     env.set_fuel(Some(fuel));
     env
 }
@@ -326,49 +326,79 @@ fn fueled_escape(
     minijinja::filters::escape(state, value)
 }
 
-/// `format`, with its `%(key)` mapping keys limited to ASCII: a key holding
-/// another character fails the filter before MiniJinja parses the format
-/// string.
-fn ascii_keyed_format(
+/// `format`, checked before MiniJinja parses the format string
+/// ([`check_format`]): `%(key)` names are ASCII, widths and precisions at
+/// most [`MAX_FORMAT_NUMBER`].
+fn checked_format(
     state: &mut minijinja::State,
     format: &minijinja::Value,
     args: minijinja::value::Rest<minijinja::value::ValueOrKwargs>,
 ) -> Result<minijinja::Value, minijinja::Error> {
     if let Some(text) = format.as_str()
-        && !format_keys_are_ascii(text)
+        && let Err(reason) = check_format(text)
     {
         return Err(minijinja::Error::new(
             minijinja::ErrorKind::InvalidOperation,
-            "format: a %(key) name must be ASCII",
+            format!("format: {reason}"),
         ));
     }
     minijinja::filters::format(state, format, args)
 }
 
-/// Whether every `%(key)` in a printf-style format string (up to its `)`,
-/// or the end) is ASCII. `%%` is a literal percent sign.
-fn format_keys_are_ascii(text: &str) -> bool {
+/// The largest width or precision `format` takes: Rust's own formatting
+/// takes no larger one.
+const MAX_FORMAT_NUMBER: u64 = u16::MAX as u64;
+
+/// Checks a printf-style format string's conversion specifiers: every
+/// `%(key)` name (up to its `)`, or the end) is ASCII, and every width and
+/// precision is at most [`MAX_FORMAT_NUMBER`]. `%%` is a literal percent
+/// sign.
+fn check_format(text: &str) -> Result<(), &'static str> {
     let bytes = text.as_bytes();
+    // The number starting at `at` (saturating) and the index after it.
+    let number = |mut at: usize| {
+        let mut value = 0u64;
+        while let Some(digit) = bytes.get(at).filter(|byte| byte.is_ascii_digit()) {
+            value = value
+                .saturating_mul(10)
+                .saturating_add(u64::from(digit - b'0'));
+            at += 1;
+        }
+        (value, at)
+    };
     let mut at = 0;
     while at < bytes.len() {
         if bytes[at] != b'%' {
             at += 1;
             continue;
         }
-        match bytes.get(at + 1) {
-            Some(b'%') => at += 2,
-            Some(b'(') => {
-                let key = &bytes[at + 2..];
-                let end = key.iter().position(|&b| b == b')').unwrap_or(key.len());
-                if !key[..end].is_ascii() {
-                    return false;
-                }
-                at += 2 + end;
+        at += 1;
+        if bytes.get(at) == Some(&b'%') {
+            at += 1;
+            continue;
+        }
+        if bytes.get(at) == Some(&b'(') {
+            let key = &bytes[at + 1..];
+            let end = key.iter().position(|&b| b == b')').unwrap_or(key.len());
+            if !key[..end].is_ascii() {
+                return Err("a %(key) name must be ASCII");
             }
-            _ => at += 1,
+            at += 1 + end + 1;
+        }
+        while matches!(bytes.get(at), Some(b'#' | b'0' | b'-' | b' ' | b'+')) {
+            at += 1;
+        }
+        let (width, after) = number(at);
+        at = after;
+        let mut precision = 0;
+        if bytes.get(at) == Some(&b'.') {
+            (precision, at) = number(at + 1);
+        }
+        if width > MAX_FORMAT_NUMBER || precision > MAX_FORMAT_NUMBER {
+            return Err("a width or precision is over 65535");
         }
     }
-    true
+    Ok(())
 }
 
 /// The template limits an app may set (ADR 0049): how much work and
@@ -1371,10 +1401,10 @@ pub(crate) fn normalize_self_closing(html: &str) -> std::borrow::Cow<'_, str> {
 mod tests {
     use super::normalize_self_closing as norm;
 
-    /// `format` takes printf-style formats with ASCII `%(key)` names;
-    /// another character in a key fails the render.
+    /// `format` takes printf-style formats with ASCII `%(key)` names and
+    /// widths and precisions up to 65535; anything else fails the render.
     #[test]
-    fn format_keys_must_be_ascii() {
+    fn format_specifiers_are_checked() {
         let render = |template: &str| test_render("t.html", template, serde_json::json!({}));
         assert_eq!(render(r#"{{ "%s-%d" | format("a", 2) }}"#).unwrap(), "a-2");
         assert_eq!(
@@ -1393,6 +1423,23 @@ mod tests {
                 err.to_string().contains("must be ASCII"),
                 "{template}: {err}"
             );
+        }
+        // Widths and precisions up to 65535 format; larger ones fail.
+        assert_eq!(
+            render(r#"{{ "%.2f|%5d" | format(1, 2) }}"#).unwrap(),
+            "1.00|    2"
+        );
+        assert_eq!(
+            render(r#"{{ "%.65535f" | format(1) | length }}"#).unwrap(),
+            "65537"
+        );
+        for template in [
+            r#"{{ "%.70000f" | format(1) }}"#,
+            r#"{{ "%(n).65536f" | format(n=1) }}"#,
+            r#"{{ "%-099999999999999999999999d" | format(1) }}"#,
+        ] {
+            let err = render(template).unwrap_err();
+            assert!(err.to_string().contains("over 65535"), "{template}: {err}");
         }
     }
 

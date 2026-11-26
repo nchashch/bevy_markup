@@ -30,10 +30,13 @@ mkdir -p "fuzz/corpus/$target"
 # Extra directories that don't exist are skipped: libFuzzer exits on a
 # missing corpus directory (the other driver's corpus cache misses on
 # the first night).
-extra=()
+# POSIX sh (dash on the runners): the existing ones collected as words
+# (corpus paths have no spaces).
+extra=""
 for dir in ${FUZZ_EXTRA_CORPUS:-}; do
-    [ -d "$dir" ] && extra+=("$dir")
+    if [ -d "$dir" ]; then extra="$extra $dir"; fi
 done
+# shellcheck disable=SC2086 # $extra is a word list on purpose
 exec cargo "+$toolchain" fuzz run --target "$host" "$target" \
-    "fuzz/corpus/$target" "fuzz/seeds/$target" "${extra[@]}" -- \
+    "fuzz/corpus/$target" "fuzz/seeds/$target" $extra -- \
     -max_total_time="$duration" -max_len=65536 -timeout=10 "$@"

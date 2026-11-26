@@ -58,7 +58,7 @@ done < <(find "$sealed" -name '*.tar.gz.age' | sort)
 report=$inbox/triage.md
 replays=$inbox/replays
 mkdir -p "$replays"
-declare -A count samples drivers status
+declare -A count samples drivers
 manual=()
 host=$(rustc "+$toolchain" -vV | sed -n 's/^host: //p')
 

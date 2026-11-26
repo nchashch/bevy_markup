@@ -9,7 +9,7 @@
 # Usage: scripts/fuzz-ci-run.sh <libfuzzer|honggfuzz|fuzzcheck|test-fuzz> <target> <seconds> [driver args...]
 # Env: CORPUS (the working corpus directory, for its size).
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 
 driver=$1 target=$2 seconds=$3
 shift 3

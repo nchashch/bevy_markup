@@ -63,3 +63,4 @@
 ## [2026-11-25 05:42] update | Nightly fuzzing: 4 workers, weighted durations (css/html 120 min), shared cargo-fuzz/honggfuzz corpora, findings encrypted (age), local triage script
 ## [2026-11-25 21:19] update | Nightly fuzzing fixes: libFuzzer skips missing extra corpora, crash counts per driver's crash directory, triage reads only crash directories; format filter takes ASCII %(key) names only
 ## [2026-11-25 22:47] update | ADR 0051: SVG drawn in an icon subset (filters, masks, patterns, markers, text, style sheets, images refused); svg_boxes, svg_fonts and the svg-text feature removed; 31,833 public icons identical; follow-ups: ADR 0042 superseded, UPSTREAM entries marked unreachable, svg screenshot retaken
+## [2026-11-26 01:49] update | Fix the second Nightly's script failures (POSIX sh extra-corpus loop, AFL shutdown race when sealing), add shellcheck to CI, bound format widths and precisions

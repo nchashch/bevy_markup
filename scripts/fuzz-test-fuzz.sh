@@ -44,6 +44,13 @@ before=$(crashes)
 set +e
 timeout "$duration" cargo "+$toolchain" test-fuzz "tests::fuzz_$target"
 status=$?
+# afl-fuzz writes its resume state (`fastresume.bin`) while it shuts down,
+# after `timeout` has returned: wait for it, or the nightly's seal step
+# reads a file that is still changing.
+for _ in $(seq 30); do
+    pgrep -f "afl-fuzz.*fuzz_$target" >/dev/null || break
+    sleep 1
+done
 set -e
 after=$(crashes)
 cd ..
