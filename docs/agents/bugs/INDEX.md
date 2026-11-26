@@ -290,6 +290,8 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0248](bug_0248.md) | The SVG work bound undercharges short `<text>` elements | `src/svg_bounds.rs` | medium | fixed | remeasuring `MAX_SVG_WORK` on usvg 0.50, 2026-11-23 |
 | [bug_0249](bug_0249.md) | Extreme CSS values crash or hang Bevy's layout and text | `src/css/value.rs`, `src/cascade.rs`; bevy_ui, parley, zeno (U52–U54) | high | fixed (upstream open) | code reading + Bevy layout reproduction, 2026-11-25 |
 | [bug_0250](bug_0250.md) | Font sizes from CSS make Bevy allocate unbounded font atlas memory | `src/fonts.rs`, `src/build.rs`; bevy_text (U55) | high | fixed (upstream open) | glyph cost measurement after bug_0249, 2026-11-25 |
+| [bug_0252](bug_0252.md) | `var()` substitution work wasn't bounded by its budget, and repeated per element | `src/cascade.rs` | high | fixed | cargo-fuzz `css`, Nightly 45740232198, 2026-11-26 |
+| [bug_0253](bug_0253.md) | Printing a lazily repeated list stalled the render or exhausted memory | `src/template.rs`; minijinja (U62) | high | fixed (local hooks; MiniJinja patched, upstream open) | cargo-fuzz `html`, Nightly 45740232198, 2026-11-26 |
 
 ## Discovery session metadata: bug_0239–0243 (2026-11-12)
 

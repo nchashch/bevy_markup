@@ -67,7 +67,12 @@ the issue may already be fixed or reported.
 | U53 | parley 0.11.1 (via bevy_text) | `BreakLines::break_next_line_or_box` `assert!`s on its line widths, which an infinite or NaN layout width breaks ([bug_0249](bug_0249.md)) | panic in every build from text in a node whose width overflows (`3e38em`, width + margin near `f32::MAX`) | same bounds | unreported |
 | U54 | zeno 0.3.3 / swash 0.2.10 (via bevy_text) | Glyph rasterization sizes its bitmap with `u32` arithmetic: past ~32,768 px per side it overflows ([bug_0249](bug_0249.md)) | debug: panic from `font-size: 2e5px`; release: hangs past 2 min at 1.4–2.4 GB; `50000px` costs 3.5 s and 6.9 GB | computed font size clamped to `MAX_FONT_SIZE` (8192 px) | unreported |
 | U55 | bevy_text 0.20.1 | Font atlases are kept per exact font size and never freed; each new size costs at least a 512² RGBA atlas, a glyph gets an atlas as large as itself (2× the font size for tall glyphs), possibly past the device's texture limit ([bug_0250](bug_0250.md)) | memory grows with the distinct sizes and glyphs ever drawn: 2,000 sizes took 2 GB, 16 letters at 8192 px 2.3 GB; animated font sizes leak | `HtmlFontLimits` (default 2048 px, 128 distinct sizes) | unreported |
+| U56 | minijinja 3.1.0 | `join`, `split`, `lines`, `escape` allocate their result before charging fuel (21×, 4.6× past the budget) | memory past the fuel budget from a template | the fueled filter wrappers in `template.rs`; patched MiniJinja (ADR 0052) | reported (email; issue to open) |
+| U57 | minijinja 3.1.0 | Long flat expression chains overflow the stack in codegen | abort from a ~13 KB template | `tera_tag_over_limit` (64 operators per tag); patched MiniJinja | reported (email; issue to open) |
 | U58 | honggfuzz-rs 0.5.62 (`cargo-hfuzz`) | Release builds add `-C target-cpu=native` | targets built on a runner with AVX-512 crash with SIGILL on every input on one without, so a cached build fails the nightly fuzz jobs | append `-C target-cpu=x86-64` in `scripts/fuzz-{setup,honggfuzz}.sh` (later flags win), cache suffix `-x86-64` | unreported |
+| U59 | minijinja 3.1.0 | `format` panics on a non-ASCII `%(key)` | panic from a 24-byte template | `checked_format`; patched MiniJinja | reported (email; issue to open) |
+| U60 | minijinja 3.1.0 | `format` panics on an integer `%f` with precision over 65535 | panic from a template | `checked_format`; patched MiniJinja | reported (email; issue to open) |
+| U62 | minijinja 3.1.0 | Deep walks of containers (printing, `~`, `in`, `==`) and constant folding aren't bounded by fuel ([bug_0253](bug_0253.md)) | stall or out-of-memory at template load or render | printing and text filters checked (`streaming_formatter`); patched MiniJinja (the rest) | found 2026-11-26; issue to open |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -1268,4 +1273,293 @@ CI clippy command and workspace tests pass on both.
   restored. Same class as U48 (cargo-afl).
 - **PR sketch:** make `target-cpu=native` opt-in (an `HFUZZ_NATIVE` switch),
   or put it before a documented override point.
+
+## U56 — MiniJinja: `join`, `split`, `lines` and `escape` allocate past the fuel budget
+
+- **Status (2026-11-26):** reported to the maintainer by email (2026-11-25/26), who asked for a public issue; issue and PR to open. Fixed on `fix/fuel-before-allocation` (from `main`), and in the MiniJinja bevy_markup patches in (`bevy_markup/3.1.0`, ADR 0052). Local guard for crates using bevy_markup: `template::fueled_join`, `fueled_split`, `fueled_lines`, `fueled_escape` charge the result up front.
+
+| field | value |
+|---|---|
+| Upstream | [mitsuhiko/minijinja](https://github.com/mitsuhiko/minijinja) 3.1.0, `src/filters.rs` `join` (`charge_join`, `join_plain`) |
+| Severity | high for users of `fuel` with untrusted templates: the budget is the advertised protection, and this defeats it (memory DoS) |
+| Found | 2026-11-25, Claude Code session (`claude-opus-5-5`), measuring fuel for ADR 0049 |
+| bevy_markup | not affected: it doesn't use MiniJinja (ADR 0049 is a proposal) |
+
+### Problem
+
+`fuel.rs` says allocations of known size are checked before they are made.
+`join` checks the growing output only through `charge_join`:
+
+```rust
+ok!(state.charge_items(1));
+if !joiner.is_empty() {
+    ok!(state.ensure_bytes(output.len().saturating_add(joiner.len())));
+}
+```
+
+1. With an empty joiner (`| join`, the default) nothing is checked per item:
+   the whole result is built, then charged once it exists.
+2. With a joiner, the check counts the output and the joiner but not the
+   item about to be appended, so it overshoots by up to one item (an item
+   can be 100 MB: `MAX_REPEATED_STRING_LEN`).
+
+### Reproduction
+
+Release build, `minijinja = { version = "3.1.0", features = ["fuel"] }`,
+`env.set_fuel(Some(10_000_000))` (≈ 640 MB of byte charges):
+
+```jinja
+{% set a = "x" * 100000000 %}{{ [a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a] | join | length }}
+```
+
+Peak RSS 5,821 MiB, then `OutOfFuel` after 0.71 s (`/usr/bin/time`,
+`prlimit --as=8 GiB`). With fuel 10⁶ it fails at once (4 MiB): the 100 MB
+repetition alone exceeds the budget. A repeated list (`[a] * 30`) behaves
+the same.
+
+### Suggested fix
+
+Check before every append, with the item's size: `ensure_bytes(output.len()
++ joiner.len() + item_len)` regardless of the joiner (for non-string items,
+format into a scratch buffer and check before copying, or charge the
+formatted length). Worth auditing the other filters that build a result in
+a loop for the same pattern (`replace`, `indent`, `format`, `wordwrap`,
+`center`, `map`/`list` conversions).
+
+### Draft report (not sent)
+
+> Subject: fuel: `join` can allocate far past the fuel budget
+>
+> With `fuel` enabled, `join` without a joiner builds its whole result
+> before it is charged (`charge_join` only calls `ensure_bytes` when the
+> joiner is non-empty, and never counts the next item). A template joining
+> 30 references to a 100 MB string reaches 5.8 GB on a budget of 10⁷
+> fuel (~640 MB). Reproduction and suggested fix above.
+
+### Audit, 2026-11-25 (ADR 0049 branch)
+
+Every built-in filter that can produce more than it takes in, at the
+default bevy_markup budget (2²² fuel ≈ 268 MB of data), release, peak RSS
+(`/usr/bin/time`), inputs sized to cost well under the budget:
+
+| Filter | Template | Peak |
+|---|---|---|
+| `join` (no joiner) | 30 × a 100 MB string | 5,821 MiB (21×) |
+| `split` | `("x " * 50000000) \| split` | 1,244 MiB (4.6×) |
+| `lines` | `("x\n" * 50000000) \| lines` | 1,244 MiB (4.6×) |
+| `escape` | `("\"" * 100000000) \| escape` | 1,245 MiB (4.6×) |
+| `list`, `tojson`, `reverse`, `title`, `batch`, `slice`, `string`, `pprint`, `chain`, `zip`, `map`, `items`, `join` with a joiner, `~` doubling | — | ≤ 290 MiB (within ~1.1×) |
+
+All four build their result and charge it afterwards (`split`/`lines`
+charge nothing per piece before allocating the list; `escape` writes the
+escaped string before it is charged). bevy_markup's workaround on the
+branch: wrappers registered over the four names charge the result's size
+through `State::consume_fuel` before calling `minijinja::filters::*`;
+`tests/template_fuel.rs` (a counting allocator) keeps every case under 1×
+of a 2¹⁸ budget (`join` reached 22.5× without the wrappers).
+
+Draft report addition: "The same pattern affects `split`, `lines` and
+`escape` (4.6× the budget each, table above)."
+
+### Fix ready (2026-11-25): `../minijinja` branch `fix/fuel-before-allocation` (434c658f, local, not pushed)
+
+Rust and Go. `join` checks output + separator + next item before growing
+(with or without a separator); `split`/`lines` count pieces and check slots
+first (Rust: `filters::split_checked`/`lines_checked`, registered instead,
+public signatures kept, as `length_checked` on main; Go: in
+`FilterSplit`/`FilterLines`, which now take the state); Rust `escape` checks
+the escaped size first (`utils::html_escaped_len`, unit-tested against
+`HtmlEscape`). Both `test_fuel_limits` bomb lists gain the cases. Without
+the fix (100,000 fuel ≈ 6.4 MB, limit 4×): Rust `join` 357 MB, `split`/
+`lines` 107 MB; Go `join` 101 MB, `split`/`lines` 75 MB. With it: Rust
+≤ 17 MB, Go ≤ 3 MB. Suites: Rust 435, Go 8 packages, all pass.
+
+Correction to the audit above: `escape` stays within MiniJinja's own 4×
+tolerance (its input is charged twice before it runs, so its 6× output is
+at most ~3× the budget); its change is hardening, not a violation. The
+Go port's `escape` is fine.
+
+Once released, bevy_markup can drop the wrappers in `template::new_environment`
+and move `U56-template_fuel.rs` into `tests/`.
+
+## U57 — MiniJinja: long flat expression chains overflow the stack in codegen
+
+- **Status (2026-11-26):** reported to the maintainer by email (2026-11-25/26), who asked for a public issue; issue and PR to open. Fixed on `fix/chain-depth` (from `main`), and in the MiniJinja bevy_markup patches in (`bevy_markup/3.1.0`, ADR 0052). Local guard for crates using bevy_markup: `template::tera_tag_over_limit` refuses a tag holding more than 64 operators (bug_0182).
+
+| field | value |
+|---|---|
+| Upstream | [mitsuhiko/minijinja](https://github.com/mitsuhiko/minijinja) 3.1.0, `src/compiler/codegen.rs` (expression compilation) |
+| Severity | high for apps compiling untrusted templates: a ~20 KB template aborts the process (stack overflow is not a panic; it can't be caught) |
+| Found | 2026-11-25, Claude Code session (`claude-opus-5-5`), measuring MiniJinja for ADR 0049 |
+| bevy_markup | not affected: it doesn't use MiniJinja. Tera had the same class (bug_0182, guarded by `template::tera_tag_over_limit`) |
+
+### Problem
+
+The parser limits nesting depth (`MAX_RECURSION`, 500: 499 nested `(`,
+`{% if %}` or `{% for %}` are refused with "template exceeds maximum
+recursion limits"). A flat chain isn't nesting to the parser — it loops —
+but it builds a left-deep tree, and code generation recurses down that tree
+once per link. Parsing and dropping the tree are fine (checked with
+`machinery::parse` on the same input); `Environment::template_from_str`
+overflows.
+
+### Reproduction
+
+Thread with a 2 MB stack (Rust's default for spawned threads), minijinja
+3.1.0, `template_from_str` only (no render):
+
+| Chain | Debug: fine / overflow | Release: fine / overflow |
+|---|---|---|
+| `{{ 1\|string\|string… }}` | 800 / 1,600 filters | 6,400 / 12,800 |
+| `{{ 1+1+1… }}` | 1,600 / 3,200 | 3,200 / 6,400 |
+| `{{ 'a'~'a'~… }}` | 1,600 / 3,200 | 3,200 / 6,400 |
+| `{{ true and true and … }}` | 1,600 / 3,200 | 3,200 / 6,400 |
+| `{{ x.y.y… }}` | 800 / 1,600 | 6,400 / 12,800 |
+| `{{ 1 is number == true … }}` | fine at 51,200 | fine at 51,200 |
+
+`format!("{{{{ 1{} }}}}", "+1".repeat(6400))` (about 13 KB) aborts a
+release build: "thread has overflowed its stack / fatal runtime error:
+stack overflow, aborting".
+
+### Suggested fix
+
+Count chain length in the parser against the same depth budget it uses for
+nesting (each binary operator, filter or attribute link adds one level), or
+make codegen iterative over left-deep chains. The `stacker` feature
+probably helps but isn't on by default [not tested].
+
+### Draft report (not sent)
+
+> Subject: stack overflow compiling long flat expression chains
+>
+> `template_from_str` on `{{ 1+1+…+1 }}` with 6,400 terms (13 KB) overflows
+> a 2 MB stack in a release build and aborts the process; 1,600 chained
+> filters do in debug. The parser's recursion limit covers nesting but not
+> chains, which become left-deep trees that codegen recurses down. Table,
+> reproduction and a suggested fix above.
+
+### Fix ready (2026-11-25): `../minijinja` branch `fix/chain-depth` (33c387e2, local, not pushed)
+
+`compiler/parser.rs`: the parser tracks the expression tree's depth
+(nesting plus chain links, `MAX_EXPR_DEPTH` = 500) and refuses deeper trees
+with the existing "template exceeds maximum recursion limits" error;
+binary-operator, postfix (`.`, `[]`, call) and filter/test chains count
+their links (`chain_link`), unary chains (`not not …`, `- - …`) go through
+`with_recursion_guard`. ~40 lines. Tests: `test_regressions.rs`
+(10,000-link chains of ten kinds refused on a 2 MiB thread in debug — abort
+without the fix; 300-link chains, with 60 levels of nesting, still compile
+and evaluate). MiniJinja's suite: 436 tests pass. The Go port is not
+affected (goroutine stacks grow; 2,000,000-link chains compile in 0.3 s).
+
+## U59 — MiniJinja: `format` panics on a non-ASCII `%(key)`
+
+- **Status (2026-11-26):** reported to the maintainer by email (2026-11-25/26), who asked for a public issue; issue and PR to open. Fixed on `fix/format-key-utf8` (from `main`), and in the MiniJinja bevy_markup patches in (`bevy_markup/3.1.0`, ADR 0052). Local guard for crates using bevy_markup: `template::checked_format` refuses a non-ASCII `%(key)`.
+
+- **Project / versions:** minijinja 3.1.0 and `main` at a372dfbd (Rust only;
+  Go slices bytes and doesn't panic). Reachable through the built-in
+  `format` filter (printf style, `builtins` feature, on by default); the
+  `str.format` path (`{a[é}`) is only in minijinja-contrib's pycompat.
+- **Severity:** high for bevy_markup — any template, 24 bytes, panics the
+  render, which runs in a Bevy system: the app's main thread.
+- **Discovery:** honggfuzz `html` target, Nightly run 45557989538
+  (2026-11-25, the first run with 4 workers), at d54f8ba. One unique
+  input (SIGABRT), hit 688 times. Replayed and minimized locally
+  2026-11-26 by Claude Opus 5.5.
+- **Minimal reproduction:** `{{ "%(é" | format(1) }}` (also `"%(aé"`,
+  any non-ASCII character inside an unterminated or terminated key) →
+  `end byte index 1 is not a char boundary` at formatting.rs:871
+  (`Cursor::advance`).
+- **Root cause:** `parse_till` (used for `%(key)` and `[key]`) steps
+  through the key with `cursor.advance(1)`, and `advance` slices the
+  source `&str` at that byte offset.
+- **Fix (upstream):** `../minijinja` branch `fix/format-key-utf8`
+  (67132834): advance by the character's UTF-8 length; regression test
+  `test_format_key_with_non_ascii_characters` in test_regressions.rs
+  (fails without the fix, full suite passes with it). Patch:
+  `minijinja-report/0003-fix-step-over-whole-characters-in-format-keys.patch`.
+- **Workaround (bevy_markup):** `template.rs` `ascii_keyed_format`
+  replaces the `format` filter and refuses a format string whose
+  `%(key)` holds a non-ASCII byte before MiniJinja parses it
+  (`format_keys_are_ascii`; `%%` is literal). Test
+  `template::tests::format_keys_must_be_ascii` (panics with the
+  wrapper unregistered). Remove the wrapper once a fixed release is
+  pinned.
+
+## U60 — MiniJinja: `format` panics on an integer `%f` precision past 65,535
+
+- **Status (2026-11-26):** reported to the maintainer by email (2026-11-25/26), who asked for a public issue; issue and PR to open. Fixed on `fix/format-integer-precision` (from `main`), and in the MiniJinja bevy_markup patches in (`bevy_markup/3.1.0`, ADR 0052). Local guard for crates using bevy_markup: `template::checked_format` refuses widths and precisions over 65535.
+
+- **Project / versions:** minijinja 3.1.0 and `main` at a372dfbd (Rust).
+  Reachable through the built-in `format` filter.
+- **Severity:** high for bevy_markup: a 28-byte template panics the
+  render, which runs in a Bevy system on the app's main thread.
+- **Discovery:** honggfuzz `html` target, Nightly run 45706083357
+  (2026-11-25, at 7896c42, which already had the U59 wrapper). One unique
+  input (SIGABRT), 218 crashes counted. Replayed and minimized locally
+  2026-11-26 by Claude Opus 5.5.
+- **Minimal reproduction:** `{{ "%.70000f" | format(1) }}` (an integer;
+  `%.65535f` works; floats, `%e`, `%g`, `%s` and widths don't panic) →
+  `Formatting argument out of range` at formatting.rs:541.
+- **Root cause:** the integer branch of `%f` formats
+  `format!("{}.{:0prec$}", val, 0)`; Rust's formatting machinery panics
+  for a dynamic precision above `u16::MAX`. MiniJinja already clamps the
+  other paths (`MAX_NATIVE_FORMAT_PRECISION`), not this one.
+- **Fix (upstream):** `../minijinja` branch `fix/format-integer-precision`:
+  write the zeros out (`"0".repeat(prec)`); regression test
+  `test_format_integer_with_a_large_precision` (panics without the fix,
+  full suite passes with it). Patch:
+  `minijinja-report/0004-fix-write-out-the-zeros-of-a-large-integer-f-precisi.patch`.
+- **Workaround (bevy_markup):** `template.rs` `checked_format` (formerly
+  `ascii_keyed_format`) refuses a width or precision over 65,535
+  (`check_format`, `MAX_FORMAT_NUMBER`). Test
+  `template::tests::format_specifiers_are_checked` (panics with the limit
+  disabled). Remove with U59's wrapper once a fixed release is pinned.
+
+## U62 — MiniJinja: deep walks of containers and constant folding aren't bounded by fuel
+
+- **Status (2026-11-26):** found by the Nightly; the maintainer asked for
+  public issues (see U56). Issue and PR to open. Fixed on
+  `fix/fuel-for-deep-walks` (from `main`) and in `bevy_markup/3.1.0`
+  (ADR 0052).
+- **Project/version:** [mitsuhiko/minijinja](https://github.com/mitsuhiko/minijinja)
+  3.1.0 and `main` at a372dfbd: `value/ops.rs` (`binop_alloc_estimate`,
+  `repeat_iterable`), `compiler/ast.rs` (`eval_binop`, `eval_compare`),
+  `vm/mod.rs` (`Emit`, `StringConcat`, `In`, comparisons), `filters::string`.
+- **Problem:** `[x] * n` makes a lazily repeated sequence of up to 10⁸
+  items for nothing (`binop_alloc_estimate` returns 0 for it: "repeating
+  lists is lazy"), and a container holding the same container shares its
+  items, so one costs far less to make than to walk. Formatting it (printing,
+  `~`, `string`), comparing it or searching it walks every item, and those
+  charge fuel only for the top level or only afterwards. Constant folding
+  does the same walks at compile time with no fuel at all: the template
+  stalls or exhausts memory while it *loads*.
+- **Measurements** (release, 3.1.0, default fuel 2²²): compiling
+  `{{ [none] * 18446744 ~ 'x' }}` builds a 110 MB string (0.6 s);
+  `{{ 1 in ([2] * 100000000) }}` compiles in 3.6 s, `{{ ([1] * 100000000) ==
+  ([1] * 100000000) }}` in 6.0 s; with variables instead of literals the
+  render runs out of fuel, except `~`, which builds the string first.
+  Nested repetitions (`[[n] * 100000] * 100000 ~ 'x'`) walk 10¹⁰ items, at
+  load or at render. Printing `[x] * 87408739` allocated 2.2 GB in
+  `write_with_html_escaping` (it formats the value into a `String` before
+  escaping).
+- **Discovery:** cargo-fuzz `html`, Nightly run 45740232198 (2026-11-26),
+  41 inputs (37 timeouts at 8–94 s, 4 out-of-memory); see
+  [bug_0253](bug_0253.md).
+- **Fix (branch):** `ops::deep_item_count(value, limit)` counts the items
+  a deep walk visits, stopping past `limit` (lists without a known length
+  aren't walked: they print without iterating and may be one-shot).
+  Folding declines operations walking (or `*` creating) more than
+  `MAX_FOLDED_SIZE / SLOT_COST` items; `State::charge_walk` charges the walk
+  against the remaining fuel before `Emit` of a container, `~` with one,
+  `in` with a container needle, comparisons (the smaller side) and the
+  `string` filter. Tests: `test_deep_walks_consume_fuel_first`,
+  `test_constant_folding_declines_large_containers`. Not covered: `tojson`
+  and `pprint` take no `State` (charging them changes public signatures).
+- **Local guard for crates using bevy_markup** (they get 3.1.0 from
+  crates.io): `template::streaming_formatter` refuses printing a value
+  holding more items than the output could take (`fits_printed`, without
+  iterating a too-long list) and escapes as it writes; `string`, `tojson`,
+  `pprint` and `json` check the same, `join` charges before collecting.
+  Constant folding and `~`/`in`/`==` at render have no hook: only the
+  MiniJinja fix closes them.
 

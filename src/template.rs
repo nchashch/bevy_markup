@@ -222,8 +222,136 @@ pub fn new_environment(fuel: u64) -> minijinja::Environment<'static> {
     env.add_filter("escape", fueled_escape);
     env.add_filter("e", fueled_escape);
     env.add_filter("format", checked_format);
+    // Filters that write a value's text into a string check that it could
+    // be printed first (the formatter's check).
+    env.add_filter("string", checked_string);
+    env.add_filter("tojson", checked_tojson);
+    env.add_filter("pprint", checked_pprint);
+    env.set_formatter(streaming_formatter);
     env.set_fuel(Some(fuel));
     env
+}
+
+/// Prints a value into the render's output as MiniJinja's own formatter
+/// does, but bounded by the output's limit ([`MAX_RENDERED_BYTES`]) before
+/// the work: a list or map (or a lazily repeated one, up to 10⁸ items,
+/// nested) holding more items than could fit is refused without printing
+/// ([`fits_printed`]), and one printed with HTML escaping is escaped as it
+/// is written instead of being written into a string first.
+fn streaming_formatter(
+    out: &mut minijinja::Output,
+    state: &mut minijinja::State,
+    value: &minijinja::Value,
+) -> Result<(), minijinja::Error> {
+    if value.is_safe() || value.as_object().is_none() {
+        return minijinja::escape_formatter(out, state, value);
+    }
+    check_printable(value)?;
+    if !matches!(state.auto_escape(), minijinja::AutoEscape::Html) {
+        return minijinja::escape_formatter(out, state, value);
+    }
+    /// Escapes each piece of a value's text on its way to the output.
+    struct Escaping<'a, 'b>(&'a mut minijinja::Output<'b>);
+    impl std::fmt::Write for Escaping<'_, '_> {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            write!(self.0, "{}", minijinja::HtmlEscape(text))
+        }
+    }
+    use std::fmt::Write as _;
+    write!(Escaping(out), "{value}").map_err(|_| {
+        minijinja::Error::new(
+            minijinja::ErrorKind::WriteFailure,
+            "the value doesn't fit in the output",
+        )
+    })
+}
+
+/// Refuses a value whose text couldn't fit in the output ([`fits_printed`]):
+/// printing it, or a filter writing it into a string, would iterate all of
+/// it first.
+fn check_printable(value: &minijinja::Value) -> Result<(), minijinja::Error> {
+    if fits_printed(value) {
+        Ok(())
+    } else {
+        Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            format!(
+                "the value holds too many items to print \
+                 (MAX_RENDERED_BYTES is {MAX_RENDERED_BYTES} bytes)"
+            ),
+        ))
+    }
+}
+
+/// Whether `value`'s printed form could fit in [`MAX_RENDERED_BYTES`]:
+/// every item of a printed list or map takes at least three bytes (`1, `),
+/// so one holding more than a third of it, counted through nested lists
+/// and maps, can't. Stops at that many items, and refuses a list whose
+/// known length alone is over it without iterating it. (Printing doesn't
+/// stop at a failed write: it formats no more, but still iterates every
+/// item.) Iterative: values nest arbitrarily deep.
+fn fits_printed(value: &minijinja::Value) -> bool {
+    use minijinja::value::ObjectRepr;
+    let mut budget = MAX_RENDERED_BYTES / 3;
+    let mut pending: Vec<Box<dyn Iterator<Item = minijinja::Value>>> =
+        vec![Box::new(std::iter::once(value.clone()))];
+    while let Some(items) = pending.last_mut() {
+        let Some(item) = items.next() else {
+            pending.pop();
+            continue;
+        };
+        let Some(budget_left) = budget.checked_sub(1) else {
+            return false;
+        };
+        budget = budget_left;
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        if object.enumerator_len().is_some_and(|len| len > budget) {
+            return false;
+        }
+        match object.repr() {
+            ObjectRepr::Map => {
+                if let Some(pairs) = object.try_iter_pairs() {
+                    pending.push(Box::new(pairs.flat_map(|(key, value)| [key, value])));
+                }
+            }
+            // MiniJinja prints a list without a known length by its
+            // `Debug`, never iterating it.
+            ObjectRepr::Seq | ObjectRepr::Iterable if object.enumerator_len().is_some() => {
+                if let Some(iter) = object.try_iter() {
+                    pending.push(Box::new(iter));
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// `string`, for a value that could be printed ([`check_printable`]).
+fn checked_string(
+    state: &minijinja::State,
+    value: &minijinja::Value,
+) -> Result<minijinja::Value, minijinja::Error> {
+    check_printable(value)?;
+    minijinja::filters::string(state, value)
+}
+
+/// `tojson`, for a value that could be printed ([`check_printable`]).
+fn checked_tojson(
+    value: &minijinja::Value,
+    indent: Option<minijinja::Value>,
+    args: minijinja::value::Kwargs,
+) -> Result<minijinja::Value, minijinja::Error> {
+    check_printable(value)?;
+    minijinja::filters::tojson(value, indent, args)
+}
+
+/// `pprint`, for a value that could be printed ([`check_printable`]).
+fn checked_pprint(value: &minijinja::Value) -> Result<String, minijinja::Error> {
+    check_printable(value)?;
+    Ok(minijinja::filters::pprint(value))
 }
 
 /// Bytes charged per item a filter creates: a `Value` slot and a small
@@ -248,7 +376,12 @@ fn fueled_join(
         return minijinja::filters::join(state, value, joiner, attribute, kwargs);
     }
     // Collected once: an iterator (`map`'s, `select`'s) can only be walked
-    // once, and the built-in walks what it is given.
+    // once, and the built-in walks what it is given. The collection is
+    // charged first when its length is known (a lazily repeated list can
+    // hold 10⁸ items).
+    if let Some(len) = value.len() {
+        charge_bytes(state, (len as u64).saturating_mul(ITEM_BYTES))?;
+    }
     let items: Vec<minijinja::Value> = value.try_iter()?.collect();
     let joiner_bytes = joiner.as_ref().map_or(0, |joiner| joiner.as_str().len()) as u64;
     let item_bytes: u64 = items
@@ -620,6 +753,7 @@ pub(crate) fn check_tera_operators(name: &str, source: &str) -> Result<(), Strin
 
 /// The `json` filter: the value as compact JSON (escaped like any output).
 fn json_filter(value: minijinja::Value) -> Result<String, minijinja::Error> {
+    check_printable(&value)?;
     serde_json::to_string(&value).map_err(|err| {
         minijinja::Error::new(
             minijinja::ErrorKind::InvalidOperation,
@@ -1400,6 +1534,113 @@ pub(crate) fn normalize_self_closing(html: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::normalize_self_closing as norm;
+
+    /// Printed values come out exactly as MiniJinja's own formatter prints
+    /// them, escaped or not.
+    #[test]
+    fn printed_values_match_minijinja() {
+        let context = serde_json::json!({
+            "list": ["<a>", 1, true, null, {"k": "v&w"}],
+            "map": {"x": "'q'", "y": [1.5, "/"]},
+            "text": "<b>&", "n": 3, "none": null,
+        });
+        let mut plain = minijinja::Environment::new();
+        plain.set_auto_escape_callback(|name| {
+            if name.ends_with(".html") {
+                minijinja::AutoEscape::Html
+            } else {
+                minijinja::AutoEscape::None
+            }
+        });
+        for source in [
+            "{{ list }}|{{ map }}|{{ text }}|{{ n }}|{{ none }}|{{ list | safe }}",
+            "{{ [1, '<'] * 3 }}|{{ range(3) }}|{{ map.y }}|{{ {'a': [map]} }}",
+        ] {
+            for name in ["t.html", "t.txt"] {
+                plain.add_template_owned(name, source.to_owned()).unwrap();
+                let expected = plain
+                    .get_template(name)
+                    .unwrap()
+                    .render(TemplateContext::from_serialize(&context).as_value())
+                    .unwrap();
+                assert_eq!(
+                    test_render(name, source, context.clone()).unwrap(),
+                    expected,
+                    "{name}: {source}"
+                );
+            }
+        }
+    }
+
+    /// A list or map holding more items than the output could take is
+    /// refused before it is read: a 50-million-item sequence isn't
+    /// iterated, nor is a lazily repeated list of repeated lists (10¹⁶
+    /// items). bevy_markup's own check, which protects apps on a MiniJinja
+    /// that doesn't charge such walks itself (this repository patches one
+    /// that does, so a render may fail on fuel first).
+    #[test]
+    fn printed_values_are_checked_before_they_are_read() {
+        use minijinja::value::{Enumerator, Object, ObjectRepr, Value};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        #[derive(Debug, Default)]
+        struct Counted(AtomicUsize);
+        impl Object for Counted {
+            fn repr(self: &std::sync::Arc<Self>) -> ObjectRepr {
+                ObjectRepr::Seq
+            }
+            fn get_value(self: &std::sync::Arc<Self>, _: &Value) -> Option<Value> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Some(Value::from(7))
+            }
+            fn enumerate(self: &std::sync::Arc<Self>) -> Enumerator {
+                Enumerator::Seq(50_000_000)
+            }
+        }
+        let counted = std::sync::Arc::new(Counted::default());
+        let err = check_printable(&Value::from_dyn_object(counted.clone())).unwrap_err();
+        assert!(err.to_string().contains("too many items"), "{err}");
+        // "7, " per item: 16 MiB holds ~5.6 million; none was read.
+        assert_eq!(counted.0.load(Ordering::Relaxed), 0);
+        let env = new_environment(HtmlTemplateLimits::default().fuel);
+        let value = |expression: &str| {
+            env.compile_expression(expression)
+                .unwrap()
+                .eval(())
+                .unwrap()
+        };
+        for expression in [
+            "[1] * 100000000",
+            "[[1] * 100000000] * 100000000",
+            "[[1] * 3000000, [2] * 3000000]",
+            "{'a': [1] * 6000000}",
+        ] {
+            assert!(check_printable(&value(expression)).is_err(), "{expression}");
+        }
+        check_printable(&value("[['<'] * 100000, {'a': [1, 2]}]")).unwrap();
+
+        // Rendered, they fail (on this check or on MiniJinja's fuel); the
+        // filters writing a value's text check it too.
+        let render = |template: &str| test_render("t.html", template, serde_json::json!({}));
+        for template in [
+            "{{ [1] * 100000000 }}",
+            "{{ [[1] * 100000000] * 100000000 }}",
+            "{{ {'a': [1] * 6000000} }}",
+            "{{ ([1] * 100000000) | string | length }}",
+            "{{ ([1] * 100000000) | json | length }}",
+            "{{ ([1] * 100000000) | tojson | length }}",
+            "{{ ([1] * 100000000) | pprint | length }}",
+            "{{ ([1] * 100000000) | join | length }}",
+        ] {
+            let err = render(template).unwrap_err().to_string();
+            assert!(
+                err.contains("too many items") || err.contains("fuel"),
+                "{template}: {err}"
+            );
+        }
+        // Under the limit, a large list prints, escaped as it is written.
+        let printed = render("{{ ['<'] * 100000 }}").unwrap();
+        assert_eq!(printed.len(), 100_000 * "&#x27;&lt;&#x27;, ".len() - 2 + 2);
+    }
 
     /// `format` takes printf-style formats with ASCII `%(key)` names and
     /// widths and precisions up to 65535; anything else fails the render.

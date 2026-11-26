@@ -1388,6 +1388,10 @@ pub(crate) struct HtmlStyles<'a> {
     reads: SelectorReads,
     /// The per-element results, keyed by everything the selectors read.
     cache: RefCell<HashMap<(String, Option<String>, Vec<String>, Pseudo, u64, u64), ElementStyle>>,
+    /// Each `var()` declaration's result by property and raw value: it
+    /// depends only on them, `variables` and `context`, so it is resolved
+    /// once per cascade rather than per element (`None`: dropped).
+    resolved: RefCell<HashMap<(String, String), Option<Decl>>>,
 }
 
 impl<'a> HtmlStyles<'a> {
@@ -1395,6 +1399,7 @@ impl<'a> HtmlStyles<'a> {
     /// stringified) before the sheet's own custom properties.
     pub fn with_context(mut self, context: &'a dyn Fn(&str) -> Option<String>) -> Self {
         self.context = Some(context);
+        self.resolved.get_mut().clear();
         self
     }
 
@@ -1471,6 +1476,7 @@ impl<'a> HtmlStyles<'a> {
             pseudo_rules,
             reads,
             cache: RefCell::default(),
+            resolved: RefCell::default(),
         }
     }
 
@@ -1546,7 +1552,7 @@ impl<'a> HtmlStyles<'a> {
             .filter(|rule| rule.selector.matches(element, pseudo, ancestors, state))
         {
             for declaration in rule.declarations {
-                apply_resolved(&mut style, declaration, &self.variables, self.context);
+                self.apply_resolved(&mut style, declaration);
             }
         }
         self.cache.borrow_mut().insert(key, style.clone());
@@ -1610,7 +1616,7 @@ impl<'a> HtmlStyles<'a> {
             .chain(rules(important))
             .chain(&block.important)
         {
-            apply_resolved(&mut style, declaration, &self.variables, self.context);
+            self.apply_resolved(&mut style, declaration);
         }
         style
     }
@@ -1726,31 +1732,51 @@ pub(crate) fn layout_field(layout: &mut LayoutDecl, prop: CalcProp, value: Val) 
     }
 }
 
-/// Applies `declaration`, resolving its `var()` references first: from the
-/// UI's context (`context`, a `TemplateContext` lookup), then the sheet's
-/// own `--` properties (`variables`). An unresolvable reference without a
-/// fallback drops the declaration (CSS: invalid at computed-value time, the
-/// declaration is unset; we skip it entirely — an earlier rule's value may
-/// show through).
-fn apply_resolved(
-    style: &mut ElementStyle,
-    declaration: &Declaration,
+impl HtmlStyles<'_> {
+    /// Applies `declaration`, resolving its `var()` references first: from
+    /// the UI's context (`context`, a `TemplateContext` lookup), then the
+    /// sheet's own `--` properties (`variables`). An unresolvable reference
+    /// without a fallback drops the declaration (CSS: invalid at
+    /// computed-value time, the declaration is unset; we skip it entirely —
+    /// an earlier rule's value may show through). Resolved once per
+    /// cascade ([`Self::resolved`]).
+    fn apply_resolved(&self, style: &mut ElementStyle, declaration: &Declaration) {
+        let (name, value) = match declaration {
+            Declaration::Value(decl) => return apply(style, decl),
+            // `initial`/`inherit`/`unset`/`revert`: the field returns to its
+            // initial value (the cascade has no parent computed style, so
+            // `inherit`/`unset` on inherited properties resolve to it too —
+            // documented deviation).
+            Declaration::Keyword(name) => return apply_keyword(style, name),
+            // A custom declaration is never substituted on its own: the
+            // consumers resolve against the raw sheet values (a 2000-link
+            // consumed chain cost 3.45 s per element, review_0003 G29).
+            Declaration::Custom { .. } => return,
+            Declaration::Var { name, value, .. } => (name, value),
+        };
+        let key = (name.clone(), value.0.clone());
+        if let Some(decl) = self.resolved.borrow().get(&key) {
+            if let Some(decl) = decl {
+                apply(style, decl);
+            }
+            return;
+        }
+        let decl = resolve(name, value, &self.variables, self.context);
+        if let Some(decl) = &decl {
+            apply(style, decl);
+        }
+        self.resolved.borrow_mut().insert(key, decl);
+    }
+}
+
+/// A `var()` declaration's value with its references substituted, parsed
+/// for its property; `None` drops the declaration.
+fn resolve(
+    name: &str,
+    value: &Raw,
     variables: &HashMap<String, Raw>,
     context: Option<&dyn Fn(&str) -> Option<String>>,
-) {
-    let (name, value) = match declaration {
-        Declaration::Value(decl) => return apply(style, decl),
-        // `initial`/`inherit`/`unset`/`revert`: the field returns to its
-        // initial value (the cascade has no parent computed style, so
-        // `inherit`/`unset` on inherited properties resolve to it too —
-        // documented deviation).
-        Declaration::Keyword(name) => return apply_keyword(style, name),
-        // A custom declaration is never substituted on its own: the
-        // consumers resolve against the raw sheet values (a 2000-link
-        // consumed chain cost 3.45 s per element, review_0003 G29).
-        Declaration::Custom { .. } => return,
-        Declaration::Var { name, value, .. } => (name, value),
-    };
+) -> Option<Decl> {
     let mut substitution = Substitution {
         variables,
         context: &context.unwrap_or(&|_| None),
@@ -1763,22 +1789,25 @@ fn apply_resolved(
     };
     let Some(text) = substitution.substitute(&value.0) else {
         debug!("html css: `var()` substitution failed");
-        return;
+        return None;
     };
     if nesting_over_limit(&text) {
         debug!("html css: substituted value nests too deeply: {text:?}");
-        return;
+        return None;
     }
-    match crate::css::property::parse(name, &text) {
-        Some(decl) => apply(style, &decl),
-        None => debug!("html css: `var()` substitution produced an invalid value: {text:?}"),
+    let decl = crate::css::property::parse(name, &text);
+    if decl.is_none() {
+        debug!("html css: `var()` substitution produced an invalid value: {text:?}");
     }
+    decl
 }
 
-/// The total substitution output one declaration may produce: a `var()`
-/// graph can be exponential (a doubling reference chain), and the budget
-/// bounds it. Beyond it the declaration is dropped, like an unresolvable
-/// one.
+/// The total work one declaration's substitution may do, in bytes: what
+/// it reads and what it writes. A `var()` graph can be exponential (a
+/// doubling reference chain), and a fallback is read twice (cut out of
+/// its `var()`, then substituted), at every level of nesting; the budget
+/// bounds both. Beyond it the declaration is dropped, like an
+/// unresolvable one.
 const VAR_BUDGET: usize = 64 * 1024;
 
 /// How deep one `var()` resolution may chain (`--v1` referencing
@@ -1958,6 +1987,10 @@ impl<'a> Substitution<'a> {
             let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
                 break;
             };
+            // What was read: the token's own text (a block's opening; its
+            // content is charged as the nested call reads it, a `var()`'s
+            // arguments below).
+            self.budget = self.budget.checked_sub(input.slice_from(start).len())?;
             let piece = match token {
                 Token::Function(function) if function.eq_ignore_ascii_case("var") => {
                     let (name, fallback) = input
@@ -1974,6 +2007,9 @@ impl<'a> Substitution<'a> {
                             Ok::<_, ParseError<()>>((name, fallback))
                         })
                         .ok()?;
+                    // Its arguments, read to cut the fallback out (which is
+                    // read again if substituted).
+                    self.budget = self.budget.checked_sub(input.slice_from(start).len())?;
                     if !name.starts_with("--") {
                         return None;
                     }
@@ -4205,6 +4241,54 @@ mod tests {
             "the pathological sheets took {:?}",
             start.elapsed()
         );
+    }
+
+    /// The substitution budget counts what is read, not only what is
+    /// written: a fallback is read twice (cut out of its `var()`, then
+    /// substituted) at every level of nesting, and comments and
+    /// whitespace write nothing. A tiny value reached through 70 KB of
+    /// comment is dropped; through a short one it resolves.
+    #[test]
+    fn var_substitution_budget_counts_what_is_read() {
+        let through = |comment: usize| {
+            declared(&format!(
+                "width: var(--missing, /*{}*/ 3px)",
+                "x".repeat(comment)
+            ))
+            .layout
+            .width
+        };
+        assert_eq!(through(16), Some(Val::Px(3.0)));
+        assert_eq!(through(70 * 1024), None);
+        // Nested fallbacks re-read the rest at every level: 128 levels of
+        // a 1 KB comment read ~16 MB, though the output is one length.
+        let mut value = String::from("3px");
+        for _ in 0..128 {
+            value = format!("var(--missing, /*{}*/ {value})", "x".repeat(1024));
+        }
+        assert_eq!(declared(&format!("width: {value}")).layout.width, None);
+    }
+
+    /// A `var()` declaration resolves once per cascade, not once per
+    /// element it applies to: its result depends only on its text, the
+    /// sheet's custom properties and the context.
+    #[test]
+    fn var_declarations_resolve_once_per_cascade() {
+        let sheet = owned_sheet("p { --w: 3px; width: var(--w); height: var(--w, 1px) }");
+        let styles = HtmlStyles::from_sheet(&sheet);
+        for class in 0..50 {
+            let class = format!("c{class}");
+            let style = styles.get(
+                &element("p", None, &[class.as_str()]),
+                Pseudo::default(),
+                &[],
+                &ElementState::default(),
+            );
+            assert_eq!(style.layout.width, Some(Val::Px(3.0)));
+        }
+        // 50 elements, one cache entry each; two declarations resolved.
+        assert_eq!(styles.cache.borrow().len(), 50);
+        assert_eq!(styles.resolved.borrow().len(), 2);
     }
 
     /// The transitive var() closure runs in linear time (a worklist): a

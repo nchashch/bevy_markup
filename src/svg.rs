@@ -179,6 +179,14 @@ fn raster_bytes(size: UVec2) -> u64 {
 /// miter limit; the smallest extent seen to panic is ~1.8·10⁶ px.
 pub const MAX_SVG_EXTENT: f32 = 524_288.0;
 
+/// The farthest a stroked path may reach from its own origin, in its own
+/// coordinates, padded by its stroke (2¹⁶). Some of the work on a stroke's
+/// outline is done in those coordinates, whatever the path is drawn at,
+/// and it grows with them; up to this reach it grows as the square root
+/// (`stroke_points`), and past it much faster. The 31,833 surveyed icons
+/// (ADR 0051) reach at most 1,944.
+pub const MAX_STROKE_REACH: f32 = 65_536.0;
+
 /// Settings for loading an `.svg` as an [`Image`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SvgLoaderSettings {
@@ -267,6 +275,12 @@ pub(crate) enum SvgError {
         extent: f32,
         max: f32,
     },
+    /// A stroked path reaches farther than [`MAX_STROKE_REACH`] in its own
+    /// coordinates.
+    StrokeTooFar {
+        reach: f32,
+        max: f32,
+    },
     /// usvg or resvg panicked (caught by [`guarded`]).
     Panicked(String),
     /// Something outside the icon subset bevy_markup renders (ADR 0051): an
@@ -314,6 +328,12 @@ impl fmt::Display for SvgError {
                 f,
                 "draws too far outside the image (a path reaches {extent:.0} px from it at \
                  this size, limit {max:.0}): reduce its coordinates, radii or stroke widths"
+            ),
+            Self::StrokeTooFar { reach, max } => write!(
+                f,
+                "a stroked path reaches {reach:.0} units from its origin, stroke included \
+                 (limit {max:.0}): scale its coordinates down and its transform up, or \
+                 reduce its stroke width"
             ),
             Self::Panicked(message) => write!(f, "the SVG renderer panicked: {message}"),
             Self::Unsupported(what) => write!(
@@ -522,7 +542,9 @@ fn check_subset(document: &roxmltree::Document) -> Result<(), SvgError> {
 
 /// Refuses a converted tree holding what [`check_subset`] keeps out of the
 /// document — a filter, mask, pattern, text or image — should anything get
-/// past it: the cost and extent models don't price them. Iterative.
+/// past it: the cost and extent models don't price them. Also refuses a
+/// stroked path reaching past [`MAX_STROKE_REACH`], before anything asks
+/// usvg for its stroke's bounding box. Iterative.
 fn check_tree(root: &usvg::Group) -> Result<(), SvgError> {
     let unsupported = |what: &str| Err(SvgError::Unsupported(what.to_owned()));
     let mut groups = vec![root];
@@ -550,6 +572,16 @@ fn check_tree(root: &usvg::Group) -> Result<(), SvgError> {
                         .any(|paint| matches!(paint, usvg::Paint::Pattern(_)))
                     {
                         return unsupported("a pattern");
+                    }
+                    if let Some(stroke) = path.stroke() {
+                        let reach = stroke_reach(path, stroke);
+                        // `!(<=)`: NaN is too far too.
+                        if !(reach <= MAX_STROKE_REACH) {
+                            return Err(SvgError::StrokeTooFar {
+                                reach,
+                                max: MAX_STROKE_REACH,
+                            });
+                        }
                     }
                 }
                 usvg::Node::Text(_) => return unsupported("text"),
@@ -1578,6 +1610,9 @@ const SEGMENT_COST: u64 = 24;
 /// dashes and strokes each as a path of its own (~65 ns a dash in
 /// review_0007's K02 probe; charged at about twice that).
 const DASH_COST: u64 = 32;
+/// Cost of one point of a stroke outline ([`CostWalk::layer_strokes`]): 60–76 ns a point measured at
+/// 32,768–65,536 units, charged at about 1.6 times that.
+const STROKE_POINT_COST: u64 = 32;
 /// Pixel rows a stroke's cap adds per contour beyond its square: a round
 /// cap is a few curves, each spanning the width (bug_0230: 10⁶ round-capped
 /// dashes 40 px wide drew for 33 s on an estimate under half the budget).
@@ -1612,7 +1647,7 @@ pub(crate) fn estimate_cost(tree: &usvg::Tree, width: u32, height: u32, max: u64
     };
     // The canvas itself: cleared, drawn into, read back.
     let canvas = f64::from(width) * f64::from(height);
-    if walk.add_area(canvas, 2.0).is_ok() {
+    if walk.add_area(canvas, 2.0).is_ok() && walk.layer_strokes(tree.root(), false, 0).is_ok() {
         let _ = walk.group(tree.root(), 0);
     }
     walk.total
@@ -1675,9 +1710,7 @@ impl ExtentWalk {
     }
 
     fn path(&mut self, path: &usvg::Path, transform: tiny_skia::Transform) -> Result<(), Over> {
-        let pad = path.stroke().map_or(0.0, |stroke| {
-            stroke.width().get() * 0.5 * stroke.miterlimit().get().max(std::f32::consts::SQRT_2)
-        });
+        let pad = path.stroke().map_or(0.0, stroke_pad);
         let bounds = path.data().bounds();
         let reach = tiny_skia::Rect::from_ltrb(
             bounds.left() - pad,
@@ -1701,6 +1734,37 @@ impl ExtentWalk {
         self.extent = self.extent.max(reach);
         Ok(())
     }
+}
+
+/// How far `path`'s stroke reaches from the origin of the path's own
+/// coordinates: its control bounds padded by half the width × the miter
+/// limit (at least √2, the square cap's corner). An upper bound on the
+/// stroke's outline, as [`ExtentWalk`] pads.
+fn stroke_reach(path: &usvg::Path, stroke: &usvg::Stroke) -> f32 {
+    let bounds = path.data().bounds();
+    stroke_pad(stroke)
+        + bounds
+            .left()
+            .abs()
+            .max(bounds.top().abs())
+            .max(bounds.right().abs())
+            .max(bounds.bottom().abs())
+}
+
+/// How far a stroke's outline reaches past its path: half the width × the
+/// miter limit (at least √2, a square cap's corner).
+fn stroke_pad(stroke: &usvg::Stroke) -> f32 {
+    stroke.width().get() * 0.5 * stroke.miterlimit().get().max(std::f32::consts::SQRT_2)
+}
+
+/// An upper bound on the points tiny-skia 0.12's stroker makes per path
+/// segment when stroking, in its own coordinates, a path whose stroke reaches `reach`
+/// (≤ [`MAX_STROKE_REACH`]): 128 + 12·√reach. Fitted over 20,000 random
+/// quads and cubics per scale, every cap and join, widths up to the
+/// scale: the worst seen were 91 points at 8 units, 581 at 2,048 and
+/// 2,061 at 65,536 (the bound gives 162, 671 and 3,200).
+fn stroke_points(reach: f32) -> f64 {
+    128.0 + 12.0 * f64::from(reach).max(0.0).sqrt()
 }
 
 /// How many dashes tiny-skia cuts `path`'s stroke into (bug_0205): the
@@ -1838,6 +1902,45 @@ impl CostWalk {
         w * h
     }
 
+    /// The stroke outline work behind isolated layers' bounds: resvg sizes
+    /// an isolated group's layer from the bounds of what it holds, which
+    /// for each stroked path below it (and in its clip path) costs work
+    /// growing with the path's own coordinates ([`MAX_STROKE_REACH`]).
+    /// Charged before [`Self::group`] asks for those bounds; they are kept,
+    /// so a path in nested isolated groups is charged once (a shared clip
+    /// path once per use).
+    fn layer_strokes(
+        &mut self,
+        group: &usvg::Group,
+        isolated: bool,
+        depth: u32,
+    ) -> Result<(), Over> {
+        if depth > MAX_COST_DEPTH {
+            self.total = self.max.saturating_add(1);
+            return Err(Over);
+        }
+        let isolated = isolated || group.should_isolate();
+        let mut clip = group.clip_path();
+        while let Some(path) = clip {
+            self.layer_strokes(path.root(), isolated, depth + 1)?;
+            clip = path.clip_path();
+        }
+        for child in group.children() {
+            match child {
+                usvg::Node::Group(child) => self.layer_strokes(child, isolated, depth + 1)?,
+                usvg::Node::Path(path) if isolated => {
+                    if let Some(stroke) = path.stroke() {
+                        let points = stroke_points(stroke_reach(path, stroke));
+                        let segments = path.data().len() as f64;
+                        self.add_area(segments * points, STROKE_POINT_COST as f64)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn group(&mut self, group: &usvg::Group, depth: u32) -> Result<(), Over> {
         if depth > MAX_COST_DEPTH {
             self.total = self.max.saturating_add(1);
@@ -1904,9 +2007,18 @@ impl CostWalk {
             )?;
             self.add_area(shape.rows, 2.0)?;
         }
-        let (width, height) = path
-            .abs_stroke_bounding_box()
-            .map_or((0.0, 0.0), |bbox| (bbox.width(), bbox.height()));
+        // The control bounds padded by the stroke, transformed: a
+        // conservative box that costs nothing to compute.
+        let pad = path.stroke().map_or(0.0, stroke_pad);
+        let bounds = path.data().bounds();
+        let (width, height) = tiny_skia::Rect::from_ltrb(
+            bounds.left() - pad,
+            bounds.top() - pad,
+            bounds.right() + pad,
+            bounds.bottom() + pad,
+        )
+        .and_then(|rect| rect.transform(path.abs_transform()))
+        .map_or((0.0, 0.0), |rect| (rect.width(), rect.height()));
         let area = self.area(width, height);
         let paints = u8::from(path.fill().is_some()) + u8::from(path.stroke().is_some());
         self.add_area(area, f64::from(paints))
@@ -2940,13 +3052,14 @@ mod tests {
 
     /// tiny-skia 0.12 panics, in release builds too, on paths far outside
     /// its canvas (UPSTREAM U24, U27, U28): these all panicked before the
-    /// extent check and are refused by it now.
+    /// extent check and are refused by it now (the stroked ones, reaching
+    /// past [`MAX_STROKE_REACH`] in their own coordinates, before it).
     #[test]
     fn paths_far_outside_the_image_are_refused() {
         let far = |body: &str| {
             matches!(
                 rasterize(svg(64, 64, body).as_bytes(), 1.0, Limits::DEFAULT),
-                Err(SvgError::TooFarOut { .. })
+                Err(SvgError::TooFarOut { .. } | SvgError::StrokeTooFar { .. })
             )
         };
         for body in [
@@ -3175,6 +3288,90 @@ mod tests {
         )
         .unwrap();
         check_tree(tree.root()).unwrap();
+    }
+
+    /// A stroked path reaching past [`MAX_STROKE_REACH`] in its own
+    /// coordinates is refused, its stroke counted; the same coordinates
+    /// filled, or scaled down into reach by a transform, load.
+    #[test]
+    fn far_reaching_strokes_are_refused() {
+        let far = "M 0 0 C 100000 0 100000 100000 0 100000";
+        let refused = |body: &str| {
+            matches!(
+                parse(svg(16, 16, body).as_bytes()),
+                Err(SvgError::StrokeTooFar { .. })
+            )
+        };
+        assert!(refused(&format!(
+            "<path d='{far}' fill='none' stroke='black'/>"
+        )));
+        // The stroke's width counts: inside by coordinates, out by the pad.
+        assert!(refused(
+            "<path d='M 0 0 L 60000 0' stroke='black' stroke-width='8000'/>"
+        ));
+        assert!(!refused(
+            "<path d='M 0 0 L 60000 0' stroke='black' stroke-width='100'/>"
+        ));
+        // Not stroked: nothing outlines it.
+        parse(svg(16, 16, &format!("<path d='{far}'/>")).as_bytes()).unwrap();
+        // The same shape in reach, drawn as large by a transform.
+        parse(
+            svg(
+                16,
+                16,
+                "<path d='M 0 0 C 10 0 10 10 0 10' transform='scale(10000)' \
+                 fill='none' stroke='black' stroke-width='0.1'/>",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let message = parse(svg(16, 16, &format!("<path d='{far}' stroke='red'/>")).as_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("limit 65536"), "{message}");
+    }
+
+    /// Stroked paths inside an isolated group (opacity, clip path) are
+    /// charged for the outlines its layer's bounds are taken from: as
+    /// [`stroke_points`] per segment, and only there.
+    #[test]
+    fn isolated_strokes_are_charged_for_their_outlines() {
+        let path = "<path d='M 0 0 C 4000 0 4000 4000 0 4000' fill='none' stroke='black'/>";
+        let cost = |body: &str| {
+            let tree = parse(svg(64, 64, body).as_bytes()).unwrap();
+            estimate_cost(&tree, 64, 64, u64::MAX)
+        };
+        let plain = cost(&format!("<g>{path}</g>"));
+        let isolated = cost(&format!("<g opacity='0.5'>{path}</g>"));
+        let tree = parse(svg(64, 64, path).as_bytes()).unwrap();
+        let usvg::Node::Path(node) = &tree.root().children()[0] else {
+            panic!("a path");
+        };
+        let outline = (node.data().len() as f64
+            * stroke_points(stroke_reach(node, node.stroke().unwrap()))
+            * STROKE_POINT_COST as f64)
+            .ceil() as u64;
+        // The layer itself (64² × 5 per side at most) is charged too.
+        assert!(
+            isolated >= plain + outline,
+            "{plain} + {outline} > {isolated}"
+        );
+        let unstroked = cost(&format!(
+            "<g opacity='0.5'>{}</g>",
+            path.replace(" stroke='black'", "")
+        ));
+        assert!(
+            isolated >= unstroked + outline,
+            "no stroke, no outline: {unstroked} + {outline} > {isolated}"
+        );
+        // A clip path isolates as well.
+        let clipped = cost(&format!(
+            "<clipPath id='c'><rect width='32' height='32'/></clipPath><g clip-path='url(#c)'>{path}</g>"
+        ));
+        assert!(
+            clipped >= plain + outline,
+            "{plain} + {outline} > {clipped}"
+        );
     }
 
     mod properties {

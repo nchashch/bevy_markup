@@ -165,7 +165,26 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
 ### Security
 - The `format` filter only accepts ASCII `%(key)` names and widths and
   precisions up to 65535; a format string with anything else fails the
-  render.
+  render (MiniJinja panics on them, UPSTREAM U59/U60).
+- Printing a list or map in a template that holds more items than the
+  rendered HTML could take (a list repeated millions of times with `*`) now
+  fails the render before reading it, instead of allocating gigabytes or
+  stalling; so do the `string`, `tojson`, `pprint` and `json` filters, and
+  `join` is charged before it collects. Values are escaped as they are
+  written. MiniJinja 3.1.0 still walks such lists without fuel when a
+  template compiles (constant expressions) and for `~`, `in` and `==`
+  (UPSTREAM U62, fixed in the MiniJinja this repository builds with,
+  ADR 0052): until MiniJinja releases the fix, add the same
+  `[patch.crates-io]` entry as bevy_markup's `Cargo.toml` to your app if it
+  loads untrusted templates.
+- CSS `var()` substitution counts what it reads toward its 64 KiB budget,
+  not only what it writes, and resolves each declaration once per cascade
+  instead of once per element: a few KB of nested fallbacks no longer
+  stall styling for seconds.
+- **Breaking (`svg`):** a stroked path reaching more than 65,536 units from
+  its origin (in its own coordinates, half the stroke width included)
+  fails to load with an error saying so; scale it down and its transform
+  up. The 31,833 icons surveyed for ADR 0051 reach under 2,000.
 - Template renders are bounded by fuel (instructions, data produced,
   items visited) instead of a load-time model of what a Tera render could
   cost: hostile templates fail their render instead of stalling or

@@ -11,9 +11,12 @@
 # Env:
 #   BEVY_MARKUP_FUZZ_KEY   the age identity (default ~/.config/bevy_markup/fuzz-artifacts.key)
 #   BEVY_MARKUP_NIGHTLY    toolchain for the replays (default: nightly)
+#   TRIAGE_SLOW_MS         an input that finishes but takes longer is reported
+#                          as slow (default 1000)
 #
 # Output:
-#   docs/agents/bugs/private/fuzz-inbox/<run>/        decrypted bundles + triage.md
+#   docs/agents/bugs/private/fuzz-inbox/<run>/        decrypted bundles, triage.md and
+#                                                    results.tsv (signature, ms, peak KB per input)
 #   docs/agents/bugs/private/fuzz-findings/<signature>/  one sample + replay log per
 #                                                    reproducing signature (kept across runs)
 # Inputs of libFuzzer and honggfuzz (raw bytes, the same harnesses) are
@@ -59,6 +62,10 @@ report=$inbox/triage.md
 replays=$inbox/replays
 mkdir -p "$replays"
 declare -A count samples drivers
+# Inputs that finish but take longer than this are reported as slow.
+slow_ms=${TRIAGE_SLOW_MS:-1000}
+results=$inbox/results.tsv
+printf 'signature\tms\tpeak_kb\tinput\n' >"$results"
 manual=()
 host=$(rustc "+$toolchain" -vV | sed -n 's/^host: //p')
 
@@ -89,12 +96,27 @@ for dir in "$inbox"/*/; do
     esac
     for file in $files; do
         out=$replays/$(basename "$file").log
-        if timeout 120 cargo "+$toolchain" fuzz run --target "$host" "$target" "$file" \
-            -- -runs=1 >"$out" 2>&1; then
+        # CI's per-input limits (scripts/fuzz-libfuzzer.sh, nightly.yml), so
+        # a timeout or an out-of-memory reproduces as one; GNU time records
+        # the peak memory of the fuzz binary (cargo's largest child).
+        if /usr/bin/time -f '%M' -o "$out.rss" timeout 120 \
+            cargo "+$toolchain" fuzz run --target "$host" "$target" "$file" \
+            -- -runs=1 -timeout=10 -rss_limit_mb=3072 >"$out" 2>&1; then
             sig="does not reproduce"
         else
             sig="$target: $(signature_of "$out")"
         fi
+        # libFuzzer's own time for the input (cargo's start-up excluded).
+        # (None when the input crashed: no line, hence `|| true` under -e.)
+        ms=$(grep -m1 -oE 'Executed .* in [0-9]+ ms' "$out" | grep -oE '[0-9]+ ms$' | cut -d' ' -f1 || true)
+        kb=$(tail -1 "$out.rss" 2>/dev/null || true)
+        # A slow input that finishes is a finding too: on the runner, under
+        # ASan and four workers, it crossed the limit (Nightly 45740232198:
+        # 78 such inputs, 3–94 s locally, all real).
+        if [ "$sig" = "does not reproduce" ] && [ "${ms:-0}" -ge "$slow_ms" ]; then
+            sig="$target: slow (over ${slow_ms} ms, no crash)"
+        fi
+        printf '%s\t%s\t%s\t%s\n' "$sig" "${ms:-}" "${kb:-}" "${file#"$inbox"/}" >>"$results"
         count[$sig]=$((${count[$sig]:-0} + 1))
         drivers[$sig]="${drivers[$sig]:-} $driver"
         # Keep the smallest input as the sample.
@@ -143,4 +165,4 @@ done
 echo
 cat "$report"
 echo
-echo "logs: $inbox/*/fuzz-private/*.log; replays: $replays/"
+echo "logs: $inbox/*/fuzz-private/*.log; replays: $replays/; per input: $results"

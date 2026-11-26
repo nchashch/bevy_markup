@@ -98,8 +98,13 @@ src/
                    stack guard, `tera_tag_over_limit`, bug_0182; still needed); `new_environment`
                    (autoescape for the markup extensions, `SemiStrict` undefined handling,
                    trailing newline kept, the `json` filter, `join`/`split`/`lines`/`escape`/`e`
-                   wrapped to charge their result's size up front, fuel from
-                   `HtmlTemplateLimits` via `TemplateFuel`/`sync_template_fuel`);
+                   wrapped to charge their result's size up front (`join` before collecting),
+                   `string`/`tojson`/`pprint`/`json` and the formatter (`streaming_formatter`)
+                   refusing a list or map with more items than the output could take
+                   (`check_printable`/`fits_printed`: 3 bytes an item, nested counted, a too-long
+                   list refused by its length unread; bug_0253) and escaping as it writes, fuel
+                   from `HtmlTemplateLimits` via `TemplateFuel`/`sync_template_fuel`; MiniJinja
+                   is patched in-repo, ADR 0052);
                    `render_source` renders through `BoundedOutput`, refused past
                    `MAX_RENDERED_BYTES` 16 MiB (bug_0220), HtmlDocument (+ outline, cut at
                    1 MiB, bug_0244),
@@ -192,10 +197,16 @@ src/
                    or `style`) → `Unsupported` → `svg_bounds::bounds`: depth ≤ 256, work ≤
                    `MAX_SVG_WORK` 2²³ (`Limits::work`; the fuzz harness uses 1/16) →
                    `usvg::Tree::from_xmltree` on the same document → `check_tree`: a filter,
-                   mask, pattern, text or image node that got past refuses too), refusing
+                   mask, pattern, text or image node that got past refuses too, and a stroked
+                   path reaching past `MAX_STROKE_REACH` 2¹⁶ in its own coordinates, stroke
+                   padded: `StrokeTooFar`), refusing
                    `<image href>` resolver (usvg's default reads any file, U19), `raster_size`
                    (side cap before allocating: tiny-skia aborts on a failed allocation),
                    `estimate_cost` (resvg's layer/clip model, early exit at `MAX_SVG_COST`;
+                   first `layer_strokes`: stroked paths under an isolated group or clip path
+                   are charged `stroke_points(reach)` × `STROKE_POINT_COST` per segment for the
+                   outline work behind their layer's bounds; path areas are the padded
+                   control bounds;
                    calibrated in docs/agents/performance/adr-0038-probe.md §7; a dashed stroke is
                    charged `DASH_COST` per dash, `dash_count` ≤ tiny-skia's 10⁶, bug_0205;
                    `CostWalk::measure` takes each path's control polygon in device px — the
@@ -511,8 +522,11 @@ scripts/
                      counts only to the job log and summary (coverage start → end, corpus,
                      crashes)
   fuzz-triage.sh     locally: download a Nightly run's sealed bundles, decrypt them with the
-                     maintainer's key, replay the crashing inputs, group them by signature,
-                     archive new ones in `docs/agents/bugs/private/fuzz-findings/`
+                     maintainer's key, replay the crashing inputs with CI's limits (`-timeout=10
+                     -rss_limit_mb=3072`), group them by signature (an input that finishes but
+                     takes over `TRIAGE_SLOW_MS`, 1 s, is "slow"), list each input's time and
+                     peak memory in `results.tsv`, archive new signatures in
+                     `docs/agents/bugs/private/fuzz-findings/`
   fuzz-<driver>.sh   run one fuzzer over one target:
                      `scripts/fuzz-{libfuzzer,honggfuzz,fuzzcheck,test-fuzz}.sh
                      <html|css|ftl|svg> [seconds=60]` (details in each script's
@@ -695,6 +709,14 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   (uncached). `opacity` multiplies down the tree in the computed `Style`
   (the `<html>` element reuses the root style, or its opacity would square)
   and fades text/span colors at spec time and box colors in `collect_node`.
+- MiniJinja is patched (ADR 0052): the root manifest and the four fuzz
+  workspaces' (`fuzz`, `honggfuzz`, `fuzzcheck`, `test-fuzz`) point
+  `[patch.crates-io] minijinja` at the fork's `bevy_markup/3.1.0` branch
+  (3.1.0 + the fixes for UPSTREAM U56, U57, U59, U60, U62). Crates using
+  bevy_markup don't get the patch, so the local guards stay
+  (`checked_format`, the fueled filters, the tag limit, the formatter's item
+  count). Drop the patch with the MiniJinja release that has the fixes;
+  keep the five manifests in step.
 - fluent-syntax is upstream 0.12.0 (what `fluent` 0.17 requires). Three of
   its bugs (still there in 0.12.0, checked 2026-11-25) are reachable from any FTL asset, and `src/ftl_check.rs` (ADR
   0045) refuses the triggering resources at load, before
@@ -869,7 +891,9 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
   `TemplateContext` first (a `--name` key; its values are opaque — their own
   `var()`s don't resolve), then the sheet's own `--name:`
   declarations (sheet-level, last wins; substituted transitively, memoized
-  with cycle detection and a 64 KiB budget per declaration — an unresolvable,
+  with cycle detection and a 64 KiB budget per declaration, charged for what it
+  reads as well as writes (bug_0252); each `var()` declaration resolves once per
+  cascade, `HtmlStyles::resolved` — an unresolvable,
   cyclic or over-budget reference drops just that declaration), then the
   reference's fallback; reference depth is capped (`MAX_VAR_DEPTH` = 64)
   and so is the whole substitution's recursion (`MAX_SUBSTITUTE_DEPTH` =

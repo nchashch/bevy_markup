@@ -69,5 +69,6 @@ as `[INFERENCE]`.
 | [0049](./0049-minijinja-with-fuel-instead-of-tera.md) | Templates on MiniJinja with fuel instead of Tera and a static check | Accepted |
 | [0050](./0050-own-selector-engine.md) | Selectors are parsed and matched by bevy_markup; parcel_selectors is removed | Accepted |
 | [0051](./0051-svg-icon-subset.md) | SVG is drawn in an icon subset; filters, masks, patterns, markers, text and style sheets are refused | Accepted |
+| [0052](./0052-patched-minijinja-until-upstream-releases.md) | MiniJinja is patched in this repository until upstream releases the fixes; bevy_markup keeps its own checks | Accepted |
 
 Add new records to this index in the same commit that adds the file.

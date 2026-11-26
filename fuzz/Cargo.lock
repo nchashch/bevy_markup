@@ -2832,8 +2832,7 @@ dependencies = [
 [[package]]
 name = "minijinja"
 version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509eeb2603a84eccabb4d75f6ec8ba23b46bbf441aaeb863d6b83a5887fd51e4"
+source = "git+https://github.com/nchashch/minijinja?branch=bevy_markup%2F3.1.0#b705d3515a922894fefef604dcbbeeb4b25dc25c"
 dependencies = [
  "itoa",
  "serde",
