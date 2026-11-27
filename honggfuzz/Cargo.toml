@@ -39,8 +39,8 @@ bench = false
 # Vendored (path) so the bundled C source can be patched for current
 # binutils: bfd.h no longer defines TRUE/FALSE (see linux/bfd.c).
 [patch.crates-io]
-# MiniJinja 3.1.0 with five fixes not yet released upstream (UPSTREAM U56,
-# U57, U59, U60, U62): `bevy_markup/3.1.0` on nchashch/minijinja. Applies to this
+# MiniJinja 3.1.0 with six fixes not yet released upstream (UPSTREAM U56,
+# U57, U59, U60, U62, U64): `bevy_markup/3.1.0` on nchashch/minijinja. Applies to this
 # repository only, not to crates depending on bevy_markup. Drop it with the
 # MiniJinja release that has them.
 minijinja = { git = "https://github.com/nchashch/minijinja", branch = "bevy_markup/3.1.0" }

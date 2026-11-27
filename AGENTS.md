@@ -716,7 +716,7 @@ examples/assets/   the examples' content (AssetPlugin file_path; no fonts: syste
 - MiniJinja is patched (ADR 0052): the root manifest and the four fuzz
   workspaces' (`fuzz`, `honggfuzz`, `fuzzcheck`, `test-fuzz`) point
   `[patch.crates-io] minijinja` at the fork's `bevy_markup/3.1.0` branch
-  (3.1.0 + the fixes for UPSTREAM U56, U57, U59, U60, U62). Crates using
+  (3.1.0 + the fixes for UPSTREAM U56, U57, U59, U60, U62, U64). Crates using
   bevy_markup don't get the patch, so the local guards stay
   (`checked_format`, the fueled filters, the tag limit, the formatter's item
   count). Drop the patch with the MiniJinja release that has the fixes;

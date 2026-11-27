@@ -2994,7 +2994,7 @@ dependencies = [
 [[package]]
 name = "minijinja"
 version = "3.1.0"
-source = "git+https://github.com/nchashch/minijinja?branch=bevy_markup%2F3.1.0#b705d3515a922894fefef604dcbbeeb4b25dc25c"
+source = "git+https://github.com/nchashch/minijinja?branch=bevy_markup%2F3.1.0#db625d2ed9c5758d3911fe8524e3fd42081d88c2"
 dependencies = [
  "itoa",
  "serde",
