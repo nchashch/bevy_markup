@@ -67,3 +67,4 @@
 ## [2026-11-26 10:10] update | Fix the third Nightly's findings: svg stroke reach limit and outline charge, css var() budget counts reading and resolves once per cascade, template printing/filters bounded, MiniJinja patched to fork branch (ADR 0052); triage replays with CI limits
 ## [2026-11-27 10:09] update | Nightly 45820956544 triage: SVG work model tracks the simplifier's drift after huge-radius arcs (bug_0254); paths with more than 64 consecutive closes are refused
 ## [2026-11-27 21:33] update | Nightly 45997844575 triage: tojson's indent counts toward the printed size (bug_0256, UPSTREAM U64)
+## [2026-11-27 23:00] update | Patched MiniJinja to fork commit db625d2e (U64 tojson indent fix) and ran a full cargo update in all five workspaces (Bevy 0.20.1, wgpu 30.0.2, astral-tl 0.8.1, pulldown-cmark 0.13.6); checks, tests and docs pass
