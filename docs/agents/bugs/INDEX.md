@@ -293,6 +293,7 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0252](bug_0252.md) | `var()` substitution work wasn't bounded by its budget, and repeated per element | `src/cascade.rs` | high | fixed | cargo-fuzz `css`, Nightly 45740232198, 2026-11-26 |
 | [bug_0253](bug_0253.md) | Printing a lazily repeated list stalled the render or exhausted memory | `src/template.rs`; minijinja (U62) | high | fixed (local hooks; MiniJinja patched, upstream open) | cargo-fuzz `html`, Nightly 45740232198, 2026-11-26 |
 | [bug_0254](bug_0254.md) | The SVG work bound undercounted arcs after an arc of huge radius | `src/svg_bounds.rs`; svgtypes/kurbo (U22) | high | fixed | cargo-fuzz and honggfuzz `svg`, Nightly 45820956544, 2026-11-27 |
+| [bug_0256](bug_0256.md) | `tojson` with a huge indent allocated gigabytes | `src/template.rs`; minijinja (U64) | high | fixed (local wrapper; upstream open) | cargo-fuzz `html`, Nightly 45997844575, 2026-11-28 |
 
 ## Discovery session metadata: bug_0239–0243 (2026-11-12)
 

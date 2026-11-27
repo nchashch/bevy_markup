@@ -270,7 +270,13 @@ fn streaming_formatter(
 /// printing it, or a filter writing it into a string, would iterate all of
 /// it first.
 fn check_printable(value: &minijinja::Value) -> Result<(), minijinja::Error> {
-    if fits_printed(value) {
+    check_printable_indented(value, 0)
+}
+
+/// [`check_printable`] for a value printed as JSON indented by `indent`
+/// spaces a level (`tojson(indent)`).
+fn check_printable_indented(value: &minijinja::Value, indent: u64) -> Result<(), minijinja::Error> {
+    if fits_printed(value, indent) {
         Ok(())
     } else {
         Err(minijinja::Error::new(
@@ -285,14 +291,18 @@ fn check_printable(value: &minijinja::Value) -> Result<(), minijinja::Error> {
 
 /// Whether `value`'s printed form could fit in [`MAX_RENDERED_BYTES`]:
 /// every item of a printed list or map takes at least three bytes (`1, `),
-/// so one holding more than a third of it, counted through nested lists
-/// and maps, can't. Stops at that many items, and refuses a list whose
-/// known length alone is over it without iterating it. (Printing doesn't
-/// stop at a failed write: it formats no more, but still iterates every
-/// item.) Iterative: values nest arbitrarily deep.
-fn fits_printed(value: &minijinja::Value) -> bool {
+/// and, pretty-printed by `indent` spaces a level, at most twice its
+/// indentation more (its own line, and its container's closing line), so
+/// one holding more than that, counted through nested lists and maps,
+/// can't. Stops at that many items, and refuses a list whose known length
+/// alone is over it without iterating it. (Printing doesn't stop at a
+/// failed write: it formats no more, but still iterates every item.)
+/// Iterative: values nest arbitrarily deep.
+fn fits_printed(value: &minijinja::Value, indent: u64) -> bool {
     use minijinja::value::ObjectRepr;
-    let mut budget = MAX_RENDERED_BYTES / 3;
+    // An item at `depth` (the containers around it) and what it costs.
+    let cost = |depth: usize| 3u64.saturating_add(indent.saturating_mul(2 * depth as u64));
+    let mut budget = MAX_RENDERED_BYTES as u64;
     let mut pending: Vec<Box<dyn Iterator<Item = minijinja::Value>>> =
         vec![Box::new(std::iter::once(value.clone()))];
     while let Some(items) = pending.last_mut() {
@@ -300,14 +310,17 @@ fn fits_printed(value: &minijinja::Value) -> bool {
             pending.pop();
             continue;
         };
-        let Some(budget_left) = budget.checked_sub(1) else {
+        let Some(budget_left) = budget.checked_sub(cost(pending.len() - 1)) else {
             return false;
         };
         budget = budget_left;
         let Some(object) = item.as_object() else {
             continue;
         };
-        if object.enumerator_len().is_some_and(|len| len > budget) {
+        if object
+            .enumerator_len()
+            .is_some_and(|len| (len as u64).saturating_mul(cost(pending.len())) > budget)
+        {
             return false;
         }
         match object.repr() {
@@ -339,12 +352,28 @@ fn checked_string(
 }
 
 /// `tojson`, for a value that could be printed ([`check_printable`]).
+///
+/// The indent is MiniJinja's (`true` = 2, `false` = none, else a `usize`,
+/// positional or `indent=`): unbounded there, it writes `indent × depth`
+/// spaces per item (UPSTREAM U64), so it counts toward the size.
 fn checked_tojson(
     value: &minijinja::Value,
     indent: Option<minijinja::Value>,
     args: minijinja::value::Kwargs,
 ) -> Result<minijinja::Value, minijinja::Error> {
-    check_printable(value)?;
+    let spaces = match indent
+        .clone()
+        .or(args.peek::<Option<minijinja::Value>>("indent")?)
+    {
+        None => 0,
+        Some(value) => match bool::try_from(value.clone()) {
+            Ok(true) => 2,
+            Ok(false) => 0,
+            // MiniJinja refuses it with its own error.
+            Err(_) => usize::try_from(value).map_or(0, |n| n as u64),
+        },
+    };
+    check_printable_indented(value, spaces)?;
     minijinja::filters::tojson(value, indent, args)
 }
 
@@ -1570,6 +1599,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `tojson`'s indent counts toward the printed size: MiniJinja takes
+    /// any `usize` and writes `indent × depth` spaces per item before any
+    /// limit applies (a 93-byte template, `tojson(5E13)`, allocated
+    /// gigabytes; UPSTREAM U64). Small indents still print.
+    #[test]
+    fn tojson_indents_count_toward_the_printed_size() {
+        let render = |template: &str| test_render("t.html", template, serde_json::json!({}));
+        for template in [
+            "{{ [1] | tojson(5E13) }}",
+            "{{ {'a': 1} | tojson(indent=50000000000000) }}",
+            "{{ [[[1]]] | tojson(18446744073709551615) }}",
+            "{{ ([1] * 3000000) | tojson(4) }}",
+        ] {
+            let err = render(template).unwrap_err().to_string();
+            assert!(
+                err.contains("too many items") || err.contains("fuel"),
+                "{template}: {err}"
+            );
+        }
+        assert_eq!(
+            render("{{ {'a': [1]} | tojson(2) }}").unwrap(),
+            "{\n  \"a\": [\n    1\n  ]\n}"
+        );
+        assert_eq!(render("{{ {} | tojson(5E13) }}").unwrap(), "{}");
+        assert_eq!(
+            render("{{ [1, 2] | tojson(true) }}").unwrap(),
+            "[\n  1,\n  2\n]"
+        );
     }
 
     /// A list or map holding more items than the output could take is

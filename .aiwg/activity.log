@@ -66,3 +66,4 @@
 ## [2026-11-26 01:49] update | Fix the second Nightly's script failures (POSIX sh extra-corpus loop, AFL shutdown race when sealing), add shellcheck to CI, bound format widths and precisions
 ## [2026-11-26 10:10] update | Fix the third Nightly's findings: svg stroke reach limit and outline charge, css var() budget counts reading and resolves once per cascade, template printing/filters bounded, MiniJinja patched to fork branch (ADR 0052); triage replays with CI limits
 ## [2026-11-27 10:09] update | Nightly 45820956544 triage: SVG work model tracks the simplifier's drift after huge-radius arcs (bug_0254); paths with more than 64 consecutive closes are refused
+## [2026-11-27 21:33] update | Nightly 45997844575 triage: tojson's indent counts toward the printed size (bug_0256, UPSTREAM U64)

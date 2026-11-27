@@ -102,7 +102,8 @@ src/
                    `string`/`tojson`/`pprint`/`json` and the formatter (`streaming_formatter`)
                    refusing a list or map with more items than the output could take
                    (`check_printable`/`fits_printed`: 3 bytes an item, nested counted, a too-long
-                   list refused by its length unread; bug_0253) and escaping as it writes, fuel
+                   list refused by its length unread; bug_0253; `tojson`'s indent adds
+                   2 × indent × depth an item, bug_0256, U64) and escaping as it writes, fuel
                    from `HtmlTemplateLimits` via `TemplateFuel`/`sync_template_fuel`; MiniJinja
                    is patched in-repo, ADR 0052);
                    `render_source` renders through `BoundedOutput`, refused past

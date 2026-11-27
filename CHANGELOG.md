@@ -202,6 +202,10 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   inputs that panicked lightningcss (a NaN in `min()`/`max()`/`clamp()`,
   which aborted apps built with `panic = "abort"`, and an infinite hue)
   are refused, and no value carries NaN or infinity into the cascade.
+- `tojson` counts its indent toward the printed size: `tojson(5E13)`
+  (any number converts) made MiniJinja write trillions of spaces and
+  exhaust memory (bug_0256, UPSTREAM U64); a value too large indented
+  fails the render like one with too many items.
 - **`svg`:** paths whose arcs follow an arc of a huge radius are charged
   for what their conversion really does: a 4 KB SVG passed the load-time
   work bound and then converted for seconds (bug_0254). An SVG path that
