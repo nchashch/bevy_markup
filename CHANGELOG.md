@@ -202,6 +202,12 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   inputs that panicked lightningcss (a NaN in `min()`/`max()`/`clamp()`,
   which aborted apps built with `panic = "abort"`, and an infinite hue)
   are refused, and no value carries NaN or infinity into the cascade.
+- **`svg`:** paths whose arcs follow an arc of a huge radius are charged
+  for what their conversion really does: a 4 KB SVG passed the load-time
+  work bound and then converted for seconds (bug_0254). An SVG path that
+  repeats a close (`Z`) more than 64 times in a row fails to load; the
+  repeats draw nothing. No real icon is affected (the 31,833 surveyed
+  for ADR 0051 load as before).
 - SVG documents with very many `<text>` elements are refused at load
   instead of taking seconds and hundreds of MB to convert. Each `<text>`
   now counts toward `MAX_SVG_WORK`, so an inline `<svg>` with more than

@@ -557,7 +557,11 @@ CI clippy command and workspace tests pass on both.
   for 4.3 s (ASan); `A3e38 3e38 0 1 1 3e38 0` runs past 100 s.
 - **Local workaround:** `svg_bounds::path_segments` counts each arc's
   cubics with kurbo's arithmetic (walking svgtypes' raw `PathParser`), and
-  the work bound refuses the document before usvg runs (ADR 0040).
+  the work bound refuses the document before usvg runs (ADR 0040). After
+  an arc of radius past ~1.5·10⁶ the simplifier's point may be far off
+  the written one (3.5·10¹⁵ after a 2·10¹⁷ arc), so the count bounds that
+  distance and charges the following arcs for it until an absolute
+  coordinate (bug_0254).
 - **PR sketch:** svgtypes: drain with a `VecDeque` (or an index), and cap
   the cubics per arc (a curve is never visibly better past a few hundred).
   kurbo/usvg: a tolerance relative to the radius, or to the output scale.

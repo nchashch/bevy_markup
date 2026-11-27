@@ -185,7 +185,10 @@ src/
                    element, 1 per stop, 4 per path segment, (arc cubics)²/64 per path arc
                    (svgtypes' quadratic drain). Segments are counted, never generated:
                    `path_segments` walks svgtypes' raw `PathParser` tracking the point like the
-                   simplifier, each arc's cubics by kurbo's arithmetic (bug_0190, U22); shape
+                   simplifier, each arc's cubics by kurbo's arithmetic (bug_0190, U22), and a
+                   `drift` bound on how far the simplifier's point is from the exact one after
+                   a huge-radius arc (reset by absolute coordinates; bug_0254); a run of more
+                   than `MAX_CLOSE_RUN` 64 closes refuses the path; shape
                    radii resolve like usvg's `convert_length` (`em` against the inherited
                    font-size, `%` against the inherited viewport). One unit ≈ 60 ns of release
                    conversion (ADR 0040 §3)

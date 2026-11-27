@@ -526,6 +526,11 @@ fn font_size(value: &str, parent: f64) -> f64 {
     }
 }
 
+/// The most closes in a row a path may hold (`Z Z Z …`); one more and its
+/// work is unbounded: refused. A repeated close draws nothing, and real
+/// paths don't repeat one.
+const MAX_CLOSE_RUN: usize = 64;
+
 /// kurbo's subdivisions of a whole ellipse of radius `radius` at usvg's
 /// tolerance 0.1 (`Arc::append_iter`): an arc of sweep `s` gets
 /// `ceil(n × s / 2π)` cubics. Infinite for a non-finite radius.
@@ -549,15 +554,31 @@ fn quarter_arc(radius: f64) -> f64 {
 /// squared. Walks the raw segments, tracking the current point as the
 /// simplifier does, and counts each arc's cubics with kurbo's own formula
 /// instead of generating them (an arc can make millions).
+///
+/// The simplifier's point is where kurbo's last cubic ended, which after an
+/// arc of a huge radius can be far from the exact point tracked here (an
+/// arc of radius 2·10¹⁷ ended 3.5·10¹⁵ away): `drift` bounds that distance.
+/// It is 0 until such an arc ([`arc_curves`]), and an absolute coordinate
+/// puts it back to 0 (the simplifier then stands on the exact point too).
 fn path_segments(d: &str) -> (f64, f64) {
     let (mut x, mut y) = (0.0f64, 0.0f64);
     let (mut start_x, mut start_y) = (0.0f64, 0.0f64);
+    let (mut drift, mut start_drift) = (0.0f64, 0.0f64);
+    let mut closes = 0usize;
     let mut segments = 0.0f64;
     let mut squares = 0.0f64;
     for segment in svgtypes::PathParser::from(d) {
         // usvg stops at the first error.
         let Ok(segment) = segment else { break };
         use svgtypes::PathSegment as S;
+        if matches!(segment, S::ClosePath { .. }) {
+            closes += 1;
+            if closes > MAX_CLOSE_RUN {
+                return (f64::INFINITY, f64::INFINITY);
+            }
+        } else {
+            closes = 0;
+        }
         let to = |abs: bool, to_x: f64, to_y: f64| {
             if abs {
                 (to_x, to_y)
@@ -573,6 +594,10 @@ fn path_segments(d: &str) -> (f64, f64) {
             } => {
                 (x, y) = to(abs, to_x, to_y);
                 (start_x, start_y) = (x, y);
+                if abs {
+                    drift = 0.0;
+                }
+                start_drift = drift;
                 segments += 1.0;
             }
             S::LineTo {
@@ -604,6 +629,9 @@ fn path_segments(d: &str) -> (f64, f64) {
                 y: to_y,
             } => {
                 (x, y) = to(abs, to_x, to_y);
+                if abs {
+                    drift = 0.0;
+                }
                 segments += 1.0;
             }
             S::HorizontalLineTo { abs, x: to_x } => {
@@ -616,6 +644,7 @@ fn path_segments(d: &str) -> (f64, f64) {
             }
             S::ClosePath { .. } => {
                 (x, y) = (start_x, start_y);
+                drift = start_drift;
                 // The close, and the move the simplifier inserts before a
                 // segment that follows it.
                 segments += 2.0;
@@ -631,14 +660,21 @@ fn path_segments(d: &str) -> (f64, f64) {
                 y: to_y,
             } => {
                 let (end_x, end_y) = to(abs, to_x, to_y);
-                let curves = arc_curves(
+                let (curves, end_drift) = arc_curves(
                     (x, y),
                     (end_x, end_y),
                     (rx, ry),
                     x_axis_rotation.to_radians(),
                     large_arc,
                     sweep,
+                    drift,
                 );
+                // An arc drawn as a line ends where a line would.
+                drift = match end_drift {
+                    Some(end_drift) => end_drift,
+                    None if abs => 0.0,
+                    None => drift,
+                };
                 segments += curves.max(1.0);
                 squares += curves * curves;
                 (x, y) = (end_x, end_y);
@@ -654,7 +690,9 @@ fn path_segments(d: &str) -> (f64, f64) {
 /// The cubics kurbo 0.13 makes of an SVG arc (`Arc::from_svg_arc`, then
 /// `to_cubic_beziers(0.1, …)`): the same arithmetic, without generating
 /// them, rounded up. 0 for an arc kurbo draws as a line; infinite where
-/// kurbo's count isn't finite (it would loop).
+/// kurbo's count isn't finite (it would loop). With it, how far from `to`
+/// the simplifier's point can end up (`None` for a line: where a line
+/// ends), given that it starts within `drift` of `from`.
 ///
 /// The simplifier starts each segment where kurbo's last cubic ended, a
 /// rounding error away from the exact endpoint tracked here: an arc whose
@@ -667,14 +705,43 @@ fn arc_curves(
     x_rotation: f64,
     large_arc: bool,
     sweep: bool,
-) -> f64 {
+    drift: f64,
+) -> (f64, Option<f64>) {
     use std::f64::consts::PI;
     // `SvgArc::is_straight_line`.
     if radii.0.abs() <= 1e-5 || radii.1.abs() <= 1e-5 {
-        return 0.0;
+        return (0.0, None);
     }
+    let (min_r, max_r) = (
+        radii.0.abs().min(radii.1.abs()),
+        radii.0.abs().max(radii.1.abs()),
+    );
+    let chord = (from.0 - to.0).hypot(from.1 - to.1);
+    // Off the exact point, the chord is unknown within `drift`, and kurbo
+    // scales the radii up to reach it: by at most (chord / 2) / min_r.
+    // The sweep is unknown too, so this counts a whole turn of the largest
+    // radius the chord allows. The arc ends on its ellipse: within twice
+    // that radius of where it started, so within 2·radius + chord + drift
+    // of `to`.
+    if drift != 0.0 {
+        let chord = chord + drift;
+        let reach = max_r * (chord / (2.0 * min_r)).max(1.0);
+        if reach.is_nan() {
+            return (f64::INFINITY, Some(f64::INFINITY));
+        }
+        return (whole(subdivisions(reach)), Some(2.0 * reach + chord));
+    }
+    // Past `EXACT_SWEEP_SUBDIVISIONS`, the point the arc ends at is
+    // trusted no more (see below).
+    let drift_after = |radius: f64| {
+        if subdivisions(radius) <= EXACT_SWEEP_SUBDIVISIONS {
+            Some(0.0)
+        } else {
+            Some(2.0 * radius + chord)
+        }
+    };
     if from == to {
-        return whole(subdivisions(radii.0.abs().max(radii.1.abs())));
+        return (whole(subdivisions(max_r)), drift_after(max_r));
     }
     // The simplifier starts the arc where kurbo's previous cubic ended, a
     // rounding error from `from`. The sweep angle below is computed from
@@ -701,7 +768,7 @@ fn arc_curves(
     }
     let full_turn = subdivisions(rx.max(ry));
     if !(full_turn <= EXACT_SWEEP_SUBDIVISIONS) {
-        return whole(full_turn);
+        return (whole(full_turn), drift_after(rx.max(ry)));
     }
     let rxry = rx * ry;
     let rxpy = rx * p_y;
@@ -724,9 +791,9 @@ fn arc_curves(
     let n = n_err * sweep_angle.abs() * (1.0 / (2.0 * PI));
     if n.is_nan() {
         // `as usize` makes NaN 0 cubics.
-        0.0
+        (0.0, Some(0.0))
     } else {
-        whole(n)
+        (whole(n), Some(0.0))
     }
 }
 
@@ -855,6 +922,33 @@ mod tests {
         assert!(segments > 3e15, "{segments}");
         // A zero radius is a line, as in kurbo.
         assert_eq!(path_segments("M0 0 A0 5 0 1 1 9 9").0, 2.0);
+    }
+
+    #[test]
+    fn arcs_after_a_huge_one_count_from_where_it_really_ended() {
+        // The first arc's last cubic ends far from `(1e12, 1)` (its
+        // rotation is a huge angle), so the second, which ends where it
+        // starts here, crosses a long chord there: the radii scale up to
+        // it, ~4300 cubics where the exact start gives ~150 (a fuzz find,
+        // at 4.4e17: ~10⁵ cubics, seconds of conversion).
+        let d = "M1e9 0 A1e9 1e9 1e19 1 1 1e12 1 A1 1e12 1 1 0 1e12 1";
+        let built = simplified(d);
+        assert!(built > 4000, "{built}");
+        let (segments, _) = path_segments(d);
+        assert!(segments as usize >= built, "{segments} < {built}");
+        // An absolute point puts the count back on the exact track.
+        let (after, _) = path_segments(&format!("{d} L0 0 A5 5 0 0 1 10 0"));
+        assert!(after - segments <= 1.0 + 4.0, "{after} vs {segments}");
+    }
+
+    #[test]
+    fn long_runs_of_closes_are_refused() {
+        let run = |n: usize| format!("M0 0 L1 1 {}", "Z".repeat(n));
+        assert!(path_segments(&run(MAX_CLOSE_RUN)).0.is_finite());
+        assert!(path_segments(&run(MAX_CLOSE_RUN + 1)).0.is_infinite());
+        // Closes between other segments don't add up.
+        let spaced = "M0 0 L1 1 Z Z L2 2 Z ".repeat(1000);
+        assert!(path_segments(&spaced).0.is_finite());
     }
 
     #[test]
