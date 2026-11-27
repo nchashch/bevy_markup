@@ -73,7 +73,7 @@ the issue may already be fixed or reported.
 | U59 | minijinja 3.1.0 | `format` panics on a non-ASCII `%(key)` | panic from a 24-byte template | `checked_format`; patched MiniJinja | reported (email; issue to open) |
 | U60 | minijinja 3.1.0 | `format` panics on an integer `%f` with precision over 65535 | panic from a template | `checked_format`; patched MiniJinja | reported (email; issue to open) |
 | U62 | minijinja 3.1.0 | Deep walks of containers (printing, `~`, `in`, `==`) and constant folding aren't bounded by fuel ([bug_0253](bug_0253.md)) | stall or out-of-memory at template load or render | printing and text filters checked (`streaming_formatter`); patched MiniJinja (the rest) | found 2026-11-26; issue to open |
-| U64 | minijinja 3.1.0 | `tojson` takes any `usize` indent and writes `indent × depth` spaces per item before any limit ([bug_0256](bug_0256.md)) | stall or out-of-memory from a 93-byte template | `checked_tojson` counts the indent (`fits_printed`) | found 2026-11-28; issue to open |
+| U64 | minijinja 3.1.0 | `tojson` takes any `usize` indent and writes `indent × depth` spaces per item before any limit ([bug_0256](bug_0256.md)) | stall or out-of-memory from a 93-byte template | `checked_tojson` counts the indent (`fits_printed`); fork fix to push | found 2026-11-28; issue to open |
 
 Both are fixed in the fork [nchashch/fluent-rs](https://github.com/nchashch/fluent-rs):
 branch `fix/fuzzing-bugs` (on upstream `main`, 0.12; for the PR) and branch
@@ -1571,8 +1571,9 @@ affected (goroutine stacks grow; 2,000,000-link chains compile in 0.3 s).
 ## U64 — MiniJinja: `tojson`'s indent is unbounded
 
 - **Status (2026-11-28):** found by the Nightly; public like U56–U62 (the
-  maintainer asked for public issues). Issue and PR to open; not fixed on
-  `bevy_markup/3.1.0` yet.
+  maintainer asked for public issues). Issue and PR to open. Fixed on
+  `fix/tojson-indent-fuel` (from `main`) and on `bevy_markup/3.1.0`
+  (`db625d2e`); the lock files move to it once the branch is pushed.
 - **Project/version:** [mitsuhiko/minijinja](https://github.com/mitsuhiko/minijinja)
   3.1.0 and the `bevy_markup/3.1.0` patch branch: `filters::tojson_impl`,
   `json::JsonWriter::{begin_item, end_container, write_indent}`.
@@ -1590,9 +1591,9 @@ affected (goroutine stacks grow; 2,000,000-link chains compile in 0.3 s).
   MiniJinja does and refuses a value whose pretty-printed size could pass
   `MAX_RENDERED_BYTES` (`fits_printed`: `3 + 2 × indent × depth` bytes an
   item) before calling it.
-- **PR sketch:** cap the indent (Python's `json.dumps` takes any, but a
-  template has no use for more than a few dozen; refusing past e.g. 64 or
-  256 is simple), use `saturating_mul` for `indent * depth`, and charge
-  fuel as the writer grows (or estimate the size first, as `charge_walk`
-  does for deep walks).
+- **Fix (branch):** with fuel, `json::to_json_within` stops with
+  `OutOfFuel` before indenting past what the remaining fuel could pay for
+  at `charge_serialized`'s rate (`State::serialized_limit`), and
+  `indent × depth` saturates. Without fuel the indent stays unbounded, like
+  the rest of an unfueled render. Test: `test_tojson_indent_is_bounded_by_fuel`.
 
