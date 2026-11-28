@@ -1597,3 +1597,41 @@ affected (goroutine stacks grow; 2,000,000-link chains compile in 0.3 s).
   `indent × depth` saturates. Without fuel the indent stays unbounded, like
   the rest of an unfueled render. Test: `test_tojson_indent_is_bounded_by_fuel`.
 
+## U65 — MiniJinja: deep walks ignore string bytes and serialization filters/operators charge fuel only after allocating
+
+- **Status (2026-11-28):** open; discovered during [review_0010](../reviews/review_0010.md) N02 and corroborated in its verification addendum ([bug_0258](bug_0258.md)). Affects both released `minijinja` 3.1.0 and the `bevy_markup/3.1.0` patch branch (`db625d2e`).
+- **Project/version:** [mitsuhiko/minijinja](https://github.com/mitsuhiko/minijinja)
+  3.1.0 and `bevy_markup/3.1.0`: `value/ops.rs` (`deep_item_count`),
+  `vm/state.rs` (`charge_serialized`), `filters.rs` (`string`, `tojson`,
+  `pprint`, `join`, `format`, `safe`, `escape`), `vm/mod.rs` (`StringConcat`).
+- **Problem:**
+  1. `ops::deep_item_count` counts container items, not the byte lengths of
+     strings held inside containers. A lazily repeated list of strings
+     `[s] * N` (e.g. `s = 'x' * 100000`, `N = 3000`) has only 3,000 items
+     but serializes to 300+ MB.
+  2. `State::charge_serialized` charges fuel for serialized bytes only
+     *after* the `String` has already been allocated (`string` filter and
+     `~` operator). At `fuel = 10_000` (~640 KB budget),
+     `([s'] * 600) | string | length` (`s' = 'x' * 50000`) peaks at 51.3 MB
+     before failing fuel, and `(([s] * 300) ~ '') | length` peaks at
+     81.3 MB before failing fuel.
+  3. Built-in `join` stringifies nested non-string items without charging
+     for their serialized size first: `[[s] * 300] | join | length` at
+     `fuel = 10_000` allocates 51.3 MB before failing fuel.
+  4. `format`, `safe`, and `escape` serialize container arguments/values
+     without charging estimated output bytes up front (and repeated large
+     width specifiers such as `'%(a)65535d' * 500 | format(a=1)` accumulate
+     tens of MBs in one call).
+- **Reproduction:** see [bug_0258](bug_0258.md) and the heap-measurement
+  table in [review_0010](../reviews/review_0010.md) (e.g.
+  `{% set s = 'x' * 100000 %}{{ ([s] * 3000) | tojson | length }}` peaks
+  at 709.7 MB before failing fuel; `[[s] * 300] | join | length` at
+  `fuel = 10_000` peaks at 51.3 MB).
+- **Suggested fix:** extend `deep_item_count` (or add a byte-budget walk)
+  to count string byte lengths alongside item overhead against the
+  remaining fuel / `State::serialized_limit` *before* allocating in
+  `string`, `~`, `join` (for non-string elements), `tojson`, `pprint`,
+  `format`, `safe`, and `escape`, or write through a fuel-bounded writer
+  that aborts with `OutOfFuel` as bytes are appended.
+
+

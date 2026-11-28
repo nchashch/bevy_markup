@@ -18,7 +18,9 @@ windowed build, ADR 0031: `J01`–`J09`),
 [review_0008](../reviews/review_0008.md) (the crate at `54bad82`:
 review_0007's fixes, the template and FTL checks: `L01`–`L16`, fixed), and
 [review_0009](../reviews/review_0009.md) (`M01`–`M05`, fixed as
-bug_0239–0243; ADR 0047).
+bug_0239–0243; ADR 0047), and [review_0010](../reviews/review_0010.md)
+(`N01`–`N09`, corroborated 2026-11-28; `N01`–`N08` filed open as
+bug_0257–0264; `N09` is docs/metadata drift).
 A finding gets its
 own `bug_NNNN.md` here when its fix lands; review_0007's were filed
 up front, open, as bug_0204–0221 (on request, 2026-11-11), and all
@@ -26,6 +28,7 @@ fixed the same day (bug_0209, bug_0213 and bug_0220 after the
 threat-model decision, ADR 0044). review_0008's were filed the same way,
 open, as bug_0223–0237 (on request, 2026-11-12), and fixed the next
 day (ADR 0046 for the template check's loop nesting and depth).
+review_0010's were filed open as bug_0257–0264 (on request, 2026-11-28).
 
 The crate was called `p23` until 2026-10-05 and is now `bevy_markup`; the
 reports keep the name, paths and commands as they were at the time
@@ -294,6 +297,34 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0253](bug_0253.md) | Printing a lazily repeated list stalled the render or exhausted memory | `src/template.rs`; minijinja (U62) | high | fixed (local hooks; MiniJinja patched, upstream open) | cargo-fuzz `html`, Nightly 45740232198, 2026-11-26 |
 | [bug_0254](bug_0254.md) | The SVG work bound undercounted arcs after an arc of huge radius | `src/svg_bounds.rs`; svgtypes/kurbo (U22) | high | fixed | cargo-fuzz and honggfuzz `svg`, Nightly 45820956544, 2026-11-27 |
 | [bug_0256](bug_0256.md) | `tojson` with a huge indent allocated gigabytes | `src/template.rs`; minijinja (U64) | high | fixed (local wrapper; upstream open) | cargo-fuzz `html`, Nightly 45997844575, 2026-11-28 |
+| [bug_0257](bug_0257.md) | Flat `calc()` operator chains bypass CSS nesting limits and overflow the stack | `src/css/value.rs`, `src/cascade.rs` | high | open | review_0010 (N01) |
+| [bug_0258](bug_0258.md) | Container-of-strings serialization bypasses `check_printable` and allocates past the template fuel budget | `src/template.rs`; minijinja (U65) | high | open (upstream U65) | review_0010 (N02) |
+| [bug_0259](bug_0259.md) | `HtmlTemplateLimits` is ignored for templates loaded in `Startup` | `src/lib.rs`, `src/template.rs` | medium | open | review_0010 (N03) |
+| [bug_0260](bug_0260.md) | `font-size` and `outline-offset` silently drop non-`px` absolute CSS units (`pt`, `in`, `cm`, `mm`, `pc`, `Q`) | `src/css/property.rs` | medium | open | review_0010 (N04) |
+| [bug_0261](bug_0261.md) | Negative `calc()` values bypass `non_negative_lp` and reach Bevy UI `Node` unclamped | `src/css/property.rs`, `src/build.rs` | medium | open | review_0010 (N05) |
+| [bug_0262](bug_0262.md) | `HtmlUi` / `HtmlModal` under a `Display::None` app container still takes focus, traps modal scope, and activates hidden buttons | `src/focus.rs` | medium | open | review_0010 (N06) |
+| [bug_0263](bug_0263.md) | Markdown block dedenting omits MiniJinja's `macro`, `call`, `with`, and `autoescape` tags | `src/md.rs` | medium | open | review_0010 (N07) |
+| [bug_0264](bug_0264.md) | CSS parser and cascade regressions after ADR 0048 (`background`, `grid`, `transition`) | `src/css/property.rs`, `src/css/grid.rs`, `src/cascade.rs` | low | open | review_0010 (N08) |
+
+## Discovery session metadata: bug_0257–0264 (2026-11-27 / 2026-11-28)
+
+- **Method:** [review_0010](../reviews/review_0010.md), an independent
+  review concentrating on the post-review_0009 architectural rewrites
+  (ADR 0048 CSS parser, ADR 0049/0052 MiniJinja + fuel, ADR 0050
+  selector engine, ADR 0051 SVG icon subset) plus focus, fonts, and
+  Markdown; probed via temporary integration tests (`review10_probes.rs`,
+  removed) and independently re-verified from scratch on 2026-11-28 with
+  fresh probes and a counting global allocator (`review10_recheck.rs`,
+  removed). Filed open, before any fix, one report per bug finding:
+  N01–N08 → bug_0257–0264 (with N02's MiniJinja side recorded as
+  UPSTREAM U65). N09 (stale Tera and `svg-text`/filter docs/metadata) is
+  records drift, not a defect, and stays in the review.
+- **Discovery agent:** Gemini (original review); verified by Claude Opus
+  5.5 (`claude-opus-5-5`), Claude Code.
+- **Commit at discovery:** `3b4253d40394bf16769cd3da49b563705730545f`
+  (re-verified at `ec1e43c7832903ab2503ddac4b7471206f9fc06d`).
+- **Machine/toolchain:** Linux 7.2.14-arch1-1 x86_64, rustc 1.99.1
+  (58cf8f9c3 2026-10-13), `CARGO_PROFILE_DEV_DEBUG=0`, Bevy 0.20.0.
 
 ## Discovery session metadata: bug_0239–0243 (2026-11-12)
 
