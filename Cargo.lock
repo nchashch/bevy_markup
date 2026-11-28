@@ -103,9 +103,9 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ahash"
-version = "0.8.14"
+version = "0.8.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54dae3d1d7b8956f3506c4e999a74e77f932a59153ccf38ab8cf96db74bb9dc0"
+checksum = "3019c0b8d883a8a17df3129e417ef463c087807d245e8881a31d583dee1c0519"
 dependencies = [
  "cfg-if",
  "getrandom 0.4.3",
@@ -4723,7 +4723,7 @@ checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
 [[package]]
 name = "minijinja"
 version = "3.1.0"
-source = "git+https://github.com/nchashch/minijinja?branch=bevy_markup%2F3.1.0#db625d2ed9c5758d3911fe8524e3fd42081d88c2"
+source = "git+https://github.com/nchashch/minijinja?branch=bevy_markup%2F3.1.0#fbbefc56a0f9cbbe96e7cf2240ff1980614623a6"
 dependencies = [
  "itoa",
  "serde",

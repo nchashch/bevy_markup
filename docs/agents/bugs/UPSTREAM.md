@@ -1599,16 +1599,18 @@ affected (goroutine stacks grow; 2,000,000-link chains compile in 0.3 s).
 
 ## U65 — MiniJinja: deep walks ignore string bytes and serialization filters/operators charge fuel only after allocating
 
-- **Status (2026-11-28):** open; discovered during [review_0010](../reviews/review_0010.md) N02 and corroborated in its verification addendum ([bug_0258](bug_0258.md)). Affects both released `minijinja` 3.1.0 and the `bevy_markup/3.1.0` patch branch (`db625d2e`).
+- **Status (2026-11-28):** discovered during [review_0010](../reviews/review_0010.md) N02 and corroborated in its verification addendum ([bug_0258](bug_0258.md)). Fixed locally on `../minijinja`'s `bevy_markup/3.1.0` branch (`fbbefc56`, not yet pushed / lockfiles not yet bumped); upstream open.
 - **Project/version:** [mitsuhiko/minijinja](https://github.com/mitsuhiko/minijinja)
-  3.1.0 and `bevy_markup/3.1.0`: `value/ops.rs` (`deep_item_count`),
-  `vm/state.rs` (`charge_serialized`), `filters.rs` (`string`, `tojson`,
-  `pprint`, `join`, `format`, `safe`, `escape`), `vm/mod.rs` (`StringConcat`).
+  3.1.0 and `bevy_markup/3.1.0` before `fbbefc56`: `value/ops.rs` (`deep_item_count`),
+  `compiler/ast.rs` (`exceeds_fold_walk`),
+  `vm/state.rs` (`charge_serialized`), `vm/mod.rs` (`Emit`, `StringConcat`),
+  `filters.rs` (`string`, `tojson`, `pprint`, `join`, `format`, `safe`, `escape`).
 - **Problem:**
   1. `ops::deep_item_count` counts container items, not the byte lengths of
      strings held inside containers. A lazily repeated list of strings
      `[s] * N` (e.g. `s = 'x' * 100000`, `N = 3000`) has only 3,000 items
-     but serializes to 300+ MB.
+     but serializes to 300+ MB. Constant folding (`(['x' * 50000] * 1000) ~ ''`)
+     also folded large string-holding containers at compile time.
   2. `State::charge_serialized` charges fuel for serialized bytes only
      *after* the `String` has already been allocated (`string` filter and
      `~` operator). At `fuel = 10_000` (~640 KB budget),
@@ -1627,11 +1629,22 @@ affected (goroutine stacks grow; 2,000,000-link chains compile in 0.3 s).
   `{% set s = 'x' * 100000 %}{{ ([s] * 3000) | tojson | length }}` peaks
   at 709.7 MB before failing fuel; `[[s] * 300] | join | length` at
   `fuel = 10_000` peaks at 51.3 MB).
-- **Suggested fix:** extend `deep_item_count` (or add a byte-budget walk)
-  to count string byte lengths alongside item overhead against the
-  remaining fuel / `State::serialized_limit` *before* allocating in
-  `string`, `~`, `join` (for non-string elements), `tojson`, `pprint`,
-  `format`, `safe`, and `escape`, or write through a fuel-bounded writer
-  that aborts with `OutOfFuel` as bytes are appended.
+- **Local workaround (bevy_markup):** `template.rs` (`estimate_printed_bytes`,
+  `charge_serialized_value`, `checked_safe`, `fueled_join`, `fueled_escape`,
+  `checked_format`, `checked_tojson`, `checked_pprint`, `checked_string`,
+  `json_filter`) protects all filter and formatter paths even for downstream
+  crates on released MiniJinja 3.1.0; `~` has no local hook.
+- **Fix (branch `bevy_markup/3.1.0` `fbbefc56`):** added
+  `ops::deep_serialized_bytes` (counting string and byte-slice lengths plus
+  container overhead up to a limit), extended `compiler/ast.rs`
+  `exceeds_fold_walk` with it, added `State::ensure_serialized` /
+  `ensure_serialized_pair` (checking at `SERIALIZED_BYTE_COST` before
+  allocating), and wired them into `Instruction::Emit`,
+  `Instruction::StringConcat` (`~`), `filters::safe_fueled`, `escape`,
+  `join` (nested object items), `string`, `tojson_impl`, and
+  `pprint_fueled`. Test: `test_container_of_strings_serialization_fails_before_allocating`
+  in `minijinja/tests/test_fuel.rs` (failed at 254 ms before the fix,
+  passes under 50 ms after; full `--all-features` and `--no-default-features`
+  suites green with `-D warnings`).
 
 
