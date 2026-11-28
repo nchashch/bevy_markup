@@ -273,3 +273,211 @@ Grouped smaller spec-conformance regressions introduced in the ADR 0048 CSS pars
 4. **N08** (`background`/`grid`/`transition` CSS regressions) and **N09** (stale Tera/`svg-text` docs, manifest, and changelog).
 
 All nine findings remain open in this report; no fixes or separate bug reports were filed during this review.
+
+---
+
+## Addendum — independent verification (Claude Opus 5.5, 2026-11-28)
+
+*Everything above this line is the original review by Gemini, unchanged.
+This section was written afterwards by a different reviewer, who
+re-checked each finding from scratch: first by reading the code at the
+cited locations, then with probes of its own (not the original
+`review10_probes.rs`, which was deleted and not seen).*
+
+| Field | Value |
+|---|---|
+| Verifier | Claude Opus 5.5 (`claude-opus-5-5`), Claude Code |
+| Date | 2026-11-28 |
+| Commit verified | `ec1e43c7832903ab2503ddac4b7471206f9fc06d` (the commits after `3b4253d` — bug_0256's `tojson` indent accounting, the MiniJinja fork bump to `db625d2e`, `cargo update` — touch none of the cited code paths except `checked_tojson`'s indent parsing) |
+| Toolchain | rustc 1.99.1 (58cf8f9c3 2026-10-13), Linux 7.2.14-arch1-1 x86_64, debug build, `CARGO_PROFILE_DEV_DEBUG=0` |
+| Result | All nine findings corroborated. Seven reproduced by independent probes. N08.5 and N09 confirmed by reading the code. Two findings turned out wider than reported (N01, N02 item 3), and one claim is weaker than stated (N01's quadratic cost). |
+
+### Method
+
+- **Code reading:** every cited location was read at the verified commit.
+  The descriptions match the code: `parse_sum`/`parse_product` build
+  left-skewed trees whose depth is the operator count, and `evaluate` and
+  `expr_is_finite` recurse over them. `fits_printed` counts items, never
+  string bytes. `json_filter`, `checked_tojson` and `checked_pprint`
+  charge no fuel for their output. `sync_template_fuel` runs only in
+  `PreUpdate`. `font_size` and `outline-offset` match `Unit::Px` only.
+  `non_negative_lp` lets every `Lp::Calc` through. `displayed_none` stops
+  at the `HtmlUi` root, and `active_modal` checks `display` on the root
+  alone. `block_tag` lists Tera's keywords. `background` takes layer 0's
+  color. The transition entry loop accepts an item that consumes nothing.
+- **Probes:** one temporary integration test (`tests/review10_recheck.rs`,
+  built with `--features fuzzing`, run with `--test-threads=1`, deleted
+  afterwards). A counting `#[global_allocator]` recorded each template
+  probe's peak heap growth. Stack cases re-executed the test binary as a
+  child process, which ran `bevy_markup::fuzz::cascade` on a 2 MB thread,
+  so an abort showed up as a signal exit.
+
+### Per-finding results
+
+**N01 — confirmed, wider than reported.** Each stylesheet below is
+`p { width: calc(<chain>); }`. Child-process results on a 2 MB thread:
+
+| Chain | Terms | Bytes | Result |
+|---|---|---|---|
+| `1px + 1% + …` | 250 | 1,398 | ok, 4.5 ms |
+| `1px + 1% + …` | 500 | 2,773 | ok, 8.8 ms |
+| `1px + 1% + …` | 1,000 | 5,523 | ok, 30.0 ms |
+| `1px + 1% + …` | 1,400 | 7,723 | **stack overflow (abort)** |
+| `1px * 1 * …` | 1,000 | 4,023 | ok, 1.7 ms |
+| `1px * 1 * …` | 2,000 | 8,023 | **stack overflow (abort)** |
+| `1px + 1px + …` (one unit) | 3,000 | 18,023 | **stack overflow (abort)** |
+
+- **Same-unit chains:** these also overflow. Folding into one value
+  doesn't help, because parsing and evaluating recurse before anything
+  folds. The fix needs the term cap or a flat representation, not only
+  the single-collapse change.
+- **The quadratic claim:** only weakly supported. Time grows somewhat
+  faster than linearly (×2.0, then ×3.4 per doubling), and is 30 ms at
+  1,000 terms. The stack overflow is the defect that matters.
+
+**N02 — confirmed, high.** Templates were rendered with
+`template::new_environment(fuel)`, the environment every loader uses:
+
+| Fuel | Template (`s = 'x' * 100000` unless noted) | Result | Peak heap | Time |
+|---|---|---|---|---|
+| default | `([s] * 300) \| join \| length` | `Ok(30000000)` | 81.3 MB | 6.3 ms |
+| default | `([s] * 300) \| json \| length` | `Ok(30000901)` | 81.3 MB | 340.6 ms |
+| default | `([s] * 300) \| tojson \| length` | `Ok(30001200)` | 81.3 MB | 33.6 ms |
+| default | `([s] * 300) \| pprint \| length` | `Ok(30002403)` | 81.3 MB | 260.3 ms |
+| default | `([s] * 300) \| string \| length` | out of fuel | 51.3 MB | 255.3 ms |
+| default | `(([s] * 300) ~ '') \| length` | out of fuel | 81.3 MB | 256.8 ms |
+| default | `'%s' \| format([s] * 300) \| length` | `Ok(30001200)` | 81.3 MB | 255.2 ms |
+| default | `([s] * 300) \| safe \| length` | `Ok(30001200)` | 81.3 MB | 268.8 ms |
+| default | `([s] * 300) \| e \| length` | `Ok(30004200)` | 102.5 MB | 337.8 ms |
+| default | `('%(a)65535d' * 500) \| format(a=1) \| length` | `Ok(32767500)` | 66.3 MB | 4.0 ms |
+| default | `([s] * 1200) \| json \| length` | `Ok(120003601)` | 324.9 MB | 1.4 s |
+| default | `([s] * 3000) \| join \| length` | out of fuel | **0.2 MB** | 0.75 ms |
+| default | `([s] * 3000) \| json \| length` | out of fuel | **709.7 MB** | 3.3 s |
+| default | `([s] * 3000) \| tojson \| length` | out of fuel | **709.7 MB** | 335.6 ms |
+| 10,000 | `([s'] * 600) \| join \| length`, `s' = 'x' * 50000` | out of fuel | 0.1 MB | 0.2 ms |
+| 10,000 | `([s'] * 600) \| json \| length` | out of fuel | 81.3 MB | 328.7 ms |
+| 10,000 | `([s'] * 600) \| tojson \| length` | out of fuel | 81.3 MB | 33.6 ms |
+| 10,000 | `([s'] * 600) \| string \| length` | out of fuel | 51.3 MB | 254.0 ms |
+
+What these show:
+
+- **Why 30 MB doesn't prove it:** at default fuel, a 30 MB result is
+  within the fuel's byte budget (2²² units × 64 bytes ≈ 268 MB), so it
+  says nothing on its own. The decisive rows are the 3,000-item ones.
+  The up-front-charging `join` refuses before allocating, while `json`
+  and `tojson` build the whole 300 MB string (peaking at 710 MB, about
+  2.4× the output) and only then fail fuel on the returned value.
+- **What stays out of the budget:** memory scales with item count times
+  string length, and only the item count is budgeted (`MAX_RENDERED_BYTES
+  / 3` items). The template's own cost stays small: `s` costs
+  `len / 64` fuel, and the repeat costs one unit per item. Out-of-memory
+  from a short template follows; it wasn't triggered.
+- **`string` and `~`:** these fail fuel, but only after allocating.
+  MiniJinja's `charge_serialized` charges what was already serialized.
+
+**N02 item 3 — confirmed, and the review understated it.** The review says
+the patched MiniJinja's `join` stops nested items. It doesn't stop them
+before allocating:
+
+- `[[s] * 300] | join | length` at fuel 10,000 (a 640 KB byte budget)
+  allocated 51.3 MB, then failed out of fuel.
+- `fueled_join` charges the nested list a flat `ITEM_BYTES`. The patched
+  built-in then stringifies the inner list without charging for it first.
+
+**N03 — confirmed.**
+
+- **Probe:** `TestUi` with `HtmlTemplateLimits { fuel: 100 }`, inserted
+  before any frame, and a page of `{% for i in range(500) %}x{% endfor %}`.
+- **Load before the first frame:** `RenderedHtml::Ready` (500 bytes).
+  This is a `Startup` system's position, since `Startup` runs before
+  `PreUpdate` on frame 0.
+- **Same load after one frame:** `Failed("engine ran out of fuel")`.
+
+**N04 — confirmed exactly.**
+
+- `font-size: 24pt` and `0.5in` render at 16 px (dropped).
+- `calc(24pt)` and `32px` render at 32 px.
+- `outline: 2px solid red; outline-offset: 6pt` dumps as
+  `outline=2,0,#ff0000` (the offset is dropped).
+
+**N05 — confirmed exactly.**
+
+- The stylesheet: `#box { padding: calc(-10px); border-width: calc(-5px);
+  gap: calc(-8px); width: calc(-20px); border-radius: calc(-6px); }`.
+- The `Node` it gives: `padding` `Px(-10.0)`, `border` `Px(-5.0)`,
+  `row_gap` `Px(-8.0)`, `width` `Px(-20.0)`, corner radius `Px(-6.0)`
+  on both axes.
+- Control: a plain `padding: -10px` is dropped, as it should be.
+
+**N06 — confirmed exactly.**
+
+- **Setup:** a visible `HtmlUi` with
+  `<button id="vis_btn" data-on-click="vis">`, and an `HtmlModal` `HtmlUi`
+  with `<button id="hidden_btn" data-on-click="hidden" autofocus>`. The
+  modal is spawned as a child of an app entity with
+  `Node { display: Display::None, .. }`.
+- **Focus:** `InputFocus` goes to `hidden_btn`.
+- **Tab order:** `HtmlFocus::tab_order()` returns only `[hidden_btn]`.
+- **Activation:** `activate(ActivationInput::Synthetic)` emits the
+  `hidden` signal.
+
+**N07 — confirmed.**
+
+- **Probe:** a `.md` page with an indented `{% macro %}` body, an
+  indented `{% with %}` body and, as a control, an indented `{% if %}`
+  body.
+- **Result:** the `macro` and `with` bodies render as
+  `<pre class="markdown"><code>…</code></pre>`, with the macro's
+  `{{ title }}` left literal. The `if` body renders as a paragraph with
+  `<strong>`.
+- **Not probed:** `call` and `autoescape`. They are absent from the same
+  keyword match in `block_tag`, so they take the same path.
+
+**N08 — confirmed, low.**
+
+1. **Multi-layer `background`:**
+   `#a { background: url('frame.png'), #ff0000; }` dumps
+   `bg=#00000000 bg-image=frame.png`. CSS gives the final layer's
+   `#ff0000`. (`frame.png` replaced the review's `missing.png`: a sheet
+   whose `url()` image is missing never settles in `TestUi`, as AGENTS.md
+   notes.)
+2. **`initial` on `background`:**
+   `.red { background: #ff0000 } .clear { background: initial }` keeps
+   `bg=#ff0000`. Control: `background-color: initial` clears it.
+3. **Non-rectangular areas:** `grid-template-areas: 'a b a'` is accepted
+   with three auto columns. `#a` gets `GridPlacement { start: 1, end: 4 }`
+   and overlaps `#b`'s `2..3`.
+4. **`repeat(0, …)`:** `grid-template-columns: repeat(0, 1fr)` reaches
+   `Node` as `RepeatedGridTrack { repetition: Count(0), … }`.
+5. **Empty `transition` items (code reading only):** the probe compared
+   cascade output for `transition: color 1s, ;` and `transition: color 1s;`
+   and was inconclusive (that output doesn't show transitions). In the
+   code, the per-entry loop in `transition` (`src/css/property.rs:1849`)
+   breaks at once on an empty item and returns `("all", 0.0, 0.0, Ease)`.
+   `parse_comma_separated` doesn't reject empty items, so the declaration
+   is accepted with an extra `all 0s` entry.
+
+**N09 — confirmed by code.**
+
+- `Cargo.toml:6` still says `"Markdown+HTML templates (Tera), …"`.
+- Tera appears in `src/lib.rs:1, 6, 7, 123, 316`, `src/l10n.rs:14, 1062`
+  and `src/signals.rs:20`.
+- CHANGELOG's `[Unreleased]` "Added" section still describes `svg-text`
+  and SVG `<text>` (lines 34–37 and 54–55) and the filter primitives
+  (from line 70). The same section removes `svg-text` at line 156.
+
+### Assessment
+
+- **Severities:** the original review's severities and recommended order
+  stand. N01 and N02 each abort the process from a small untrusted input
+  (ADR 0044), N02 at the default fuel.
+- **Corrections for the fixes:**
+  - N01's fix must cover same-unit chains: cap the terms, or flatten the
+    tree.
+  - N02's fix must charge or estimate bytes *before* serializing in
+    `json`, `tojson`, `pprint`, `format`, `safe` and `escape`. It must
+    also cover nested values in `join`, and the post-hoc charges in
+    `string` and `~` (those two live in MiniJinja and belong in
+    `UPSTREAM.md`).
+- **Status:** none of the nine findings is filed in `docs/agents/bugs/` or
+  fixed as of `ec1e43c`.
