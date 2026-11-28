@@ -471,10 +471,10 @@ fn value<'i>(name: &str, input: &mut Parser<'i, '_>) -> Parsed<'i, Option<Decl>>
         "outline-style" => Decl::OutlineStyle(outline_style(input)?),
         "outline-width" => Decl::OutlineWidth(line_width(input)?),
         "outline-color" => Decl::OutlineColor(parse_color(input)?.fixed()),
-        "outline-offset" => Decl::OutlineOffset(match parse_lp(input)? {
-            Lp::Dim(px, Unit::Px) => Some(px),
-            _ => {
-                bevy::log::debug!("html css: unsupported outline-offset value (px only)");
+        "outline-offset" => Decl::OutlineOffset(match parse_lp(input)?.px() {
+            Some(px) => Some(px),
+            None => {
+                bevy::log::debug!("html css: unsupported outline-offset value (absolute lengths only)");
                 None
             }
         }),
@@ -534,14 +534,39 @@ fn sides<'i, T: Clone>(
     Ok([top, right, bottom, left])
 }
 
-/// A length-percentage that may not be negative.
+/// A length-percentage that may not be negative: negative literals are
+/// invalid at parse time, while negative folded `calc()` values clamp to
+/// `0` per CSS Values 4 (bug_0261).
 fn non_negative_lp<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Lp> {
     let lp = parse_lp(input)?;
     let negative = match &lp {
         Lp::Dim(v, _) | Lp::Percent(v) => *v < 0.0,
         Lp::Calc(_) => false,
     };
-    if negative { invalid(input) } else { Ok(lp) }
+    if negative {
+        return invalid(input);
+    }
+    Ok(match lp {
+        Lp::Calc(Some(CalcExpr::Val(val))) => {
+            Lp::Calc(Some(CalcExpr::Val(non_negative_val(val))))
+        }
+        other => other,
+    })
+}
+
+/// Clamps a single folded `Val` to `>= 0` (CSS Values 4 range clamping).
+fn non_negative_val(val: Val) -> Val {
+    match val {
+        Val::Px(v) => Val::Px(v.max(0.0)),
+        Val::Percent(v) => Val::Percent(v.max(0.0)),
+        Val::Em(v) => Val::Em(v.max(0.0)),
+        Val::Rem(v) => Val::Rem(v.max(0.0)),
+        Val::Vw(v) => Val::Vw(v.max(0.0)),
+        Val::Vh(v) => Val::Vh(v.max(0.0)),
+        Val::VMin(v) => Val::VMin(v.max(0.0)),
+        Val::VMax(v) => Val::VMax(v.max(0.0)),
+        Val::Auto => Val::Auto,
+    }
 }
 
 /// `width`/`height`/`min-*` (`max`: `max-*`, where `none` replaces `auto`).
@@ -1433,7 +1458,7 @@ fn font_size<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Option<FontSizeSpec>>
         }));
     }
     Ok(match non_negative_lp(input)? {
-        Lp::Dim(px, Unit::Px) => Some(FontSizeSpec::Px(px)),
+        Lp::Dim(px, Unit::Px | Unit::Abs) => Some(FontSizeSpec::Px(px)),
         Lp::Dim(em, Unit::Em) => Some(FontSizeSpec::Inherited(em)),
         Lp::Dim(rem, Unit::Rem) => Some(FontSizeSpec::Root(rem)),
         Lp::Percent(p) => Some(FontSizeSpec::Inherited(p / 100.0)),
@@ -1591,21 +1616,28 @@ fn background_clip<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Option<VisualBo
     )
 }
 
-/// `background`: its layers (only the first one's color and image apply;
-/// a multi-layer background's first layer has no color, as in CSS).
+/// `background`: its layers (only the final layer may carry a color per CSS
+/// Backgrounds 3; the first layer's image and the final layer's color apply).
 fn background<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Decl> {
     let layers = input.parse_comma_separated(background_layer)?;
-    let (color, image) = layers[0].clone();
-    let color = if layers.len() > 1 {
-        Some(Color::srgba_u8(0, 0, 0, 0))
-    } else {
-        color
+    if layers[..layers.len() - 1]
+        .iter()
+        .any(|(color, _)| color.is_some())
+    {
+        return invalid(input);
+    }
+    let image = layers[0].1.clone();
+    let color = match &layers.last().unwrap().0 {
+        Some(c) => c.fixed(),
+        None => Some(Color::srgba_u8(0, 0, 0, 0)),
     };
     Ok(Decl::Background { color, image })
 }
 
-/// One `background` layer: its color (transparent when omitted) and URL.
-fn background_layer<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, (Option<Color>, Option<String>)> {
+/// One `background` layer: its explicit color (if any) and URL.
+fn background_layer<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Parsed<'i, (Option<CssColor>, Option<String>)> {
     let mut color = None;
     let mut image = None;
     let mut position = false;
@@ -1646,10 +1678,6 @@ fn background_layer<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, (Option<Color>
     if !any {
         return invalid(input);
     }
-    let color = match color {
-        Some(c) => c.fixed(),
-        None => Some(Color::srgba_u8(0, 0, 0, 0)),
-    };
     Ok((color, image.flatten()))
 }
 
@@ -1853,6 +1881,7 @@ fn transition<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Vec<TransitionDecl>>
         let mut delay = None;
         let mut timing = None;
         let mut behavior = false;
+        let mut any = false;
         loop {
             if duration.is_none()
                 && let Ok(t) = entry.try_parse(parse_time)
@@ -1886,8 +1915,9 @@ fn transition<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Vec<TransitionDecl>>
             } else {
                 break;
             }
+            any = true;
         }
-        if duration.map_or(false, |d| d < 0.0) {
+        if !any || duration.is_some_and(|d| d < 0.0) {
             return invalid(entry);
         }
         Ok((

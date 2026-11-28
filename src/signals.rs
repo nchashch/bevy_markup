@@ -17,7 +17,7 @@
 //!   (logged at `debug`), as are hooks on elements that produce no entity
 //!   (`html`, `body`, unknown tags outside blocks; `button` is not a
 //!   container — use `div`).
-//! - **`data-with`** is a JSON object rendered by Tera with the template's
+//! - **`data-with`** is a JSON object rendered by MiniJinja with the template's
 //!   context, like `data-l10n-args`: a snapshot of the data at render time.
 //!   Numbers stay numbers; invalid JSON becomes `null` (logged at `debug`).
 //!   It applies to all of the element's hooks; absent means [`Value::Null`].

@@ -2182,3 +2182,103 @@ fn review_0009_hiding_the_focused_control_repairs_focus() {
         );
     }
 }
+
+/// bug_0262: an `HtmlUi` / `HtmlModal` mounted under an app-owned
+/// `Node { display: Display::None }` ancestor must neither take focus, trap
+/// modal tab order, nor fire clicks on activation; toggling the ancestor back
+/// to `Display::Flex` lets the modal take focus and hiding it again restores
+/// focus to the visible UI.
+#[test]
+fn bug_0262_modal_under_display_none_ancestor_cannot_trap_focus() {
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::ui::auto_directional_navigation::AutoDirectionalNavigation;
+
+    let main_page = r#"<button id="vis_btn" data-on-click="vis">Visible</button>"#;
+    let modal_page =
+        r#"<button id="hidden_btn" autofocus data-on-click="hidden">Hidden Modal</button>"#;
+    let mut ui = TestUi::with_pointer(
+        "bug-0262-modal-ancestor",
+        &[("main.html", main_page), ("modal.html", modal_page)],
+        UVec2::new(400, 300),
+    )
+    .spawn("main.html", TemplateContext::new(), Node::default());
+    let modal_handle: Handle<HtmlTemplate> = ui.load("modal.html");
+    let (wrapper, modal_root) = {
+        let world = ui.world_mut();
+        let wrapper = world
+            .spawn(Node {
+                display: Display::None,
+                ..default()
+            })
+            .id();
+        let modal_root = world
+            .spawn((
+                HtmlUi(modal_handle),
+                HtmlModal,
+                Node::default(),
+                ChildOf(wrapper),
+            ))
+            .id();
+        (wrapper, modal_root)
+    };
+    ui.settle();
+    ui.update(4);
+
+    let main_root = ui.root();
+    let vis_btn = element_by_id(ui.world_mut(), main_root, "vis_btn");
+    let hidden_btn = element_by_id(ui.world_mut(), modal_root, "hidden_btn");
+
+    assert_eq!(ui.world_mut().resource::<InputFocus>().get(), Some(vis_btn));
+    assert!(
+        ui.world_mut()
+            .get::<AutoDirectionalNavigation>(hidden_btn)
+            .is_none()
+    );
+    ui.world_mut()
+        .run_system_once(move |mut focus: HtmlFocus| {
+            assert_eq!(focus.tab_order(), vec![vis_btn]);
+            focus.activate(ActivationInput::Synthetic);
+        })
+        .unwrap();
+    ui.update(1);
+    assert_eq!(
+        ui.take_signals()
+            .iter()
+            .map(|s| s.name.as_ref())
+            .collect::<Vec<_>>(),
+        ["vis"]
+    );
+
+    // Showing the wrapper activates the modal and moves focus to its button.
+    ui.world_mut()
+        .get_mut::<Node>(wrapper)
+        .unwrap()
+        .display = Display::Flex;
+    ui.update(3);
+    assert_eq!(
+        ui.world_mut().resource::<InputFocus>().get(),
+        Some(hidden_btn)
+    );
+    ui.world_mut()
+        .run_system_once(move |mut focus: HtmlFocus| {
+            assert_eq!(focus.tab_order(), vec![hidden_btn]);
+            focus.activate(ActivationInput::Synthetic);
+        })
+        .unwrap();
+    ui.update(1);
+    assert_eq!(
+        ui.take_signals()
+            .iter()
+            .map(|s| s.name.as_ref())
+            .collect::<Vec<_>>(),
+        ["hidden"]
+    );
+
+    // Hiding the wrapper again releases modal focus back to the visible UI.
+    ui.world_mut()
+        .get_mut::<Node>(wrapper)
+        .unwrap()
+        .display = Display::None;
+    ui.update(3);
+    assert_eq!(ui.world_mut().resource::<InputFocus>().get(), Some(vis_btn));
+}

@@ -225,6 +225,21 @@ impl CalcProp {
                 | CalcProp::Bottom
         )
     }
+
+    /// Whether CSS forbids negative used values on this property, so
+    /// negative `calc()` results clamp to `0px` (CSS Values 4, bug_0261).
+    pub(crate) fn non_negative(self) -> bool {
+        matches!(
+            self,
+            CalcProp::Width
+                | CalcProp::Height
+                | CalcProp::MinWidth
+                | CalcProp::MinHeight
+                | CalcProp::MaxWidth
+                | CalcProp::MaxHeight
+                | CalcProp::FlexBasis
+        )
+    }
 }
 
 /// The context a calc() resolves against at layout time.
@@ -2097,7 +2112,22 @@ fn calc_props(name: &str) -> &'static [CalcProp] {
 fn apply_keyword(style: &mut ElementStyle, name: &str) {
     match name {
         "color" => style.color = None,
+        "background" => {
+            style.background = None;
+            style.background_image = None;
+        }
         "background-color" => style.background = None,
+        "background-image" => style.background_image = None,
+        "background-repeat" => {
+            if let Some(image) = &mut style.background_image {
+                image.tiled = (true, true);
+            }
+        }
+        "background-clip" => {
+            if let Some(image) = &mut style.background_image {
+                image.clip = VisualBox::BorderBox;
+            }
+        }
         "opacity" => style.opacity = None,
         "z-index" => style.z_index = None,
         "font-family" => style.font_family = None,
@@ -6622,5 +6652,248 @@ mod tests {
             declared("list-style: square inside").list_style,
             Some(ListStyleSpec::Square)
         );
+    }
+
+    /// bug_0260: non-`px` absolute units (`pt`, `in`, `cm`, `mm`, `pc`, `Q`)
+    /// apply to `font-size` and `outline-offset` just like `px`.
+    #[test]
+    fn bug_0260_absolute_units_apply_to_font_size_and_outline_offset() {
+        for (decl, expected_px) in [
+            ("font-size: 24pt", 32.0f32),
+            ("font-size: 0.5in", 48.0),
+            ("font-size: 2pc", 32.0),
+            ("font-size: 2.54cm", 96.0),
+            ("font-size: 25.4mm", 96.0),
+            ("font-size: 40Q", 96.0 / 2.54),
+        ] {
+            let Some(FontSizeSpec::Px(px)) = declared(decl).font_size else {
+                panic!("{decl} dropped: {:?}", declared(decl).font_size);
+            };
+            assert!((px - expected_px).abs() < 1e-3, "{decl}: {px} vs {expected_px}");
+        }
+        for (decl, expected_px) in [
+            ("outline-offset: 6pt", 8.0f32),
+            ("outline-offset: 0.25in", 24.0),
+            ("outline-offset: 1pc", 16.0),
+            ("outline-offset: 2.54cm", 96.0),
+            ("outline-offset: 25.4mm", 96.0),
+            ("outline-offset: 40Q", 96.0 / 2.54),
+        ] {
+            let Some(px) = declared(decl).outline.offset else {
+                panic!("{decl} dropped: {:?}", declared(decl).outline.offset);
+            };
+            assert!((px - expected_px).abs() < 1e-3, "{decl}: {px} vs {expected_px}");
+        }
+    }
+
+    /// bug_0261: negative folded `calc()` values clamp to 0 on non-negative
+    /// properties, while signed properties (`margin`, insets) stay negative.
+    #[test]
+    fn bug_0261_negative_calc_clamps_to_zero() {
+        let style = declared(
+            "padding: calc(-10px); border-width: calc(-5px); gap: calc(-8px); \
+             width: calc(-20px); height: calc(5px - 15px); min-width: calc(-4px); \
+             max-width: calc(-3px); flex-basis: calc(-12px); \
+             border-radius: calc(-6px); font-size: calc(-10px); line-height: calc(-2px); \
+             margin-left: calc(-10px); left: calc(-7px);",
+        );
+        assert_eq!(style.padding, [Some(0.0); 4]);
+        assert_eq!(style.border_width, [Some(0.0); 4]);
+        assert_eq!(style.row_gap, Some(0.0));
+        assert_eq!(style.layout.column_gap, Some(0.0));
+        assert_eq!(style.layout.width, Some(Val::Px(0.0)));
+        assert_eq!(style.layout.height, Some(Val::Px(0.0)));
+        assert_eq!(style.layout.min_width, Some(Val::Px(0.0)));
+        assert_eq!(style.layout.max_width, Some(Val::Px(0.0)));
+        assert_eq!(style.layout.flex_basis, Some(Val::Px(0.0)));
+        assert_eq!(
+            style.layout.border_radius,
+            [Some((Val::Px(0.0), Val::Px(0.0))); 4]
+        );
+        assert_eq!(style.font_size, Some(FontSizeSpec::Px(0.0)));
+        assert_eq!(style.line_height, Some(LineHeightSpec::Px(0.0)));
+        // Signed properties still allow negative calc().
+        assert_eq!(style.layout.margin[3], Some(Val::Px(-10.0)));
+        assert_eq!(style.layout.inset[3], Some(Val::Px(-7.0)));
+    }
+
+    /// bug_0264: CSS parser and cascade regressions after ADR 0048
+    /// (`background`, `grid-template-areas`, `repeat(0, ...)`, `transition`).
+    #[test]
+    fn bug_0264_css_parser_and_cascade_regressions() {
+        // 1. Multi-layer background takes the final layer's color and rejects
+        //    a color on a non-final layer.
+        let bg = declared("background: url('frame.png'), #ff0000");
+        assert_eq!(bg.background, Some(Color::srgba_u8(0xff, 0, 0, 0xff)));
+        assert_eq!(
+            bg.background_image.as_ref().map(|i| i.url.as_str()),
+            Some("frame.png")
+        );
+        let invalid_bg = declared("background: #00ff00; background: #ff0000, url('frame.png')");
+        assert_eq!(
+            invalid_bg.background,
+            Some(Color::srgba_u8(0, 0xff, 0, 0xff)),
+            "color on non-final background layer must be invalid"
+        );
+
+        // 2. `initial` resets background, background-image, background-repeat,
+        //    and background-clip.
+        let reset_bg = declared("background: url('a.png') #ff0000; background: initial");
+        assert_eq!(reset_bg.background, None);
+        assert!(reset_bg.background_image.is_none());
+        let reset_img = declared("background-image: url('a.png'); background-image: initial");
+        assert!(reset_img.background_image.is_none());
+        let reset_rep = declared(
+            "background-image: url('a.png'); background-repeat: no-repeat; background-repeat: initial",
+        );
+        assert_eq!(
+            reset_rep.background_image.as_ref().map(|i| i.tiled),
+            Some((true, true))
+        );
+        let reset_clip = declared(
+            "background-image: url('a.png'); background-clip: content-box; background-clip: initial",
+        );
+        assert_eq!(
+            reset_clip.background_image.as_ref().map(|i| i.clip),
+            Some(VisualBox::BorderBox)
+        );
+
+        // 3. Non-rectangular `grid-template-areas` (and `grid-template`) are
+        //    rejected as invalid declarations.
+        for bad in [
+            "grid-template-areas: 'a b a'",
+            "grid-template-areas: 'a a' 'a b'",
+            "grid-template-areas: 'a .' '. a'",
+            "grid-template: 'a b a' 1fr / 1fr 1fr 1fr",
+        ] {
+            let style = declared(&format!("grid-template-areas: 'ok'; {bad}"));
+            let names = style.layout.grid_names.as_ref().expect("fallback kept");
+            assert!(names.areas.contains_key("ok"), "{bad} overwrote valid areas");
+            assert!(!names.areas.contains_key("a"), "{bad} was accepted");
+        }
+
+        // 4. `repeat(0, ...)` and negative repeat counts are rejected.
+        for bad in [
+            "grid-template-columns: repeat(0, 1fr)",
+            "grid-template-columns: repeat(-2, 1fr)",
+        ] {
+            let style = declared(bad);
+            assert!(
+                style.layout.grid_template_columns.is_none(),
+                "{bad} must be rejected: {:?}",
+                style.layout.grid_template_columns
+            );
+        }
+        assert!(
+            declared("grid-template-columns: repeat(1, 1fr)")
+                .layout
+                .grid_template_columns
+                .is_some()
+        );
+
+        // 5. Empty comma-separated items in `transition` are rejected.
+        for bad in [
+            "transition: color 1s, ",
+            "transition: , color 1s",
+            "transition: color 1s, , background-color 1s",
+        ] {
+            let style = declared(bad);
+            assert!(
+                style.transitions.is_empty(),
+                "{bad} must be rejected: {:?}",
+                style.transitions
+            );
+        }
+        assert_eq!(
+            declared("transition: color 1s, background-color 0.5s")
+                .transitions
+                .len(),
+            2
+        );
+    }
+
+    proptest::proptest! {
+        /// bug_0260: every absolute CSS unit on `font-size` and
+        /// `outline-offset` converts to the exact same `px` value as `calc()`.
+        #[test]
+        fn bug_0260_absolute_units_match_calc(
+            value in 0.1f32..200.0,
+            unit in proptest::sample::select(vec!["px", "pt", "in", "cm", "mm", "pc", "Q"]),
+        ) {
+            let direct = declared(&format!("font-size: {value}{unit}")).font_size;
+            let via_calc = declared(&format!("font-size: calc({value}{unit})")).font_size;
+            proptest::prop_assert_eq!(direct, via_calc);
+            let off = declared(&format!("outline-offset: {value}{unit}")).outline.offset;
+            proptest::prop_assert!(off.is_some());
+        }
+
+        /// bug_0261: negative folded `calc()` values never produce negative
+        /// lengths on non-negative properties.
+        #[test]
+        fn bug_0261_negative_calc_never_stays_negative(
+            a in 1.0f32..500.0,
+            b in 1.0f32..500.0,
+        ) {
+            let neg = -(a + b);
+            let css = format!(
+                "padding: calc({neg}px); border-width: calc({neg}px); \
+                 gap: calc({neg}px); width: calc({neg}px); border-radius: calc({neg}px);"
+            );
+            let style = declared(&css);
+            proptest::prop_assert!(style.padding.iter().all(|v| *v == Some(0.0)));
+            proptest::prop_assert!(style.border_width.iter().all(|v| *v == Some(0.0)));
+            proptest::prop_assert_eq!(style.row_gap, Some(0.0));
+            proptest::prop_assert_eq!(style.layout.width, Some(Val::Px(0.0)));
+            proptest::prop_assert_eq!(
+                style.layout.border_radius,
+                [Some((Val::Px(0.0), Val::Px(0.0))); 4]
+            );
+        }
+
+        /// bug_0264: `grid-template-areas` accepts a grid if and only if
+        /// every named area forms a single solid rectangle.
+        #[test]
+        fn bug_0264_grid_template_areas_accepts_iff_rectangular(
+            rows in 2usize..=4,
+            cols in 2usize..=4,
+            cells in proptest::collection::vec(0u8..4, 16),
+        ) {
+            let tokens = [".", "a", "b", "c"];
+            let grid: Vec<&str> = cells[..rows * cols].iter().map(|&i| tokens[i as usize]).collect();
+            // Reference rectangularity oracle: for every name, every cell in
+            // its bounding box must carry that same name.
+            let mut is_rect = true;
+            for name in ["a", "b", "c"] {
+                let coords: Vec<(usize, usize)> = grid
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| **t == name)
+                    .map(|(i, _)| (i / cols, i % cols))
+                    .collect();
+                if coords.is_empty() {
+                    continue;
+                }
+                let r1 = coords.iter().map(|c| c.0).min().unwrap();
+                let r2 = coords.iter().map(|c| c.0).max().unwrap();
+                let c1 = coords.iter().map(|c| c.1).min().unwrap();
+                let c2 = coords.iter().map(|c| c.1).max().unwrap();
+                for r in r1..=r2 {
+                    for c in c1..=c2 {
+                        if grid[r * cols + c] != name {
+                            is_rect = false;
+                        }
+                    }
+                }
+            }
+            let decl: String = (0..rows)
+                .map(|r| format!("'{}'", grid[r * cols..(r + 1) * cols].join(" ")))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let accepted = declared(&format!("grid-template-areas: {decl}"))
+                .layout
+                .grid_names
+                .is_some();
+            proptest::prop_assert_eq!(accepted, is_rect, "decl={}", decl);
+        }
     }
 }

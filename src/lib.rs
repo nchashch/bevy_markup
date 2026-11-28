@@ -1,10 +1,10 @@
-//! # bevy_markup — HTML + CSS + Fluent + Tera as Bevy UI
+//! # bevy_markup — HTML + CSS + Fluent + MiniJinja as Bevy UI
 //!
 //! Write UI as HTML templates; get Bevy UI nodes.
 //!
 //! ```text
-//! .md template ──pulldown-cmark once at load──▶ .html template (Tera intact)
-//! .html/.md (Tera template) ──render(TemplateContext)──▶ HTML ──tl──▶ DOM
+//! .md template ──pulldown-cmark once at load──▶ .html template (MiniJinja intact)
+//! .html/.md (MiniJinja template) ──render(TemplateContext)──▶ HTML ──tl──▶ DOM
 //!   ──Fluent (data-l10n-id, ActiveLocale)──▶ localized DOM
 //!   ──CSS (DefaultStylesheet / HtmlStylesheet, FontFamilies)──▶ Bevy UI nodes
 //! ```
@@ -120,7 +120,7 @@
 //!   Conversion is per file: an `.html` partial included from a Markdown
 //!   page is never converted, a `.md` partial included from an HTML page
 //!   is. Raw HTML passes through, so a Markdown page can embed real UI
-//!   (`data-on-click` buttons, containers). Indent Tera blocks and HTML
+//!   (`data-on-click` buttons, containers). Indent MiniJinja blocks and HTML
 //!   containers freely: a block's body (`{% if %}`, `{% for %}`, … down to
 //!   its `{% end… %}`, or an own-line `<div …>` down to its `</div>`)
 //!   loses the indentation its lines share before conversion, so an
@@ -313,7 +313,7 @@ pub struct BevyMarkupPlugin;
 /// frame.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HtmlUiSystems {
-    /// Tera renders templates and `tl` parses them into [`html::RenderedHtml`].
+    /// MiniJinja renders templates and `tl` parses them into [`html::RenderedHtml`].
     Render,
     /// Fluent resolves `data-l10n-id` elements against [`l10n::ActiveLocale`].
     Localize,
@@ -346,8 +346,14 @@ impl Plugin for BevyMarkupPlugin {
             .first()
             .is_some_and(|assets| matches!(assets.unapproved_path_mode, UnapprovedPathMode::Allow));
         // ADR 0049: the loaders compile templates with the app's fuel
-        // budget (`HtmlTemplateLimits`, copied to them each frame).
-        let fuel = template::TemplateFuel::default();
+        // budget (`HtmlTemplateLimits`, copied at init, finish, PreStartup,
+        // and each PreUpdate so Startup loads see configured limits too,
+        // bug_0259).
+        app.init_resource::<template::HtmlTemplateLimits>();
+        let initial_fuel = app.world().resource::<template::HtmlTemplateLimits>().fuel;
+        let fuel = template::TemplateFuel(std::sync::Arc::new(
+            std::sync::atomic::AtomicU64::new(initial_fuel),
+        ));
         app.init_asset::<template::HtmlTemplate>()
             .register_asset_loader(template::HtmlTemplateLoader {
                 allow_unapproved,
@@ -358,7 +364,7 @@ impl Plugin for BevyMarkupPlugin {
                 fuel: fuel.clone(),
             })
             .insert_resource(fuel)
-            .init_resource::<template::HtmlTemplateLimits>()
+            .add_systems(PreStartup, template::sync_template_fuel)
             .add_systems(PreUpdate, template::sync_template_fuel)
             .init_asset::<style::Stylesheet>()
             .init_asset_loader::<style::StylesheetLoader>()
@@ -516,6 +522,9 @@ impl Plugin for BevyMarkupPlugin {
     }
 
     fn finish(&self, app: &mut App) {
+        // Sync `HtmlTemplateLimits` after all app `.insert_resource(...)`
+        // calls so `Startup` template loads see it (bug_0259).
+        template::sync_template_fuel_now(app.world());
         // In `finish`, after every plugin's `build`: an app that adds
         // Bevy's `DirectionalNavigationPlugin` itself (anywhere in its own
         // build) is detected here, so the auto-add doesn't hit Bevy's

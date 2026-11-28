@@ -222,7 +222,8 @@ pub(crate) fn parse_lp<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Lp> {
         // and their sheets rely on it.
         Token::Number { value, .. } => Ok(Lp::Dim(bounded(finite(input, value)?), Unit::Px)),
         Token::Function(name) if is_math(&name) => {
-            match evaluate(&math_function(&name, input, 0)?, true) {
+            let mut budget = MAX_CALC_NODES;
+            match evaluate(&math_function(&name, input, 0, &mut budget)?, true) {
                 Some(Typed::Len(expr)) => Ok(Lp::Calc(Some(simplify(bounded_expr(expr))))),
                 Some(Typed::Unsupported) => Ok(Lp::Calc(None)),
                 _ => Err(location.new_custom_error(super::CssError::Invalid)),
@@ -258,7 +259,8 @@ pub(crate) fn parse_numeric<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, Numeri
             _ => return Err(location.new_custom_error(super::CssError::Invalid)),
         },
         Token::Function(name) if is_math(&name) => {
-            match evaluate(&math_function(&name, input, 0)?, false) {
+            let mut budget = MAX_CALC_NODES;
+            match evaluate(&math_function(&name, input, 0, &mut budget)?, false) {
                 Some(Typed::Num(n)) => Numeric::Number(n),
                 Some(Typed::Pct(p)) => Numeric::Percent(p),
                 Some(Typed::Angle(a)) => Numeric::Angle(a),
@@ -385,6 +387,20 @@ fn is_image_function(name: &str) -> bool {
 /// expression (the pre-scan already bounds parentheses at 8).
 const MAX_CALC_DEPTH: usize = 32;
 
+/// The maximum number of leaves and operators in one math expression:
+/// bounds flat operator chains (`1px + 1% + …`, `1px * 1 * …`, `1px + 1px + …`)
+/// and wide `min()`/`max()` argument lists so neither recursive evaluation nor
+/// `Drop` can overflow a 2 MB thread stack (bug_0257).
+const MAX_CALC_NODES: usize = 128;
+
+fn take_calc_node<'i>(input: &Parser<'i, '_>, budget: &mut usize) -> Parsed<'i, ()> {
+    if *budget == 0 {
+        return invalid(input);
+    }
+    *budget -= 1;
+    Ok(())
+}
+
 /// A math expression, before type checking.
 #[derive(Clone, Debug)]
 enum Ast {
@@ -422,19 +438,25 @@ fn other_unit(value: f32, unit: &str) -> Option<Leaf> {
 
 /// The arguments of math function `name` (its `Function` token already
 /// read).
-fn math_function<'i>(name: &str, input: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, Ast> {
+fn math_function<'i>(
+    name: &str,
+    input: &mut Parser<'i, '_>,
+    depth: usize,
+    budget: &mut usize,
+) -> Parsed<'i, Ast> {
     if depth >= MAX_CALC_DEPTH {
         return invalid(input);
     }
+    take_calc_node(input, budget)?;
     let name = name.to_ascii_lowercase();
     input.parse_nested_block(|args| match name.as_str() {
         "calc" | "-webkit-calc" | "-moz-calc" => {
-            let sum = parse_sum(args, depth + 1)?;
+            let sum = parse_sum(args, depth + 1, budget)?;
             args.expect_exhausted()?;
             Ok(sum)
         }
         "min" | "max" => {
-            let list = args.parse_comma_separated(|arg| parse_sum(arg, depth + 1))?;
+            let list = args.parse_comma_separated(|arg| parse_sum(arg, depth + 1, budget))?;
             Ok(if name == "min" {
                 Ast::Min(list)
             } else {
@@ -442,11 +464,11 @@ fn math_function<'i>(name: &str, input: &mut Parser<'i, '_>, depth: usize) -> Pa
             })
         }
         "clamp" => {
-            let low = parse_sum(args, depth + 1)?;
+            let low = parse_sum(args, depth + 1, budget)?;
             args.expect_comma()?;
-            let value = parse_sum(args, depth + 1)?;
+            let value = parse_sum(args, depth + 1, budget)?;
             args.expect_comma()?;
-            let high = parse_sum(args, depth + 1)?;
+            let high = parse_sum(args, depth + 1, budget)?;
             args.expect_exhausted()?;
             Ok(Ast::Max(vec![low, Ast::Min(vec![value, high])]))
         }
@@ -458,10 +480,11 @@ fn math_function<'i>(name: &str, input: &mut Parser<'i, '_>, depth: usize) -> Pa
 }
 
 /// `a + b - c`: CSS requires whitespace around `+` and `-`.
-fn parse_sum<'i>(input: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, Ast> {
-    let mut sum = parse_product(input, depth)?;
+fn parse_sum<'i>(input: &mut Parser<'i, '_>, depth: usize, budget: &mut usize) -> Parsed<'i, Ast> {
+    let mut sum = parse_product(input, depth, budget)?;
     while let Some(op) = sum_operator(input) {
-        let term = parse_product(input, depth)?;
+        take_calc_node(input, budget)?;
+        let term = parse_product(input, depth, budget)?;
         let term = if op == '-' {
             Ast::Mul(Box::new(Ast::Leaf(Leaf::Number(-1.0))), Box::new(term))
         } else {
@@ -491,16 +514,28 @@ fn sum_operator(input: &mut Parser<'_, '_>) -> Option<char> {
     op
 }
 
-fn parse_product<'i>(input: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, Ast> {
-    let mut product = parse_math_value(input, depth)?;
+fn parse_product<'i>(
+    input: &mut Parser<'i, '_>,
+    depth: usize,
+    budget: &mut usize,
+) -> Parsed<'i, Ast> {
+    let mut product = parse_math_value(input, depth, budget)?;
     loop {
         let state = input.state();
         match input.next() {
             Ok(Token::Delim('*')) => {
-                product = Ast::Mul(Box::new(product), Box::new(parse_math_value(input, depth)?));
+                take_calc_node(input, budget)?;
+                product = Ast::Mul(
+                    Box::new(product),
+                    Box::new(parse_math_value(input, depth, budget)?),
+                );
             }
             Ok(Token::Delim('/')) => {
-                product = Ast::Div(Box::new(product), Box::new(parse_math_value(input, depth)?));
+                take_calc_node(input, budget)?;
+                product = Ast::Div(
+                    Box::new(product),
+                    Box::new(parse_math_value(input, depth, budget)?),
+                );
             }
             _ => {
                 input.reset(&state);
@@ -510,7 +545,12 @@ fn parse_product<'i>(input: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, Ast
     }
 }
 
-fn parse_math_value<'i>(input: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, Ast> {
+fn parse_math_value<'i>(
+    input: &mut Parser<'i, '_>,
+    depth: usize,
+    budget: &mut usize,
+) -> Parsed<'i, Ast> {
+    take_calc_node(input, budget)?;
     let location = input.current_source_location();
     let error = || Err(location.new_custom_error(super::CssError::Invalid));
     let token = input.next()?.clone();
@@ -536,12 +576,14 @@ fn parse_math_value<'i>(input: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, 
                 return error();
             }
             return input.parse_nested_block(|inner| {
-                let sum = parse_sum(inner, depth + 1)?;
+                let sum = parse_sum(inner, depth + 1, budget)?;
                 inner.expect_exhausted()?;
                 Ok(sum)
             });
         }
-        Token::Function(name) if is_math(&name) => return math_function(&name, input, depth + 1),
+        Token::Function(name) if is_math(&name) => {
+            return math_function(&name, input, depth + 1, budget);
+        }
         _ => return error(),
     };
     let value = match leaf {
@@ -873,5 +915,85 @@ mod tests {
                 proptest::prop_assert!(max.is_finite() && max <= MAX_CSS_MAGNITUDE, "{text}: {parsed:?}");
             }
         }
+
+        /// bug_0257: flat operator chains past the term limit are always
+        /// refused (regardless of operator or unit mix), never building a
+        /// stack-overflowing AST spine.
+        #[test]
+        fn bug_0257_calc_expressions_over_term_limit_are_rejected(
+            terms in 150usize..260,
+            kind in 0usize..4,
+        ) {
+            let text = match kind {
+                0 => {
+                    let body = (0..terms)
+                        .map(|i| if i % 2 == 0 { "1px" } else { "1%" })
+                        .collect::<Vec<_>>()
+                        .join(" + ");
+                    format!("calc({body})")
+                }
+                1 => {
+                    let body = vec!["1px"; terms].join(" + ");
+                    format!("calc({body})")
+                }
+                2 => {
+                    let mut body = String::from("1px");
+                    for _ in 1..terms {
+                        body.push_str(" * 1");
+                    }
+                    format!("calc({body})")
+                }
+                _ => {
+                    let body = vec!["1px"; terms].join(", ");
+                    format!("min({body})")
+                }
+            };
+            proptest::prop_assert_eq!(lp(&text), None, "kind={} terms={}", kind, terms);
+        }
+    }
+
+    /// bug_0257: flat `calc()` / `min()` chains with zero nested parens are
+    /// bounded before they can overflow a 2 MB thread stack; moderate chains
+    /// still parse.
+    #[test]
+    fn bug_0257_flat_calc_chains_are_bounded() {
+        let ok_sum = format!("calc({})", vec!["1px"; 32].join(" + "));
+        assert_eq!(lp(&ok_sum), Some(Lp::Calc(Some(CalcExpr::Val(Val::Px(32.0))))));
+
+        let mixed = format!(
+            "calc({})",
+            (0..200)
+                .map(|i| if i % 2 == 0 { "1px" } else { "1%" })
+                .collect::<Vec<_>>()
+                .join(" + ")
+        );
+        let same = format!("calc({})", vec!["1px"; 200].join(" + "));
+        let prod = format!("calc(1px{})", " * 1".repeat(200));
+        let wide_min = format!("min({})", vec!["1px"; 200].join(", "));
+        for text in [&mixed, &same, &prod, &wide_min] {
+            assert_eq!(lp(text), None, "expected over-limit math to be refused");
+        }
+
+        // 3,000-term chains (which overflowed a 2 MB debug stack before
+        // bug_0257) must refuse cleanly on a 2 MB thread.
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let huge_mixed = format!(
+                    "calc({})",
+                    (0..3000)
+                        .map(|i| if i % 2 == 0 { "1px" } else { "1%" })
+                        .collect::<Vec<_>>()
+                        .join(" + ")
+                );
+                let huge_same = format!("calc({})", vec!["1px"; 3000].join(" + "));
+                let huge_prod = format!("calc(1px{})", " * 1".repeat(3000));
+                for text in [&huge_mixed, &huge_same, &huge_prod] {
+                    assert_eq!(lp(text), None);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

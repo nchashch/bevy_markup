@@ -11942,3 +11942,112 @@ fn font_limits_bound_what_bevy_rasterizes() {
         rasterized.len()
     );
 }
+
+/// bug_0259: `HtmlTemplateLimits` inserted during app setup must take effect
+/// for templates loaded in `Startup` (before `PreUpdate` runs).
+#[test]
+fn bug_0259_template_limits_apply_to_startup_loads() {
+    let dir = std::env::temp_dir().join(format!(
+        "bevy_markup_bug_0259_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("page.html"),
+        "{% for i in range(500) %}x{% endfor %}",
+    )
+    .unwrap();
+
+    for insert_before_plugin in [false, true] {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin {
+                file_path: dir.to_string_lossy().into_owned(),
+                ..default()
+            },
+        ))
+        .init_asset::<Image>()
+        .init_asset::<Font>()
+        .init_resource::<bevy::picking::hover::HoverMap>();
+        if insert_before_plugin {
+            app.insert_resource(HtmlTemplateLimits { fuel: 100 });
+            app.add_plugins(BevyMarkupPlugin);
+        } else {
+            app.add_plugins(BevyMarkupPlugin);
+            app.insert_resource(HtmlTemplateLimits { fuel: 100 });
+        }
+        app.add_systems(Startup, |mut commands: Commands, assets: Res<AssetServer>| {
+            let handle: Handle<HtmlTemplate> = assets.load("page.html");
+            commands.spawn((HtmlUi(handle), Node::default()));
+        });
+        app.finish();
+        app.cleanup();
+
+        let mut settled: Option<Result<(), String>> = None;
+        for _ in 0..80 {
+            app.update();
+            let world = app.world_mut();
+            let mut q = world.query::<&RenderedHtml>();
+            if let Ok(rendered) = q.single(world) {
+                match rendered {
+                    RenderedHtml::Pending => {}
+                    RenderedHtml::Ready(_) => {
+                        settled = Some(Ok(()));
+                        break;
+                    }
+                    RenderedHtml::Failed(msg) => {
+                        settled = Some(Err(msg.clone()));
+                        break;
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            matches!(settled, Some(Err(ref msg)) if msg.contains("fuel")),
+            "insert_before_plugin={insert_before_plugin}: expected out-of-fuel failure on Startup load, got {settled:?}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// bug_0261: mixed-unit `calc()` expressions that resolve negative at layout
+/// time (`width: calc(10px - 100%)` in a 200 px parent) clamp to `0px` on
+/// non-negative properties while signed properties (`margin-left`) stay negative.
+#[test]
+fn bug_0261_mixed_unit_negative_calc_clamps_at_layout() {
+    let page = r#"<div id="wrap"><div id="child">hi</div></div>"#;
+    let css = r#"
+        #wrap { width: 200px; height: 200px; }
+        #child { width: calc(10px - 100%); margin-left: calc(10px - 100%); }
+    "#;
+    let mut ui = TestUi::with_layout(
+        "bug-0261-mixed-calc",
+        &[("page.html", page), ("style.css", css)],
+        UVec2::new(400, 400),
+    )
+    .stylesheet("style.css")
+    .spawn("page.html", TemplateContext::new(), Node::default());
+    ui.settle();
+    ui.update(4);
+
+    let world = ui.world_mut();
+    let child_node = world
+        .query::<(&HtmlElement, &Node)>()
+        .iter(world)
+        .find(|(el, _)| el.id.as_deref() == Some("child"))
+        .map(|(_, node)| node.clone())
+        .expect("#child node");
+    assert_eq!(child_node.width, Val::Px(0.0), "width must clamp to 0px");
+    assert_eq!(
+        child_node.margin.left,
+        Val::Px(-190.0),
+        "signed margin-left must remain negative"
+    );
+}

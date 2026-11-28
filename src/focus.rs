@@ -407,9 +407,8 @@ fn active_modal(
 ) -> Option<Entity> {
     let visible = |entity| {
         visible_in_hierarchy(entity, visibility, parents)
-            && nodes
-                .get(entity)
-                .is_ok_and(|node| node.display != Display::None)
+            && nodes.contains(entity)
+            && !displayed_none(entity, nodes, parents)
     };
     roots_in_scope
         .iter()
@@ -529,13 +528,12 @@ fn sync_navigation(
     }
 }
 
-/// Whether `entity` or an ancestor up to its `HtmlUi` root is
-/// `display: none`.
+/// Whether `entity` or any ancestor in the UI hierarchy is `display: none`
+/// (walking above the `HtmlUi` root into app-owned containers too, bug_0262).
 fn displayed_none(
     entity: Entity,
     nodes: &Query<&Node>,
     parents: &Query<&ChildOf>,
-    roots: &Query<(), With<HtmlUi>>,
 ) -> bool {
     for ancestor in std::iter::once(entity).chain(parents.iter_ancestors(entity)) {
         if nodes
@@ -543,9 +541,6 @@ fn displayed_none(
             .is_ok_and(|node| node.display == Display::None)
         {
             return true;
-        }
-        if roots.contains(ancestor) {
-            break;
         }
     }
     false
@@ -558,10 +553,9 @@ fn eligible(
     visibility: &Query<&Visibility>,
     nodes: &Query<&Node>,
     parents: &Query<&ChildOf>,
-    roots: &Query<(), With<HtmlUi>>,
+    _roots: &Query<(), With<HtmlUi>>,
 ) -> bool {
-    visible_in_hierarchy(entity, visibility, parents)
-        && !displayed_none(entity, nodes, parents, roots)
+    visible_in_hierarchy(entity, visibility, parents) && !displayed_none(entity, nodes, parents)
 }
 
 /// Puts focus back on a focusable element in scope when it isn't on one:

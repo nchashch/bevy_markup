@@ -219,6 +219,9 @@ fn track_repeat<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, TrackRepeat> {
     input.expect_function_matching("repeat")?;
     input.parse_nested_block(|args| {
         let count = if let Ok(n) = args.try_parse(parse_integer) {
+            if n <= 0 {
+                return invalid(args);
+            }
             RepeatCount::Number(n)
         } else {
             let location = args.current_source_location();
@@ -322,6 +325,34 @@ fn area_string(string: &str, cells: &mut Vec<Option<String>>) -> Option<u32> {
     }
 }
 
+/// Whether every named area in `areas` forms a single solid rectangle
+/// (CSS Grid 1 §7.3.1: non-rectangular named areas make the declaration
+/// invalid). O(N): each name's cell count equals its bounding box area if
+/// and only if every cell inside that box carries the same name.
+fn areas_are_rectangular(columns: u32, areas: &[Option<String>]) -> bool {
+    let columns = columns as usize;
+    if columns == 0 {
+        return false;
+    }
+    let mut bounds: std::collections::HashMap<&str, (usize, usize, usize, usize, usize)> =
+        std::collections::HashMap::new();
+    for (index, cell) in areas.iter().enumerate() {
+        let Some(name) = cell.as_deref() else {
+            continue;
+        };
+        let (row, col) = (index / columns, index % columns);
+        let entry = bounds.entry(name).or_insert((row, row, col, col, 0));
+        entry.0 = entry.0.min(row);
+        entry.1 = entry.1.max(row);
+        entry.2 = entry.2.min(col);
+        entry.3 = entry.3.max(col);
+        entry.4 += 1;
+    }
+    bounds
+        .values()
+        .all(|&(r1, r2, c1, c2, count)| count == (r2 - r1 + 1) * (c2 - c1 + 1))
+}
+
 /// `grid-template-areas`.
 pub(crate) fn template_areas<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, GridTemplateAreas> {
     if input.try_parse(|i| i.expect_ident_matching("none")).is_ok() {
@@ -341,7 +372,7 @@ pub(crate) fn template_areas<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, GridT
         }
         rows += 1;
     }
-    if rows == 0 {
+    if rows == 0 || !areas_are_rectangular(columns, &cells) {
         return invalid(input);
     }
     Ok(GridTemplateAreas::Areas {
@@ -408,6 +439,9 @@ pub(crate) fn template<'i>(input: &mut Parser<'i, '_>) -> Parsed<'i, GridTemplat
         names.push(input.try_parse(line_names).unwrap_or_default());
     }
     if !cells.is_empty() {
+        if !areas_are_rectangular(columns, &cells) {
+            return invalid(input);
+        }
         if names.len() == items.len() {
             names.push(Vec::new());
         }

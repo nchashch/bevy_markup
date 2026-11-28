@@ -223,10 +223,12 @@ pub fn new_environment(fuel: u64) -> minijinja::Environment<'static> {
     env.add_filter("e", fueled_escape);
     env.add_filter("format", checked_format);
     // Filters that write a value's text into a string check that it could
-    // be printed first (the formatter's check).
+    // be printed and charge its estimated bytes against remaining fuel first
+    // (bug_0253, bug_0256, bug_0258).
     env.add_filter("string", checked_string);
     env.add_filter("tojson", checked_tojson);
     env.add_filter("pprint", checked_pprint);
+    env.add_filter("safe", checked_safe);
     env.set_formatter(streaming_formatter);
     env.set_fuel(Some(fuel));
     env
@@ -289,20 +291,39 @@ fn check_printable_indented(value: &minijinja::Value, indent: u64) -> Result<(),
     }
 }
 
-/// Whether `value`'s printed form could fit in [`MAX_RENDERED_BYTES`]:
-/// every item of a printed list or map takes at least three bytes (`1, `),
-/// and, pretty-printed by `indent` spaces a level, at most twice its
-/// indentation more (its own line, and its container's closing line), so
-/// one holding more than that, counted through nested lists and maps,
-/// can't. Stops at that many items, and refuses a list whose known length
-/// alone is over it without iterating it. (Printing doesn't stop at a
-/// failed write: it formats no more, but still iterates every item.)
+/// Escaping growth model when estimating serialized byte sizes before
+/// allocating (`estimate_printed_bytes`).
+#[derive(Clone, Copy)]
+enum EscapeMode {
+    Plain,
+    Json,
+    Html,
+}
+
+/// Estimates how many bytes `value`'s serialized form will take, stopping
+/// early and returning `None` as soon as the running total passes `limit`.
+///
+/// Counts:
+/// - container item overhead (`3 + 2 * indent * depth` bytes per nested item),
+///   rejecting sequences/maps whose known length alone exceeds the budget in
+///   O(1) without iterating (bug_0253, bug_0256);
+/// - string and byte-slice lengths inside containers, plus JSON or HTML
+///   escape expansion, so `[s] * N` is refused before allocating (bug_0258).
+///
 /// Iterative: values nest arbitrarily deep.
-fn fits_printed(value: &minijinja::Value, indent: u64) -> bool {
+fn estimate_printed_bytes(
+    value: &minijinja::Value,
+    indent: u64,
+    escape: EscapeMode,
+    limit: u64,
+) -> Option<u64> {
     use minijinja::value::ObjectRepr;
-    // An item at `depth` (the containers around it) and what it costs.
     let cost = |depth: usize| 3u64.saturating_add(indent.saturating_mul(2 * depth as u64));
-    let mut budget = MAX_RENDERED_BYTES as u64;
+    let mut used = 0u64;
+    // Pin up to 16 large strings (MiniJinja stores them as Arc<str>) so a
+    // lazily repeated `[s] * N` scans `s`'s escape delta only once while
+    // guaranteeing its address cannot be reused for the duration of this walk.
+    let mut escape_cache: Vec<(usize, usize, u64, minijinja::Value)> = Vec::new();
     let mut pending: Vec<Box<dyn Iterator<Item = minijinja::Value>>> =
         vec![Box::new(std::iter::once(value.clone()))];
     while let Some(items) = pending.last_mut() {
@@ -310,18 +331,95 @@ fn fits_printed(value: &minijinja::Value, indent: u64) -> bool {
             pending.pop();
             continue;
         };
-        let Some(budget_left) = budget.checked_sub(cost(pending.len() - 1)) else {
-            return false;
-        };
-        budget = budget_left;
+        let depth = pending.len() - 1;
+        if depth > 0 || item.as_object().is_some() {
+            used = used.saturating_add(cost(depth));
+            if used > limit {
+                return None;
+            }
+        }
+        if let Some(text) = item.as_str() {
+            used = used.saturating_add(text.len() as u64);
+            if used > limit {
+                return None;
+            }
+            if !matches!(escape, EscapeMode::Plain) && !text.is_empty() {
+                let key = (text.as_ptr() as usize, text.len());
+                let cached = escape_cache
+                    .iter()
+                    .find(|(ptr, len, _, _)| *ptr == key.0 && *len == key.1)
+                    .map(|(_, _, extra, _)| *extra);
+                if let Some(extra) = cached {
+                    used = used.saturating_add(extra);
+                    if used > limit {
+                        return None;
+                    }
+                } else {
+                    let mut extra_total = 0u64;
+                    match escape {
+                        EscapeMode::Plain => {}
+                        EscapeMode::Html => {
+                            for byte in text.bytes() {
+                                let extra = match byte {
+                                    b'"' | b'\'' | b'/' => 5,
+                                    b'<' | b'>' => 3,
+                                    b'&' => 4,
+                                    _ => 0,
+                                };
+                                if extra > 0 {
+                                    extra_total = extra_total.saturating_add(extra);
+                                    if used.saturating_add(extra_total) > limit {
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                        EscapeMode::Json => {
+                            for byte in text.bytes() {
+                                let extra = match byte {
+                                    b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 1,
+                                    0x00..=0x1f => 5,
+                                    _ => 0,
+                                };
+                                if extra > 0 {
+                                    extra_total = extra_total.saturating_add(extra);
+                                    if used.saturating_add(extra_total) > limit {
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    used = used.saturating_add(extra_total);
+                    if text.len() >= 128 && escape_cache.len() < 16 {
+                        escape_cache.push((key.0, key.1, extra_total, item));
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(bytes) = item.as_bytes() {
+            used = used.saturating_add(bytes.len() as u64);
+            if used > limit {
+                return None;
+            }
+            continue;
+        }
         let Some(object) = item.as_object() else {
             continue;
         };
-        if object
-            .enumerator_len()
-            .is_some_and(|len| (len as u64).saturating_mul(cost(pending.len())) > budget)
-        {
-            return false;
+        let mult = if matches!(object.repr(), ObjectRepr::Map) {
+            2u64
+        } else {
+            1u64
+        };
+        if object.enumerator_len().is_some_and(|len| {
+            (len as u64)
+                .saturating_mul(mult)
+                .saturating_mul(cost(depth + 1))
+                > limit.saturating_sub(used)
+        }) {
+            return None;
         }
         match object.repr() {
             ObjectRepr::Map => {
@@ -339,24 +437,97 @@ fn fits_printed(value: &minijinja::Value, indent: u64) -> bool {
             _ => {}
         }
     }
-    true
+    Some(used)
 }
 
-/// `string`, for a value that could be printed ([`check_printable`]).
+/// Whether `value`'s printed form could fit in [`MAX_RENDERED_BYTES`].
+fn fits_printed(value: &minijinja::Value, indent: u64) -> bool {
+    estimate_printed_bytes(value, indent, EscapeMode::Plain, MAX_RENDERED_BYTES as u64).is_some()
+}
+
+/// Maximum serialized bytes a single filter call may allocate: the smaller
+/// of [`MAX_RENDERED_BYTES`] and what the remaining fuel can pay for.
+fn serialized_byte_limit(state: &minijinja::State) -> (u64, bool) {
+    let max = MAX_RENDERED_BYTES as u64;
+    match state.fuel_levels() {
+        Some((_, remaining)) => {
+            let fuel_bytes = remaining.saturating_mul(64).saturating_add(63);
+            if fuel_bytes < max {
+                (fuel_bytes, true)
+            } else {
+                (max, false)
+            }
+        }
+        None => (max, false),
+    }
+}
+
+/// Fails with `OutOfFuel` when fuel was the tighter limit, else
+/// `InvalidOperation` naming `MAX_RENDERED_BYTES`.
+fn over_serialization_limit(
+    state: &minijinja::State,
+    fuel_limited: bool,
+) -> minijinja::Error {
+    if fuel_limited
+        && let Some((_, remaining)) = state.fuel_levels()
+        && let Err(err) = state.consume_fuel(remaining.saturating_add(1))
+    {
+        return err;
+    }
+    minijinja::Error::new(
+        minijinja::ErrorKind::InvalidOperation,
+        format!(
+            "the value holds too many items or bytes to print \
+             (MAX_RENDERED_BYTES is {MAX_RENDERED_BYTES} bytes)"
+        ),
+    )
+}
+
+/// Estimates `value`'s serialized size against both remaining fuel and
+/// [`MAX_RENDERED_BYTES`] and charges fuel *before* the serializer allocates
+/// (bug_0258).
+fn charge_serialized_value(
+    state: &minijinja::State,
+    value: &minijinja::Value,
+    indent: u64,
+    escape: EscapeMode,
+) -> Result<(), minijinja::Error> {
+    let (limit, fuel_limited) = serialized_byte_limit(state);
+    let Some(bytes) = estimate_printed_bytes(value, indent, escape, limit) else {
+        return Err(over_serialization_limit(state, fuel_limited));
+    };
+    charge_bytes(state, bytes)
+}
+
+/// `string`, bounded and pre-charged before serializing.
 fn checked_string(
     state: &minijinja::State,
     value: &minijinja::Value,
 ) -> Result<minijinja::Value, minijinja::Error> {
-    check_printable(value)?;
+    charge_serialized_value(state, value, 0, EscapeMode::Plain)?;
     minijinja::filters::string(state, value)
 }
 
-/// `tojson`, for a value that could be printed ([`check_printable`]).
+/// `safe`, bounded and pre-charged before converting a non-safe value to a
+/// `String`.
+fn checked_safe(
+    state: &minijinja::State,
+    value: &minijinja::Value,
+) -> Result<minijinja::Value, minijinja::Error> {
+    if value.is_safe() {
+        return Ok(value.clone());
+    }
+    charge_serialized_value(state, value, 0, EscapeMode::Plain)?;
+    Ok(minijinja::Value::from_safe_string(value.to_string()))
+}
+
+/// `tojson`, bounded and pre-charged before serializing.
 ///
 /// The indent is MiniJinja's (`true` = 2, `false` = none, else a `usize`,
 /// positional or `indent=`): unbounded there, it writes `indent × depth`
 /// spaces per item (UPSTREAM U64), so it counts toward the size.
 fn checked_tojson(
+    state: &minijinja::State,
     value: &minijinja::Value,
     indent: Option<minijinja::Value>,
     args: minijinja::value::Kwargs,
@@ -373,13 +544,16 @@ fn checked_tojson(
             Err(_) => usize::try_from(value).map_or(0, |n| n as u64),
         },
     };
-    check_printable_indented(value, spaces)?;
+    charge_serialized_value(state, value, spaces, EscapeMode::Json)?;
     minijinja::filters::tojson(value, indent, args)
 }
 
-/// `pprint`, for a value that could be printed ([`check_printable`]).
-fn checked_pprint(value: &minijinja::Value) -> Result<String, minijinja::Error> {
-    check_printable(value)?;
+/// `pprint`, bounded and pre-charged before serializing.
+fn checked_pprint(
+    state: &minijinja::State,
+    value: &minijinja::Value,
+) -> Result<String, minijinja::Error> {
+    charge_serialized_value(state, value, 2, EscapeMode::Plain)?;
     Ok(minijinja::filters::pprint(value))
 }
 
@@ -393,7 +567,8 @@ fn charge_bytes(state: &minijinja::State, bytes: u64) -> Result<(), minijinja::E
     state.consume_fuel(bytes / 64)
 }
 
-/// `join`, charged for its result before building it.
+/// `join`, charged for its result (including nested non-string items) before
+/// building it (bug_0258).
 fn fueled_join(
     state: &mut minijinja::State,
     value: &minijinja::Value,
@@ -412,13 +587,37 @@ fn fueled_join(
         charge_bytes(state, (len as u64).saturating_mul(ITEM_BYTES))?;
     }
     let items: Vec<minijinja::Value> = value.try_iter()?.collect();
+    let (limit, fuel_limited) = serialized_byte_limit(state);
     let joiner_bytes = joiner.as_ref().map_or(0, |joiner| joiner.as_str().len()) as u64;
-    let item_bytes: u64 = items
-        .iter()
-        .map(|item| item.as_str().map_or(ITEM_BYTES, |text| text.len() as u64))
-        .sum();
-    let joiners = joiner_bytes.saturating_mul(items.len().saturating_sub(1) as u64);
-    charge_bytes(state, item_bytes.saturating_add(joiners))?;
+    let mut total = joiner_bytes.saturating_mul(items.len().saturating_sub(1) as u64);
+    if total > limit {
+        return Err(over_serialization_limit(state, fuel_limited));
+    }
+    for item in &items {
+        let target = match attribute {
+            Some(attr) => item.get_attr(attr).ok(),
+            None => None,
+        };
+        let target = target.as_ref().unwrap_or(item);
+        let bytes = if let Some(text) = target.as_str() {
+            text.len() as u64
+        } else {
+            let Some(est) = estimate_printed_bytes(
+                target,
+                0,
+                EscapeMode::Plain,
+                limit.saturating_sub(total),
+            ) else {
+                return Err(over_serialization_limit(state, fuel_limited));
+            };
+            est.max(ITEM_BYTES)
+        };
+        total = total.saturating_add(bytes);
+        if total > limit {
+            return Err(over_serialization_limit(state, fuel_limited));
+        }
+    }
+    charge_bytes(state, total)?;
     minijinja::filters::join(
         state,
         &minijinja::Value::from(items),
@@ -467,42 +666,91 @@ fn fueled_lines(
     minijinja::filters::lines(value)
 }
 
-/// `escape`, charged for its escaped text before building it: HTML
-/// escaping turns one byte into up to six (`"` → `&quot;`).
+/// `escape`, charged for its escaped text (including non-string containers)
+/// before building it: HTML escaping turns one byte into up to six
+/// (`"` → `&quot;`, bug_0258).
 fn fueled_escape(
     state: &mut minijinja::State,
     value: &minijinja::Value,
 ) -> Result<minijinja::Value, minijinja::Error> {
-    if let Some(text) = value.as_str() {
-        let grown: u64 = text
-            .bytes()
-            .map(|byte| match byte {
-                b'"' | b'\'' | b'/' => 5,
-                b'<' | b'>' => 3,
-                b'&' => 4,
-                _ => 0,
-            })
-            .sum();
-        charge_bytes(state, (text.len() as u64).saturating_add(grown))?;
+    if value.is_safe() {
+        return Ok(value.clone());
     }
+    charge_serialized_value(state, value, 0, EscapeMode::Html)?;
     minijinja::filters::escape(state, value)
 }
 
 /// `format`, checked before MiniJinja parses the format string
 /// ([`check_format`]): `%(key)` names are ASCII, widths and precisions at
-/// most [`MAX_FORMAT_NUMBER`].
+/// most [`MAX_FORMAT_NUMBER`], and total formatted bytes (specifier widths
+/// plus serialized argument sizes × repetition counts) are budgeted before
+/// formatting (bug_0258).
 fn checked_format(
     state: &mut minijinja::State,
     format: &minijinja::Value,
     args: minijinja::value::Rest<minijinja::value::ValueOrKwargs>,
 ) -> Result<minijinja::Value, minijinja::Error> {
-    if let Some(text) = format.as_str()
-        && let Err(reason) = check_format(text)
-    {
-        return Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            format!("format: {reason}"),
-        ));
+    if let Some(text) = format.as_str() {
+        let budget = match check_format(text) {
+            Ok(budget) => budget,
+            Err(reason) => {
+                return Err(minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!("format: {reason}"),
+                ));
+            }
+        };
+        let (limit, fuel_limited) = serialized_byte_limit(state);
+        let mut total = budget.min_bytes;
+        if total > limit {
+            return Err(over_serialization_limit(state, fuel_limited));
+        }
+        let mut pos_index = 0u64;
+        for arg in args.iter() {
+            let value: &minijinja::Value = arg;
+            if !budget.named_specs.is_empty()
+                && (value.is_kwargs() || value.kind() == minijinja::value::ValueKind::Map)
+            {
+                for (key, count) in &budget.named_specs {
+                    let item = value
+                        .get_item(&minijinja::Value::from(key.as_str()))
+                        .ok()
+                        .filter(|v| !v.is_undefined())
+                        .or_else(|| value.get_attr(key).ok().filter(|v| !v.is_undefined()));
+                    if let Some(item) = item {
+                        let rem = limit.saturating_sub(total);
+                        let Some(est) = estimate_printed_bytes(
+                            &item,
+                            0,
+                            EscapeMode::Plain,
+                            rem / (*count).max(1),
+                        ) else {
+                            return Err(over_serialization_limit(state, fuel_limited));
+                        };
+                        total = total.saturating_add(est.saturating_mul(*count));
+                        if total > limit {
+                            return Err(over_serialization_limit(state, fuel_limited));
+                        }
+                    }
+                }
+            }
+            if !value.is_kwargs() {
+                if pos_index < budget.positional_specs {
+                    let rem = limit.saturating_sub(total);
+                    let Some(est) =
+                        estimate_printed_bytes(value, 0, EscapeMode::Plain, rem)
+                    else {
+                        return Err(over_serialization_limit(state, fuel_limited));
+                    };
+                    total = total.saturating_add(est);
+                    if total > limit {
+                        return Err(over_serialization_limit(state, fuel_limited));
+                    }
+                }
+                pos_index += 1;
+            }
+        }
+        charge_bytes(state, total)?;
     }
     minijinja::filters::format(state, format, args)
 }
@@ -511,11 +759,19 @@ fn checked_format(
 /// takes no larger one.
 const MAX_FORMAT_NUMBER: u64 = u16::MAX as u64;
 
+/// Size summary collected by [`check_format`].
+struct FormatBudget {
+    min_bytes: u64,
+    positional_specs: u64,
+    named_specs: std::collections::HashMap<String, u64>,
+}
+
 /// Checks a printf-style format string's conversion specifiers: every
 /// `%(key)` name (up to its `)`, or the end) is ASCII, and every width and
 /// precision is at most [`MAX_FORMAT_NUMBER`]. `%%` is a literal percent
-/// sign.
-fn check_format(text: &str) -> Result<(), &'static str> {
+/// sign. Returns the minimum output bytes from literals and widths/precisions
+/// plus specifier reference counts.
+fn check_format(text: &str) -> Result<FormatBudget, &'static str> {
     let bytes = text.as_bytes();
     // The number starting at `at` (saturating) and the index after it.
     let number = |mut at: usize| {
@@ -528,6 +784,9 @@ fn check_format(text: &str) -> Result<(), &'static str> {
         }
         (value, at)
     };
+    let mut min_bytes = text.len() as u64;
+    let mut positional_specs = 0u64;
+    let mut named_specs: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     let mut at = 0;
     while at < bytes.len() {
         if bytes[at] != b'%' {
@@ -539,11 +798,15 @@ fn check_format(text: &str) -> Result<(), &'static str> {
             at += 1;
             continue;
         }
+        let mut named = None;
         if bytes.get(at) == Some(&b'(') {
             let key = &bytes[at + 1..];
             let end = key.iter().position(|&b| b == b')').unwrap_or(key.len());
             if !key[..end].is_ascii() {
                 return Err("a %(key) name must be ASCII");
+            }
+            if let Ok(name) = std::str::from_utf8(&key[..end]) {
+                named = Some(name.to_owned());
             }
             at += 1 + end + 1;
         }
@@ -559,8 +822,18 @@ fn check_format(text: &str) -> Result<(), &'static str> {
         if width > MAX_FORMAT_NUMBER || precision > MAX_FORMAT_NUMBER {
             return Err("a width or precision is over 65535");
         }
+        min_bytes = min_bytes.saturating_add(width.max(precision));
+        if let Some(name) = named {
+            *named_specs.entry(name).or_insert(0) += 1;
+        } else {
+            positional_specs = positional_specs.saturating_add(1);
+        }
     }
-    Ok(())
+    Ok(FormatBudget {
+        min_bytes,
+        positional_specs,
+        named_specs,
+    })
 }
 
 /// The template limits an app may set (ADR 0049): how much work and
@@ -625,6 +898,19 @@ pub(crate) fn test_render(
 /// Copies a changed [`HtmlTemplateLimits`] to the loaders.
 pub(crate) fn sync_template_fuel(limits: Res<HtmlTemplateLimits>, fuel: Res<TemplateFuel>) {
     if limits.is_changed() {
+        fuel.0
+            .store(limits.fuel, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Immediately copies [`HtmlTemplateLimits`] to [`TemplateFuel`] during
+/// plugin `finish` so `Startup` template loads see resources inserted during
+/// app setup (bug_0259).
+pub(crate) fn sync_template_fuel_now(world: &World) {
+    if let (Some(limits), Some(fuel)) = (
+        world.get_resource::<HtmlTemplateLimits>(),
+        world.get_resource::<TemplateFuel>(),
+    ) {
         fuel.0
             .store(limits.fuel, std::sync::atomic::Ordering::Relaxed);
     }
@@ -780,9 +1066,13 @@ pub(crate) fn check_tera_operators(name: &str, source: &str) -> Result<(), Strin
     }
 }
 
-/// The `json` filter: the value as compact JSON (escaped like any output).
-fn json_filter(value: minijinja::Value) -> Result<String, minijinja::Error> {
-    check_printable(&value)?;
+/// The `json` filter: the value as compact JSON (escaped like any output),
+/// bounded and pre-charged before serializing (bug_0258).
+fn json_filter(
+    state: &minijinja::State,
+    value: minijinja::Value,
+) -> Result<String, minijinja::Error> {
+    charge_serialized_value(state, &value, 0, EscapeMode::Json)?;
     serde_json::to_string(&value).map_err(|err| {
         minijinja::Error::new(
             minijinja::ErrorKind::InvalidOperation,
@@ -2195,6 +2485,115 @@ mod tests {
             let document = template.render(&context).unwrap();
             prop_assert_eq!(document.dom().query_selector("p").unwrap().count(), 1);
             prop_assert_eq!(decoded_text(&document), s);
+        }
+
+        /// bug_0258: `fits_printed` accounts for string bytes inside
+        /// containers (nested or flat), refusing any container whose string
+        /// payloads exceed `MAX_RENDERED_BYTES` before serialization runs.
+        #[test]
+        fn bug_0258_serialized_containers_respect_fuel_and_output_limit(
+            str_len in 100_000usize..200_000,
+            count in 200usize..400,
+            nested in proptest::bool::ANY,
+        ) {
+            let s = minijinja::Value::from("x".repeat(str_len));
+            let list: minijinja::Value = vec![s; count].into();
+            let val = if nested {
+                minijinja::Value::from(vec![list])
+            } else {
+                list
+            };
+            // str_len * count >= 20_000_000 > MAX_RENDERED_BYTES (16 MiB),
+            // even though item count is only 200..400.
+            proptest::prop_assert!(
+                !fits_printed(&val, 0),
+                "str_len={} count={} nested={} passed fits_printed",
+                str_len,
+                count,
+                nested
+            );
+        }
+    }
+
+    /// bug_0258: container-of-strings serialization (`[s] * N`) is refused
+    /// *before* allocating past either `MAX_RENDERED_BYTES` or remaining
+    /// fuel across every filter, plus nested `join` and repeated-width
+    /// `format`.
+    #[test]
+    fn bug_0258_container_of_strings_is_bounded_before_allocating() {
+        let render_with = |fuel: u64, source: &str| {
+            let mut env = new_environment(fuel);
+            env.add_template_owned("t.html", source.to_owned()).unwrap();
+            let template = HtmlTemplate {
+                env,
+                name: "t.html".to_owned(),
+            };
+            let start = std::time::Instant::now();
+            let result = template.render_source(&TemplateContext::new());
+            (result, start.elapsed())
+        };
+
+        // Low fuel (~640 KB budget): 30 MB containers must fail *fast*
+        // (before building a 30 MB String, which took 35–330 ms unfixed).
+        let low_cases = [
+            "{% set s = 'x' * 50000 %}{{ ([s] * 600) | json | length }}",
+            "{% set s = 'x' * 50000 %}{{ ([s] * 600) | tojson | length }}",
+            "{% set s = 'x' * 50000 %}{{ ([s] * 600) | pprint | length }}",
+            "{% set s = 'x' * 50000 %}{{ ([s] * 600) | string | length }}",
+            "{% set s = 'x' * 50000 %}{{ ([s] * 600) | safe | length }}",
+            "{% set s = 'x' * 50000 %}{{ ([s] * 600) | escape | length }}",
+            "{% set s = 'x' * 50000 %}{{ ([s] * 600) | e | length }}",
+            "{% set s = 'x' * 50000 %}{{ '%s' | format([s] * 600) | length }}",
+            "{% set s = 'x' * 50000 %}{{ [[s] * 600] | join | length }}",
+            "{% set s = 'x' * 50000 %}{{ [s] * 600 }}",
+        ];
+        for source in low_cases {
+            let (result, elapsed) = render_with(10_000, source);
+            assert!(result.is_err(), "{source} should fail under low fuel");
+            assert!(
+                elapsed < std::time::Duration::from_millis(25),
+                "{source} took {elapsed:?} — serialized before refusing"
+            );
+        }
+
+        // Default fuel: containers over MAX_RENDERED_BYTES (16 MiB) and
+        // multi-specifier format expansions must be refused rather than
+        // succeeding with 30+ MB intermediate strings.
+        let default_fuel = HtmlTemplateLimits::default().fuel;
+        let default_cases = [
+            "{% set s = 'x' * 100000 %}{{ ([s] * 300) | json | length }}",
+            "{% set s = 'x' * 100000 %}{{ ([s] * 300) | tojson | length }}",
+            "{% set s = 'x' * 100000 %}{{ ([s] * 300) | pprint | length }}",
+            "{% set s = 'x' * 100000 %}{{ ([s] * 300) | safe | length }}",
+            "{% set s = 'x' * 100000 %}{{ ([s] * 300) | escape | length }}",
+            "{% set s = 'x' * 100000 %}{{ '%s' | format([s] * 300) | length }}",
+            "{% set s = 'x' * 100000 %}{{ [[s] * 300] | join | length }}",
+            "{{ ('%(a)65535d' * 500) | format(a=1) | length }}",
+            "{% set s = 'x' * 100000 %}{{ ('%(a)s' * 300) | format(a=s) | length }}",
+        ];
+        for source in default_cases {
+            let (result, elapsed) = render_with(default_fuel, source);
+            assert!(
+                result.is_err(),
+                "{source} should be refused over MAX_RENDERED_BYTES, got {result:?}"
+            );
+            assert!(
+                elapsed < std::time::Duration::from_millis(50),
+                "{source} took {elapsed:?} — serialized before refusing"
+            );
+        }
+
+        // Legitimate small uses of all wrapped filters keep working.
+        for (source, expected) in [
+            ("{{ ['a', 'b'] | json }}", "[&quot;a&quot;,&quot;b&quot;]"),
+            ("{{ ['a', 'b'] | tojson }}", "[\"a\", \"b\"]"),
+            ("{{ '<b>hi</b>' | safe }}", "<b>hi</b>"),
+            ("{{ '<b>hi</b>' | escape }}", "&lt;b&gt;hi&lt;&#x2f;b&gt;"),
+            ("{{ ['a', 'b'] | join('-') }}", "a-b"),
+            ("{{ '%(a)s-%(b)d' | format(a='ok', b=7) }}", "ok-7"),
+        ] {
+            let (result, _) = render_with(default_fuel, source);
+            assert_eq!(result.unwrap(), expected, "{source}");
         }
     }
 

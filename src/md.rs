@@ -208,21 +208,24 @@ fn block_tag(line: &str) -> Option<BlockTag<'_>> {
         .split(|c: char| c.is_whitespace() || c == '(')
         .next()?;
     match keyword {
-        "if" | "for" | "block" | "component" | "filter" | "raw" => {
+        "if" | "for" | "block" | "filter" | "raw" | "macro" | "call" | "with" | "autoescape" => {
             Some(BlockTag::Open(BlockKey::Tera(keyword)))
         }
-        "set" | "set_global" if !inner.contains('=') => Some(BlockTag::Open(BlockKey::Tera("set"))),
+        "set" if !inner.contains('=') => Some(BlockTag::Open(BlockKey::Tera("set"))),
         "elif" | "else" => Some(BlockTag::Middle),
         _ => {
             let closed = keyword.strip_prefix("end")?;
-            let closed = if closed == "set_global" {
-                "set"
-            } else {
-                closed
-            };
             matches!(
                 closed,
-                "if" | "for" | "block" | "component" | "filter" | "raw" | "set"
+                "if" | "for"
+                    | "block"
+                    | "filter"
+                    | "raw"
+                    | "set"
+                    | "macro"
+                    | "call"
+                    | "with"
+                    | "autoescape"
             )
             .then_some(BlockTag::Close(BlockKey::Tera(closed)))
         }
@@ -1506,4 +1509,74 @@ fn code_is_teraliteral_when_rendered() {
     let html = render("hello {{ name }}, code `{{ name }}`\n", r#"{"name":"Ada"}"#);
     assert!(html.contains("hello Ada"), "{html}");
     assert!(html.contains("<code>{{ name }}</code>"), "{html}");
+}
+
+/// bug_0263: MiniJinja's `macro`, `call`, `with`, and `autoescape` block
+/// tags dedent their indented bodies instead of turning them into
+/// CommonMark indented code blocks.
+#[cfg(test)]
+#[test]
+fn bug_0263_minijinja_block_tags_dedent() {
+    let render = |source: &str, json: &str| -> String {
+        let html = to_html_template(source);
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        crate::template::test_render("md", &html, value).unwrap()
+    };
+
+    let macro_and_call = "\
+{% macro card(title) %}
+    **{{ title }}**
+{% endmacro %}
+{% macro box() %}
+<div>{{ caller() }}</div>
+{% endmacro %}
+{{ card(title) }}
+{% call box() %}
+    Some **bold** text
+{% endcall %}
+";
+    let html = render(macro_and_call, r#"{"title":"Hello"}"#);
+    assert!(!html.contains("<pre"), "macro/call turned into code block: {html}");
+    assert!(html.contains(r#"<strong class="markdown">Hello</strong>"#), "{html}");
+    assert!(html.contains(r#"<strong class="markdown">bold</strong>"#), "{html}");
+
+    let with_and_autoescape = "\
+{% with label = 'Ada' %}
+    **{{ label }}**
+{% endwith %}
+{% autoescape true %}
+    **{{ text }}**
+{% endautoescape %}
+";
+    let html = render(with_and_autoescape, r#"{"text":"Safe"}"#);
+    assert!(!html.contains("<pre"), "with/autoescape turned into code block: {html}");
+    assert!(html.contains(r#"<strong class="markdown">Ada</strong>"#), "{html}");
+    assert!(html.contains(r#"<strong class="markdown">Safe</strong>"#), "{html}");
+}
+
+#[cfg(test)]
+proptest::proptest! {
+    /// bug_0263: any indented MiniJinja block tag body dedents as Markdown,
+    /// never as an indented `<pre><code>` block.
+    #[test]
+    fn bug_0263_indented_minijinja_blocks_never_become_code_blocks(
+        tag in proptest::sample::select(vec![
+            ("macro m()", "endmacro"),
+            ("call m()", "endcall"),
+            ("with x = 1", "endwith"),
+            ("autoescape true", "endautoescape"),
+            ("if true", "endif"),
+            ("for x in items", "endfor"),
+            ("block b", "endblock"),
+            ("filter upper", "endfilter"),
+        ]),
+        indent in 4usize..=12,
+        word in "[a-zA-Z]{2,8}",
+    ) {
+        let pad = " ".repeat(indent);
+        let src = format!("{{% {} %}}\n{pad}**{word}**\n{{% {} %}}\n", tag.0, tag.1);
+        let html = to_html_template(&src);
+        proptest::prop_assert!(!html.contains("<pre"), "{:?} -> {:?}", src, html);
+        proptest::prop_assert!(html.contains(&format!(r#"<strong class="markdown">{word}</strong>"#)), "{:?} -> {:?}", src, html);
+    }
 }

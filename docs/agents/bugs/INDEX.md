@@ -297,14 +297,14 @@ immediately paid for themselves; bug_0006–0007: the Fluent oracle; bug_0008–
 | [bug_0253](bug_0253.md) | Printing a lazily repeated list stalled the render or exhausted memory | `src/template.rs`; minijinja (U62) | high | fixed (local hooks; MiniJinja patched, upstream open) | cargo-fuzz `html`, Nightly 45740232198, 2026-11-26 |
 | [bug_0254](bug_0254.md) | The SVG work bound undercounted arcs after an arc of huge radius | `src/svg_bounds.rs`; svgtypes/kurbo (U22) | high | fixed | cargo-fuzz and honggfuzz `svg`, Nightly 45820956544, 2026-11-27 |
 | [bug_0256](bug_0256.md) | `tojson` with a huge indent allocated gigabytes | `src/template.rs`; minijinja (U64) | high | fixed (local wrapper; upstream open) | cargo-fuzz `html`, Nightly 45997844575, 2026-11-28 |
-| [bug_0257](bug_0257.md) | Flat `calc()` operator chains bypass CSS nesting limits and overflow the stack | `src/css/value.rs`, `src/cascade.rs` | high | open | review_0010 (N01) |
-| [bug_0258](bug_0258.md) | Container-of-strings serialization bypasses `check_printable` and allocates past the template fuel budget | `src/template.rs`; minijinja (U65) | high | open (upstream U65) | review_0010 (N02) |
-| [bug_0259](bug_0259.md) | `HtmlTemplateLimits` is ignored for templates loaded in `Startup` | `src/lib.rs`, `src/template.rs` | medium | open | review_0010 (N03) |
-| [bug_0260](bug_0260.md) | `font-size` and `outline-offset` silently drop non-`px` absolute CSS units (`pt`, `in`, `cm`, `mm`, `pc`, `Q`) | `src/css/property.rs` | medium | open | review_0010 (N04) |
-| [bug_0261](bug_0261.md) | Negative `calc()` values bypass `non_negative_lp` and reach Bevy UI `Node` unclamped | `src/css/property.rs`, `src/build.rs` | medium | open | review_0010 (N05) |
-| [bug_0262](bug_0262.md) | `HtmlUi` / `HtmlModal` under a `Display::None` app container still takes focus, traps modal scope, and activates hidden buttons | `src/focus.rs` | medium | open | review_0010 (N06) |
-| [bug_0263](bug_0263.md) | Markdown block dedenting omits MiniJinja's `macro`, `call`, `with`, and `autoescape` tags | `src/md.rs` | medium | open | review_0010 (N07) |
-| [bug_0264](bug_0264.md) | CSS parser and cascade regressions after ADR 0048 (`background`, `grid`, `transition`) | `src/css/property.rs`, `src/css/grid.rs`, `src/cascade.rs` | low | open | review_0010 (N08) |
+| [bug_0257](bug_0257.md) | Flat `calc()` operator chains bypass CSS nesting limits and overflow the stack | `src/css/value.rs`, `src/cascade.rs` | high | fixed | review_0010 (N01) |
+| [bug_0258](bug_0258.md) | Container-of-strings serialization bypasses `check_printable` and allocates past the template fuel budget | `src/template.rs`; minijinja (U65) | high | fixed (local wrappers; upstream U65 open for `~`) | review_0010 (N02) |
+| [bug_0259](bug_0259.md) | `HtmlTemplateLimits` is ignored for templates loaded in `Startup` | `src/lib.rs`, `src/template.rs` | medium | fixed | review_0010 (N03) |
+| [bug_0260](bug_0260.md) | `font-size` and `outline-offset` silently drop non-`px` absolute CSS units (`pt`, `in`, `cm`, `mm`, `pc`, `Q`) | `src/css/property.rs` | medium | fixed | review_0010 (N04) |
+| [bug_0261](bug_0261.md) | Negative `calc()` values bypass `non_negative_lp` and reach Bevy UI `Node` unclamped | `src/css/property.rs`, `src/cascade.rs`, `src/build.rs` | medium | fixed | review_0010 (N05) |
+| [bug_0262](bug_0262.md) | `HtmlUi` / `HtmlModal` under a `Display::None` app container still takes focus, traps modal scope, and activates hidden buttons | `src/focus.rs` | medium | fixed | review_0010 (N06) |
+| [bug_0263](bug_0263.md) | Markdown block dedenting omits MiniJinja's `macro`, `call`, `with`, and `autoescape` tags | `src/md.rs` | medium | fixed | review_0010 (N07) |
+| [bug_0264](bug_0264.md) | CSS parser and cascade regressions after ADR 0048 (`background`, `grid`, `transition`) | `src/css/property.rs`, `src/css/grid.rs`, `src/cascade.rs` | low | fixed | review_0010 (N08) |
 
 ## Discovery session metadata: bug_0257–0264 (2026-11-27 / 2026-11-28)
 

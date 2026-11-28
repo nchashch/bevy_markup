@@ -31,11 +31,11 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   `CanvasPicture` child filling the canvas's padding box, so a canvas
   can have a CSS `border-image` or `background-image` frame too. New
   example: `canvas`.
-- **`svg` example** (`--features svg`, `svg-text` for its text badge):
-  inline `<svg>` icons recolored by the theme and `:hover`, one SVG file
-  as `<img>` at four sizes, an SVG `border-image` and tiled
-  `background-image`, SVG `<text>`, a hostile SVG that's refused, and a
-  `UiScale` button that redraws everything at 1×, 1.5× and 2×.
+- **`svg` example** (`--features svg`): inline `<svg>` icons recolored by
+  the theme and `:hover`, one SVG file as `<img>` at four sizes, an SVG
+  `border-image` and tiled `background-image`, a hostile SVG that's
+  refused, and a `UiScale` button that redraws everything at 1×, 1.5× and
+  2×.
 - **SVG images** (the new `svg` cargo feature): `.svg` files load as
   ordinary `Image`s, drawn on the CPU by resvg, so `<img src="icon.svg">`,
   `border-image: url(frame.svg) 8` (slices in the SVG's px),
@@ -51,10 +51,8 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
   image sized like an `<img>`; its `currentColor` is the element's CSS
   `color`, so `svg { color: … }`, `:hover` and themes recolor it. It must
   be well-formed XML (quoted attributes, closed tags); page CSS doesn't
-  reach inside it. Static SVG only. `<text>` inside an SVG needs the
-  `svg-text` feature, which draws it with the fonts registered in
-  `FontFamilies`, font files and system families alike (resolved as the page's CSS resolves `font-family`, falling
-  back to Bevy's default font) and redraws it when a font loads later. The loader
+  reach inside it. Static icon-subset SVG only (shapes, paths, groups,
+  `defs`/`symbol`/`use`, gradients and clip paths; see Changed). The loader
   treats files as untrusted:
   - `<image href>` is never resolved, so an SVG can't read other files;
   - images are capped at 4096 px per side;
@@ -62,34 +60,13 @@ Before 1.0, a minor version bump (0.2 → 0.3) may contain breaking changes.
     to load with an error saying why, instead of crashing or stalling the
     app;
   - so does a file that would expand too far before drawing even starts
-    (`<use>` copies of copies, a marker repeated on every vertex of long
-    paths, patterns and gradients inherited by many shapes, arcs with
-    enormous radii; the limit is `svg::MAX_SVG_WORK`), and one whose
-    pattern or marker inherits a `fill`, `stroke` or `marker` naming
-    itself.
-  - a filter `feTurbulence` whose `baseFrequency` is too large to
-    represent fails to load with an error naming it, instead of a
-    renderer panic.
+    (`<use>` copies of copies, gradients inherited by many shapes, arcs
+    with enormous radii; the limit is `svg::MAX_SVG_WORK`), and one whose
+    gradient inherits itself;
   - an `.svg` that draws extremely far outside its image (more than
     524,288 px past the edge at the drawn size: huge coordinates, radii,
     stroke widths or transforms) fails to load with an error, instead of
     a renderer panic, which release builds hit too.
-  - a filter `feConvolveMatrix` whose `order` is too large to represent
-    fails to load with an error naming it, instead of a renderer panic
-    in debug builds.
-  - a filter `feMorphology` whose `radius` is too large to represent
-    fails to load with an error naming it, instead of a renderer panic.
-  - a filter, mask or pattern over a shape so large (around 10³⁸ units,
-    or grown that big by transforms) that its region can't be computed
-    fails to load with an error, instead of a renderer panic.
-  - a blur (`feGaussianBlur`, `feDropShadow`) with a standard deviation
-    above `MAX_SVG_BLUR` (2²⁰ px at the drawn size) fails with an error
-    naming it, instead of a renderer panic in debug builds.
-  - a pattern whose tile would be huge at the drawn size fails as too
-    expensive to draw, instead of aborting the app on a failed allocation.
-  - a filter region, primitive subregion or `feOffset`/`feDropShadow`
-    offset reaching more than `MAX_SVG_FILTER_REGION` (2²⁴ px) from the
-    image fails with an error, instead of a renderer panic.
 
 ### Changed
 - **Breaking:** SVGs are drawn in an icon subset: shapes, paths, groups,

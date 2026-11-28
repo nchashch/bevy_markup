@@ -484,10 +484,22 @@ before allocating:
 
 ## Filed
 
-Filed as open bug reports on 2026-11-28, before any fix: N01
+Filed as open bug reports on 2026-11-28 (`4ad8d30`), before any fix: N01
 [bug_0257](../bugs/bug_0257.md), N02 [bug_0258](../bugs/bug_0258.md)
 ([UPSTREAM U65](../bugs/UPSTREAM.md#u65--minijinja-deep-walks-ignore-string-bytes-and-serialization-filtersoperators-charge-fuel-only-after-allocating)),
 N03 [bug_0259](../bugs/bug_0259.md), N04 [bug_0260](../bugs/bug_0260.md),
 N05 [bug_0261](../bugs/bug_0261.md), N06 [bug_0262](../bugs/bug_0262.md),
 N07 [bug_0263](../bugs/bug_0263.md), N08 [bug_0264](../bugs/bug_0264.md).
 N09 is docs/metadata drift, not a defect, and has no bug report.
+
+## Fix disposition — 2026-11-28
+
+All nine findings (`N01`–`N08` as `bug_0257`–`bug_0264`, plus `N09`'s
+`Cargo.toml` / `CHANGELOG.md` / rustdoc drift) are fixed after `4ad8d30`.
+Fifteen new unit, property, and integration tests cover all eight bug
+reports; every one was verified to fail before its fix and pass with it.
+For `N02` (`bug_0258`), `bevy_markup`'s wrappers now pre-estimate and
+pre-charge serialized string bytes across `json`, `tojson`, `pprint`,
+`string`, `safe`, `escape`/`e`, `join`, `format`, and the formatter;
+MiniJinja's `~` operator has no local hook and stays tracked in
+[UPSTREAM U65](../bugs/UPSTREAM.md#u65--minijinja-deep-walks-ignore-string-bytes-and-serialization-filtersoperators-charge-fuel-only-after-allocating).

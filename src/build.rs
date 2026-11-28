@@ -4347,9 +4347,12 @@ pub(crate) fn resolve_calc(
             content,
         };
         for (prop, expr) in &calc.exprs {
-            let Some(value) = expr.resolve(&basis, prop.horizontal()) else {
+            let Some(mut value) = expr.resolve(&basis, prop.horizontal()) else {
                 continue;
             };
+            if prop.non_negative() {
+                value = value.max(0.0);
+            }
             let value = Val::Px(value);
             // Compare through the immutable deref first: taking `&mut`
             // through a `Mut<Node>` marks it changed even for an equal
